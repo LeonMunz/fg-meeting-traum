@@ -9,3 +9,15 @@ dist/
 *.iml
 
 .DS_Store
+
+# Python
+**/.venv/
+**/__pycache__/
+*.py[cod]
+**/db.sqlite3
+
+# Python generated files
+__pycache__/
+*.py[cod]
+.venv/
+db.sqlite3
