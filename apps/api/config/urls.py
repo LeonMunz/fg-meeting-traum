@@ -19,6 +19,7 @@ from django.urls import path
 
 from accounts.views import CSRFEndpoint, LoginView, LogoutView, MeView
 from config.health import HealthCheckView
+from research_groups.views import ResearchGroupDetailView, ResearchGroupListView
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -27,4 +28,6 @@ urlpatterns = [
     path('api/auth/login/', LoginView.as_view(), name='login'),
     path('api/auth/logout/', LogoutView.as_view(), name='logout'),
     path('api/auth/me/', MeView.as_view(), name='me'),
+    path('api/research-groups/', ResearchGroupListView.as_view(), name='research-groups-list'),
+    path('api/research-groups/<int:pk>/', ResearchGroupDetailView.as_view(), name='research-groups-detail'),
 ]
