@@ -1,6 +1,8 @@
 import { Navigate, Route, Routes } from 'react-router'
 
+import { SessionProvider, useSession } from '../api/SessionProvider'
 import { AppShell } from '../components/layout/AppShell'
+import { LoginPage } from '../features/auth/LoginPage'
 import { DashboardPage } from '../features/dashboard/DashboardPage'
 
 function PlaceholderPage({ title }: { title: string }) {
@@ -19,69 +21,110 @@ function PlaceholderPage({ title }: { title: string }) {
   )
 }
 
+function RequireAuth({ children }: { children: React.ReactNode }) {
+  const { user, loading } = useSession()
+
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <span className="material-symbols-outlined text-[24px] animate-spin text-on-surface-variant">
+          refresh
+        </span>
+      </div>
+    )
+  }
+
+  if (!user) {
+    return <Navigate to="/login" replace />
+  }
+
+  return <>{children}</>
+}
+
+function AppRoutes() {
+  return (
+    <Routes>
+      <Route path="/login" element={<LoginPage />} />
+
+      <Route
+        path="/"
+        element={
+          <RequireAuth>
+            <AppShell>
+              <Routes>
+                <Route path="/" element={<DashboardPage />} />
+
+                <Route
+                  path="/my-work"
+                  element={<PlaceholderPage title="My Work" />}
+                />
+
+                <Route
+                  path="/projects"
+                  element={<PlaceholderPage title="Projects" />}
+                />
+
+                <Route
+                  path="/goals"
+                  element={<PlaceholderPage title="Goals" />}
+                />
+
+                <Route
+                  path="/meetings"
+                  element={<PlaceholderPage title="Meetings" />}
+                />
+
+                <Route
+                  path="/kvp"
+                  element={<PlaceholderPage title="KVP" />}
+                />
+
+                <Route
+                  path="/knowledge"
+                  element={<PlaceholderPage title="Knowledge" />}
+                />
+
+                <Route
+                  path="/calendar"
+                  element={<PlaceholderPage title="Calendar" />}
+                />
+
+                <Route
+                  path="/people"
+                  element={<PlaceholderPage title="People" />}
+                />
+
+                <Route
+                  path="/notifications"
+                  element={<PlaceholderPage title="Notifications" />}
+                />
+
+                <Route
+                  path="/settings"
+                  element={<PlaceholderPage title="Settings" />}
+                />
+
+                <Route
+                  path="/profile"
+                  element={<PlaceholderPage title="Profile" />}
+                />
+
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+            </AppShell>
+          </RequireAuth>
+        }
+      />
+
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  )
+}
+
 export function App() {
   return (
-    <AppShell>
-      <Routes>
-        <Route path="/" element={<DashboardPage />} />
-
-        <Route
-          path="/my-work"
-          element={<PlaceholderPage title="My Work" />}
-        />
-
-        <Route
-          path="/projects"
-          element={<PlaceholderPage title="Projects" />}
-        />
-
-        <Route
-          path="/goals"
-          element={<PlaceholderPage title="Goals" />}
-        />
-
-        <Route
-          path="/meetings"
-          element={<PlaceholderPage title="Meetings" />}
-        />
-
-        <Route
-          path="/kvp"
-          element={<PlaceholderPage title="KVP" />}
-        />
-
-        <Route
-          path="/knowledge"
-          element={<PlaceholderPage title="Knowledge" />}
-        />
-
-        <Route
-          path="/calendar"
-          element={<PlaceholderPage title="Calendar" />}
-        />
-
-        <Route
-          path="/people"
-          element={<PlaceholderPage title="People" />}
-        />
-
-        <Route
-          path="/notifications"
-          element={<PlaceholderPage title="Notifications" />}
-        />
-
-        <Route
-          path="/settings"
-          element={<PlaceholderPage title="Settings" />}
-        />
-
-        <Route
-          path="/profile"
-          element={<PlaceholderPage title="Profile" />}
-        />
-
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </AppShell>
+    <SessionProvider>
+      <AppRoutes />
+    </SessionProvider>
   )
 }

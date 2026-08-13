@@ -1,16 +1,28 @@
-// FG Workspace — MVP Domain Types
-// Source of truth: docs/domain_model_v0.1.md
+// FG Workspace — Domain Types
+// Source of truth: docs/domain/foundation.md + API contract
 
-// ── User ──────────────────────────────────────────────────────────
+// ── Foundation: Identity & Research Group ─────────────────────────
 
-/** A person using or participating in the workspace. */
+/** Authenticated user (from API). */
 export type User = {
-  id: string
-  displayName: string
-  initials?: string
+  id: number
+  username: string
+  firstName: string
+  lastName: string
+  email: string
 }
 
-// ── Project ───────────────────────────────────────────────────────
+/** Research group membership role. */
+export type ResearchGroupRole = 'admin' | 'member'
+
+/** Research group (from API). */
+export type ResearchGroup = {
+  id: number
+  name: string
+  role: ResearchGroupRole
+}
+
+// ── Project (future: Foundation 2) ────────────────────────────────
 
 export type ProjectStatus = 'active' | 'paused' | 'completed'
 
@@ -21,99 +33,49 @@ export type Project = {
   status: ProjectStatus
 }
 
-// ── Task ──────────────────────────────────────────────────────────
+// ── Work Item (future: Foundation 3) ──────────────────────────────
 
-export type TaskStatus =
+export type WorkItemStatus =
   | 'todo'
   | 'in_progress'
   | 'review'
-  | 'blocked'
   | 'done'
 
+export type WorkItemType =
+  | 'epic'
+  | 'milestone'
+  | 'deliverable'
+  | 'task'
+
 /** Actionable work item. */
-export type Task = {
+export type WorkItem = {
   id: string
   title: string
   description?: string
-  status: TaskStatus
+  type: WorkItemType
+  status: WorkItemStatus
 
-  projectId?: string
+  projectId: string
 
   assigneeIds: string[]
-  accountableId?: string
-  watcherIds?: string[]
+
+  parentId?: string
 
   dueDate?: string
-  labels?: string[]
+  blockedReason?: string
+  completedAt?: string
 
   sourceMeetingItemId?: string
 }
 
-// ── MeetingSeries ─────────────────────────────────────────────────
-
-/** Reusable definition of a recurring meeting (e.g. "FG Weekly"). */
-export type MeetingSeries = {
-  id: string
-  title: string
-  type: string
-}
-
-// ── Meeting ───────────────────────────────────────────────────────
+// ── Meeting (future) ──────────────────────────────────────────────
 
 export type MeetingStatus = 'upcoming' | 'live' | 'completed'
 
 /** One concrete meeting occurrence. */
 export type Meeting = {
   id: string
-  seriesId?: string
-
   title: string
-  type: string
   date: string
   status: MeetingStatus
-
-  moderatorId?: string
-  participantIds: string[]
-}
-
-// ── Topic ─────────────────────────────────────────────────────────
-
-export type TopicStatus = 'open' | 'resolved'
-
-/** A durable discussion point that can exist across multiple meetings. */
-export type Topic = {
-  id: string
-  title: string
-  description?: string
-  status: TopicStatus
-
-  projectId?: string
-  ownerId?: string
-  labels?: string[]
-}
-
-// ── MeetingItem ───────────────────────────────────────────────────
-
-export type MeetingItemStatus =
-  | 'not_discussed'
-  | 'discussing'
-  | 'done'
-  | 'follow_up'
-
-export type MeetingItemKind = 'agenda' | 'spontaneous'
-
-/** The appearance/discussion of a Topic or standalone point in one Meeting. */
-export type MeetingItem = {
-  id: string
-  meetingId: string
-  topicId?: string
-
-  title: string
-  notes?: string
-
-  kind: MeetingItemKind
-  status: MeetingItemStatus
-  order: number
-
-  linkedTaskIds: string[]
 }
