@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Knowledge Base - FG Workspace</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&amp;family=JetBrains+Mono:wght@400&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+          darkMode: "class",
+          theme: {
+            extend: {
+              "colors": {
+                      "secondary-container": "#dae2fd",
+                      "tertiary": "#7e3000",
+                      "error-container": "#ffdad6",
+                      "primary-container": "#4f46e5",
+                      "surface-container-low": "#eff4ff",
+                      "secondary-fixed-dim": "#bec6e0",
+                      "on-tertiary": "#ffffff",
+                      "on-tertiary-fixed-variant": "#7b2f00",
+                      "on-secondary-fixed": "#131b2e",
+                      "outline": "#777587",
+                      "on-error-container": "#93000a",
+                      "secondary": "#565e74",
+                      "background": "#f8f9ff",
+                      "surface-variant": "#d3e4fe",
+                      "primary-fixed": "#e2dfff",
+                      "surface-container": "#e5eeff",
+                      "on-secondary": "#ffffff",
+                      "inverse-surface": "#213145",
+                      "surface-container-lowest": "#ffffff",
+                      "surface-bright": "#f8f9ff",
+                      "surface-container-highest": "#d3e4fe",
+                      "surface-tint": "#4d44e3",
+                      "on-primary-fixed": "#0f0069",
+                      "on-secondary-fixed-variant": "#3f465c",
+                      "inverse-on-surface": "#eaf1ff",
+                      "on-primary-container": "#dad7ff",
+                      "on-background": "#0b1c30",
+                      "on-error": "#ffffff",
+                      "tertiary-container": "#a44100",
+                      "on-surface": "#0b1c30",
+                      "outline-variant": "#c7c4d8",
+                      "error": "#ba1a1a",
+                      "tertiary-fixed": "#ffdbcc",
+                      "on-tertiary-container": "#ffd2be",
+                      "tertiary-fixed-dim": "#ffb695",
+                      "surface": "#f8f9ff",
+                      "secondary-fixed": "#dae2fd",
+                      "on-tertiary-fixed": "#351000",
+                      "on-primary": "#ffffff",
+                      "primary": "#3525cd",
+                      "primary-fixed-dim": "#c3c0ff",
+                      "surface-container-high": "#dce9ff",
+                      "on-primary-fixed-variant": "#3323cc",
+                      "surface-dim": "#cbdbf5",
+                      "on-secondary-container": "#5c647a",
+                      "inverse-primary": "#c3c0ff",
+                      "on-surface-variant": "#464555"
+              },
+              "borderRadius": {
+                      "DEFAULT": "0.25rem",
+                      "lg": "0.5rem",
+                      "xl": "0.75rem",
+                      "full": "9999px"
+              },
+              "spacing": {
+                      "stack-lg": "24px",
+                      "unit": "4px",
+                      "margin-page": "40px",
+                      "stack-xs": "4px",
+                      "gutter": "24px",
+                      "stack-md": "16px",
+                      "stack-sm": "8px",
+                      "container-max": "1440px",
+                      "sidebar-width": "240px"
+              },
+              "fontFamily": {
+                      "label-caps": [
+                              "Inter"
+                      ],
+                      "headline-md": [
+                              "Inter"
+                      ],
+                      "body-md": [
+                              "Inter"
+                      ],
+                      "headline-lg": [
+                              "Inter"
+                      ],
+                      "display-lg": [
+                              "Inter"
+                      ],
+                      "body-sm": [
+                              "Inter"
+                      ],
+                      "mono-sm": [
+                              "JetBrains Mono"
+                      ],
+                      "body-lg": [
+                              "Inter"
+                      ],
+                      "title-md": [
+                              "Inter"
+                      ]
+              },
+              "fontSize": {
+                      "label-caps": [
+                              "11px",
+                              {
+                                      "lineHeight": "16px",
+                                      "letterSpacing": "0.05em",
+                                      "fontWeight": "600"
+                              }
+                      ],
+                      "headline-md": [
+                              "24px",
+                              {
+                                      "lineHeight": "32px",
+                                      "letterSpacing": "-0.01em",
+                                      "fontWeight": "600"
+                              }
+                      ],
+                      "body-md": [
+                              "14px",
+                              {
+                                      "lineHeight": "20px",
+                                      "fontWeight": "400"
+                              }
+                      ],
+                      "headline-lg": [
+                              "32px",
+                              {
+                                      "lineHeight": "40px",
+                                      "letterSpacing": "-0.02em",
+                                      "fontWeight": "600"
+                              }
+                      ],
+                      "display-lg": [
+                              "48px",
+                              {
+                                      "lineHeight": "56px",
+                                      "letterSpacing": "-0.02em",
+                                      "fontWeight": "700"
+                              }
+                      ],
+                      "body-sm": [
+                              "13px",
+                              {
+                                      "lineHeight": "18px",
+                                      "fontWeight": "400"
+                              }
+                      ],
+                      "mono-sm": [
+                              "12px",
+                              {
+                                      "lineHeight": "16px",
+                                      "fontWeight": "400"
+                              }
+                      ],
+                      "body-lg": [
+                              "16px",
+                              {
+                                      "lineHeight": "24px",
+                                      "fontWeight": "400"
+                              }
+                      ],
+                      "title-md": [
+                              "18px",
+                              {
+                                      "lineHeight": "24px",
+                                      "fontWeight": "600"
+                              }
+                      ]
+              }
+      },
+          },
+        }
+    </script>
+</head>
+<body class="bg-background text-on-background font-body-md min-h-screen flex">
+<!-- SideNavBar -->
+<nav class="fixed left-0 top-0 h-screen w-sidebar-width bg-surface-container-low border-r border-outline-variant flex flex-col py-margin-page px-stack-md z-20">
+<div class="flex items-center gap-stack-sm mb-margin-page px-stack-sm">
+<div class="w-8 h-8 rounded-full bg-primary-container text-on-primary-container flex items-center justify-center font-bold">FG</div>
+<div>
+<h1 class="font-title-md text-title-md font-bold text-on-surface">FG Workspace</h1>
+<p class="font-body-sm text-body-sm text-on-surface-variant">Research OS</p>
+</div>
+</div>
+<div class="flex-1 overflow-y-auto space-y-unit">
+<a class="flex items-center gap-stack-md px-stack-sm py-2 rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-all duration-150 ease-in-out font-body-md text-body-md" href="#">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 0;">home</span>
+<span>Home</span>
+</a>
+<a class="flex items-center gap-stack-md px-stack-sm py-2 rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-all duration-150 ease-in-out font-body-md text-body-md" href="#">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 0;">assignment</span>
+<span>My Work</span>
+</a>
+<a class="flex items-center gap-stack-md px-stack-sm py-2 rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-all duration-150 ease-in-out font-body-md text-body-md" href="#">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 0;">folder_open</span>
+<span>Projects</span>
+</a>
+<a class="flex items-center gap-stack-md px-stack-sm py-2 rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-all duration-150 ease-in-out font-body-md text-body-md" href="#">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 0;">ads_click</span>
+<span>Goals</span>
+</a>
+<a class="flex items-center gap-stack-md px-stack-sm py-2 rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-all duration-150 ease-in-out font-body-md text-body-md" href="#">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 0;">groups</span>
+<span>Meetings</span>
+</a>
+<a class="flex items-center gap-stack-md px-stack-sm py-2 rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-all duration-150 ease-in-out font-body-md text-body-md" href="#">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 0;">database</span>
+<span>KVP</span>
+</a>
+<a class="flex items-center gap-stack-md px-stack-sm py-2 rounded-lg bg-secondary-container text-on-secondary-container font-semibold transition-all duration-150 ease-in-out font-body-md text-body-md" href="#">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">library_books</span>
+<span>Knowledge</span>
+</a>
+<a class="flex items-center gap-stack-md px-stack-sm py-2 rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-all duration-150 ease-in-out font-body-md text-body-md" href="#">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 0;">calendar_today</span>
+<span>Calendar</span>
+</a>
+<a class="flex items-center gap-stack-md px-stack-sm py-2 rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-all duration-150 ease-in-out font-body-md text-body-md" href="#">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 0;">group</span>
+<span>People</span>
+</a>
+</div>
+<div class="mt-auto space-y-unit pt-stack-md border-t border-outline-variant">
+<a class="flex items-center gap-stack-md px-stack-sm py-2 rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-all duration-150 ease-in-out font-body-md text-body-md" href="#">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 0;">notifications</span>
+<span>Notifications</span>
+</a>
+<a class="flex items-center gap-stack-md px-stack-sm py-2 rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-all duration-150 ease-in-out font-body-md text-body-md" href="#">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 0;">settings</span>
+<span>Settings</span>
+</a>
+<a class="flex items-center gap-stack-md px-stack-sm py-2 rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-all duration-150 ease-in-out font-body-md text-body-md" href="#">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 0;">account_circle</span>
+<span>Profile</span>
+</a>
+</div>
+</nav>
+<!-- Main Content Area -->
+<main class="ml-sidebar-width flex-1 flex flex-col min-h-screen relative">
+<!-- TopNavBar -->
+<header class="fixed top-0 right-0 w-[calc(100%-240px)] h-16 bg-surface border-b border-outline-variant flex justify-between items-center px-gutter max-w-container-max z-10">
+<div class="flex-1 max-w-2xl">
+<div class="relative flex items-center w-full focus-within:ring-2 focus-within:ring-primary rounded bg-surface-container-low border border-outline-variant px-stack-sm py-1.5 shadow-sm">
+<span class="material-symbols-outlined text-on-surface-variant mr-stack-sm" style="font-variation-settings: 'FILL' 0;">search</span>
+<input class="bg-transparent border-none w-full focus:ring-0 font-body-sm text-body-sm text-on-surface p-0 placeholder-on-surface-variant" placeholder="Search Knowledge Base (Cmd+K)" type="text"/>
+<span class="font-mono-sm text-mono-sm text-outline px-1.5 py-0.5 border border-outline-variant rounded bg-surface ml-stack-sm">⌘K</span>
+</div>
+</div>
+<div class="flex items-center gap-stack-sm ml-gutter">
+<button class="p-2 text-on-surface-variant hover:text-primary transition-colors focus-within:ring-2 focus-within:ring-primary rounded">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 0;">help_outline</span>
+</button>
+<button class="p-2 text-on-surface-variant hover:text-primary transition-colors focus-within:ring-2 focus-within:ring-primary rounded">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 0;">add_circle</span>
+</button>
+</div>
+</header>
+<!-- Canvas -->
+<div class="flex-1 mt-16 flex max-w-container-max w-full mx-auto">
+<!-- Left Pane: Wiki Hierarchy -->
+<aside class="w-1/4 border-r border-outline-variant bg-surface-bright flex flex-col p-stack-lg overflow-y-auto hidden md:flex">
+<h2 class="font-label-caps text-label-caps text-outline uppercase mb-stack-md">Hierarchy</h2>
+<div class="space-y-stack-xs">
+<!-- Tree Node -->
+<div>
+<div class="flex items-center gap-stack-xs py-1 cursor-pointer text-on-surface hover:text-primary font-body-sm text-body-sm rounded px-2 hover:bg-surface-container-low">
+<span class="material-symbols-outlined text-[16px] text-outline" style="font-variation-settings: 'FILL' 0;">arrow_drop_down</span>
+<span class="material-symbols-outlined text-[16px] text-primary" style="font-variation-settings: 'FILL' 1;">folder</span>
+<span class="font-medium">Lab Manuals</span>
+</div>
+<div class="ml-stack-lg pl-stack-xs border-l border-outline-variant space-y-unit mt-unit">
+<div class="flex items-center gap-stack-xs py-1 cursor-pointer text-on-surface-variant hover:text-primary font-body-sm text-body-sm rounded px-2 hover:bg-surface-container-low">
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 0;">description</span>
+<span>Safety Protocols 2024</span>
+</div>
+<div class="flex items-center gap-stack-xs py-1 cursor-pointer text-on-surface-variant hover:text-primary font-body-sm text-body-sm rounded px-2 hover:bg-surface-container-low">
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 0;">description</span>
+<span>Equipment Calibration</span>
+</div>
+</div>
+</div>
+<!-- Tree Node -->
+<div>
+<div class="flex items-center gap-stack-xs py-1 cursor-pointer text-primary font-body-sm text-body-sm rounded px-2 bg-surface-container-low font-medium">
+<span class="material-symbols-outlined text-[16px]" style="font-variation-settings: 'FILL' 0;">arrow_drop_down</span>
+<span class="material-symbols-outlined text-[16px] text-primary" style="font-variation-settings: 'FILL' 1;">folder_open</span>
+<span>Research Protocols</span>
+</div>
+<div class="ml-stack-lg pl-stack-xs border-l border-outline-variant space-y-unit mt-unit">
+<div class="flex items-center gap-stack-xs py-1 cursor-pointer text-primary bg-inverse-on-surface font-body-sm text-body-sm rounded px-2">
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 0;">article</span>
+<span>Quantum Sim V2</span>
+</div>
+<div class="flex items-center gap-stack-xs py-1 cursor-pointer text-on-surface-variant hover:text-primary font-body-sm text-body-sm rounded px-2 hover:bg-surface-container-low">
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 0;">article</span>
+<span>Neural Net Training</span>
+</div>
+</div>
+</div>
+<!-- Tree Node -->
+<div>
+<div class="flex items-center gap-stack-xs py-1 cursor-pointer text-on-surface hover:text-primary font-body-sm text-body-sm rounded px-2 hover:bg-surface-container-low">
+<span class="material-symbols-outlined text-[16px] text-outline" style="font-variation-settings: 'FILL' 0;">arrow_right</span>
+<span class="material-symbols-outlined text-[16px] text-primary-fixed-dim" style="font-variation-settings: 'FILL' 1;">folder</span>
+<span>Project Documentation</span>
+</div>
+</div>
+<!-- Tree Node -->
+<div>
+<div class="flex items-center gap-stack-xs py-1 cursor-pointer text-on-surface hover:text-primary font-body-sm text-body-sm rounded px-2 hover:bg-surface-container-low">
+<span class="material-symbols-outlined text-[16px] text-outline" style="font-variation-settings: 'FILL' 0;">arrow_right</span>
+<span class="material-symbols-outlined text-[16px] text-outline" style="font-variation-settings: 'FILL' 1;">folder</span>
+<span>Archive</span>
+</div>
+</div>
+</div>
+</aside>
+<!-- Main Content: Reading View -->
+<section class="w-full md:w-3/4 flex flex-col bg-surface p-stack-lg md:p-margin-page overflow-y-auto">
+<!-- Breadcrumbs -->
+<div class="flex items-center gap-stack-xs text-outline font-body-sm text-body-sm mb-stack-lg">
+<span class="hover:text-primary cursor-pointer transition-colors">Knowledge Base</span>
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 0;">chevron_right</span>
+<span class="hover:text-primary cursor-pointer transition-colors">Research Protocols</span>
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 0;">chevron_right</span>
+<span class="text-on-surface font-medium">Quantum Sim V2 Protocol</span>
+</div>
+<div class="flex flex-col lg:flex-row gap-margin-page items-start">
+<!-- Document Body -->
+<article class="flex-1 max-w-3xl">
+<h1 class="font-display-lg text-display-lg text-on-surface mb-stack-md tracking-tight">Quantum Sim V2 Protocol</h1>
+<div class="flex flex-wrap items-center gap-stack-sm mb-stack-lg border-b border-outline-variant pb-stack-md">
+<div class="flex items-center gap-unit bg-surface-container-low px-2 py-1 rounded border border-outline-variant">
+<span class="material-symbols-outlined text-[14px] text-primary" style="font-variation-settings: 'FILL' 0;">article</span>
+<span class="font-mono-sm text-mono-sm text-on-surface">Protocol</span>
+</div>
+<div class="flex items-center gap-unit text-on-surface-variant font-body-sm text-body-sm">
+<div class="w-5 h-5 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center font-bold text-[10px]">JD</div>
+<span>Dr. J. Doe</span>
+</div>
+<span class="text-outline text-[12px]">•</span>
+<span class="font-mono-sm text-mono-sm text-on-surface-variant">Last updated: Oct 24, 2023</span>
+</div>
+<div class="prose prose-sm max-w-none text-on-surface space-y-stack-md font-body-md text-body-md leading-relaxed">
+<p>This document outlines the updated protocol for executing Quantum Simulation Version 2 (V2) on the primary cluster. The objective is to stabilize the entanglement matrices during prolonged coherence testing.</p>
+<h3 class="font-headline-md text-headline-md text-on-surface mt-stack-lg mb-stack-sm">1. Pre-Execution Checklist</h3>
+<ul class="list-disc pl-stack-md space-y-unit text-on-surface-variant">
+<li>Verify cryostat temperature is maintained below 15mK.</li>
+<li>Initialize pulse generator sequences via the central API.</li>
+<li>Ensure isolated ground loop monitoring is active.</li>
+</ul>
+<div class="bg-surface-container p-stack-md rounded border border-outline-variant my-stack-lg shadow-sm">
+<div class="flex items-start gap-stack-sm">
+<span class="material-symbols-outlined text-primary mt-0.5" style="font-variation-settings: 'FILL' 1;">info</span>
+<div>
+<p class="font-body-sm text-body-sm font-semibold text-on-surface m-0">Critical Update</p>
+<p class="font-body-sm text-body-sm text-on-surface-variant m-0 mt-1">The calibration matrix has been updated. Do not use legacy parameters from V1 experiments.</p>
+</div>
+</div>
+</div>
+<h3 class="font-headline-md text-headline-md text-on-surface mt-stack-lg mb-stack-sm">2. Configuration Parameters</h3>
+<!-- KVP Table -->
+<div class="border border-outline-variant rounded overflow-hidden mb-stack-lg">
+<div class="grid grid-cols-2 border-b border-outline-variant bg-surface-container-low px-stack-sm py-2">
+<div class="font-label-caps text-label-caps text-outline uppercase">Parameter</div>
+<div class="font-label-caps text-label-caps text-outline uppercase">Value (V2)</div>
+</div>
+<div class="grid grid-cols-2 border-b border-outline-variant px-stack-sm py-2 items-center hover:bg-surface-bright transition-colors">
+<div class="font-label-caps text-label-caps text-on-surface-variant uppercase">Qubit Coherence (T1)</div>
+<div class="font-mono-sm text-mono-sm text-primary">~120 µs</div>
+</div>
+<div class="grid grid-cols-2 border-b border-outline-variant px-stack-sm py-2 items-center hover:bg-surface-bright transition-colors">
+<div class="font-label-caps text-label-caps text-on-surface-variant uppercase">Gate Fidelity</div>
+<div class="font-mono-sm text-mono-sm text-primary">99.85%</div>
+</div>
+<div class="grid grid-cols-2 px-stack-sm py-2 items-center hover:bg-surface-bright transition-colors">
+<div class="font-label-caps text-label-caps text-on-surface-variant uppercase">Coupling Strength</div>
+<div class="font-mono-sm text-mono-sm text-primary">15 MHz</div>
+</div>
+</div>
+</div>
+</article>
+<!-- Right Sidebar: Context / Related -->
+<aside class="w-full lg:w-72 flex-shrink-0 space-y-stack-lg border-l border-outline-variant pl-stack-lg hidden xl:block">
+<div>
+<h3 class="font-label-caps text-label-caps text-outline uppercase mb-stack-sm">Related Content</h3>
+<div class="space-y-stack-sm">
+<a class="block p-stack-sm rounded border border-outline-variant bg-surface hover:shadow-sm transition-all group" href="#">
+<div class="flex items-start gap-stack-sm">
+<span class="material-symbols-outlined text-[16px] text-primary mt-0.5" style="font-variation-settings: 'FILL' 0;">description</span>
+<div>
+<p class="font-body-sm text-body-sm font-medium text-on-surface group-hover:text-primary transition-colors">V1 to V2 Migration Guide</p>
+<p class="font-mono-sm text-mono-sm text-outline mt-1">Wiki • Last Week</p>
+</div>
+</div>
+</a>
+<a class="block p-stack-sm rounded border border-outline-variant bg-surface hover:shadow-sm transition-all group" href="#">
+<div class="flex items-start gap-stack-sm">
+<span class="material-symbols-outlined text-[16px] text-tertiary mt-0.5" style="font-variation-settings: 'FILL' 0;">dataset</span>
+<div>
+<p class="font-body-sm text-body-sm font-medium text-on-surface group-hover:text-primary transition-colors">Baseline Coherence Data</p>
+<p class="font-mono-sm text-mono-sm text-outline mt-1">Dataset • Oct 15</p>
+</div>
+</div>
+</a>
+</div>
+</div>
+<div>
+<h3 class="font-label-caps text-label-caps text-outline uppercase mb-stack-sm">Tags</h3>
+<div class="flex flex-wrap gap-unit">
+<span class="px-2 py-1 rounded bg-surface-container border border-outline-variant font-mono-sm text-mono-sm text-on-surface-variant">#quantum</span>
+<span class="px-2 py-1 rounded bg-surface-container border border-outline-variant font-mono-sm text-mono-sm text-on-surface-variant">#v2-cluster</span>
+<span class="px-2 py-1 rounded bg-surface-container border border-outline-variant font-mono-sm text-mono-sm text-on-surface-variant">#simulation</span>
+</div>
+</div>
+</aside>
+</div>
+</section>
+</div>
+</main>
+</body></html>

@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Knowledge Workspace - Quantum Simulation Concepts</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&amp;family=JetBrains+Mono:wght@400&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+          darkMode: "class",
+          theme: {
+            extend: {
+              "colors": {
+                      "on-tertiary-container": "#ffd2be",
+                      "primary": "#3525cd",
+                      "on-primary-fixed-variant": "#3323cc",
+                      "secondary-container": "#dae2fd",
+                      "surface-container-lowest": "#ffffff",
+                      "tertiary-fixed-dim": "#ffb695",
+                      "on-tertiary-fixed-variant": "#7b2f00",
+                      "on-tertiary": "#ffffff",
+                      "on-secondary": "#ffffff",
+                      "error": "#ba1a1a",
+                      "surface-container": "#e5eeff",
+                      "on-secondary-fixed-variant": "#3f465c",
+                      "on-primary-fixed": "#0f0069",
+                      "on-surface": "#0b1c30",
+                      "primary-container": "#4f46e5",
+                      "outline": "#777587",
+                      "tertiary": "#7e3000",
+                      "surface-tint": "#4d44e3",
+                      "on-primary-container": "#dad7ff",
+                      "on-secondary-fixed": "#131b2e",
+                      "on-error-container": "#93000a",
+                      "on-tertiary-fixed": "#351000",
+                      "on-primary": "#ffffff",
+                      "on-background": "#0b1c30",
+                      "on-secondary-container": "#5c647a",
+                      "secondary": "#565e74",
+                      "secondary-fixed-dim": "#bec6e0",
+                      "primary-fixed": "#e2dfff",
+                      "tertiary-fixed": "#ffdbcc",
+                      "inverse-surface": "#213145",
+                      "primary-fixed-dim": "#c3c0ff",
+                      "inverse-on-surface": "#eaf1ff",
+                      "outline-variant": "#c7c4d8",
+                      "secondary-fixed": "#dae2fd",
+                      "surface-container-highest": "#d3e4fe",
+                      "surface-container-low": "#eff4ff",
+                      "background": "#f8f9ff",
+                      "inverse-primary": "#c3c0ff",
+                      "on-surface-variant": "#464555",
+                      "surface-dim": "#cbdbf5",
+                      "surface-variant": "#d3e4fe",
+                      "surface": "#f8f9ff",
+                      "surface-bright": "#f8f9ff",
+                      "on-error": "#ffffff",
+                      "error-container": "#ffdad6",
+                      "surface-container-high": "#dce9ff",
+                      "tertiary-container": "#a44100"
+              },
+              "borderRadius": {
+                      "DEFAULT": "0.25rem",
+                      "lg": "0.5rem",
+                      "xl": "0.75rem",
+                      "full": "9999px"
+              },
+              "spacing": {
+                      "margin-page": "40px",
+                      "sidebar-width": "240px",
+                      "stack-lg": "24px",
+                      "stack-sm": "8px",
+                      "stack-xs": "4px",
+                      "stack-md": "16px",
+                      "container-max": "1440px",
+                      "gutter": "24px",
+                      "unit": "4px"
+              },
+              "fontFamily": {
+                      "title-md": [
+                              "Inter"
+                      ],
+                      "body-md": [
+                              "Inter"
+                      ],
+                      "display-lg": [
+                              "Inter"
+                      ],
+                      "body-sm": [
+                              "Inter"
+                      ],
+                      "label-caps": [
+                              "Inter"
+                      ],
+                      "body-lg": [
+                              "Inter"
+                      ],
+                      "headline-lg": [
+                              "Inter"
+                      ],
+                      "mono-sm": [
+                              "JetBrains Mono"
+                      ],
+                      "headline-md": [
+                              "Inter"
+                      ]
+              },
+              "fontSize": {
+                      "title-md": [
+                              "18px",
+                              {
+                                      "lineHeight": "24px",
+                                      "fontWeight": "600"
+                              }
+                      ],
+                      "body-md": [
+                              "14px",
+                              {
+                                      "lineHeight": "20px",
+                                      "fontWeight": "400"
+                              }
+                      ],
+                      "display-lg": [
+                              "48px",
+                              {
+                                      "lineHeight": "56px",
+                                      "letterSpacing": "-0.02em",
+                                      "fontWeight": "700"
+                              }
+                      ],
+                      "body-sm": [
+                              "13px",
+                              {
+                                      "lineHeight": "18px",
+                                      "fontWeight": "400"
+                              }
+                      ],
+                      "label-caps": [
+                              "11px",
+                              {
+                                      "lineHeight": "16px",
+                                      "letterSpacing": "0.05em",
+                                      "fontWeight": "600"
+                              }
+                      ],
+                      "body-lg": [
+                              "16px",
+                              {
+                                      "lineHeight": "24px",
+                                      "fontWeight": "400"
+                              }
+                      ],
+                      "headline-lg": [
+                              "32px",
+                              {
+                                      "lineHeight": "40px",
+                                      "letterSpacing": "-0.02em",
+                                      "fontWeight": "600"
+                              }
+                      ],
+                      "mono-sm": [
+                              "12px",
+                              {
+                                      "lineHeight": "16px",
+                                      "fontWeight": "400"
+                              }
+                      ],
+                      "headline-md": [
+                              "24px",
+                              {
+                                      "lineHeight": "32px",
+                                      "letterSpacing": "-0.01em",
+                                      "fontWeight": "600"
+                              }
+                      ]
+              }
+      },
+          },
+        }
+    </script>
+<style>
+        /* Base styles from guidance */
+        body {
+            background-color: #f8f9ff;
+            color: #0b1c30;
+        }
+        
+        /* Grid and visual graph styles */
+        .dot-pattern {
+            background-image: radial-gradient(#c7c4d8 1px, transparent 1px);
+            background-size: 20px 20px;
+        }
+        
+        .node-card {
+            background-color: white;
+            border: 1px solid #E5E7EB;
+            box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+            border-radius: 8px;
+            transition: all 0.2s ease;
+        }
+        
+        .node-card:hover {
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+            transform: translateY(-2px);
+            border-color: #4f46e5;
+        }
+
+        /* SVG Line connection styles */
+        .graph-line {
+            stroke: #c7c4d8;
+            stroke-width: 2;
+            fill: none;
+            stroke-dasharray: 4;
+            animation: dash 20s linear infinite;
+        }
+        
+        @keyframes dash {
+            to {
+                stroke-dashoffset: -100;
+            }
+        }
+    </style>
+</head>
+<body class="flex h-screen overflow-hidden bg-background font-body-md">
+<!-- SideNavBar -->
+<nav class="fixed left-0 top-0 h-screen w-sidebar-width bg-surface-container-low dark:bg-surface-container-lowest border-r border-outline-variant dark:border-outline flat no shadows transition-all duration-150 ease-in-out flex flex-col py-margin-page px-stack-md z-20">
+<!-- Header -->
+<div class="mb-stack-lg flex items-center gap-stack-sm px-stack-xs">
+<div class="w-8 h-8 bg-primary rounded-lg flex items-center justify-center text-white shrink-0">
+<span class="material-symbols-outlined text-[18px]">science</span>
+</div>
+<div>
+<h1 class="font-title-md text-title-md font-bold text-on-surface dark:text-on-primary-fixed">FG Workspace</h1>
+<p class="font-body-sm text-body-sm text-on-surface-variant">Research OS</p>
+</div>
+</div>
+<!-- Main Nav Tabs -->
+<div class="flex flex-col gap-stack-xs flex-grow overflow-y-auto">
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant dark:text-outline-variant hover:bg-surface-container-high dark:hover:bg-surface-dim transition-colors" href="#">
+<span class="material-symbols-outlined">home</span>
+<span class="font-body-md text-body-md">Home</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant dark:text-outline-variant hover:bg-surface-container-high dark:hover:bg-surface-dim transition-colors" href="#">
+<span class="material-symbols-outlined">assignment</span>
+<span class="font-body-md text-body-md">My Work</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant dark:text-outline-variant hover:bg-surface-container-high dark:hover:bg-surface-dim transition-colors" href="#">
+<span class="material-symbols-outlined">folder_open</span>
+<span class="font-body-md text-body-md">Projects</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant dark:text-outline-variant hover:bg-surface-container-high dark:hover:bg-surface-dim transition-colors" href="#">
+<span class="material-symbols-outlined">ads_click</span>
+<span class="font-body-md text-body-md">Goals</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant dark:text-outline-variant hover:bg-surface-container-high dark:hover:bg-surface-dim transition-colors" href="#">
+<span class="material-symbols-outlined">groups</span>
+<span class="font-body-md text-body-md">Meetings</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant dark:text-outline-variant hover:bg-surface-container-high dark:hover:bg-surface-dim transition-colors" href="#">
+<span class="material-symbols-outlined">database</span>
+<span class="font-body-md text-body-md">KVP</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg bg-secondary-container dark:bg-on-secondary-fixed-variant text-on-secondary-container dark:text-secondary-fixed font-semibold" href="#">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">library_books</span>
+<span class="font-body-md text-body-md">Knowledge</span>
+</a>
+<!-- Contextual Hierarchy (Wiki Sidebar) -->
+<div class="ml-8 mt-2 flex flex-col gap-1 border-l-2 border-outline-variant pl-3">
+<a class="font-body-sm text-body-sm text-on-surface-variant hover:text-primary transition-colors py-1 truncate" href="#">Qubit Architectures</a>
+<a class="font-body-sm text-body-sm text-primary font-semibold py-1 truncate" href="#">Simulation Concepts</a>
+<a class="font-body-sm text-body-sm text-on-surface-variant hover:text-primary transition-colors py-1 truncate" href="#">Error Correction Protocols</a>
+<a class="font-body-sm text-body-sm text-on-surface-variant hover:text-primary transition-colors py-1 truncate" href="#">Hardware Specs 2024</a>
+</div>
+<a class="flex items-center gap-3 px-3 py-2 mt-4 rounded-lg text-on-surface-variant dark:text-outline-variant hover:bg-surface-container-high dark:hover:bg-surface-dim transition-colors" href="#">
+<span class="material-symbols-outlined">calendar_today</span>
+<span class="font-body-md text-body-md">Calendar</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant dark:text-outline-variant hover:bg-surface-container-high dark:hover:bg-surface-dim transition-colors" href="#">
+<span class="material-symbols-outlined">group</span>
+<span class="font-body-md text-body-md">People</span>
+</a>
+</div>
+<!-- Footer Nav Tabs -->
+<div class="mt-auto pt-stack-md border-t border-outline-variant flex flex-col gap-stack-xs">
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant dark:text-outline-variant hover:bg-surface-container-high dark:hover:bg-surface-dim transition-colors" href="#">
+<span class="material-symbols-outlined">notifications</span>
+<span class="font-body-md text-body-md">Notifications</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant dark:text-outline-variant hover:bg-surface-container-high dark:hover:bg-surface-dim transition-colors" href="#">
+<span class="material-symbols-outlined">settings</span>
+<span class="font-body-md text-body-md">Settings</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant dark:text-outline-variant hover:bg-surface-container-high dark:hover:bg-surface-dim transition-colors" href="#">
+<span class="material-symbols-outlined">account_circle</span>
+<span class="font-body-md text-body-md">Profile</span>
+</a>
+</div>
+</nav>
+<!-- Main Content Area -->
+<main class="ml-sidebar-width flex-1 flex flex-col relative h-screen">
+<!-- TopNavBar -->
+<header class="fixed top-0 right-0 w-[calc(100%-240px)] h-16 bg-surface dark:bg-background border-b border-outline-variant dark:border-outline flat no shadows flex justify-between items-center px-gutter max-w-container-max z-10">
+<!-- Breadcrumb / Title -->
+<div class="flex items-center gap-2 text-on-surface-variant">
+<span class="font-body-sm text-body-sm hover:text-primary cursor-pointer">Knowledge</span>
+<span class="material-symbols-outlined text-[16px]">chevron_right</span>
+<span class="font-body-sm text-body-sm hover:text-primary cursor-pointer">Quantum Computing</span>
+<span class="material-symbols-outlined text-[16px]">chevron_right</span>
+<span class="font-title-md text-title-md font-bold text-on-surface">Simulation Concepts</span>
+</div>
+<!-- View Toggle & Actions -->
+<div class="flex items-center gap-stack-md">
+<!-- Toggle -->
+<div class="flex items-center bg-surface-container rounded-lg p-1 border border-outline-variant">
+<button class="px-3 py-1.5 rounded text-on-surface-variant font-body-sm hover:text-primary transition-colors flex items-center gap-2">
+<span class="material-symbols-outlined text-[18px]">description</span>
+                        Document
+                    </button>
+<button class="px-3 py-1.5 rounded bg-white shadow-sm border border-outline-variant text-primary font-body-sm font-semibold flex items-center gap-2">
+<span class="material-symbols-outlined text-[18px]" style="font-variation-settings: 'FILL' 1;">account_tree</span>
+                        Visual
+                    </button>
+</div>
+<div class="h-6 w-px bg-outline-variant mx-2"></div>
+<button class="text-on-surface-variant hover:text-primary transition-colors">
+<span class="material-symbols-outlined">help_outline</span>
+</button>
+<button class="text-on-surface-variant hover:text-primary transition-colors">
+<span class="material-symbols-outlined">add_circle</span>
+</button>
+</div>
+</header>
+<!-- Canvas Area (Visual Mode) -->
+<div class="mt-16 flex-1 relative overflow-hidden dot-pattern">
+<!-- SVG Background for lines -->
+<svg class="absolute inset-0 w-full h-full pointer-events-none" xmlns="http://www.w3.org/2000/svg">
+<!-- Connect Central to Top Left -->
+<path class="graph-line" d="M 500 300 Q 300 300 250 150"></path>
+<!-- Connect Central to Top Right -->
+<path class="graph-line" d="M 500 300 Q 700 300 750 180"></path>
+<!-- Connect Central to Bottom Left -->
+<path class="graph-line" d="M 500 300 Q 350 450 280 500"></path>
+<!-- Connect Central to Bottom Right -->
+<path class="graph-line" d="M 500 300 Q 650 450 720 520"></path>
+<!-- Cross connections -->
+<path class="graph-line opacity-50" d="M 250 150 Q 500 100 750 180"></path>
+</svg>
+<!-- Nodes Canvas -->
+<div class="absolute inset-0 p-margin-page overflow-auto">
+<div class="relative w-full h-full min-w-[1000px] min-h-[700px]">
+<!-- Central Node -->
+<div class="absolute top-[250px] left-[400px] w-[200px] node-card z-10 border-primary-container border-2">
+<div class="p-4 flex flex-col items-center text-center">
+<div class="w-10 h-10 bg-primary-container/10 rounded-full flex items-center justify-center mb-2 text-primary-container">
+<span class="material-symbols-outlined">hub</span>
+</div>
+<h3 class="font-title-md text-title-md text-on-surface mb-1">Quantum Simulation Concepts</h3>
+<p class="font-body-sm text-body-sm text-on-surface-variant">Core theories and models for Q-sims.</p>
+</div>
+</div>
+<!-- Top Left Node: Paper Reference -->
+<div class="absolute top-[80px] left-[150px] w-[220px] node-card z-10">
+<div class="p-3 border-b border-outline-variant flex items-center justify-between bg-surface-container-low rounded-t-lg">
+<span class="font-label-caps text-label-caps text-on-surface-variant flex items-center gap-1">
+<span class="material-symbols-outlined text-[14px]">article</span> Paper
+                            </span>
+</div>
+<div class="p-3">
+<h4 class="font-body-md text-body-md font-semibold text-on-surface mb-2">Feynman's Original Proposal (1982)</h4>
+<div class="flex items-center gap-2">
+<span class="w-2 h-2 rounded-full bg-emerald-500"></span>
+<span class="font-mono-sm text-mono-sm text-secondary">Read Status: Done</span>
+</div>
+</div>
+</div>
+<!-- Top Right Node: Concept -->
+<div class="absolute top-[110px] left-[650px] w-[240px] node-card z-10">
+<div class="p-3 border-b border-outline-variant flex items-center justify-between bg-surface-container-low rounded-t-lg">
+<span class="font-label-caps text-label-caps text-on-surface-variant flex items-center gap-1">
+<span class="material-symbols-outlined text-[14px]">lightbulb</span> Concept
+                            </span>
+</div>
+<div class="p-3">
+<h4 class="font-body-md text-body-md font-semibold text-on-surface mb-2">Hamiltonian Evolution</h4>
+<p class="font-body-sm text-body-sm text-on-surface-variant line-clamp-3 mb-3">
+                                Simulating the time evolution of a quantum system governed by a given Hamiltonian H using Trotterization.
+                            </p>
+<button class="text-primary font-body-sm font-semibold hover:underline flex items-center gap-1">
+                                View Details <span class="material-symbols-outlined text-[14px]">arrow_forward</span>
+</button>
+</div>
+</div>
+<!-- Bottom Left Node: KVP Data -->
+<div class="absolute top-[430px] left-[180px] w-[250px] node-card z-10">
+<div class="p-3 border-b border-outline-variant flex items-center justify-between bg-surface-container-low rounded-t-lg">
+<span class="font-label-caps text-label-caps text-on-surface-variant flex items-center gap-1">
+<span class="material-symbols-outlined text-[14px]">database</span> Simulation Params
+                            </span>
+</div>
+<div class="p-3 flex flex-col gap-2">
+<div class="flex justify-between items-center py-1 border-b border-outline-variant/50 border-dashed">
+<span class="font-label-caps text-label-caps text-on-surface-variant">Qubit_Count</span>
+<span class="font-mono-sm text-mono-sm text-primary">128</span>
+</div>
+<div class="flex justify-between items-center py-1 border-b border-outline-variant/50 border-dashed">
+<span class="font-label-caps text-label-caps text-on-surface-variant">Gate_Fidelity</span>
+<span class="font-mono-sm text-mono-sm text-primary">0.999</span>
+</div>
+<div class="flex justify-between items-center py-1">
+<span class="font-label-caps text-label-caps text-on-surface-variant">Sim_Type</span>
+<span class="font-mono-sm text-mono-sm text-primary">Variational</span>
+</div>
+</div>
+</div>
+<!-- Bottom Right Node: Decision -->
+<div class="absolute top-[450px] left-[620px] w-[220px] node-card z-10">
+<div class="p-3 border-b border-outline-variant flex items-center justify-between bg-surface-container-low rounded-t-lg">
+<span class="font-label-caps text-label-caps text-error flex items-center gap-1">
+<span class="material-symbols-outlined text-[14px]">gavel</span> Decision Log
+                            </span>
+</div>
+<div class="p-3">
+<h4 class="font-body-md text-body-md font-semibold text-on-surface mb-2">Algorithm Selection</h4>
+<p class="font-body-sm text-body-sm text-on-surface-variant mb-2">Chose VQE over QPE for near-term hardware constraints.</p>
+<span class="inline-block px-2 py-1 bg-surface-container rounded text-mono-sm font-mono-sm text-on-surface-variant">Approved by: Dr. Chen</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Contextual Tool Palette (Floating) -->
+<div class="absolute bottom-margin-page right-margin-page bg-white p-2 rounded-xl shadow-lg border border-outline-variant flex flex-col gap-2 z-20">
+<button class="w-10 h-10 rounded-lg flex items-center justify-center text-on-surface-variant hover:bg-surface-container hover:text-primary transition-colors" title="Zoom In">
+<span class="material-symbols-outlined">zoom_in</span>
+</button>
+<button class="w-10 h-10 rounded-lg flex items-center justify-center text-on-surface-variant hover:bg-surface-container hover:text-primary transition-colors" title="Zoom Out">
+<span class="material-symbols-outlined">zoom_out</span>
+</button>
+<div class="w-6 h-px bg-outline-variant mx-auto"></div>
+<button class="w-10 h-10 rounded-lg flex items-center justify-center text-on-surface-variant hover:bg-surface-container hover:text-primary transition-colors" title="Reset View">
+<span class="material-symbols-outlined">filter_center_focus</span>
+</button>
+<button class="w-10 h-10 rounded-lg flex items-center justify-center text-on-surface-variant hover:bg-surface-container hover:text-primary transition-colors" title="Add Node">
+<span class="material-symbols-outlined">add_circle</span>
+</button>
+</div>
+</div>
+</main>
+</body></html>

@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Multi-Perspective Task Board</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&amp;family=JetBrains+Mono:wght@400&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "on-tertiary-container": "#ffd2be",
+                    "primary": "#3525cd",
+                    "on-primary-fixed-variant": "#3323cc",
+                    "secondary-container": "#dae2fd",
+                    "surface-container-lowest": "#ffffff",
+                    "tertiary-fixed-dim": "#ffb695",
+                    "on-tertiary-fixed-variant": "#7b2f00",
+                    "on-tertiary": "#ffffff",
+                    "on-secondary": "#ffffff",
+                    "error": "#ba1a1a",
+                    "surface-container": "#e5eeff",
+                    "on-secondary-fixed-variant": "#3f465c",
+                    "on-primary-fixed": "#0f0069",
+                    "on-surface": "#0b1c30",
+                    "primary-container": "#4f46e5",
+                    "outline": "#777587",
+                    "tertiary": "#7e3000",
+                    "surface-tint": "#4d44e3",
+                    "on-primary-container": "#dad7ff",
+                    "on-secondary-fixed": "#131b2e",
+                    "on-error-container": "#93000a",
+                    "on-tertiary-fixed": "#351000",
+                    "on-primary": "#ffffff",
+                    "on-background": "#0b1c30",
+                    "on-secondary-container": "#5c647a",
+                    "secondary": "#565e74",
+                    "secondary-fixed-dim": "#bec6e0",
+                    "primary-fixed": "#e2dfff",
+                    "tertiary-fixed": "#ffdbcc",
+                    "inverse-surface": "#213145",
+                    "primary-fixed-dim": "#c3c0ff",
+                    "inverse-on-surface": "#eaf1ff",
+                    "outline-variant": "#c7c4d8",
+                    "secondary-fixed": "#dae2fd",
+                    "surface-container-highest": "#d3e4fe",
+                    "surface-container-low": "#eff4ff",
+                    "background": "#f8f9ff",
+                    "inverse-primary": "#c3c0ff",
+                    "on-surface-variant": "#464555",
+                    "surface-dim": "#cbdbf5",
+                    "surface-variant": "#d3e4fe",
+                    "surface": "#f8f9ff",
+                    "surface-bright": "#f8f9ff",
+                    "on-error": "#ffffff",
+                    "error-container": "#ffdad6",
+                    "surface-container-high": "#dce9ff",
+                    "tertiary-container": "#a44100"
+            },
+            "borderRadius": {
+                    "DEFAULT": "0.25rem",
+                    "lg": "0.5rem",
+                    "xl": "0.75rem",
+                    "full": "9999px"
+            },
+            "spacing": {
+                    "margin-page": "40px",
+                    "sidebar-width": "240px",
+                    "stack-lg": "24px",
+                    "stack-sm": "8px",
+                    "stack-xs": "4px",
+                    "stack-md": "16px",
+                    "container-max": "1440px",
+                    "gutter": "24px",
+                    "unit": "4px"
+            },
+            "fontFamily": {
+                    "title-md": ["Inter"],
+                    "body-md": ["Inter"],
+                    "display-lg": ["Inter"],
+                    "body-sm": ["Inter"],
+                    "label-caps": ["Inter"],
+                    "body-lg": ["Inter"],
+                    "headline-lg": ["Inter"],
+                    "mono-sm": ["JetBrains Mono"],
+                    "headline-md": ["Inter"]
+            },
+            "fontSize": {
+                    "title-md": ["18px", {"lineHeight": "24px", "fontWeight": "600"}],
+                    "body-md": ["14px", {"lineHeight": "20px", "fontWeight": "400"}],
+                    "display-lg": ["48px", {"lineHeight": "56px", "letterSpacing": "-0.02em", "fontWeight": "700"}],
+                    "body-sm": ["13px", {"lineHeight": "18px", "fontWeight": "400"}],
+                    "label-caps": ["11px", {"lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "600"}],
+                    "body-lg": ["16px", {"lineHeight": "24px", "fontWeight": "400"}],
+                    "headline-lg": ["32px", {"lineHeight": "40px", "letterSpacing": "-0.02em", "fontWeight": "600"}],
+                    "mono-sm": ["12px", {"lineHeight": "16px", "fontWeight": "400"}],
+                    "headline-md": ["24px", {"lineHeight": "32px", "letterSpacing": "-0.01em", "fontWeight": "600"}]
+            }
+          }
+        }
+      }
+    </script>
+<style>
+        .no-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .no-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+    </style>
+</head>
+<body class="bg-background text-on-surface antialiased min-h-screen">
+<!-- SideNavBar -->
+<nav class="bg-surface-container-low fixed left-0 top-0 h-screen w-sidebar-width border-r border-outline-variant flex flex-col py-margin-page px-stack-md z-20">
+<div class="flex items-center gap-3 mb-stack-lg px-3">
+<div class="w-8 h-8 rounded bg-primary-container text-on-primary-container flex items-center justify-center font-bold">FG</div>
+<div class="flex flex-col">
+<span class="font-title-md text-title-md font-bold text-on-surface">FG Workspace</span>
+<span class="font-label-caps text-label-caps text-on-surface-variant">Research OS</span>
+</div>
+</div>
+<ul class="flex flex-col gap-1 flex-1">
+<!-- Items -> Home to People -->
+<li><a class="flex items-center gap-3 px-3 py-2 rounded-lg font-body-md text-body-md text-on-surface-variant hover:bg-surface-container-high transition-colors" href="#"><span class="material-symbols-outlined">home</span>Home</a></li>
+<li><a class="flex items-center gap-3 px-3 py-2 rounded-lg font-body-md text-body-md text-on-surface-variant hover:bg-surface-container-high transition-colors" href="#"><span class="material-symbols-outlined">assignment</span>My Work</a></li>
+<!-- Active Tab: Projects -->
+<li><a class="flex items-center gap-3 px-3 py-2 bg-secondary-container text-on-secondary-container rounded-lg font-semibold transition-all duration-150 ease-in-out" href="#"><span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">folder_open</span>Projects</a></li>
+<li><a class="flex items-center gap-3 px-3 py-2 rounded-lg font-body-md text-body-md text-on-surface-variant hover:bg-surface-container-high transition-colors" href="#"><span class="material-symbols-outlined">ads_click</span>Goals</a></li>
+<li><a class="flex items-center gap-3 px-3 py-2 rounded-lg font-body-md text-body-md text-on-surface-variant hover:bg-surface-container-high transition-colors" href="#"><span class="material-symbols-outlined">groups</span>Meetings</a></li>
+<li><a class="flex items-center gap-3 px-3 py-2 rounded-lg font-body-md text-body-md text-on-surface-variant hover:bg-surface-container-high transition-colors" href="#"><span class="material-symbols-outlined">database</span>KVP</a></li>
+<li><a class="flex items-center gap-3 px-3 py-2 rounded-lg font-body-md text-body-md text-on-surface-variant hover:bg-surface-container-high transition-colors" href="#"><span class="material-symbols-outlined">library_books</span>Knowledge</a></li>
+<li><a class="flex items-center gap-3 px-3 py-2 rounded-lg font-body-md text-body-md text-on-surface-variant hover:bg-surface-container-high transition-colors" href="#"><span class="material-symbols-outlined">calendar_today</span>Calendar</a></li>
+<li><a class="flex items-center gap-3 px-3 py-2 rounded-lg font-body-md text-body-md text-on-surface-variant hover:bg-surface-container-high transition-colors" href="#"><span class="material-symbols-outlined">group</span>People</a></li>
+</ul>
+<div class="mt-auto border-t border-outline-variant pt-4">
+<ul class="flex flex-col gap-1">
+<li><a class="flex items-center gap-3 px-3 py-2 rounded-lg font-body-md text-body-md text-on-surface-variant hover:bg-surface-container-high transition-colors" href="#"><span class="material-symbols-outlined">notifications</span>Notifications</a></li>
+<li><a class="flex items-center gap-3 px-3 py-2 rounded-lg font-body-md text-body-md text-on-surface-variant hover:bg-surface-container-high transition-colors" href="#"><span class="material-symbols-outlined">settings</span>Settings</a></li>
+<li><a class="flex items-center gap-3 px-3 py-2 rounded-lg font-body-md text-body-md text-on-surface-variant hover:bg-surface-container-high transition-colors" href="#"><span class="material-symbols-outlined">account_circle</span>Profile</a></li>
+</ul>
+</div>
+</nav>
+<!-- TopNavBar -->
+<header class="bg-surface fixed top-0 right-0 w-[calc(100%-240px)] h-16 border-b border-outline-variant flex justify-between items-center px-gutter max-w-container-max ml-auto z-10">
+<div class="flex items-center w-96">
+<div class="relative w-full focus-within:ring-2 focus-within:ring-primary rounded-md">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant text-sm">search</span>
+<input class="w-full pl-10 pr-4 py-2 bg-surface-container border border-outline-variant rounded-md font-body-sm text-body-sm focus:outline-none placeholder:text-on-surface-variant" placeholder="Search across OS..." type="text"/>
+</div>
+</div>
+<div class="flex items-center gap-4 text-on-surface-variant">
+<button class="hover:text-primary transition-colors flex items-center justify-center w-8 h-8 rounded-full hover:bg-surface-container-high"><span class="material-symbols-outlined">help_outline</span></button>
+<button class="hover:text-primary transition-colors flex items-center justify-center w-8 h-8 rounded-full hover:bg-surface-container-high"><span class="material-symbols-outlined">add_circle</span></button>
+<div class="w-8 h-8 rounded-full bg-secondary-container border border-outline-variant overflow-hidden">
+<img class="w-full h-full object-cover" data-alt="A small circular avatar portrait of a professional in a modern light mode UI setting, crisp lighting." src="https://lh3.googleusercontent.com/aida-public/AB6AXuDrfssIyVWPZf2SWMX6oxkPb8FXBeqIZzjLaccnXxlpSbQPzKmal9me-Km43Iu8fm6aKWQPCZpYetCa2MtU0cSZ85o3zWxw4-J0ns9uGt2gv1f-QE_YHtt1HIbd4xdzsdxmf2Uw8MjLcgTyqsSkuDVbRYYDFTt1qlm2WLcvBwIw_7Jhg3PIogn1SUlVaorYac_duubFPGk449UvsQMTRG9UDdrmQ-doP2Nj5-NluqcKx_bVA7w8uG18Kw"/>
+</div>
+</div>
+</header>
+<!-- Main Content Area -->
+<main class="ml-[240px] pt-16 min-h-screen flex flex-col relative max-w-container-max">
+<!-- Page Header & View Switcher -->
+<div class="px-margin-page pt-margin-page pb-stack-lg border-b border-outline-variant bg-surface-bright sticky top-16 z-0">
+<div class="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-stack-md">
+<div>
+<div class="flex items-center gap-2 mb-2">
+<span class="font-label-caps text-label-caps text-on-surface-variant tracking-wider uppercase">Project Workspace</span>
+<span class="material-symbols-outlined text-sm text-on-surface-variant">chevron_right</span>
+<span class="font-label-caps text-label-caps text-primary tracking-wider uppercase">Active Phase</span>
+</div>
+<h1 class="font-headline-lg text-headline-lg text-on-surface">Quantum Materials Study</h1>
+</div>
+<!-- Quick Actions -->
+<div class="flex items-center gap-3">
+<button class="px-4 py-2 bg-surface-container-lowest border border-outline-variant rounded font-body-sm text-body-sm text-on-surface flex items-center gap-2 hover:bg-surface-container-low transition-colors">
+<span class="material-symbols-outlined text-sm">filter_list</span> Filter
+                    </button>
+<button class="px-4 py-2 bg-primary-container text-on-primary-container rounded font-body-sm text-body-sm font-semibold flex items-center gap-2 hover:bg-primary hover:text-white transition-colors">
+<span class="material-symbols-outlined text-sm">add</span> New Task
+                    </button>
+</div>
+</div>
+<!-- Multi-Perspective View Switcher -->
+<div class="flex items-center bg-surface-container-low p-1 rounded-lg w-fit border border-outline-variant">
+<button class="px-4 py-1.5 rounded font-body-sm text-body-sm text-on-surface-variant hover:text-on-surface transition-colors">My Board</button>
+<button class="px-4 py-1.5 rounded bg-surface border border-outline-variant shadow-sm font-body-sm text-body-sm font-semibold text-primary">Project Board</button>
+<button class="px-4 py-1.5 rounded font-body-sm text-body-sm text-on-surface-variant hover:text-on-surface transition-colors">Person Board</button>
+<button class="px-4 py-1.5 rounded font-body-sm text-body-sm text-on-surface-variant hover:text-on-surface transition-colors">Team Overview</button>
+</div>
+</div>
+<!-- Kanban Board Canvas -->
+<div class="flex-1 overflow-x-auto no-scrollbar bg-background p-margin-page">
+<div class="flex gap-stack-lg min-w-max h-full items-start">
+<!-- Column 1: Backlog -->
+<div class="w-[340px] flex flex-col bg-surface-container-lowest border border-outline-variant rounded-lg overflow-hidden h-[calc(100vh-280px)]">
+<div class="p-4 border-b border-outline-variant bg-surface-bright flex justify-between items-center">
+<div class="flex items-center gap-2">
+<span class="w-2 h-2 rounded-full bg-outline-variant"></span>
+<h3 class="font-title-md text-title-md text-on-surface">Backlog</h3>
+<span class="font-mono-sm text-mono-sm bg-surface-container-low px-1.5 py-0.5 rounded text-on-surface-variant">12</span>
+</div>
+<button class="text-on-surface-variant hover:text-on-surface"><span class="material-symbols-outlined text-sm">more_horiz</span></button>
+</div>
+<div class="flex-1 overflow-y-auto p-3 flex flex-col gap-3">
+<!-- Task Card Minimal (Backlog) -->
+<div class="bg-surface border border-outline-variant rounded p-3 shadow-[0_1px_2px_0_rgba(0,0,0,0.05)] cursor-pointer hover:border-primary-fixed-dim transition-colors group">
+<div class="flex justify-between items-start mb-2">
+<span class="font-label-caps text-label-caps text-secondary px-2 py-0.5 bg-secondary-container rounded">Literature</span>
+<span class="font-mono-sm text-mono-sm text-on-surface-variant">T-104</span>
+</div>
+<h4 class="font-body-md text-body-md font-semibold text-on-surface mb-3 line-clamp-2 group-hover:text-primary transition-colors">Review initial papers on YBCO properties at lower temperatures</h4>
+</div>
+</div>
+</div>
+<!-- Column 2: In Progress (Focus) -->
+<div class="w-[340px] flex flex-col bg-surface-container-lowest border border-outline-variant rounded-lg overflow-hidden h-[calc(100vh-280px)] shadow-[0_4px_6px_-1px_rgba(0,0,0,0.05)] ring-1 ring-primary/10">
+<div class="p-4 border-b border-outline-variant bg-surface-bright flex justify-between items-center">
+<div class="flex items-center gap-2">
+<span class="w-2 h-2 rounded-full bg-primary"></span>
+<h3 class="font-title-md text-title-md text-on-surface">In Progress</h3>
+<span class="font-mono-sm text-mono-sm bg-surface-container-low px-1.5 py-0.5 rounded text-on-surface-variant">3</span>
+</div>
+<button class="text-on-surface-variant hover:text-on-surface"><span class="material-symbols-outlined text-sm">more_horiz</span></button>
+</div>
+<div class="flex-1 overflow-y-auto p-3 flex flex-col gap-3">
+<!-- Extended Task Card -->
+<div class="bg-surface border border-primary-fixed-dim rounded-lg p-4 shadow-[0_1px_2px_0_rgba(0,0,0,0.05)] flex flex-col gap-4">
+<div>
+<div class="flex justify-between items-start mb-2">
+<div class="flex gap-2">
+<span class="font-label-caps text-label-caps text-primary px-2 py-0.5 bg-primary-fixed rounded">Synthesis</span>
+<span class="font-label-caps text-label-caps text-error px-2 py-0.5 border border-error-container rounded flex items-center gap-1"><span class="material-symbols-outlined text-[10px]">priority_high</span>High</span>
+</div>
+<span class="font-mono-sm text-mono-sm text-on-surface-variant">QMS-42</span>
+</div>
+<h4 class="font-body-lg text-body-lg font-semibold text-on-surface">Synthesize Phase 2 Compounds</h4>
+</div>
+<!-- Extended Roles & Workload -->
+<div class="bg-surface-container-low rounded p-3 border border-outline-variant flex flex-col gap-3">
+<!-- Owner -->
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-2">
+<div class="w-6 h-6 rounded-full bg-secondary-container flex items-center justify-center font-mono-sm text-[10px] font-bold text-on-secondary-container">AL</div>
+<span class="font-body-sm text-body-sm text-on-surface">Alex Rivera</span>
+</div>
+<span class="font-label-caps text-label-caps text-on-surface-variant">Owner</span>
+</div>
+<div class="h-px bg-outline-variant w-full"></div>
+<!-- Assignee with Workload -->
+<div class="flex flex-col gap-1.5">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-2">
+<div class="w-6 h-6 rounded-full bg-tertiary-container flex items-center justify-center font-mono-sm text-[10px] font-bold text-on-tertiary-container">CH</div>
+<span class="font-body-sm text-body-sm text-on-surface font-semibold">Chris Chen</span>
+</div>
+<span class="font-label-caps text-label-caps text-on-surface-variant">Assignee</span>
+</div>
+<!-- Workload Context -->
+<div class="pl-8 flex items-center gap-2">
+<div class="flex-1 h-1 bg-surface-container-high rounded-full overflow-hidden">
+<div class="h-full bg-tertiary-container w-[85%]"></div>
+</div>
+<span class="font-mono-sm text-[10px] text-tertiary">85% Cap</span>
+</div>
+</div>
+<div class="h-px bg-outline-variant w-full"></div>
+<!-- Reviewer -->
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-2">
+<div class="w-6 h-6 rounded-full bg-surface-variant border border-outline-variant flex items-center justify-center font-mono-sm text-[10px] text-on-surface-variant">SJ</div>
+<span class="font-body-sm text-body-sm text-on-surface-variant">Sam Jones</span>
+</div>
+<span class="font-label-caps text-label-caps text-on-surface-variant">Reviewer</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Column 3: Review -->
+<div class="w-[340px] flex flex-col bg-surface-container-lowest border border-outline-variant rounded-lg overflow-hidden h-[calc(100vh-280px)]">
+<div class="p-4 border-b border-outline-variant bg-surface-bright flex justify-between items-center">
+<div class="flex items-center gap-2">
+<span class="w-2 h-2 rounded-full bg-tertiary-container"></span>
+<h3 class="font-title-md text-title-md text-on-surface">Review</h3>
+<span class="font-mono-sm text-mono-sm bg-surface-container-low px-1.5 py-0.5 rounded text-on-surface-variant">1</span>
+</div>
+<button class="text-on-surface-variant hover:text-on-surface"><span class="material-symbols-outlined text-sm">more_horiz</span></button>
+</div>
+<div class="flex-1 overflow-y-auto p-3 flex flex-col gap-3">
+<!-- Extended Task Card -->
+<div class="bg-surface border border-outline-variant rounded-lg p-4 shadow-[0_1px_2px_0_rgba(0,0,0,0.05)] flex flex-col gap-4 opacity-75">
+<div>
+<div class="flex justify-between items-start mb-2">
+<span class="font-label-caps text-label-caps text-on-surface-variant px-2 py-0.5 bg-surface-variant rounded">Data Analysis</span>
+<span class="font-mono-sm text-mono-sm text-on-surface-variant">QMS-38</span>
+</div>
+<h4 class="font-body-lg text-body-lg font-semibold text-on-surface">Cryogenic Stress Test Results Compile</h4>
+</div>
+<div class="bg-surface-container-lowest rounded p-2 border border-outline-variant flex flex-col gap-2">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-2">
+<div class="w-5 h-5 rounded-full bg-secondary-container flex items-center justify-center font-mono-sm text-[9px] font-bold text-on-secondary-container">AL</div>
+<span class="font-body-sm text-body-sm text-on-surface">Alex (Owner)</span>
+</div>
+</div>
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-2">
+<div class="w-5 h-5 rounded-full bg-primary-container flex items-center justify-center font-mono-sm text-[9px] font-bold text-on-primary-container">SJ</div>
+<span class="font-body-sm text-body-sm text-on-surface font-semibold">Sam (Reviewing)</span>
+</div>
+<span class="material-symbols-outlined text-[14px] text-tertiary-container">pending</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</main>
+</body></html>

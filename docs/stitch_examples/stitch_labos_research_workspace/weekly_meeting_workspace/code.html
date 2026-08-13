@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Weekly Meeting Workspace - FG Workspace</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&amp;family=JetBrains+Mono:wght@400&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "on-tertiary-fixed-variant": "#7b2f00",
+                    "on-primary-container": "#dad7ff",
+                    "primary-fixed": "#e2dfff",
+                    "surface-container-highest": "#d3e4fe",
+                    "secondary-fixed": "#dae2fd",
+                    "tertiary-container": "#a44100",
+                    "on-tertiary-container": "#ffd2be",
+                    "surface": "#f8f9ff",
+                    "on-surface": "#0b1c30",
+                    "surface-bright": "#f8f9ff",
+                    "outline-variant": "#c7c4d8",
+                    "on-primary-fixed": "#0f0069",
+                    "surface-container-high": "#dce9ff",
+                    "secondary-fixed-dim": "#bec6e0",
+                    "secondary-container": "#dae2fd",
+                    "inverse-on-surface": "#eaf1ff",
+                    "error-container": "#ffdad6",
+                    "on-tertiary-fixed": "#351000",
+                    "on-error": "#ffffff",
+                    "on-secondary-fixed-variant": "#3f465c",
+                    "on-secondary-container": "#5c647a",
+                    "on-background": "#0b1c30",
+                    "tertiary": "#7e3000",
+                    "on-secondary": "#ffffff",
+                    "on-primary": "#ffffff",
+                    "outline": "#777587",
+                    "on-secondary-fixed": "#131b2e",
+                    "secondary": "#565e74",
+                    "surface-container-lowest": "#ffffff",
+                    "on-tertiary": "#ffffff",
+                    "surface-container": "#e5eeff",
+                    "primary": "#3525cd",
+                    "on-surface-variant": "#464555",
+                    "on-error-container": "#93000a",
+                    "tertiary-fixed-dim": "#ffb695",
+                    "tertiary-fixed": "#ffdbcc",
+                    "error": "#ba1a1a",
+                    "surface-tint": "#4d44e3",
+                    "background": "#f8f9ff",
+                    "surface-variant": "#d3e4fe",
+                    "surface-container-low": "#eff4ff",
+                    "inverse-surface": "#213145",
+                    "primary-container": "#4f46e5",
+                    "inverse-primary": "#c3c0ff",
+                    "on-primary-fixed-variant": "#3323cc",
+                    "primary-fixed-dim": "#c3c0ff",
+                    "surface-dim": "#cbdbf5"
+            },
+            "borderRadius": {
+                    "DEFAULT": "0.25rem",
+                    "lg": "0.5rem",
+                    "xl": "0.75rem",
+                    "full": "9999px"
+            },
+            "spacing": {
+                    "container-max": "1440px",
+                    "stack-md": "16px",
+                    "gutter": "24px",
+                    "stack-xs": "4px",
+                    "unit": "4px",
+                    "margin-page": "40px",
+                    "sidebar-width": "240px",
+                    "stack-sm": "8px",
+                    "stack-lg": "24px"
+            },
+            "fontFamily": {
+                    "title-md": ["Inter"],
+                    "mono-sm": ["JetBrains Mono"],
+                    "body-sm": ["Inter"],
+                    "display-lg": ["Inter"],
+                    "label-caps": ["Inter"],
+                    "body-md": ["Inter"],
+                    "headline-md": ["Inter"],
+                    "headline-lg": ["Inter"],
+                    "body-lg": ["Inter"]
+            },
+            "fontSize": {
+                    "title-md": ["18px", {"lineHeight": "24px", "fontWeight": "600"}],
+                    "mono-sm": ["12px", {"lineHeight": "16px", "fontWeight": "400"}],
+                    "body-sm": ["13px", {"lineHeight": "18px", "fontWeight": "400"}],
+                    "display-lg": ["48px", {"lineHeight": "56px", "letterSpacing": "-0.02em", "fontWeight": "700"}],
+                    "label-caps": ["11px", {"lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "600"}],
+                    "body-md": ["14px", {"lineHeight": "20px", "fontWeight": "400"}],
+                    "headline-md": ["24px", {"lineHeight": "32px", "letterSpacing": "-0.01em", "fontWeight": "600"}],
+                    "headline-lg": ["32px", {"lineHeight": "40px", "letterSpacing": "-0.02em", "fontWeight": "600"}],
+                    "body-lg": ["16px", {"lineHeight": "24px", "fontWeight": "400"}]
+            }
+          }
+        }
+      }
+    </script>
+</head>
+<body class="bg-background text-on-background font-body-md antialiased h-screen overflow-hidden flex selection:bg-primary-fixed selection:text-on-primary-fixed">
+<!-- SideNavBar -->
+<nav class="fixed left-0 top-0 h-screen w-sidebar-width bg-surface-container-low dark:bg-surface-container-lowest border-r border-outline-variant dark:border-outline flex flex-col h-full py-margin-page px-stack-md z-20">
+<div class="mb-stack-lg px-stack-sm flex items-center gap-stack-sm">
+<div class="w-8 h-8 rounded bg-primary flex items-center justify-center text-on-primary font-bold">FG</div>
+<div>
+<h1 class="font-title-md text-title-md font-bold text-on-surface dark:text-on-primary-fixed leading-tight">FG Workspace</h1>
+<span class="font-label-caps text-label-caps text-on-surface-variant">Research OS</span>
+</div>
+</div>
+<ul class="flex flex-col gap-unit flex-grow overflow-y-auto">
+<li>
+<a class="flex items-center gap-stack-sm px-stack-sm py-2 rounded-lg text-on-surface-variant dark:text-outline-variant hover:bg-surface-container-high dark:hover:bg-surface-dim transition-colors transition-all duration-150 ease-in-out font-body-md text-body-md" href="#">
+<span class="material-symbols-outlined" data-icon="home" style="font-variation-settings: 'FILL' 0;">home</span>
+                    Home
+                </a>
+</li>
+<li>
+<a class="flex items-center gap-stack-sm px-stack-sm py-2 rounded-lg text-on-surface-variant dark:text-outline-variant hover:bg-surface-container-high dark:hover:bg-surface-dim transition-colors transition-all duration-150 ease-in-out font-body-md text-body-md" href="#">
+<span class="material-symbols-outlined" data-icon="assignment" style="font-variation-settings: 'FILL' 0;">assignment</span>
+                    My Work
+                </a>
+</li>
+<li>
+<a class="flex items-center gap-stack-sm px-stack-sm py-2 rounded-lg text-on-surface-variant dark:text-outline-variant hover:bg-surface-container-high dark:hover:bg-surface-dim transition-colors transition-all duration-150 ease-in-out font-body-md text-body-md" href="#">
+<span class="material-symbols-outlined" data-icon="folder_open" style="font-variation-settings: 'FILL' 0;">folder_open</span>
+                    Projects
+                </a>
+</li>
+<li>
+<a class="flex items-center gap-stack-sm px-stack-sm py-2 rounded-lg text-on-surface-variant dark:text-outline-variant hover:bg-surface-container-high dark:hover:bg-surface-dim transition-colors transition-all duration-150 ease-in-out font-body-md text-body-md" href="#">
+<span class="material-symbols-outlined" data-icon="ads_click" style="font-variation-settings: 'FILL' 0;">ads_click</span>
+                    Goals
+                </a>
+</li>
+<li>
+<a class="flex items-center gap-stack-sm px-stack-sm py-2 bg-secondary-container dark:bg-on-secondary-fixed-variant text-on-secondary-container dark:text-secondary-fixed rounded-lg font-semibold transition-all duration-150 ease-in-out font-body-md text-body-md" href="#">
+<span class="material-symbols-outlined" data-icon="groups" style="font-variation-settings: 'FILL' 1;">groups</span>
+                    Meetings
+                </a>
+</li>
+<li>
+<a class="flex items-center gap-stack-sm px-stack-sm py-2 rounded-lg text-on-surface-variant dark:text-outline-variant hover:bg-surface-container-high dark:hover:bg-surface-dim transition-colors transition-all duration-150 ease-in-out font-body-md text-body-md" href="#">
+<span class="material-symbols-outlined" data-icon="database" style="font-variation-settings: 'FILL' 0;">database</span>
+                    KVP
+                </a>
+</li>
+<li>
+<a class="flex items-center gap-stack-sm px-stack-sm py-2 rounded-lg text-on-surface-variant dark:text-outline-variant hover:bg-surface-container-high dark:hover:bg-surface-dim transition-colors transition-all duration-150 ease-in-out font-body-md text-body-md" href="#">
+<span class="material-symbols-outlined" data-icon="library_books" style="font-variation-settings: 'FILL' 0;">library_books</span>
+                    Knowledge
+                </a>
+</li>
+<li>
+<a class="flex items-center gap-stack-sm px-stack-sm py-2 rounded-lg text-on-surface-variant dark:text-outline-variant hover:bg-surface-container-high dark:hover:bg-surface-dim transition-colors transition-all duration-150 ease-in-out font-body-md text-body-md" href="#">
+<span class="material-symbols-outlined" data-icon="calendar_today" style="font-variation-settings: 'FILL' 0;">calendar_today</span>
+                    Calendar
+                </a>
+</li>
+<li>
+<a class="flex items-center gap-stack-sm px-stack-sm py-2 rounded-lg text-on-surface-variant dark:text-outline-variant hover:bg-surface-container-high dark:hover:bg-surface-dim transition-colors transition-all duration-150 ease-in-out font-body-md text-body-md" href="#">
+<span class="material-symbols-outlined" data-icon="group" style="font-variation-settings: 'FILL' 0;">group</span>
+                    People
+                </a>
+</li>
+</ul>
+<ul class="flex flex-col gap-unit mt-stack-md pt-stack-md border-t border-outline-variant dark:border-outline">
+<li>
+<a class="flex items-center gap-stack-sm px-stack-sm py-2 rounded-lg text-on-surface-variant dark:text-outline-variant hover:bg-surface-container-high dark:hover:bg-surface-dim transition-colors transition-all duration-150 ease-in-out font-body-md text-body-md" href="#">
+<span class="material-symbols-outlined" data-icon="notifications" style="font-variation-settings: 'FILL' 0;">notifications</span>
+                    Notifications
+                </a>
+</li>
+<li>
+<a class="flex items-center gap-stack-sm px-stack-sm py-2 rounded-lg text-on-surface-variant dark:text-outline-variant hover:bg-surface-container-high dark:hover:bg-surface-dim transition-colors transition-all duration-150 ease-in-out font-body-md text-body-md" href="#">
+<span class="material-symbols-outlined" data-icon="settings" style="font-variation-settings: 'FILL' 0;">settings</span>
+                    Settings
+                </a>
+</li>
+<li>
+<a class="flex items-center gap-stack-sm px-stack-sm py-2 rounded-lg text-on-surface-variant dark:text-outline-variant hover:bg-surface-container-high dark:hover:bg-surface-dim transition-colors transition-all duration-150 ease-in-out font-body-md text-body-md" href="#">
+<span class="material-symbols-outlined" data-icon="account_circle" style="font-variation-settings: 'FILL' 0;">account_circle</span>
+                    Profile
+                </a>
+</li>
+</ul>
+</nav>
+<!-- TopNavBar -->
+<header class="fixed top-0 right-0 w-[calc(100%-240px)] h-16 bg-surface dark:bg-background border-b border-outline-variant dark:border-outline flex justify-between items-center px-gutter ml-auto z-10 transition-all duration-150 ease-in-out">
+<div class="flex items-center gap-stack-md w-1/3">
+<div class="relative w-full max-w-md flex items-center bg-surface-container-low rounded-lg border border-outline-variant focus-within:ring-2 focus-within:ring-primary overflow-hidden">
+<span class="material-symbols-outlined absolute left-3 text-on-surface-variant" data-icon="search">search</span>
+<input class="w-full bg-transparent border-none py-2 pl-10 pr-3 font-body-sm text-body-sm text-on-surface focus:ring-0 placeholder:text-on-surface-variant/50 outline-none" placeholder="Search FG Workspace..." type="text"/>
+</div>
+</div>
+<div class="flex items-center gap-stack-sm">
+<button class="p-2 text-on-surface-variant hover:text-primary dark:hover:text-primary-fixed-dim hover:bg-surface-container-high dark:hover:bg-surface-dim rounded-full transition-colors flex items-center justify-center">
+<span class="material-symbols-outlined" data-icon="help_outline">help_outline</span>
+</button>
+<button class="p-2 text-on-surface-variant hover:text-primary dark:hover:text-primary-fixed-dim hover:bg-surface-container-high dark:hover:bg-surface-dim rounded-full transition-colors flex items-center justify-center">
+<span class="material-symbols-outlined" data-icon="add_circle">add_circle</span>
+</button>
+</div>
+</header>
+<!-- Main Content Area -->
+<main class="ml-sidebar-width mt-16 flex-grow flex w-full h-[calc(100vh-64px)] overflow-hidden bg-background">
+<!-- Left/Center Canvas: The Meeting -->
+<div class="flex-grow flex flex-col h-full overflow-y-auto custom-scrollbar border-r border-outline-variant">
+<!-- Meeting Header Area -->
+<div class="px-margin-page py-stack-lg border-b border-outline-variant bg-surface">
+<div class="flex items-start justify-between mb-stack-md">
+<div>
+<div class="flex items-center gap-stack-sm mb-unit">
+<span class="font-label-caps text-label-caps text-primary px-2 py-1 bg-primary-fixed rounded-sm uppercase tracking-wider">Weekly Sync</span>
+<span class="font-mono-sm text-mono-sm text-on-surface-variant flex items-center gap-1">
+<span class="material-symbols-outlined text-[14px]">calendar_today</span> Oct 24, 2023
+                            </span>
+</div>
+<h2 class="font-headline-lg text-headline-lg text-on-surface">Core Research Team Sync</h2>
+</div>
+<div class="flex items-center gap-unit">
+<button class="px-3 py-1.5 flex items-center gap-1 font-body-sm text-body-sm text-on-surface-variant border border-outline-variant rounded hover:bg-surface-container-low transition-colors">
+<span class="material-symbols-outlined text-[16px]">arrow_back</span>
+                            Prev
+                        </button>
+<button class="px-3 py-1.5 flex items-center gap-1 font-body-sm text-body-sm text-on-surface-variant border border-outline-variant rounded hover:bg-surface-container-low transition-colors">
+                            Next
+                            <span class="material-symbols-outlined text-[16px]">arrow_forward</span>
+</button>
+</div>
+</div>
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-stack-sm">
+<div class="flex -space-x-2">
+<img class="w-8 h-8 rounded-full border-2 border-surface object-cover" data-alt="A small circular avatar of a professional in a minimalist grey setting, bright lighting, sharp focus, corporate headshot style." src="https://lh3.googleusercontent.com/aida-public/AB6AXuABtlnMHVQ_1pZzIsIvR3-V-lOCCkodW4GqBafIAtUgqqmdPgLoNt5fjx4_iW8La5vnVLbBdoz47ledno3AdAo-i6177r4dnOMnWRxMUwuFeXz4a0XEXw0hSWs6R6nTBzB8VyDkciu23uThuin6-nAPjY6ud5dV8i2Mi6_gAUkrYCeNWQLuQcvcAUJN85Q7V1qFqQOIx75pyCpkk5cLRR3Gh8_AduEMS30bRCyuKl32FkC7yxEcUdwhgQ"/>
+<img class="w-8 h-8 rounded-full border-2 border-surface object-cover" data-alt="A small circular avatar of a professional looking focused, high-key lighting, modern office background slightly blurred." src="https://lh3.googleusercontent.com/aida-public/AB6AXuAA21oAHY1G1_JODVhYwQSJfCV0mc1LR1XLSdlvBUDFC2cC8JVDavpMlBWEjwb2_ua0F17H2UCbxpwt19dYTKJkGBkk135-bLyxNurY7Gkpg6Mcp9sjPA-TjeZQ7xlFfuyyX3pq65awxNWW9WC4Uw5-VRbuI2OspOJuMexv8jq425r8Z4s0KUOcm7i2IIu96xfKdlkdVR12InIRYG_HI4nD_oBvwmmDWJAcuouZ7yVcNkPhELzp7uPUpQ"/>
+<img class="w-8 h-8 rounded-full border-2 border-surface object-cover" data-alt="A small circular avatar of a professional woman with glasses, neutral expression, clean white background studio lighting." src="https://lh3.googleusercontent.com/aida-public/AB6AXuAnOpL-pXauU3t7UZvOTxhcCGwQMR07lrOIJk9cE7Llpak99Gn7DQIDz4yN6h2mvIo1iFYD03XINCZMEWuJWxlFjMlQvsD4rHLZ94RtUk9Pq1LIcZv5vCCBsfp3oKEcj5Kl4yDLmL9vy_cA4nKmtxzmn8AR9HojEaB7SdmLehV73_bMZqIjLygjm1fwNFps1dAZorxmzE6VjBKlahVMnvvQ0ECpqecwI6RN6a5iHMhJtlhMwk-xUIZNGA"/>
+<div class="w-8 h-8 rounded-full border-2 border-surface bg-surface-container-highest flex items-center justify-center font-mono-sm text-[10px] text-on-surface font-semibold">+2</div>
+</div>
+<span class="font-body-sm text-body-sm text-on-surface-variant ml-2">5 Participants</span>
+</div>
+<div class="flex items-center gap-2">
+<span class="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-surface-container-high border border-outline-variant font-label-caps text-label-caps text-on-surface">
+<span class="w-2 h-2 rounded-full bg-[#10B981]"></span> Live
+                        </span>
+<button class="px-4 py-2 bg-primary text-on-primary font-body-sm text-body-sm rounded-lg hover:bg-primary/90 transition-colors shadow-sm">End Meeting</button>
+</div>
+</div>
+</div>
+<!-- Dynamic Agenda Content -->
+<div class="p-margin-page flex flex-col gap-stack-lg max-w-container-max mx-auto w-full">
+<!-- Section: Announcements -->
+<section class="bg-surface rounded-lg border border-outline-variant shadow-sm overflow-hidden">
+<div class="px-stack-md py-stack-sm bg-surface-container-low border-b border-outline-variant flex items-center justify-between">
+<h3 class="font-title-md text-title-md text-on-surface flex items-center gap-2">
+<span class="material-symbols-outlined text-primary text-[20px]">campaign</span>
+                            Announcements
+                        </h3>
+<button class="text-on-surface-variant hover:text-primary"><span class="material-symbols-outlined">add</span></button>
+</div>
+<div class="p-stack-md">
+<ul class="space-y-stack-sm">
+<li class="flex gap-stack-sm items-start group">
+<span class="material-symbols-outlined text-on-surface-variant mt-0.5 text-[18px]">drag_indicator</span>
+<div class="flex-grow text-on-surface font-body-md text-body-md">
+                                    Q3 Planning offsite dates confirmed for Nov 12-14. Check emails for travel booking details.
+                                </div>
+</li>
+<li class="flex gap-stack-sm items-start group">
+<span class="material-symbols-outlined text-on-surface-variant mt-0.5 text-[18px]">drag_indicator</span>
+<div class="flex-grow text-on-surface font-body-md text-body-md">
+                                    New GPU cluster allocation request form is now live in the Knowledge Base.
+                                </div>
+</li>
+</ul>
+</div>
+</section>
+<!-- Section: Project Updates -->
+<section class="bg-surface rounded-lg border border-outline-variant shadow-sm overflow-hidden">
+<div class="px-stack-md py-stack-sm bg-surface-container-low border-b border-outline-variant flex items-center justify-between">
+<h3 class="font-title-md text-title-md text-on-surface flex items-center gap-2">
+<span class="material-symbols-outlined text-primary text-[20px]">folder_special</span>
+                            Project Updates
+                        </h3>
+<button class="text-on-surface-variant hover:text-primary"><span class="material-symbols-outlined">add</span></button>
+</div>
+<div class="p-stack-md flex flex-col gap-stack-md">
+<div class="border-b border-outline-variant pb-stack-md last:border-0 last:pb-0">
+<div class="flex items-center justify-between mb-unit">
+<span class="font-body-md text-body-md font-semibold text-on-surface">Alpha Model Retraining</span>
+<span class="font-label-caps text-label-caps px-2 py-0.5 bg-surface-container-highest text-on-surface rounded">On Track</span>
+</div>
+<p class="font-body-sm text-body-sm text-on-surface-variant mb-stack-sm">Data pipeline optimization completed. Training initialized on cluster B.</p>
+<!-- Inline Task Creation Context -->
+<div class="bg-inverse-on-surface p-stack-sm rounded border border-outline-variant/50 flex flex-col gap-2">
+<div class="flex items-center gap-2 font-mono-sm text-mono-sm text-on-surface">
+<span class="material-symbols-outlined text-[16px] text-primary">check_box_outline_blank</span>
+<span>Monitor loss curve for first 10 epochs.</span>
+</div>
+<div class="flex items-center gap-2 mt-1">
+<input class="h-7 text-xs bg-surface border border-outline-variant rounded px-2 w-32 focus:ring-1 focus:ring-primary focus:border-primary outline-none" placeholder="Assignee (e.g. @sarah)" type="text"/>
+<input class="h-7 text-xs bg-surface border border-outline-variant rounded px-2 focus:ring-1 focus:ring-primary focus:border-primary outline-none text-on-surface-variant" type="date"/>
+<button class="h-7 px-2 bg-surface border border-outline-variant rounded text-xs font-semibold text-on-surface hover:bg-surface-container-highest transition-colors">Create Task</button>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- Section: KVP Topics -->
+<section class="bg-surface rounded-lg border border-outline-variant shadow-sm overflow-hidden">
+<div class="px-stack-md py-stack-sm bg-surface-container-low border-b border-outline-variant flex items-center justify-between">
+<h3 class="font-title-md text-title-md text-on-surface flex items-center gap-2">
+<span class="material-symbols-outlined text-primary text-[20px]">database</span>
+                            KVP Topics
+                        </h3>
+</div>
+<div class="p-0">
+<table class="w-full text-left border-collapse">
+<tbody>
+<tr class="border-b border-outline-variant hover:bg-surface-container-lowest transition-colors">
+<td class="p-stack-sm pl-stack-md font-label-caps text-label-caps text-on-surface-variant w-1/3 align-top">MODEL_ARCHITECTURE</td>
+<td class="p-stack-sm pr-stack-md font-mono-sm text-mono-sm text-primary align-top break-all">Transformer-XL variants evaluation</td>
+</tr>
+<tr class="border-b border-outline-variant hover:bg-surface-container-lowest transition-colors">
+<td class="p-stack-sm pl-stack-md font-label-caps text-label-caps text-on-surface-variant w-1/3 align-top">DATASET_INGESTION_RATE</td>
+<td class="p-stack-sm pr-stack-md font-mono-sm text-mono-sm text-primary align-top">1.2 TB/hr (Target: 1.5 TB/hr)</td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+</div>
+</div>
+<!-- Right Panel: Meeting Intelligence -->
+<aside class="w-[320px] bg-surface border-l border-outline-variant flex flex-col h-full flex-shrink-0">
+<div class="p-stack-md border-b border-outline-variant flex items-center gap-2 bg-surface-container-lowest">
+<span class="material-symbols-outlined text-primary">psychology</span>
+<h3 class="font-title-md text-title-md text-on-surface">Intelligence</h3>
+</div>
+<div class="flex-grow overflow-y-auto p-stack-md flex flex-col gap-stack-lg custom-scrollbar">
+<!-- Unresolved Tasks from Prev -->
+<div>
+<h4 class="font-label-caps text-label-caps text-on-surface-variant mb-stack-sm uppercase tracking-wider flex items-center gap-1">
+<span class="material-symbols-outlined text-[14px]">history</span> Previous Unresolved
+                    </h4>
+<ul class="flex flex-col gap-2">
+<li class="bg-surface-container-low border border-outline-variant p-2 rounded-lg flex items-start gap-2">
+<input class="mt-0.5 rounded border-outline-variant text-primary focus:ring-primary h-4 w-4" type="checkbox"/>
+<div>
+<p class="font-body-sm text-body-sm text-on-surface leading-tight mb-1">Finalize budget allocation for cloud compute Q4.</p>
+<span class="font-mono-sm text-[10px] text-error flex items-center gap-0.5"><span class="material-symbols-outlined text-[12px]">warning</span> Overdue: Oct 20</span>
+</div>
+</li>
+<li class="bg-surface-container-low border border-outline-variant p-2 rounded-lg flex items-start gap-2">
+<input class="mt-0.5 rounded border-outline-variant text-primary focus:ring-primary h-4 w-4" type="checkbox"/>
+<div>
+<p class="font-body-sm text-body-sm text-on-surface leading-tight mb-1">Review candidate profiles for Data Eng role.</p>
+<span class="font-mono-sm text-[10px] text-on-surface-variant">@david</span>
+</div>
+</li>
+</ul>
+</div>
+<!-- Related Documents -->
+<div>
+<h4 class="font-label-caps text-label-caps text-on-surface-variant mb-stack-sm uppercase tracking-wider flex items-center gap-1">
+<span class="material-symbols-outlined text-[14px]">attach_file</span> Related Docs
+                    </h4>
+<div class="flex flex-col gap-unit">
+<a class="flex items-center gap-2 p-2 rounded hover:bg-surface-container-high transition-colors border border-transparent hover:border-outline-variant" href="#">
+<span class="material-symbols-outlined text-on-surface-variant text-[18px]">description</span>
+<span class="font-body-sm text-body-sm text-on-surface truncate">Q3 Performance Review.pdf</span>
+</a>
+<a class="flex items-center gap-2 p-2 rounded hover:bg-surface-container-high transition-colors border border-transparent hover:border-outline-variant" href="#">
+<span class="material-symbols-outlined text-on-surface-variant text-[18px]">table_chart</span>
+<span class="font-body-sm text-body-sm text-on-surface truncate">Resource Allocation Matrix.csv</span>
+</a>
+</div>
+</div>
+</div>
+</aside>
+</main>
+<style>
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background-color: #E5E7EB; /* outline-variant approx */
+            border-radius: 20px;
+        }
+        .dark .custom-scrollbar::-webkit-scrollbar-thumb {
+            background-color: #464555;
+        }
+    </style>
+</body></html>

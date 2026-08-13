@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+
+<html class="h-full" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Weekly Sync - FG Workspace</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&amp;family=JetBrains+Mono:wght@400&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+          darkMode: "class",
+          theme: {
+            extend: {
+              "colors": {
+                      "on-tertiary-container": "#ffd2be",
+                      "primary": "#3525cd",
+                      "on-primary-fixed-variant": "#3323cc",
+                      "secondary-container": "#dae2fd",
+                      "surface-container-lowest": "#ffffff",
+                      "tertiary-fixed-dim": "#ffb695",
+                      "on-tertiary-fixed-variant": "#7b2f00",
+                      "on-tertiary": "#ffffff",
+                      "on-secondary": "#ffffff",
+                      "error": "#ba1a1a",
+                      "surface-container": "#e5eeff",
+                      "on-secondary-fixed-variant": "#3f465c",
+                      "on-primary-fixed": "#0f0069",
+                      "on-surface": "#0b1c30",
+                      "primary-container": "#4f46e5",
+                      "outline": "#777587",
+                      "tertiary": "#7e3000",
+                      "surface-tint": "#4d44e3",
+                      "on-primary-container": "#dad7ff",
+                      "on-secondary-fixed": "#131b2e",
+                      "on-error-container": "#93000a",
+                      "on-tertiary-fixed": "#351000",
+                      "on-primary": "#ffffff",
+                      "on-background": "#0b1c30",
+                      "on-secondary-container": "#5c647a",
+                      "secondary": "#565e74",
+                      "secondary-fixed-dim": "#bec6e0",
+                      "primary-fixed": "#e2dfff",
+                      "tertiary-fixed": "#ffdbcc",
+                      "inverse-surface": "#213145",
+                      "primary-fixed-dim": "#c3c0ff",
+                      "inverse-on-surface": "#eaf1ff",
+                      "outline-variant": "#c7c4d8",
+                      "secondary-fixed": "#dae2fd",
+                      "surface-container-highest": "#d3e4fe",
+                      "surface-container-low": "#eff4ff",
+                      "background": "#f8f9ff",
+                      "inverse-primary": "#c3c0ff",
+                      "on-surface-variant": "#464555",
+                      "surface-dim": "#cbdbf5",
+                      "surface-variant": "#d3e4fe",
+                      "surface": "#f8f9ff",
+                      "surface-bright": "#f8f9ff",
+                      "on-error": "#ffffff",
+                      "error-container": "#ffdad6",
+                      "surface-container-high": "#dce9ff",
+                      "tertiary-container": "#a44100"
+              },
+              "borderRadius": {
+                      "DEFAULT": "0.25rem",
+                      "lg": "0.5rem",
+                      "xl": "0.75rem",
+                      "full": "9999px"
+              },
+              "spacing": {
+                      "margin-page": "40px",
+                      "sidebar-width": "240px",
+                      "stack-lg": "24px",
+                      "stack-sm": "8px",
+                      "stack-xs": "4px",
+                      "stack-md": "16px",
+                      "container-max": "1440px",
+                      "gutter": "24px",
+                      "unit": "4px"
+              },
+              "fontFamily": {
+                      "title-md": [
+                              "Inter"
+                      ],
+                      "body-md": [
+                              "Inter"
+                      ],
+                      "display-lg": [
+                              "Inter"
+                      ],
+                      "body-sm": [
+                              "Inter"
+                      ],
+                      "label-caps": [
+                              "Inter"
+                      ],
+                      "body-lg": [
+                              "Inter"
+                      ],
+                      "headline-lg": [
+                              "Inter"
+                      ],
+                      "mono-sm": [
+                              "JetBrains Mono"
+                      ],
+                      "headline-md": [
+                              "Inter"
+                      ]
+              },
+              "fontSize": {
+                      "title-md": [
+                              "18px",
+                              {
+                                      "lineHeight": "24px",
+                                      "fontWeight": "600"
+                              }
+                      ],
+                      "body-md": [
+                              "14px",
+                              {
+                                      "lineHeight": "20px",
+                                      "fontWeight": "400"
+                              }
+                      ],
+                      "display-lg": [
+                              "48px",
+                              {
+                                      "lineHeight": "56px",
+                                      "letterSpacing": "-0.02em",
+                                      "fontWeight": "700"
+                              }
+                      ],
+                      "body-sm": [
+                              "13px",
+                              {
+                                      "lineHeight": "18px",
+                                      "fontWeight": "400"
+                              }
+                      ],
+                      "label-caps": [
+                              "11px",
+                              {
+                                      "lineHeight": "16px",
+                                      "letterSpacing": "0.05em",
+                                      "fontWeight": "600"
+                              }
+                      ],
+                      "body-lg": [
+                              "16px",
+                              {
+                                      "lineHeight": "24px",
+                                      "fontWeight": "400"
+                              }
+                      ],
+                      "headline-lg": [
+                              "32px",
+                              {
+                                      "lineHeight": "40px",
+                                      "letterSpacing": "-0.02em",
+                                      "fontWeight": "600"
+                              }
+                      ],
+                      "mono-sm": [
+                              "12px",
+                              {
+                                      "lineHeight": "16px",
+                                      "fontWeight": "400"
+                              }
+                      ],
+                      "headline-md": [
+                              "24px",
+                              {
+                                      "lineHeight": "32px",
+                                      "letterSpacing": "-0.01em",
+                                      "fontWeight": "600"
+                              }
+                      ]
+              }
+      },
+          },
+        }
+      </script>
+<style>
+        body { background-color: theme('colors.surface-container-lowest'); }
+        .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+        .icon-fill { font-variation-settings: 'FILL' 1; }
+    </style>
+</head>
+<body class="h-full flex overflow-hidden font-body-md text-on-surface antialiased bg-surface">
+<!-- SideNavBar (Shared Component) -->
+<nav class="fixed left-0 top-0 h-screen w-sidebar-width bg-surface-container-low border-r border-outline-variant flex flex-col py-margin-page px-stack-md shrink-0 z-10 transition-all duration-150 ease-in-out">
+<div class="mb-stack-lg px-stack-sm flex items-center gap-stack-sm">
+<span class="material-symbols-outlined icon-fill text-primary text-title-md">hexagon</span>
+<div class="flex flex-col">
+<span class="font-title-md text-title-md font-bold text-on-surface">FG Workspace</span>
+<span class="font-body-sm text-body-sm text-on-surface-variant">Research OS</span>
+</div>
+</div>
+<ul class="flex flex-col gap-unit flex-1 overflow-y-auto">
+<li>
+<a class="flex items-center gap-stack-sm px-stack-sm py-stack-xs rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-colors font-body-md text-body-md" href="#">
+<span class="material-symbols-outlined" data-icon="home">home</span>
+<span>Home</span>
+</a>
+</li>
+<li>
+<a class="flex items-center gap-stack-sm px-stack-sm py-stack-xs rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-colors font-body-md text-body-md" href="#">
+<span class="material-symbols-outlined" data-icon="assignment">assignment</span>
+<span>My Work</span>
+</a>
+</li>
+<li>
+<a class="flex items-center gap-stack-sm px-stack-sm py-stack-xs rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-colors font-body-md text-body-md" href="#">
+<span class="material-symbols-outlined" data-icon="folder_open">folder_open</span>
+<span>Projects</span>
+</a>
+</li>
+<li>
+<a class="flex items-center gap-stack-sm px-stack-sm py-stack-xs rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-colors font-body-md text-body-md" href="#">
+<span class="material-symbols-outlined" data-icon="ads_click">ads_click</span>
+<span>Goals</span>
+</a>
+</li>
+<li>
+<a class="flex items-center gap-stack-sm px-stack-sm py-stack-xs rounded-lg bg-secondary-container text-on-secondary-container font-semibold transition-colors font-body-md text-body-md" href="#">
+<span class="material-symbols-outlined icon-fill" data-icon="groups">groups</span>
+<span>Meetings</span>
+</a>
+</li>
+<li>
+<a class="flex items-center gap-stack-sm px-stack-sm py-stack-xs rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-colors font-body-md text-body-md" href="#">
+<span class="material-symbols-outlined" data-icon="database">database</span>
+<span>KVP</span>
+</a>
+</li>
+<li>
+<a class="flex items-center gap-stack-sm px-stack-sm py-stack-xs rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-colors font-body-md text-body-md" href="#">
+<span class="material-symbols-outlined" data-icon="library_books">library_books</span>
+<span>Knowledge</span>
+</a>
+</li>
+<li>
+<a class="flex items-center gap-stack-sm px-stack-sm py-stack-xs rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-colors font-body-md text-body-md" href="#">
+<span class="material-symbols-outlined" data-icon="calendar_today">calendar_today</span>
+<span>Calendar</span>
+</a>
+</li>
+<li>
+<a class="flex items-center gap-stack-sm px-stack-sm py-stack-xs rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-colors font-body-md text-body-md" href="#">
+<span class="material-symbols-outlined" data-icon="group">group</span>
+<span>People</span>
+</a>
+</li>
+</ul>
+<div class="mt-auto pt-stack-md border-t border-outline-variant">
+<ul class="flex flex-col gap-unit">
+<li>
+<a class="flex items-center gap-stack-sm px-stack-sm py-stack-xs rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-colors font-body-md text-body-md" href="#">
+<span class="material-symbols-outlined" data-icon="notifications">notifications</span>
+<span>Notifications</span>
+</a>
+</li>
+<li>
+<a class="flex items-center gap-stack-sm px-stack-sm py-stack-xs rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-colors font-body-md text-body-md" href="#">
+<span class="material-symbols-outlined" data-icon="settings">settings</span>
+<span>Settings</span>
+</a>
+</li>
+<li>
+<a class="flex items-center gap-stack-sm px-stack-sm py-stack-xs rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-colors font-body-md text-body-md" href="#">
+<span class="material-symbols-outlined" data-icon="account_circle">account_circle</span>
+<span>Profile</span>
+</a>
+</li>
+</ul>
+</div>
+</nav>
+<!-- Main Content Area -->
+<main class="ml-[240px] flex-1 flex flex-col h-full bg-surface-container-lowest">
+<!-- Header -->
+<header class="h-16 px-gutter border-b border-outline-variant flex items-center justify-between shrink-0 bg-surface-container-lowest z-10">
+<div class="flex items-center gap-stack-md">
+<div class="flex items-center gap-stack-sm">
+<div class="w-2 h-2 rounded-full bg-error animate-pulse"></div>
+<h1 class="font-headline-md text-headline-md text-on-surface">Weekly Sync</h1>
+<span class="font-mono-sm text-mono-sm text-on-surface-variant bg-surface-container px-2 py-1 rounded">LIVE</span>
+</div>
+<div class="h-4 w-px bg-outline-variant"></div>
+<div class="flex items-center gap-stack-sm font-body-sm text-body-sm text-on-surface-variant">
+<span class="material-symbols-outlined text-[16px]">schedule</span>
+<span>10:00 AM - 11:00 AM</span>
+</div>
+</div>
+<div class="flex items-center gap-stack-md">
+<!-- Progress -->
+<div class="flex flex-col items-end gap-1">
+<div class="font-body-sm text-body-sm font-medium text-on-surface">6 / 9 topics completed</div>
+<div class="w-32 h-1 bg-surface-container rounded-full overflow-hidden">
+<div class="h-full bg-primary-container rounded-full" style="width: 66%"></div>
+</div>
+</div>
+<button class="bg-error text-on-error px-4 py-2 rounded-lg font-body-md text-body-md font-semibold hover:bg-on-error-container transition-colors flex items-center gap-2 shadow-[0_1px_2px_0_rgba(0,0,0,0.05)]">
+<span class="material-symbols-outlined text-[18px]">stop_circle</span>
+                    End Meeting
+                </button>
+</div>
+</header>
+<!-- Meeting Content Grid -->
+<div class="flex-1 overflow-hidden flex">
+<!-- Center: Active Agenda -->
+<div class="flex-1 overflow-y-auto p-margin-page border-r border-outline-variant bg-surface-container-lowest">
+<div class="max-w-3xl mx-auto flex flex-col gap-stack-lg">
+<!-- Section Title -->
+<div class="flex items-center justify-between">
+<h2 class="font-title-md text-title-md text-on-surface">Active Agenda</h2>
+<button class="text-primary font-body-sm text-body-sm font-medium hover:underline flex items-center gap-1">
+<span class="material-symbols-outlined text-[16px]">edit</span>
+                            Edit Agenda
+                        </button>
+</div>
+<!-- Agenda Items -->
+<div class="flex flex-col gap-stack-md">
+<!-- Item: Done -->
+<div class="bg-surface-container-lowest border border-outline-variant rounded-lg p-stack-md shadow-[0_1px_2px_0_rgba(0,0,0,0.05)] opacity-60">
+<div class="flex items-start gap-stack-md">
+<div class="mt-1">
+<span class="material-symbols-outlined text-primary-container">check_circle</span>
+</div>
+<div class="flex-1">
+<div class="flex items-center justify-between mb-1">
+<h3 class="font-body-lg text-body-lg font-medium text-on-surface line-through decoration-outline-variant">Review Q3 Metrics</h3>
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase bg-surface-container px-2 py-1 rounded">Done</span>
+</div>
+<p class="font-body-sm text-body-sm text-on-surface-variant">Discussed key performance indicators for the last quarter.</p>
+</div>
+</div>
+</div>
+<!-- Item: In Discussion (Active) -->
+<div class="bg-surface-container-lowest border border-primary-container rounded-lg p-stack-md shadow-[0_10px_15px_-3px_rgba(0,0,0,0.1)] relative">
+<div class="absolute left-0 top-0 bottom-0 w-1 bg-primary-container rounded-l-lg"></div>
+<div class="flex items-start gap-stack-md pl-2">
+<div class="mt-1">
+<span class="material-symbols-outlined text-primary-container animate-spin-slow">sync</span>
+</div>
+<div class="flex-1 flex flex-col gap-stack-sm">
+<div class="flex items-center justify-between">
+<h3 class="font-body-lg text-body-lg font-medium text-on-surface">Resource Allocation for Project X</h3>
+<span class="font-label-caps text-label-caps text-primary-container uppercase bg-secondary-container px-2 py-1 rounded">In discussion</span>
+</div>
+<p class="font-body-sm text-body-sm text-on-surface-variant">Determine engineering resources needed for the upcoming sprint.</p>
+<!-- Moderation Controls -->
+<div class="flex items-center gap-stack-sm mt-stack-sm pt-stack-sm border-t border-outline-variant">
+<button class="text-on-surface-variant hover:text-primary transition-colors flex items-center gap-1 font-body-sm text-body-sm">
+<span class="material-symbols-outlined text-[16px]">check</span> Mark Done
+                                        </button>
+<button class="text-on-surface-variant hover:text-primary transition-colors flex items-center gap-1 font-body-sm text-body-sm">
+<span class="material-symbols-outlined text-[16px]">turn_right</span> Follow-up
+                                        </button>
+<div class="flex-1"></div>
+<span class="font-mono-sm text-mono-sm text-on-surface-variant">12:45 elapsed</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Item: Not Discussed -->
+<div class="bg-surface-container-lowest border border-outline-variant rounded-lg p-stack-md shadow-[0_1px_2px_0_rgba(0,0,0,0.05)]">
+<div class="flex items-start gap-stack-md">
+<div class="mt-1">
+<span class="material-symbols-outlined text-outline-variant">radio_button_unchecked</span>
+</div>
+<div class="flex-1">
+<div class="flex items-center justify-between mb-1">
+<h3 class="font-body-lg text-body-lg font-medium text-on-surface">Marketing Campaign Launch</h3>
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase bg-surface-container-high px-2 py-1 rounded">Not discussed</span>
+</div>
+<p class="font-body-sm text-body-sm text-on-surface-variant">Final review of assets and go-live schedule.</p>
+</div>
+</div>
+</div>
+</div>
+<!-- Spontaneous Topics -->
+<div class="mt-stack-lg pt-stack-lg border-t border-outline-variant">
+<h2 class="font-title-md text-title-md text-on-surface mb-stack-md">Spontaneous Topics</h2>
+<div class="flex gap-stack-sm">
+<input class="flex-1 bg-surface-container-lowest border border-outline-variant rounded-lg px-3 py-2 font-body-sm text-body-sm focus:ring-2 focus:ring-primary-container focus:border-primary-container outline-none transition-shadow shadow-[0_1px_2px_0_rgba(0,0,0,0.05)]" placeholder="Quickly add a topic..." type="text"/>
+<button class="bg-primary-container text-on-primary px-4 py-2 rounded-lg font-body-md text-body-md font-semibold hover:bg-surface-tint transition-colors shadow-[0_1px_2px_0_rgba(0,0,0,0.05)]">
+                                Add
+                            </button>
+</div>
+</div>
+</div>
+</div>
+<!-- Right Sidebar: Meeting Intelligence -->
+<aside class="w-[360px] bg-surface-container-lowest flex flex-col shrink-0">
+<div class="p-stack-md border-b border-outline-variant flex items-center gap-2 bg-surface">
+<span class="material-symbols-outlined text-primary text-[20px]">psychology</span>
+<h2 class="font-title-md text-title-md text-on-surface">Meeting Intelligence</h2>
+</div>
+<div class="flex-1 overflow-y-auto p-stack-md flex flex-col gap-stack-lg">
+<!-- Previous Decisions -->
+<section>
+<h3 class="font-label-caps text-label-caps text-on-surface-variant uppercase mb-stack-sm tracking-wider">Previous Decisions</h3>
+<div class="flex flex-col gap-unit">
+<div class="bg-surface p-stack-sm rounded border border-outline-variant text-body-sm font-body-sm">
+<div class="flex items-center gap-1 mb-1 text-primary-container">
+<span class="material-symbols-outlined text-[14px]">gavel</span>
+<span class="font-semibold">Decided (Oct 12)</span>
+</div>
+<p class="text-on-surface">Move primary staging environment to AWS eu-central-1.</p>
+</div>
+<div class="bg-surface p-stack-sm rounded border border-outline-variant text-body-sm font-body-sm">
+<div class="flex items-center gap-1 mb-1 text-primary-container">
+<span class="material-symbols-outlined text-[14px]">gavel</span>
+<span class="font-semibold">Decided (Oct 05)</span>
+</div>
+<p class="text-on-surface">Freeze hiring for design team until Q1 next year.</p>
+</div>
+</div>
+</section>
+<!-- History -->
+<section>
+<h3 class="font-label-caps text-label-caps text-on-surface-variant uppercase mb-stack-sm tracking-wider">History &amp; Context</h3>
+<div class="border-l-2 border-surface-container-high ml-2 pl-4 py-2 flex flex-col gap-stack-md relative">
+<div class="relative">
+<div class="absolute -left-[23px] top-1 w-2.5 h-2.5 rounded-full bg-outline-variant border-2 border-surface-container-lowest"></div>
+<div class="font-mono-sm text-mono-sm text-on-surface-variant mb-1">Oct 12, 2023</div>
+<h4 class="font-body-md text-body-md font-medium text-on-surface mb-1">Weekly Sync #42</h4>
+<p class="font-body-sm text-body-sm text-on-surface-variant line-clamp-2">Discussed staging migration, reviewed Q3 preliminary numbers, and set OKRs for engineering team.</p>
+<a class="text-primary font-body-sm text-body-sm hover:underline mt-1 inline-block" href="#">View Protocol</a>
+</div>
+<div class="relative">
+<div class="absolute -left-[23px] top-1 w-2.5 h-2.5 rounded-full bg-outline-variant border-2 border-surface-container-lowest"></div>
+<div class="font-mono-sm text-mono-sm text-on-surface-variant mb-1">Oct 05, 2023</div>
+<h4 class="font-body-md text-body-md font-medium text-on-surface mb-1">Weekly Sync #41</h4>
+<p class="font-body-sm text-body-sm text-on-surface-variant line-clamp-2">Hiring freeze discussion, design team capacity planning, and review of marketing assets.</p>
+<a class="text-primary font-body-sm text-body-sm hover:underline mt-1 inline-block" href="#">View Protocol</a>
+</div>
+</div>
+</section>
+</div>
+</aside>
+</div>
+</main>
+</body></html>

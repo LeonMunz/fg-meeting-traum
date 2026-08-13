@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Start a New Research Project - Guided Workflow</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&amp;family=JetBrains+Mono:wght@400&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "on-tertiary-container": "#ffd2be",
+                    "primary": "#3525cd",
+                    "on-primary-fixed-variant": "#3323cc",
+                    "secondary-container": "#dae2fd",
+                    "surface-container-lowest": "#ffffff",
+                    "tertiary-fixed-dim": "#ffb695",
+                    "on-tertiary-fixed-variant": "#7b2f00",
+                    "on-tertiary": "#ffffff",
+                    "on-secondary": "#ffffff",
+                    "error": "#ba1a1a",
+                    "surface-container": "#e5eeff",
+                    "on-secondary-fixed-variant": "#3f465c",
+                    "on-primary-fixed": "#0f0069",
+                    "on-surface": "#0b1c30",
+                    "primary-container": "#4f46e5",
+                    "outline": "#777587",
+                    "tertiary": "#7e3000",
+                    "surface-tint": "#4d44e3",
+                    "on-primary-container": "#dad7ff",
+                    "on-secondary-fixed": "#131b2e",
+                    "on-error-container": "#93000a",
+                    "on-tertiary-fixed": "#351000",
+                    "on-primary": "#ffffff",
+                    "on-background": "#0b1c30",
+                    "on-secondary-container": "#5c647a",
+                    "secondary": "#565e74",
+                    "secondary-fixed-dim": "#bec6e0",
+                    "primary-fixed": "#e2dfff",
+                    "tertiary-fixed": "#ffdbcc",
+                    "inverse-surface": "#213145",
+                    "primary-fixed-dim": "#c3c0ff",
+                    "inverse-on-surface": "#eaf1ff",
+                    "outline-variant": "#c7c4d8",
+                    "secondary-fixed": "#dae2fd",
+                    "surface-container-highest": "#d3e4fe",
+                    "surface-container-low": "#eff4ff",
+                    "background": "#f8f9ff",
+                    "inverse-primary": "#c3c0ff",
+                    "on-surface-variant": "#464555",
+                    "surface-dim": "#cbdbf5",
+                    "surface-variant": "#d3e4fe",
+                    "surface": "#f8f9ff",
+                    "surface-bright": "#f8f9ff",
+                    "on-error": "#ffffff",
+                    "error-container": "#ffdad6",
+                    "surface-container-high": "#dce9ff",
+                    "tertiary-container": "#a44100"
+            },
+            "borderRadius": {
+                    "DEFAULT": "0.25rem",
+                    "lg": "0.5rem",
+                    "xl": "0.75rem",
+                    "full": "9999px"
+            },
+            "spacing": {
+                    "margin-page": "40px",
+                    "sidebar-width": "240px",
+                    "stack-lg": "24px",
+                    "stack-sm": "8px",
+                    "stack-xs": "4px",
+                    "stack-md": "16px",
+                    "container-max": "1440px",
+                    "gutter": "24px",
+                    "unit": "4px"
+            },
+            "fontFamily": {
+                    "title-md": ["Inter"],
+                    "body-md": ["Inter"],
+                    "display-lg": ["Inter"],
+                    "body-sm": ["Inter"],
+                    "label-caps": ["Inter"],
+                    "body-lg": ["Inter"],
+                    "headline-lg": ["Inter"],
+                    "mono-sm": ["JetBrains Mono"],
+                    "headline-md": ["Inter"]
+            },
+            "fontSize": {
+                    "title-md": ["18px", {"lineHeight": "24px", "fontWeight": "600"}],
+                    "body-md": ["14px", {"lineHeight": "20px", "fontWeight": "400"}],
+                    "display-lg": ["48px", {"lineHeight": "56px", "letterSpacing": "-0.02em", "fontWeight": "700"}],
+                    "body-sm": ["13px", {"lineHeight": "18px", "fontWeight": "400"}],
+                    "label-caps": ["11px", {"lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "600"}],
+                    "body-lg": ["16px", {"lineHeight": "24px", "fontWeight": "400"}],
+                    "headline-lg": ["32px", {"lineHeight": "40px", "letterSpacing": "-0.02em", "fontWeight": "600"}],
+                    "mono-sm": ["12px", {"lineHeight": "16px", "fontWeight": "400"}],
+                    "headline-md": ["24px", {"lineHeight": "32px", "letterSpacing": "-0.01em", "fontWeight": "600"}]
+            }
+          }
+        }
+      }
+    </script>
+<style>
+        body { font-family: 'Inter', sans-serif; background-color: #f8f9ff; color: #0b1c30; }
+        .grid-bg {
+            background-size: 24px 24px;
+            background-image:
+                linear-gradient(to right, #e5e7eb 1px, transparent 1px),
+                linear-gradient(to bottom, #e5e7eb 1px, transparent 1px);
+        }
+    </style>
+</head>
+<body class="bg-background min-h-screen text-on-surface antialiased overflow-hidden flex">
+<!-- JSON Component: SideNavBar -->
+<nav class="fixed left-0 top-0 h-screen w-sidebar-width border-r border-outline-variant bg-surface-container-low flex flex-col py-margin-page px-stack-md z-20">
+<div class="mb-stack-lg px-stack-xs flex items-center gap-2">
+<div class="w-8 h-8 rounded bg-primary-container text-on-primary flex items-center justify-center font-title-md font-bold">FG</div>
+<div>
+<h1 class="font-title-md text-title-md font-bold text-on-surface">FG Workspace</h1>
+<p class="font-body-sm text-body-sm text-on-surface-variant">Research OS</p>
+</div>
+</div>
+<ul class="flex-1 flex flex-col gap-unit">
+<li><a class="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-colors font-body-md text-body-md" href="#"><span class="material-symbols-outlined" data-icon="home">home</span> Home</a></li>
+<li><a class="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-colors font-body-md text-body-md" href="#"><span class="material-symbols-outlined" data-icon="assignment">assignment</span> My Work</a></li>
+<li><a class="flex items-center gap-3 px-3 py-2 rounded-lg bg-secondary-container text-on-secondary-container font-semibold font-body-md text-body-md" href="#"><span class="material-symbols-outlined" data-icon="folder_open" style="font-variation-settings: 'FILL' 1;">folder_open</span> Projects</a></li>
+<li><a class="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-colors font-body-md text-body-md" href="#"><span class="material-symbols-outlined" data-icon="ads_click">ads_click</span> Goals</a></li>
+<li><a class="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-colors font-body-md text-body-md" href="#"><span class="material-symbols-outlined" data-icon="groups">groups</span> Meetings</a></li>
+<li><a class="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-colors font-body-md text-body-md" href="#"><span class="material-symbols-outlined" data-icon="database">database</span> KVP</a></li>
+<li><a class="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-colors font-body-md text-body-md" href="#"><span class="material-symbols-outlined" data-icon="library_books">library_books</span> Knowledge</a></li>
+<li><a class="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-colors font-body-md text-body-md" href="#"><span class="material-symbols-outlined" data-icon="calendar_today">calendar_today</span> Calendar</a></li>
+<li><a class="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-colors font-body-md text-body-md" href="#"><span class="material-symbols-outlined" data-icon="group">group</span> People</a></li>
+</ul>
+<div class="mt-auto border-t border-outline-variant pt-stack-md flex flex-col gap-unit">
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-colors font-body-md text-body-md" href="#"><span class="material-symbols-outlined" data-icon="notifications">notifications</span> Notifications</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-colors font-body-md text-body-md" href="#"><span class="material-symbols-outlined" data-icon="settings">settings</span> Settings</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-colors font-body-md text-body-md" href="#"><span class="material-symbols-outlined" data-icon="account_circle">account_circle</span> Profile</a>
+</div>
+</nav>
+<!-- Main Content Canvas -->
+<main class="ml-sidebar-width flex-1 flex flex-col h-screen overflow-hidden">
+<!-- JSON Component: TopNavBar (Suppressed due to linear/transactional intent of Guided Workflow) -->
+<!-- Header area for the workflow -->
+<header class="h-16 px-gutter flex items-center justify-between border-b border-outline-variant bg-surface flex-shrink-0">
+<div class="flex items-center gap-stack-md">
+<button class="w-8 h-8 flex items-center justify-center rounded hover:bg-surface-container transition-colors text-on-surface-variant">
+<span class="material-symbols-outlined" data-icon="close">close</span>
+</button>
+<div class="h-4 w-px bg-outline-variant"></div>
+<h2 class="font-title-md text-title-md text-on-surface">Start a New Research Project</h2>
+<span class="px-2 py-0.5 rounded-full bg-secondary-container text-on-secondary-container font-label-caps text-label-caps ml-stack-sm">DRAFT</span>
+</div>
+<div class="flex items-center gap-stack-md">
+<button class="px-4 py-2 rounded-lg font-body-sm text-body-sm font-semibold text-on-surface border border-outline-variant hover:bg-surface-container-low transition-colors">Save Draft</button>
+<button class="px-4 py-2 rounded-lg font-body-sm text-body-sm font-semibold bg-primary-container text-on-primary hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2">
+                     Submit for Review <span class="material-symbols-outlined text-[16px]" data-icon="send">send</span>
+</button>
+</div>
+</header>
+<!-- Split View Container -->
+<div class="flex-1 flex overflow-hidden">
+<!-- Left Panel: Flowchart / Context (Where am I?) -->
+<section class="w-1/2 border-r border-outline-variant bg-surface-container-lowest overflow-y-auto relative flex flex-col">
+<div class="p-gutter sticky top-0 bg-surface-container-lowest/90 backdrop-blur border-b border-outline-variant z-10">
+<h3 class="font-headline-md text-headline-md text-on-surface mb-stack-xs">Project Initialization Flow</h3>
+<p class="font-body-sm text-body-sm text-on-surface-variant">Complete sequential steps to register a new study.</p>
+</div>
+<div class="flex-1 p-gutter relative grid-bg">
+<!-- Flow Nodes -->
+<div class="relative flex flex-col gap-12 max-w-sm mx-auto">
+<!-- Path Line -->
+<div class="absolute left-6 top-10 bottom-10 w-0.5 bg-outline-variant z-0"></div>
+<!-- Step 1: Completed -->
+<div class="relative z-10 flex gap-stack-md items-start opacity-60">
+<div class="w-12 h-12 rounded-full bg-primary-container text-on-primary flex items-center justify-center shrink-0 shadow-[0_1px_2px_0_rgba(0,0,0,0.05)]">
+<span class="material-symbols-outlined" data-icon="check" style="font-variation-settings: 'FILL' 1;">check</span>
+</div>
+<div class="pt-2">
+<div class="font-label-caps text-label-caps text-on-surface-variant mb-1">STEP 1</div>
+<h4 class="font-title-md text-title-md text-on-surface">Proposal Draft</h4>
+<p class="font-body-sm text-body-sm text-on-surface-variant mt-1">Initial hypothesis and methodology definition.</p>
+</div>
+</div>
+<!-- Step 2: Completed -->
+<div class="relative z-10 flex gap-stack-md items-start opacity-60">
+<div class="w-12 h-12 rounded-full bg-primary-container text-on-primary flex items-center justify-center shrink-0 shadow-[0_1px_2px_0_rgba(0,0,0,0.05)]">
+<span class="material-symbols-outlined" data-icon="check" style="font-variation-settings: 'FILL' 1;">check</span>
+</div>
+<div class="pt-2">
+<div class="font-label-caps text-label-caps text-on-surface-variant mb-1">STEP 2</div>
+<h4 class="font-title-md text-title-md text-on-surface">Resource Estimation</h4>
+<p class="font-body-sm text-body-sm text-on-surface-variant mt-1">Compute, lab time, and personnel allocation.</p>
+</div>
+</div>
+<!-- Step 3: Active -->
+<div class="relative z-10 flex gap-stack-md items-start">
+<div class="absolute -left-2 top-2 w-16 h-16 rounded-full bg-primary/10 animate-pulse z-[-1]"></div>
+<div class="w-12 h-12 rounded-full bg-surface-container-lowest border-2 border-primary text-primary flex items-center justify-center shrink-0 shadow-[0_1px_2px_0_rgba(0,0,0,0.05)]">
+<span class="font-mono-sm text-mono-sm font-bold">3</span>
+</div>
+<div class="pt-2 bg-surface-container-lowest/80 backdrop-blur p-4 -mt-4 rounded-xl border border-primary/20 shadow-[0_1px_2px_0_rgba(0,0,0,0.05)] flex-1">
+<div class="font-label-caps text-label-caps text-primary mb-1 flex items-center gap-2">
+                                    CURRENT STEP
+                                    <span class="w-2 h-2 rounded-full bg-primary"></span>
+</div>
+<h4 class="font-title-md text-title-md text-on-surface">Ethics Approval</h4>
+<p class="font-body-sm text-body-sm text-on-surface-variant mt-1">IRB submission and data handling protocol review.</p>
+</div>
+</div>
+<!-- Step 4: Pending -->
+<div class="relative z-10 flex gap-stack-md items-start opacity-40">
+<div class="w-12 h-12 rounded-full bg-surface-container-highest border border-outline-variant text-on-surface-variant flex items-center justify-center shrink-0">
+<span class="font-mono-sm text-mono-sm font-bold">4</span>
+</div>
+<div class="pt-2">
+<div class="font-label-caps text-label-caps text-on-surface-variant mb-1">NEXT STEP</div>
+<h4 class="font-title-md text-title-md text-on-surface">Funding Allocation</h4>
+<p class="font-body-sm text-body-sm text-on-surface-variant mt-1">Grant linking and budget approval.</p>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- Right Panel: Guided Execution (What's next?) -->
+<section class="w-1/2 bg-surface-container-lowest overflow-y-auto">
+<div class="max-w-2xl mx-auto p-margin-page pb-32">
+<div class="mb-stack-lg">
+<div class="flex items-center gap-2 text-on-surface-variant mb-2">
+<span class="material-symbols-outlined text-[16px]" data-icon="policy">policy</span>
+<span class="font-label-caps text-label-caps uppercase">Step 3 of 5</span>
+</div>
+<h2 class="font-display-lg text-display-lg text-on-surface mb-stack-sm">Ethics Approval</h2>
+<p class="font-body-lg text-body-lg text-on-surface-variant">Ensure your research protocol complies with institutional data handling and human/animal subject regulations.</p>
+</div>
+<!-- Actionable Canvas -->
+<div class="flex flex-col gap-stack-lg">
+<!-- Meta Data Row (Bento style) -->
+<div class="grid grid-cols-2 gap-stack-md">
+<div class="bg-surface-container-low p-stack-md rounded-xl border border-outline-variant/50">
+<div class="font-label-caps text-label-caps text-on-surface-variant mb-1">RESPONSIBLE ROLE</div>
+<div class="flex items-center gap-2">
+<div class="w-6 h-6 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center text-xs font-bold">PI</div>
+<span class="font-body-md text-body-md font-semibold text-on-surface">Principal Investigator</span>
+</div>
+</div>
+<div class="bg-surface-container-low p-stack-md rounded-xl border border-outline-variant/50">
+<div class="font-label-caps text-label-caps text-on-surface-variant mb-1">SLA TIMELINE</div>
+<div class="flex items-center gap-2 text-on-surface">
+<span class="material-symbols-outlined text-[18px]" data-icon="timer">timer</span>
+<span class="font-mono-sm text-mono-sm">Est. 5-7 Business Days</span>
+</div>
+</div>
+</div>
+<!-- Required Documents -->
+<div class="border border-outline-variant rounded-xl shadow-[0_1px_2px_0_rgba(0,0,0,0.05)] bg-surface-container-lowest overflow-hidden">
+<div class="px-stack-md py-3 border-b border-outline-variant bg-surface-container-low flex justify-between items-center">
+<h3 class="font-title-md text-title-md text-on-surface">Required Documents</h3>
+<span class="font-label-caps text-label-caps text-on-surface-variant">2 ITEMS REQUIRED</span>
+</div>
+<div class="divide-y divide-outline-variant">
+<!-- Doc 1 -->
+<div class="p-stack-md flex items-center justify-between hover:bg-surface-container-lowest transition-colors group">
+<div class="flex items-start gap-3">
+<div class="w-8 h-8 rounded bg-error-container text-on-error-container flex items-center justify-center shrink-0">
+<span class="material-symbols-outlined" data-icon="picture_as_pdf">picture_as_pdf</span>
+</div>
+<div>
+<div class="font-body-md text-body-md font-semibold text-on-surface">IRB Submission Form</div>
+<div class="font-body-sm text-body-sm text-on-surface-variant">Form 104-B (Signed by PI)</div>
+</div>
+</div>
+<button class="px-3 py-1.5 text-primary border border-primary/30 rounded font-body-sm text-body-sm hover:bg-primary/5 transition-colors">Upload</button>
+</div>
+<!-- Doc 2 -->
+<div class="p-stack-md flex items-center justify-between hover:bg-surface-container-lowest transition-colors group">
+<div class="flex items-start gap-3">
+<div class="w-8 h-8 rounded bg-secondary-container text-on-secondary-container flex items-center justify-center shrink-0">
+<span class="material-symbols-outlined" data-icon="description">description</span>
+</div>
+<div>
+<div class="font-body-md text-body-md font-semibold text-on-surface">Data Management Plan (DMP)</div>
+<div class="font-body-sm text-body-sm text-on-surface-variant">Approved by IT Security</div>
+</div>
+</div>
+<div class="flex items-center gap-2 text-primary font-body-sm text-body-sm">
+<span class="material-symbols-outlined" data-icon="check_circle" style="font-variation-settings: 'FILL' 1;">check_circle</span>
+                                        Attached
+                                    </div>
+</div>
+</div>
+</div>
+<!-- Checklist -->
+<div class="border border-outline-variant rounded-xl shadow-[0_1px_2px_0_rgba(0,0,0,0.05)] bg-surface-container-lowest p-stack-md">
+<h3 class="font-title-md text-title-md text-on-surface mb-stack-md">Pre-submission Checklist</h3>
+<div class="flex flex-col gap-3">
+<label class="flex items-start gap-3 cursor-pointer group">
+<div class="mt-0.5 relative flex items-center justify-center w-5 h-5 rounded border border-outline-variant bg-surface-container-lowest group-hover:border-primary transition-colors">
+<input checked="" class="sr-only peer" type="checkbox"/>
+<span class="material-symbols-outlined text-[16px] text-primary opacity-0 peer-checked:opacity-100 transition-opacity" data-icon="check">check</span>
+</div>
+<span class="font-body-md text-body-md text-on-surface line-through text-on-surface-variant">Confirm no PHI (Protected Health Information) is included in open datasets.</span>
+</label>
+<label class="flex items-start gap-3 cursor-pointer group">
+<div class="mt-0.5 relative flex items-center justify-center w-5 h-5 rounded border border-outline-variant bg-surface-container-lowest group-hover:border-primary transition-colors">
+<input class="sr-only peer" type="checkbox"/>
+<span class="material-symbols-outlined text-[16px] text-primary opacity-0 peer-checked:opacity-100 transition-opacity" data-icon="check">check</span>
+</div>
+<span class="font-body-md text-body-md text-on-surface">Verify all external collaborators have signed NDA.</span>
+</label>
+<label class="flex items-start gap-3 cursor-pointer group">
+<div class="mt-0.5 relative flex items-center justify-center w-5 h-5 rounded border border-outline-variant bg-surface-container-lowest group-hover:border-primary transition-colors">
+<input class="sr-only peer" type="checkbox"/>
+<span class="material-symbols-outlined text-[16px] text-primary opacity-0 peer-checked:opacity-100 transition-opacity" data-icon="check">check</span>
+</div>
+<span class="font-body-md text-body-md text-on-surface">Assign Institutional Review Board (IRB) tracking number if available.</span>
+</label>
+</div>
+</div>
+<!-- Sticky Action Bar at bottom of scroll area -->
+<div class="fixed bottom-0 right-0 w-[calc(100%-240px-50%)] p-margin-page bg-gradient-to-t from-surface-container-lowest via-surface-container-lowest to-transparent pointer-events-none flex justify-end">
+<button class="pointer-events-auto px-6 py-3 rounded-lg bg-primary-container text-on-primary font-body-md text-body-md font-bold shadow-[0_10px_15px_-3px_rgba(0,0,0,0.1)] hover:opacity-90 transition-opacity flex items-center gap-2 opacity-50 cursor-not-allowed">
+                                Complete Step <span class="material-symbols-outlined" data-icon="arrow_forward">arrow_forward</span>
+</button>
+</div>
+</div>
+</div>
+</section>
+</div>
+</main>
+</body></html>
