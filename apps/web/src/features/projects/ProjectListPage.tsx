@@ -79,22 +79,16 @@ const roleLabels: Record<DemoProjectRole, string> = {
   viewer: 'Viewer',
 }
 
-const statusStyles: Record<DemoProjectStatus, string> = {
-  active: 'bg-emerald-50 text-emerald-700 ring-emerald-600/15',
-  paused: 'bg-amber-50 text-amber-700 ring-amber-600/15',
-  completed: 'bg-surface-container-high text-on-surface-variant ring-outline-variant',
+const roleIcons: Record<DemoProjectRole, string> = {
+  owner: 'shield_person',
+  member: 'person',
+  viewer: 'visibility',
 }
 
 const statusDotStyles: Record<DemoProjectStatus, string> = {
   active: 'bg-emerald-500',
   paused: 'bg-amber-500',
   completed: 'bg-outline',
-}
-
-const roleStyles: Record<DemoProjectRole, string> = {
-  owner: 'bg-primary-fixed text-primary',
-  member: 'bg-surface-container-high text-on-surface',
-  viewer: 'bg-surface-container-low text-on-surface-variant',
 }
 
 type StatusFilter = 'all' | DemoProjectStatus
@@ -283,110 +277,154 @@ export function ProjectListPage() {
             </button>
           </div>
         ) : visibleProjects.length > 0 ? (
-          <div className="mt-4 overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest shadow-sm">
-            {visibleProjects.map((project, index) => (
-              <article
-                key={project.id}
-                role="link"
-                tabIndex={0}
-                onClick={() =>
-                  navigate(`/projects/${project.id}`, {
-                    state: { project },
-                  })
-                }
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' || event.key === ' ') {
-                    event.preventDefault()
-                    navigate(`/projects/${project.id}`, {
-                      state: { project },
-                    })
-                  }
-                }}
-                className={[
-                  'group grid cursor-pointer gap-5 px-5 py-5 transition hover:bg-surface-container-low/55 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary sm:px-6',
-                  'lg:grid-cols-[minmax(0,1fr)_150px_180px_150px] lg:items-center',
-                  index !== visibleProjects.length - 1
-                    ? 'border-b border-outline-variant'
-                    : '',
-                ].join(' ')}
-              >
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-3">
-                    <h2 className="truncate text-base font-semibold text-on-surface">
-                      {project.name}
-                    </h2>
+          <div className="mt-4 overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest">
+            <div className="hidden h-9 grid-cols-[minmax(360px,1fr)_120px_120px_180px_110px] items-center px-6 lg:grid">
+              <div className="text-[11px] font-normal text-on-surface-variant/75">
+                Project
+              </div>
 
-                    <span
-                      className={[
-                        'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset',
-                        statusStyles[project.status],
-                      ].join(' ')}
-                    >
-                      <span
-                        className={[
-                          'h-1.5 w-1.5 rounded-full',
-                          statusDotStyles[project.status],
-                        ].join(' ')}
-                      />
-                      {statusLabels[project.status]}
-                    </span>
-                  </div>
+              <div className="text-[11px] font-normal text-on-surface-variant/75">
+                Status
+              </div>
 
-                  <p className="mt-1.5 max-w-3xl text-sm leading-5 text-on-surface-variant">
-                    {project.description}
-                  </p>
-                </div>
+              <div className="text-[11px] font-normal text-on-surface-variant/75">
+                Role
+              </div>
 
-                <div>
-                  <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-on-surface-variant lg:hidden">
-                    Your role
-                  </div>
+              <div className="text-[11px] font-normal text-on-surface-variant/75">
+                Members
+              </div>
 
-                  <span
+              <div className="text-[11px] font-normal text-on-surface-variant/75">
+                Updated
+              </div>
+            </div>
+
+            <div className="border-t border-outline-variant/40">
+              {visibleProjects.map((project, index) => {
+                const updatedLabel = project.updatedLabel.replace(
+                  /^Updated\s+/,
+                  '',
+                )
+
+                const visibleInitials = project.memberInitials.slice(0, 2)
+                const hiddenMemberCount = Math.max(
+                  project.memberCount - visibleInitials.length,
+                  0,
+                )
+
+                return (
+                  <article
+                    key={project.id}
+                    role="link"
+                    tabIndex={0}
+                    onClick={() =>
+                      navigate(`/projects/${project.id}`, {
+                        state: { project },
+                      })
+                    }
+                    onKeyDown={(event) => {
+                      if (
+                        event.key === 'Enter' ||
+                        event.key === ' '
+                      ) {
+                        event.preventDefault()
+                        navigate(`/projects/${project.id}`, {
+                          state: { project },
+                        })
+                      }
+                    }}
                     className={[
-                      'inline-flex rounded-full px-2.5 py-1 text-xs font-medium',
-                      roleStyles[project.role],
+                      'group grid cursor-pointer gap-4 px-5 py-3.5 transition-colors hover:bg-surface-container-low/45 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary sm:px-6',
+                      'lg:min-h-[68px] lg:grid-cols-[minmax(360px,1fr)_120px_120px_180px_110px] lg:items-center lg:gap-0',
+                      index > 0
+                        ? 'border-t border-outline-variant/25'
+                        : '',
                     ].join(' ')}
                   >
-                    {roleLabels[project.role]}
-                  </span>
-                </div>
+                    <div className="min-w-0 pr-8">
+                      <h2 className="truncate text-sm font-semibold text-on-surface">
+                        {project.name}
+                      </h2>
 
-                <div>
-                  <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-on-surface-variant lg:hidden">
-                    Members
-                  </div>
-
-                  <div className="flex items-center">
-                    <div className="flex -space-x-2">
-                      {project.memberInitials.map((initials) => (
-                        <div
-                          key={initials}
-                          className="flex h-8 w-8 items-center justify-center rounded-full border-2 border-white bg-surface-container-high text-[10px] font-semibold text-on-surface"
-                        >
-                          {initials}
-                        </div>
-                      ))}
+                      <p className="mt-1 truncate text-xs font-normal text-on-surface-variant">
+                        {project.description}
+                      </p>
                     </div>
 
-                    <span className="ml-3 text-sm text-on-surface-variant">
-                      {project.memberCount}{' '}
-                      {project.memberCount === 1 ? 'member' : 'members'}
-                    </span>
-                  </div>
-                </div>
+                    <div>
+                      <div className="mb-1 text-[10px] text-on-surface-variant lg:hidden">
+                        Status
+                      </div>
 
-                <div className="flex items-center justify-between gap-3 lg:justify-end">
-                  <span className="text-xs text-on-surface-variant">
-                    {project.updatedLabel}
-                  </span>
+                      <div className="flex items-center gap-2 text-xs font-normal text-on-surface-variant">
+                        <span
+                          className={[
+                            'h-1.5 w-1.5 shrink-0 rounded-full',
+                            statusDotStyles[project.status],
+                          ].join(' ')}
+                        />
 
-                  <span className="material-symbols-outlined text-[20px] text-on-surface-variant transition group-hover:translate-x-0.5 group-hover:text-primary">
-                    arrow_forward
-                  </span>
-                </div>
-              </article>
-            ))}
+                        <span>
+                          {statusLabels[project.status]}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="mb-1 text-[10px] text-on-surface-variant lg:hidden">
+                        Role
+                      </div>
+
+                      <div className="flex items-center gap-1.5 text-xs font-normal text-on-surface-variant">
+                        <span className="material-symbols-outlined text-[15px]">
+                          {roleIcons[project.role]}
+                        </span>
+
+                        <span>{roleLabels[project.role]}</span>
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="mb-1 text-[10px] text-on-surface-variant lg:hidden">
+                        Members
+                      </div>
+
+                      <div className="flex min-w-0 items-center gap-2">
+                        <div className="flex shrink-0 -space-x-1.5">
+                          {visibleInitials.map((initials) => (
+                            <div
+                              key={initials}
+                              className="flex h-[22px] w-[22px] items-center justify-center rounded-full border border-surface-container-lowest bg-surface-container-high text-[8px] font-semibold text-on-surface"
+                            >
+                              {initials}
+                            </div>
+                          ))}
+                        </div>
+
+                        <span className="truncate text-xs font-normal text-on-surface-variant">
+                          {project.memberCount === 1
+                            ? '1 member'
+                            : hiddenMemberCount > 0
+                              ? `+${hiddenMemberCount}`
+                              : `${project.memberCount} members`}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-xs font-normal text-on-surface-variant">
+                        {updatedLabel}
+                      </span>
+
+                      <span className="material-symbols-outlined translate-x-[-2px] text-[17px] text-on-surface-variant/40 opacity-0 transition group-hover:translate-x-0 group-hover:text-primary group-hover:opacity-100">
+                        arrow_forward
+                      </span>
+                    </div>
+                  </article>
+                )
+              })}
+            </div>
           </div>
         ) : projectCount === 0 && !hasActiveFilters ? (
           <div className="mt-8 flex min-h-72 flex-col items-center justify-center rounded-xl border border-dashed border-outline-variant bg-surface-container-lowest px-6 py-12 text-center">
@@ -459,37 +497,50 @@ function ProjectListSkeleton() {
   return (
     <div
       aria-hidden="true"
-      className="mt-4 overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest shadow-sm"
+      className="mt-4 overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest"
     >
-      {Array.from({ length: 4 }).map((_, index) => (
-        <div
-          key={index}
-          className={[
-            'grid animate-pulse gap-5 px-6 py-5',
-            'lg:grid-cols-[minmax(0,1fr)_150px_180px_150px] lg:items-center',
-            index !== 3 ? 'border-b border-outline-variant' : '',
-          ].join(' ')}
-        >
-          <div>
-            <div className="h-4 w-52 rounded bg-surface-container-high" />
-            <div className="mt-3 h-3 w-full max-w-xl rounded bg-surface-container-low" />
-          </div>
+      <div className="hidden h-9 grid-cols-[minmax(360px,1fr)_120px_120px_180px_110px] items-center px-6 lg:grid">
+        <div className="h-2.5 w-12 rounded bg-surface-container-low" />
+        <div className="h-2.5 w-10 rounded bg-surface-container-low" />
+        <div className="h-2.5 w-8 rounded bg-surface-container-low" />
+        <div className="h-2.5 w-12 rounded bg-surface-container-low" />
+        <div className="h-2.5 w-10 rounded bg-surface-container-low" />
+      </div>
 
-          <div className="h-6 w-20 rounded-full bg-surface-container-high" />
+      <div className="border-t border-outline-variant/40">
+        {Array.from({ length: 4 }).map((_, index) => (
+          <div
+            key={index}
+            className={[
+              'grid animate-pulse gap-4 px-6 py-3.5',
+              'lg:min-h-[68px] lg:grid-cols-[minmax(360px,1fr)_120px_120px_180px_110px] lg:items-center lg:gap-0',
+              index > 0
+                ? 'border-t border-outline-variant/25'
+                : '',
+            ].join(' ')}
+          >
+            <div className="pr-8">
+              <div className="h-3.5 w-52 rounded bg-surface-container-high" />
+              <div className="mt-2 h-2.5 w-full max-w-md rounded bg-surface-container-low" />
+            </div>
 
-          <div className="flex items-center gap-3">
-            <div className="flex -space-x-2">
-              <div className="h-8 w-8 rounded-full bg-surface-container-high" />
-              <div className="h-8 w-8 rounded-full bg-surface-container-high" />
-              <div className="h-8 w-8 rounded-full bg-surface-container-high" />
+            <div className="h-3 w-14 rounded bg-surface-container-low" />
+
+            <div className="h-3 w-14 rounded bg-surface-container-low" />
+
+            <div className="flex items-center gap-2">
+              <div className="flex -space-x-1.5">
+                <div className="h-[22px] w-[22px] rounded-full bg-surface-container-high" />
+                <div className="h-[22px] w-[22px] rounded-full bg-surface-container-high" />
+              </div>
+
+              <div className="h-3 w-8 rounded bg-surface-container-low" />
             </div>
 
             <div className="h-3 w-16 rounded bg-surface-container-low" />
           </div>
-
-          <div className="ml-auto h-3 w-20 rounded bg-surface-container-low" />
-        </div>
-      ))}
+        ))}
+      </div>
     </div>
   )
 }
