@@ -217,8 +217,12 @@ Many-to-many relationships are modeled relationally with join models/tables wher
 Examples:
 
 - WorkItem ↔ User → WorkItemAssignee
+- WorkItem ↔ WorkItemLabelDefinition → WorkItemLabel (join table)
 - Meeting ↔ User → MeetingParticipant
 - WorkItem ↔ MeetingItem discussion → WorkItemDiscussion
+
+Project-scoped WorkItem configuration (types, statuses, labels) uses
+explicit relational domain models. No arbitrary JSON blob on Project.
 
 ## Single source of truth
 
@@ -308,9 +312,11 @@ Maria (not added) does not see X
 
 ### Foundation 3 — Work Items
 
-- Epic / Milestone / Deliverable / Task
-- mandatory Project
-- status
+- WorkItemTypeDefinition (per Project)
+- WorkItemStatusDefinition (per Project, with semantic category)
+- WorkItemLabelDefinition (per Project)
+- WorkItem with references to Project-scoped definitions
+- status category (todo / in_progress / review / done)
 - assignees
 - due date
 - blocked reason

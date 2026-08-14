@@ -41,18 +41,22 @@ Research Group
     │
     ├── Project Members
     ├── Project Permissions
+    ├── Work Item Configuration
+    │   ├── Types
+    │   ├── Statuses
+    │   └── Labels
     ├── Project Meetings
     ├── Project Topics
     └── Work Items
-        ├── Epic
-        ├── Milestone
-        ├── Deliverable
-        └── Task
 ```
 
 The Research Group is the shared organizational space.
 
 A Project is a separate, protected work space inside the Research Group.
+
+Each Project maintains its own WorkItem configuration: types, statuses,
+and labels. Project A configuration is independent from Project B
+configuration.
 
 These levels must not be conflated.
 
@@ -218,7 +222,6 @@ Do not implement before a validated need:
 - portfolio management
 - cross-project work-item hierarchies
 - configurable workflow engines
-- configurable work-item types
 - full audit platform
 - wiki
 - full-text search infrastructure
