@@ -12,18 +12,6 @@ import {
   type DirectoryUser,
 } from './AddProjectMemberDialog'
 import { RemoveProjectMemberDialog } from './RemoveProjectMemberDialog'
-import {
-  WorkItemConfigurationSettings,
-} from './WorkItemConfigurationSettings'
-import {
-  defaultWorkItemLabels,
-  defaultWorkItemStatuses,
-  defaultWorkItemTypes,
-  type WorkItemLabelDefinition,
-  type WorkItemStatusDefinition,
-  type WorkItemTypeDefinition,
-} from './workItemConfiguration'
-
 import { useSession } from '../../api/useSession'
 
 type ProjectStatus = 'active' | 'paused' | 'completed'
@@ -43,11 +31,11 @@ type WorkItemFocus =
   | 'all-open'
   | 'custom'
 
-type CustomWorkItemStatus = string
-type CustomWorkItemType = string
+type CustomWorkItemStatus = 'all' | DemoWorkItemStatus
+type CustomWorkItemType = 'all' | DemoWorkItemType
 
 type WorkItemsView = 'board' | 'list'
-type WorkItemsTypeFilter = string
+type WorkItemsTypeFilter = 'all' | DemoWorkItemType
 
 type WorkItemsPreferences = {
   view: WorkItemsView
@@ -57,15 +45,21 @@ type WorkItemsPreferences = {
   blockedOnly: boolean
 }
 
+type DemoWorkItemAssignee = {
+  id: string
+  name: string
+  initials: string
+}
+
 type DemoWorkItem = {
   id: string
   title: string
   type: DemoWorkItemType
   status: DemoWorkItemStatus
-  assignee: string
+  assignees: DemoWorkItemAssignee[]
   dueInDays: number
   dueLabel: string
-  blocked: boolean
+  blockedReason: string | null
 }
 
 type ProjectMember = {
@@ -346,60 +340,73 @@ const demoWorkItems: Record<string, DemoWorkItem[]> = {
       title: 'Calibrate cryostat for low-temperature measurements',
       type: 'task',
       status: 'in_progress',
-      assignee: 'Alex Dev',
+      assignees: [
+        { id: 'alex', name: 'Alex Dev', initials: 'AD' },
+      ],
       dueInDays: 1,
       dueLabel: 'Tomorrow',
-      blocked: false,
+      blockedReason: null,
     },
     {
       id: 'wi-2',
       title: 'Review measurement protocol',
       type: 'deliverable',
       status: 'todo',
-      assignee: 'Chris Dev',
+      assignees: [
+        { id: 'chris', name: 'Chris Dev', initials: 'CD' },
+        { id: 'maria', name: 'Maria Dev', initials: 'MD' },
+      ],
       dueInDays: 3,
       dueLabel: 'Aug 17',
-      blocked: false,
+      blockedReason: null,
     },
     {
       id: 'wi-3',
       title: 'Resolve sample holder issue',
       type: 'task',
       status: 'todo',
-      assignee: 'Maria Dev',
+      assignees: [
+        { id: 'maria', name: 'Maria Dev', initials: 'MD' },
+      ],
       dueInDays: 2,
       dueLabel: 'Aug 16',
-      blocked: true,
+      blockedReason: 'Replacement sample holder is still unavailable.',
     },
     {
       id: 'wi-4',
       title: 'Prepare milestone review',
       type: 'milestone',
       status: 'todo',
-      assignee: 'Chris Dev',
+      assignees: [
+        { id: 'chris', name: 'Chris Dev', initials: 'CD' },
+      ],
       dueInDays: 6,
       dueLabel: 'Aug 20',
-      blocked: false,
+      blockedReason: null,
     },
     {
       id: 'wi-5',
       title: 'Update literature matrix',
       type: 'task',
       status: 'review',
-      assignee: 'Alex Dev',
+      assignees: [
+        { id: 'alex', name: 'Alex Dev', initials: 'AD' },
+      ],
       dueInDays: -2,
       dueLabel: 'Aug 12',
-      blocked: false,
+      blockedReason: null,
     },
     {
       id: 'wi-6',
       title: 'Archive initial dataset',
       type: 'task',
       status: 'done',
-      assignee: 'Chris Dev',
+      assignees: [
+        { id: 'chris', name: 'Chris Dev', initials: 'CD' },
+      ],
       dueInDays: -1,
       dueLabel: 'Completed yesterday',
-      blocked: false,
+      blockedReason: null,
     },
   ],
   'ai-engineering': [],
@@ -421,6 +428,52 @@ const workItemTypeLabels: Record<DemoWorkItemType, string> = {
   deliverable: 'Deliverable',
   task: 'Task',
 }
+
+const workItemStatusOptions: Array<{
+  value: DemoWorkItemStatus
+  label: string
+  icon: string
+}> = [
+  {
+    value: 'todo',
+    label: 'To do',
+    icon: 'radio_button_unchecked',
+  },
+  {
+    value: 'in_progress',
+    label: 'In progress',
+    icon: 'pending',
+  },
+  {
+    value: 'review',
+    label: 'Review',
+    icon: 'rate_review',
+  },
+  {
+    value: 'done',
+    label: 'Done',
+    icon: 'check_circle',
+  },
+]
+
+const workItemTypeOptions: Array<{
+  value: DemoWorkItemType
+  label: string
+  icon: string
+}> = [
+  { value: 'epic', label: 'Epic', icon: 'account_tree' },
+  { value: 'milestone', label: 'Milestone', icon: 'flag' },
+  {
+    value: 'deliverable',
+    label: 'Deliverable',
+    icon: 'inventory_2',
+  },
+  {
+    value: 'task',
+    label: 'Task',
+    icon: 'check_box_outline_blank',
+  },
+]
 
 type WorkItemFilterPreferences = {
   focus: WorkItemFocus
@@ -457,13 +510,25 @@ function isWorkItemFocus(value: unknown): value is WorkItemFocus {
 function isCustomWorkItemStatus(
   value: unknown,
 ): value is CustomWorkItemStatus {
-  return typeof value === 'string' && value.length > 0
+  return (
+    value === 'all' ||
+    value === 'todo' ||
+    value === 'in_progress' ||
+    value === 'review' ||
+    value === 'done'
+  )
 }
 
 function isCustomWorkItemType(
   value: unknown,
 ): value is CustomWorkItemType {
-  return typeof value === 'string' && value.length > 0
+  return (
+    value === 'all' ||
+    value === 'epic' ||
+    value === 'milestone' ||
+    value === 'deliverable' ||
+    value === 'task'
+  )
 }
 
 function loadWorkItemFilterPreferences(
@@ -573,17 +638,6 @@ export function ProjectDetailPage() {
   const [settingsStatus, setSettingsStatus] =
     useState<ProjectStatus>('active')
 
-  const [workItemStatuses, setWorkItemStatuses] = useState<
-    WorkItemStatusDefinition[]
-  >(() => defaultWorkItemStatuses.map((status) => ({ ...status })))
-
-  const [workItemTypes, setWorkItemTypes] = useState<
-    WorkItemTypeDefinition[]
-  >(() => defaultWorkItemTypes.map((type) => ({ ...type })))
-
-  const [workItemLabels, setWorkItemLabels] = useState<
-    WorkItemLabelDefinition[]
-  >(() => defaultWorkItemLabels.map((label) => ({ ...label })))
   const [members, setMembers] = useState<ProjectMember[]>([])
   const [addMemberDialogOpen, setAddMemberDialogOpen] = useState(false)
   const [memberToRemove, setMemberToRemove] =
@@ -649,30 +703,6 @@ export function ProjectDetailPage() {
     customAssignee,
   ])
 
-  useEffect(() => {
-    if (
-      customStatus !== 'all' &&
-      !workItemStatuses.some(
-        (status) => status.id === customStatus,
-      )
-    ) {
-      setCustomStatus('all')
-    }
-
-    if (
-      customType !== 'all' &&
-      !workItemTypes.some(
-        (type) => type.id === customType,
-      )
-    ) {
-      setCustomType('all')
-    }
-  }, [
-    customStatus,
-    customType,
-    workItemStatuses,
-    workItemTypes,
-  ])
 
   const routedProject = (
     location.state as { project?: RoutedProject } | null
@@ -716,15 +746,6 @@ export function ProjectDetailPage() {
       setSettingsDescription(project.description)
       setSettingsStatus(project.status)
 
-      setWorkItemStatuses(
-        defaultWorkItemStatuses.map((status) => ({ ...status })),
-      )
-      setWorkItemTypes(
-        defaultWorkItemTypes.map((type) => ({ ...type })),
-      )
-      setWorkItemLabels(
-        defaultWorkItemLabels.map((label) => ({ ...label })),
-      )
     }
   }, [project])
 
@@ -999,27 +1020,8 @@ export function ProjectDetailPage() {
     ? []
     : demoWorkItems[project.id] ?? []
 
-  const configurationWorkItems = demoWorkItems[project.id] ?? []
+  const currentUserMemberId = user?.username ?? null
 
-  const workItemStatusUsage: Record<string, number> =
-    Object.fromEntries(
-      workItemStatuses.map((status) => [
-        status.id,
-        configurationWorkItems.filter(
-          (item) => item.status === status.id,
-        ).length,
-      ]),
-    )
-
-  const workItemTypeUsage: Record<string, number> =
-    Object.fromEntries(
-      workItemTypes.map((type) => [
-        type.id,
-        configurationWorkItems.filter(
-          (item) => item.type === type.id,
-        ).length,
-      ]),
-    )
 
   const focusedWorkItems = projectWorkItems.filter((item) => {
     switch (workItemFocus) {
@@ -1041,10 +1043,16 @@ export function ProjectDetailPage() {
         return item.status !== 'done' && item.dueInDays < 0
 
       case 'blocked':
-        return item.status !== 'done' && item.blocked
+        return item.status !== 'done' && Boolean(item.blockedReason)
 
       case 'mine':
-        return item.status !== 'done' && item.assignee === 'Alex Dev'
+        return (
+          item.status !== 'done' &&
+          currentUserMemberId != null &&
+          item.assignees.some(
+            (assignee) => assignee.id === currentUserMemberId,
+          )
+        )
 
       case 'recently-completed':
         return item.status === 'done'
@@ -1063,7 +1071,11 @@ export function ProjectDetailPage() {
           customType === 'all' || item.type === customType
 
         const assigneeMatches =
-          customAssignee === 'all' || item.assignee === 'Alex Dev'
+          customAssignee === 'all' ||
+          (currentUserMemberId != null &&
+            item.assignees.some(
+              (assignee) => assignee.id === currentUserMemberId,
+            ))
 
         return dueMatches && statusMatches && typeMatches && assigneeMatches
       }
@@ -1405,9 +1417,12 @@ export function ProjectDetailPage() {
                     >
                       <option value="all">Any status</option>
 
-                      {workItemStatuses.map((status) => (
-                        <option key={status.id} value={status.id}>
-                          {status.name}
+                      {workItemStatusOptions.map((status) => (
+                        <option
+                          key={status.value}
+                          value={status.value}
+                        >
+                          {status.label}
                         </option>
                       ))}
                     </select>
@@ -1429,9 +1444,12 @@ export function ProjectDetailPage() {
                     >
                       <option value="all">Any type</option>
 
-                      {workItemTypes.map((type) => (
-                        <option key={type.id} value={type.id}>
-                          {type.name}
+                      {workItemTypeOptions.map((type) => (
+                        <option
+                          key={type.value}
+                          value={type.value}
+                        >
+                          {type.label}
                         </option>
                       ))}
                     </select>
@@ -1511,19 +1529,22 @@ export function ProjectDetailPage() {
                       </span>
                     </div>
 
-                    <div>
-                      <span
-                        className={[
-                          'inline-flex rounded-full px-2.5 py-1 text-xs font-medium',
-                          item.blocked
-                            ? 'bg-error-container text-error'
-                            : 'bg-surface-container-high text-on-surface',
-                        ].join(' ')}
-                      >
-                        {item.blocked
-                          ? 'Blocked'
-                          : workItemStatusLabels[item.status]}
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="inline-flex rounded-full bg-surface-container-high px-2.5 py-1 text-xs font-medium text-on-surface">
+                        {workItemStatusLabels[item.status]}
                       </span>
+
+                      {item.blockedReason && (
+                        <span
+                          title={item.blockedReason}
+                          className="inline-flex items-center gap-1 rounded-full bg-error-container px-2.5 py-1 text-xs font-medium text-error"
+                        >
+                          <span className="material-symbols-outlined text-[13px]">
+                            block
+                          </span>
+                          Blocked
+                        </span>
+                      )}
                     </div>
 
                     <div className="flex items-center justify-between gap-3 sm:justify-end">
@@ -1753,11 +1774,9 @@ export function ProjectDetailPage() {
       {activeTab === 'work-items' && (
         <ProjectWorkItemsPanel
           items={projectWorkItems}
-          statusDefinitions={workItemStatuses}
-          typeDefinitions={workItemTypes}
-          assigneeNames={sortedMembers
-            .filter((member) => member.role !== 'viewer')
-            .map((member) => member.name)}
+          eligibleAssignees={sortedMembers.filter(
+            (member) => member.role !== 'viewer',
+          )}
           readOnly={isReadOnly}
           preferencesKey={
             user
@@ -1976,17 +1995,6 @@ export function ProjectDetailPage() {
               </div>
             </fieldset>
 
-            <WorkItemConfigurationSettings
-              statuses={workItemStatuses}
-              types={workItemTypes}
-              labels={workItemLabels}
-              statusUsage={workItemStatusUsage}
-              typeUsage={workItemTypeUsage}
-              readOnly={!canEditProjectSettings}
-              onStatusesChange={setWorkItemStatuses}
-              onTypesChange={setWorkItemTypes}
-              onLabelsChange={setWorkItemLabels}
-            />
           </div>
 
           {canEditProjectSettings && (
@@ -2045,16 +2053,12 @@ export function ProjectDetailPage() {
 
 function ProjectWorkItemsPanel({
   items,
-  statusDefinitions,
-  typeDefinitions,
-  assigneeNames,
+  eligibleAssignees,
   readOnly,
   preferencesKey,
 }: {
   items: DemoWorkItem[]
-  statusDefinitions: WorkItemStatusDefinition[]
-  typeDefinitions: WorkItemTypeDefinition[]
-  assigneeNames: string[]
+  eligibleAssignees: ProjectMember[]
   readOnly: boolean
   preferencesKey: string | null
 }) {
@@ -2097,7 +2101,10 @@ function ProjectWorkItemsPanel({
       setQuery(typeof parsed.query === 'string' ? parsed.query : '')
 
       setTypeFilter(
-        typeof parsed.type === 'string'
+        parsed.type === 'epic' ||
+          parsed.type === 'milestone' ||
+          parsed.type === 'deliverable' ||
+          parsed.type === 'task'
           ? parsed.type
           : 'all',
       )
@@ -2154,29 +2161,24 @@ function ProjectWorkItemsPanel({
     blockedOnly,
   ])
 
-  useEffect(() => {
-    if (
-      typeFilter !== 'all' &&
-      !typeDefinitions.some(
-        (type) => type.id === typeFilter,
-      )
-    ) {
-      setTypeFilter('all')
-    }
-  }, [typeDefinitions, typeFilter])
 
   useEffect(() => {
     if (
       assigneeFilter !== 'all' &&
-      !assigneeNames.includes(assigneeFilter)
+      !eligibleAssignees.some(
+        (assignee) => assignee.id === assigneeFilter,
+      )
     ) {
       setAssigneeFilter('all')
     }
-  }, [assigneeFilter, assigneeNames])
+  }, [assigneeFilter, eligibleAssignees])
 
-  const sortedAssigneeNames = useMemo(
-    () => [...assigneeNames].sort((a, b) => a.localeCompare(b)),
-    [assigneeNames],
+  const sortedEligibleAssignees = useMemo(
+    () =>
+      [...eligibleAssignees].sort((a, b) =>
+        a.name.localeCompare(b.name),
+      ),
+    [eligibleAssignees],
   )
 
   const filteredItems = useMemo(() => {
@@ -2186,7 +2188,9 @@ function ProjectWorkItemsPanel({
       const matchesQuery =
         normalizedQuery.length === 0 ||
         item.title.toLowerCase().includes(normalizedQuery) ||
-        item.assignee.toLowerCase().includes(normalizedQuery) ||
+        item.assignees.some((assignee) =>
+          assignee.name.toLowerCase().includes(normalizedQuery),
+        ) ||
         workItemTypeLabels[item.type]
           .toLowerCase()
           .includes(normalizedQuery)
@@ -2196,9 +2200,11 @@ function ProjectWorkItemsPanel({
 
       const matchesAssignee =
         assigneeFilter === 'all' ||
-        item.assignee === assigneeFilter
+        item.assignees.some(
+          (assignee) => assignee.id === assigneeFilter,
+        )
 
-      const matchesBlocked = !blockedOnly || item.blocked
+      const matchesBlocked = !blockedOnly || Boolean(item.blockedReason)
 
       return (
         matchesQuery &&
@@ -2228,9 +2234,9 @@ function ProjectWorkItemsPanel({
     setBlockedOnly(false)
   }
 
-  const statusColumns = statusDefinitions.map((status) => ({
-    status: status.id,
-    label: status.name,
+  const statusColumns = workItemStatusOptions.map((status) => ({
+    status: status.value,
+    label: status.label,
     icon: status.icon,
   }))
 
@@ -2239,9 +2245,9 @@ function ProjectWorkItemsPanel({
     label: string
   }> = [
     { value: 'all', label: 'All' },
-    ...typeDefinitions.map((type) => ({
-      value: type.id,
-      label: type.name,
+    ...workItemTypeOptions.map((type) => ({
+      value: type.value,
+      label: type.label,
     })),
   ]
 
@@ -2342,9 +2348,9 @@ function ProjectWorkItemsPanel({
             >
               <option value="all">Anyone</option>
 
-              {sortedAssigneeNames.map((name) => (
-                <option key={name} value={name}>
-                  {name}
+              {sortedEligibleAssignees.map((assignee) => (
+                <option key={assignee.id} value={assignee.id}>
+                  {assignee.name}
                 </option>
               ))}
             </select>
@@ -2535,12 +2541,6 @@ function WorkItemBoardCard({
   const overdue =
     item.status !== 'done' && item.dueInDays < 0
 
-  const initials = item.assignee
-    .split(/\s+/)
-    .map((part) => part[0])
-    .join('')
-    .slice(0, 2)
-    .toUpperCase()
 
   return (
     <article className="rounded-lg border border-outline-variant bg-surface-container-lowest p-4 shadow-sm">
@@ -2552,7 +2552,7 @@ function WorkItemBoardCard({
           {workItemTypeLabels[item.type]}
         </span>
 
-        {item.blocked && (
+        {item.blockedReason && (
           <span className="inline-flex items-center gap-1 rounded-full bg-error-container px-2 py-0.5 text-[10px] font-semibold text-error">
             <span className="material-symbols-outlined text-[13px]">
               block
@@ -2566,16 +2566,14 @@ function WorkItemBoardCard({
         {item.title}
       </h3>
 
-      <div className="mt-4 flex items-center justify-between gap-3 border-t border-outline-variant pt-3">
-        <div className="flex min-w-0 items-center gap-2">
-          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-surface-container-high text-[9px] font-semibold text-on-surface">
-            {initials}
-          </div>
+      {item.blockedReason && (
+        <p className="mt-2 line-clamp-2 text-xs leading-5 text-error">
+          {item.blockedReason}
+        </p>
+      )}
 
-          <span className="truncate text-xs text-on-surface-variant">
-            {item.assignee}
-          </span>
-        </div>
+      <div className="mt-4 flex items-center justify-between gap-3 border-t border-outline-variant pt-3">
+        <WorkItemAssignees assignees={item.assignees} />
 
         <span
           className={[
@@ -2592,6 +2590,46 @@ function WorkItemBoardCard({
         </span>
       </div>
     </article>
+  )
+}
+
+function WorkItemAssignees({
+  assignees,
+}: {
+  assignees: DemoWorkItemAssignee[]
+}) {
+  if (assignees.length === 0) {
+    return (
+      <span className="text-xs text-on-surface-variant">
+        Unassigned
+      </span>
+    )
+  }
+
+  const visibleAssignees = assignees.slice(0, 2)
+  const remainingCount = assignees.length - visibleAssignees.length
+
+  return (
+    <div
+      className="flex min-w-0 items-center gap-2"
+      title={assignees.map((assignee) => assignee.name).join(', ')}
+    >
+      <div className="flex shrink-0 -space-x-1.5">
+        {visibleAssignees.map((assignee) => (
+          <div
+            key={assignee.id}
+            className="flex h-7 w-7 items-center justify-center rounded-full border-2 border-surface-container-lowest bg-surface-container-high text-[9px] font-semibold text-on-surface"
+          >
+            {assignee.initials}
+          </div>
+        ))}
+      </div>
+
+      <span className="truncate text-xs text-on-surface-variant">
+        {assignees[0].name}
+        {remainingCount > 0 ? ` +${remainingCount}` : ''}
+      </span>
+    </div>
   )
 }
 
@@ -2647,12 +2685,6 @@ function WorkItemsList({
           const overdue =
             item.status !== 'done' && item.dueInDays < 0
 
-          const initials = item.assignee
-            .split(/\s+/)
-            .map((part) => part[0])
-            .join('')
-            .slice(0, 2)
-            .toUpperCase()
 
           return (
             <div
@@ -2665,7 +2697,7 @@ function WorkItemsList({
                     {item.title}
                   </span>
 
-                  {item.blocked && (
+                  {item.blockedReason && (
                     <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-error-container px-2 py-0.5 text-[10px] font-semibold text-error">
                       <span className="material-symbols-outlined text-[13px]">
                         block
@@ -2674,6 +2706,12 @@ function WorkItemsList({
                     </span>
                   )}
                 </div>
+
+                {item.blockedReason && (
+                  <p className="mt-1 truncate text-xs text-error">
+                    {item.blockedReason}
+                  </p>
+                )}
               </div>
 
               <div className="flex items-center gap-1.5 text-xs font-medium text-on-surface-variant">
@@ -2692,15 +2730,7 @@ function WorkItemsList({
                 </span>
               </div>
 
-              <div className="flex min-w-0 items-center gap-2">
-                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-surface-container-high text-[9px] font-semibold text-on-surface">
-                  {initials}
-                </div>
-
-                <span className="truncate text-xs text-on-surface-variant">
-                  {item.assignee}
-                </span>
-              </div>
+              <WorkItemAssignees assignees={item.assignees} />
 
               <div
                 className={[
