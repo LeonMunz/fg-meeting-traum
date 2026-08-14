@@ -2821,4 +2821,3 @@ function ProjectDetailSkeleton() {
     </div>
   )
 }
-
