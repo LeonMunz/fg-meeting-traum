@@ -622,3 +622,88 @@ class OwnershipLockingTest(TestCase):
             lock_pos, check_pos,
             "Project row must be locked before final-owner check",
         )
+
+
+class ProjectMembershipAdminTest(TestCase):
+    """Verify ProjectMembershipAdmin restricts add/change/delete in Django admin."""
+
+    def setUp(self):
+        self.superuser = User.objects.create_superuser(
+            username="admin", password="Pass1!"
+        )
+        self.group = ResearchGroup.objects.create(
+            name="FG Test", created_by=self.superuser
+        )
+        self.project = Project.objects.create(
+            name="Admin Test",
+            research_group=self.group,
+            created_by=self.superuser,
+        )
+        self.membership = ProjectMembership.objects.create(
+            project=self.project,
+            user=self.superuser,
+            role=ProjectMembership.Role.OWNER,
+            added_by=self.superuser,
+        )
+        from projects.admin import ProjectMembershipAdmin
+        from django.contrib.admin.sites import site
+        self.admin = site.get_model_admin(ProjectMembership)
+
+    def test_admin_cannot_add(self):
+        """ProjectMembershipAdmin.has_add_permission returns False."""
+        from django.test import RequestFactory
+        factory = RequestFactory()
+        request = factory.post("/admin/")
+        request.user = self.superuser
+        self.assertFalse(
+            self.admin.has_add_permission(request),
+            "Adding ProjectMembership through admin should be blocked",
+        )
+
+    def test_admin_cannot_change(self):
+        """ProjectMembershipAdmin.has_change_permission returns False."""
+        from django.test import RequestFactory
+        factory = RequestFactory()
+        request = factory.post("/admin/")
+        request.user = self.superuser
+        self.assertFalse(
+            self.admin.has_change_permission(request, obj=self.membership),
+            "Changing ProjectMembership through admin should be blocked",
+        )
+
+    def test_admin_cannot_change_collection(self):
+        """ProjectMembershipAdmin.has_change_permission(obj=None) returns False."""
+        from django.test import RequestFactory
+        factory = RequestFactory()
+        request = factory.post("/admin/")
+        request.user = self.superuser
+        self.assertFalse(
+            self.admin.has_change_permission(request, obj=None),
+            "Changing any ProjectMembership through admin should be blocked",
+        )
+
+    def test_admin_cannot_delete(self):
+        """ProjectMembershipAdmin.has_delete_permission returns False."""
+        from django.test import RequestFactory
+        factory = RequestFactory()
+        request = factory.post("/admin/")
+        request.user = self.superuser
+        self.assertFalse(
+            self.admin.has_delete_permission(request, obj=self.membership),
+            "Deleting ProjectMembership through admin should be blocked",
+        )
+
+    def test_admin_can_view_changelist(self):
+        """Superuser can still view the ProjectMembership changelist.
+
+        Viewing is allowed via the default ModelAdmin.has_module_permission
+        which returns True for superusers.
+        """
+        from django.test import RequestFactory
+        factory = RequestFactory()
+        request = factory.get("/admin/")
+        request.user = self.superuser
+        self.assertTrue(
+            self.admin.has_module_permission(request),
+            "Superuser should be able to view ProjectMembership in admin",
+        )

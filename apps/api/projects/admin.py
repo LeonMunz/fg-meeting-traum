@@ -16,7 +16,14 @@ class ProjectMembershipAdmin(admin.ModelAdmin):
     list_filter = ("role",)
     search_fields = ("user__username", "project__name")
 
-    # Prevent admin from bypassing domain invariants via direct edits
-    add_permission = None
-    change_permission = None
-    delete_permission = None
+    def has_add_permission(self, request):
+        """Prevent adding ProjectMembership through Django admin."""
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        """Prevent changing ProjectMembership through Django admin."""
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        """Prevent deleting ProjectMembership through Django admin."""
+        return False
