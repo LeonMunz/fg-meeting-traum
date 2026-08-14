@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from 'react-router'
 
-import { SessionProvider, useSession } from '../api/SessionProvider'
+import { SessionProvider } from '../api/SessionProvider'
+import { useSession } from '../api/useSession'
 import { AppShell } from '../components/layout/AppShell'
 import { LoginPage } from '../features/auth/LoginPage'
 import { DashboardPage } from '../features/dashboard/DashboardPage'

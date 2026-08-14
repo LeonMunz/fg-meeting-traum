@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useState } from 'react'
+import { createContext, useCallback, useEffect, useState } from 'react'
 
 import { login as apiLogin, logout as apiLogout, me as apiMe } from '../api/auth'
 import { ApiError } from '../api/client'
@@ -16,6 +16,8 @@ interface SessionContextValue extends SessionState {
 }
 
 const SessionContext = createContext<SessionContextValue | null>(null)
+
+export { SessionContext }
 
 export function SessionProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<SessionState>({
@@ -70,10 +72,4 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       {children}
     </SessionContext.Provider>
   )
-}
-
-export function useSession() {
-  const ctx = useContext(SessionContext)
-  if (!ctx) throw new Error('useSession must be used inside SessionProvider')
-  return ctx
 }

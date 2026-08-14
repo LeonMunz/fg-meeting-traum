@@ -1,32 +1,34 @@
 """
 URL configuration for config project.
-
-The `urlpatterns` list routes URLs to views. For more information please see:
-    https://docs.djangoproject.com/en/5.2/topics/http/urls/
-Examples:
-Function views
-    1. Add an import:  from my_app import views
-    2. Add a URL to urlpatterns:  path('', views.home, name='home')
-Class-based views
-    1. Add an import:  from other_app.views import Home
-    2. Add a URL to urlpatterns:  path('', Home.as_view(), name='home')
-Including another URLconf
-    1. Import the include() function: from django.urls import include, path
-    2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 from django.contrib import admin
 from django.urls import path
+from django.views.decorators.csrf import csrf_protect
 
 from accounts.views import CSRFEndpoint, LoginView, LogoutView, MeView
 from config.health import HealthCheckView
 from research_groups.views import ResearchGroupDetailView, ResearchGroupListView
 
+
+def csrf_protect_view(view_class):
+    """Apply csrf_protect to a DRF view.
+
+    DRF sets csrf_exempt=True on as_view() view functions, which causes
+    csrf_protect to be a no-op. This helper removes csrf_exempt before
+    wrapping with csrf_protect, ensuring Django's CsrfViewMiddleware
+    actually enforces CSRF checks.
+    """
+    view_func = view_class.as_view()
+    del view_func.csrf_exempt
+    return csrf_protect(view_func)
+
+
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/health/', HealthCheckView.as_view(), name='health'),
     path('api/auth/csrf/', CSRFEndpoint.as_view(), name='csrf'),
-    path('api/auth/login/', LoginView.as_view(), name='login'),
-    path('api/auth/logout/', LogoutView.as_view(), name='logout'),
+    path('api/auth/login/', csrf_protect_view(LoginView), name='login'),
+    path('api/auth/logout/', csrf_protect_view(LogoutView), name='logout'),
     path('api/auth/me/', MeView.as_view(), name='me'),
     path('api/research-groups/', ResearchGroupListView.as_view(), name='research-groups-list'),
     path('api/research-groups/<int:pk>/', ResearchGroupDetailView.as_view(), name='research-groups-detail'),

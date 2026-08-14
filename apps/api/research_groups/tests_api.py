@@ -8,7 +8,6 @@ Verifies that:
 """
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase
 from rest_framework.test import APIClient, APITestCase
 
 from research_groups.models import ResearchGroup, ResearchGroupMembership
@@ -20,7 +19,7 @@ class _AuthMixin:
     """Mixin with login helper for APIClient-based tests."""
 
     def setUp(self):
-        super().setUp() if isinstance(self, TestCase) else None
+        super().setUp()
         self.client = APIClient()
 
     def _login(self, username="testuser", password="TestPass1!"):

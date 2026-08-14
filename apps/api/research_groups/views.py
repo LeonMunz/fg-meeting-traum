@@ -1,9 +1,8 @@
-from accounts.api import APIView
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from .models import ResearchGroup, ResearchGroupMembership
-from .serializers import ResearchGroupSerializer
 
 
 class ResearchGroupListView(APIView):

@@ -1,8 +1,8 @@
-from accounts.api import APIView
 from django.contrib.auth import authenticate, login, logout
-from django.middleware.csrf import get_token as csrf_get_token
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.views import APIView
+from django.middleware.csrf import get_token as csrf_get_token
 
 
 class CSRFEndpoint(APIView):
@@ -11,7 +11,7 @@ class CSRFEndpoint(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        # Calling get_token() ensures the CSRF cookie is set on the response.
+        # get_token() ensures the CSRF cookie is set on the response.
         csrf_get_token(request)
         return Response({"detail": "CSRF cookie set"})
 
@@ -19,12 +19,10 @@ class CSRFEndpoint(APIView):
 class LoginView(APIView):
     """Authenticate a user and create a server session.
 
-    Requires a valid CSRF token in the X-CSRFToken header.
-    CSRF enforcement is handled by the base APIView when requires_csrf_token is True.
+    CSRF protection is enforced by csrf_protect in urls.py.
     """
 
     permission_classes = [AllowAny]
-    requires_csrf_token = True
 
     def post(self, request):
         username = request.data.get("username", "")
@@ -51,12 +49,10 @@ class LoginView(APIView):
 class LogoutView(APIView):
     """Terminate the current Django session.
 
-    Requires a valid CSRF token in the X-CSRFToken header.
-    CSRF enforcement is handled by the base APIView when requires_csrf_token is True.
+    CSRF protection is enforced by csrf_protect in urls.py.
     """
 
     permission_classes = [AllowAny]
-    requires_csrf_token = True
 
     def post(self, request):
         logout(request)

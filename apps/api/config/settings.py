@@ -133,11 +133,12 @@ STATIC_URL = 'static/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # Django REST Framework
-# Use a custom SessionAuthentication that does not enforce CSRF at the DRF layer.
-# Django's CsrfViewMiddleware still enforces CSRF on unsafe methods (POST/PUT/PATCH/DELETE).
+# Standard session authentication with minimal customize for 401 responses.
+# CSRF is enforced by DRF SessionAuthentication for authenticated unsafe requests.
+# Login/Logout views add explicit CSRF enforcement via csrf_protect.
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
-        'accounts.authentication.NoCSRFSessionAuthentication',
+        'accounts.authentication.FGSessionAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',

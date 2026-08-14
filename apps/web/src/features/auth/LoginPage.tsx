@@ -2,7 +2,7 @@ import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { useNavigate } from 'react-router'
 
-import { useSession } from '../../api/SessionProvider'
+import { useSession } from '../../api/useSession'
 
 export function LoginPage() {
   const { login, loading, error } = useSession()

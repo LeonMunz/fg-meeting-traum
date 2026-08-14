@@ -1,4 +1,4 @@
-import { useSession } from '../../api/SessionProvider'
+import { useSession } from '../../api/useSession'
 import { ResearchGroupSelector } from '../../features/research-group/ResearchGroupSelector'
 import { useState } from 'react'
 
