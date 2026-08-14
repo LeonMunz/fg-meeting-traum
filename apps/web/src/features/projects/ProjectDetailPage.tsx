@@ -12,6 +12,7 @@ import {
   type DirectoryUser,
 } from './AddProjectMemberDialog'
 import { RemoveProjectMemberDialog } from './RemoveProjectMemberDialog'
+import { CreateWorkItemDialog } from './CreateWorkItemDialog'
 import { useSession } from '../../api/useSession'
 
 type ProjectStatus = 'active' | 'paused' | 'completed'
@@ -57,9 +58,10 @@ type DemoWorkItem = {
   type: DemoWorkItemType
   status: DemoWorkItemStatus
   assignees: DemoWorkItemAssignee[]
-  dueInDays: number
-  dueLabel: string
+  dueInDays: number | null
+  dueLabel: string | null
   blockedReason: string | null
+  parentId: string | null
 }
 
 type ProjectMember = {
@@ -346,6 +348,7 @@ const demoWorkItems: Record<string, DemoWorkItem[]> = {
       dueInDays: 1,
       dueLabel: 'Tomorrow',
       blockedReason: null,
+      parentId: null,
     },
     {
       id: 'wi-2',
@@ -359,6 +362,7 @@ const demoWorkItems: Record<string, DemoWorkItem[]> = {
       dueInDays: 3,
       dueLabel: 'Aug 17',
       blockedReason: null,
+      parentId: null,
     },
     {
       id: 'wi-3',
@@ -371,6 +375,7 @@ const demoWorkItems: Record<string, DemoWorkItem[]> = {
       dueInDays: 2,
       dueLabel: 'Aug 16',
       blockedReason: 'Replacement sample holder is still unavailable.',
+      parentId: null,
     },
     {
       id: 'wi-4',
@@ -383,6 +388,7 @@ const demoWorkItems: Record<string, DemoWorkItem[]> = {
       dueInDays: 6,
       dueLabel: 'Aug 20',
       blockedReason: null,
+      parentId: null,
     },
     {
       id: 'wi-5',
@@ -395,6 +401,7 @@ const demoWorkItems: Record<string, DemoWorkItem[]> = {
       dueInDays: -2,
       dueLabel: 'Aug 12',
       blockedReason: null,
+      parentId: null,
     },
     {
       id: 'wi-6',
@@ -407,6 +414,7 @@ const demoWorkItems: Record<string, DemoWorkItem[]> = {
       dueInDays: -1,
       dueLabel: 'Completed yesterday',
       blockedReason: null,
+      parentId: null,
     },
   ],
   'ai-engineering': [],
@@ -642,6 +650,9 @@ export function ProjectDetailPage() {
   const [addMemberDialogOpen, setAddMemberDialogOpen] = useState(false)
   const [memberToRemove, setMemberToRemove] =
     useState<ProjectMember | null>(null)
+  const [workItems, setWorkItems] = useState<DemoWorkItem[]>([])
+  const [createWorkItemDialogOpen, setCreateWorkItemDialogOpen] =
+    useState(false)
   const [workItemFocus, setWorkItemFocus] =
     useState<WorkItemFocus>('due-3-days')
   const [customDueDays, setCustomDueDays] = useState(3)
@@ -736,6 +747,17 @@ export function ProjectDetailPage() {
     setMembers(project?.members ?? [])
     setAddMemberDialogOpen(false)
     setMemberToRemove(null)
+    setCreateWorkItemDialogOpen(false)
+    setWorkItems(
+      project
+        ? (demoWorkItems[project.id] ?? []).map((item) => ({
+            ...item,
+            assignees: item.assignees.map((assignee) => ({
+              ...assignee,
+            })),
+          }))
+        : [],
+    )
 
     if (project) {
       setProjectName(project.name)
@@ -1012,13 +1034,95 @@ export function ProjectDetailPage() {
     setMemberToRemove(null)
   }
 
+  const handleCreateWorkItem = (input: {
+    title: string
+    type: DemoWorkItemType
+    status: DemoWorkItemStatus
+    assigneeIds: string[]
+    parentId: string | null
+    dueDate: string | null
+    blockedReason: string | null
+  }) => {
+    if (isReadOnly) return
+
+    const assignableMembers = members.filter(
+      (member) => member.role !== 'viewer',
+    )
+
+    const assignees = assignableMembers
+      .filter((member) => input.assigneeIds.includes(member.id))
+      .map((member) => ({
+        id: member.id,
+        name: member.name,
+        initials: member.initials,
+      }))
+
+    const validParentId =
+      input.parentId &&
+      workItems.some((item) => item.id === input.parentId)
+        ? input.parentId
+        : null
+
+    let dueInDays: number | null = null
+    let dueLabel: string | null = null
+
+    if (input.dueDate) {
+      const [year, month, day] = input.dueDate
+        .split('-')
+        .map(Number)
+
+      const targetDate = new Date(year, month - 1, day)
+      const today = new Date()
+      const todayStart = new Date(
+        today.getFullYear(),
+        today.getMonth(),
+        today.getDate(),
+      )
+
+      dueInDays = Math.round(
+        (targetDate.getTime() - todayStart.getTime()) /
+          (24 * 60 * 60 * 1000),
+      )
+
+      dueLabel =
+        dueInDays === 0
+          ? 'Today'
+          : dueInDays === 1
+            ? 'Tomorrow'
+            : new Intl.DateTimeFormat('en', {
+                month: 'short',
+                day: 'numeric',
+              }).format(targetDate)
+    }
+
+    const localId =
+      typeof globalThis.crypto?.randomUUID === 'function'
+        ? globalThis.crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(16).slice(2)}`
+
+    const newWorkItem: DemoWorkItem = {
+      id: `local-${localId}`,
+      title: input.title.trim(),
+      type: input.type,
+      status: input.status,
+      assignees,
+      dueInDays,
+      dueLabel,
+      blockedReason: input.blockedReason?.trim() || null,
+      parentId: validParentId,
+    }
+
+    setWorkItems((current) => [newWorkItem, ...current])
+    setCreateWorkItemDialogOpen(false)
+  }
+
   const projectActivities = forceEmptyActivity
     ? []
     : demoActivities[project.id] ?? []
 
   const projectWorkItems = forceEmptyWorkItems
     ? []
-    : demoWorkItems[project.id] ?? []
+    : workItems
 
   const currentUserMemberId = user?.username ?? null
 
@@ -1028,6 +1132,7 @@ export function ProjectDetailPage() {
       case 'due-3-days':
         return (
           item.status !== 'done' &&
+          item.dueInDays != null &&
           item.dueInDays >= 0 &&
           item.dueInDays <= 3
         )
@@ -1035,12 +1140,17 @@ export function ProjectDetailPage() {
       case 'due-week':
         return (
           item.status !== 'done' &&
+          item.dueInDays != null &&
           item.dueInDays >= 0 &&
           item.dueInDays <= 7
         )
 
       case 'overdue':
-        return item.status !== 'done' && item.dueInDays < 0
+        return (
+          item.status !== 'done' &&
+          item.dueInDays != null &&
+          item.dueInDays < 0
+        )
 
       case 'blocked':
         return item.status !== 'done' && Boolean(item.blockedReason)
@@ -1062,7 +1172,9 @@ export function ProjectDetailPage() {
 
       case 'custom': {
         const dueMatches =
-          item.dueInDays >= 0 && item.dueInDays <= customDueDays
+          item.dueInDays != null &&
+          item.dueInDays >= 0 &&
+          item.dueInDays <= customDueDays
 
         const statusMatches =
           customStatus === 'all' || item.status === customStatus
@@ -1551,12 +1663,14 @@ export function ProjectDetailPage() {
                       <span
                         className={[
                           'text-xs',
-                          item.dueInDays < 0 && item.status !== 'done'
+                          item.dueInDays != null &&
+                          item.dueInDays < 0 &&
+                          item.status !== 'done'
                             ? 'font-semibold text-error'
                             : 'text-on-surface-variant',
                         ].join(' ')}
                       >
-                        {item.dueLabel}
+                        {item.dueLabel ?? 'No due date'}
                       </span>
                     </div>
                   </div>
@@ -1778,6 +1892,7 @@ export function ProjectDetailPage() {
             (member) => member.role !== 'viewer',
           )}
           readOnly={isReadOnly}
+          onCreate={() => setCreateWorkItemDialogOpen(true)}
           preferencesKey={
             user
               ? `fg-workspace:project-work-items:v1:${user.id}:${project.id}`
@@ -2047,6 +2162,24 @@ export function ProjectDetailPage() {
         onClose={() => setMemberToRemove(null)}
         onConfirm={handleConfirmRemoveMember}
       />
+
+      <CreateWorkItemDialog
+        open={createWorkItemDialogOpen}
+        assignees={sortedMembers
+          .filter((member) => member.role !== 'viewer')
+          .map((member) => ({
+            id: member.id,
+            name: member.name,
+            initials: member.initials,
+          }))}
+        parentItems={projectWorkItems.map((item) => ({
+          id: item.id,
+          title: item.title,
+          type: item.type,
+        }))}
+        onClose={() => setCreateWorkItemDialogOpen(false)}
+        onCreate={handleCreateWorkItem}
+      />
     </div>
   )
 }
@@ -2055,11 +2188,13 @@ function ProjectWorkItemsPanel({
   items,
   eligibleAssignees,
   readOnly,
+  onCreate,
   preferencesKey,
 }: {
   items: DemoWorkItem[]
   eligibleAssignees: ProjectMember[]
   readOnly: boolean
+  onCreate: () => void
   preferencesKey: string | null
 }) {
   const [view, setView] = useState<WorkItemsView>('board')
@@ -2271,6 +2406,19 @@ function ProjectWorkItemsPanel({
         </div>
 
         <div className="flex items-center gap-3">
+          {!readOnly && (
+            <button
+              type="button"
+              onClick={onCreate}
+              className="inline-flex h-9 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-primary/90"
+            >
+              <span className="material-symbols-outlined text-[18px]">
+                add
+              </span>
+              New work item
+            </button>
+          )}
+
           {readOnly && (
             <span className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-surface-container-high px-3 text-xs font-semibold text-on-surface-variant">
               <span className="material-symbols-outlined text-[17px]">
@@ -2431,6 +2579,19 @@ function ProjectWorkItemsPanel({
           <p className="mt-1 max-w-md text-sm leading-6 text-on-surface-variant">
             This project does not contain any work items yet.
           </p>
+
+          {!readOnly && (
+            <button
+              type="button"
+              onClick={onCreate}
+              className="mt-5 inline-flex h-9 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-primary/90"
+            >
+              <span className="material-symbols-outlined text-[18px]">
+                add
+              </span>
+              Create first work item
+            </button>
+          )}
         </div>
       ) : filteredItems.length === 0 ? (
         <div className="flex min-h-64 flex-col items-center justify-center px-6 py-12 text-center">
@@ -2539,7 +2700,9 @@ function WorkItemBoardCard({
           : 'check_box_outline_blank'
 
   const overdue =
-    item.status !== 'done' && item.dueInDays < 0
+    item.status !== 'done' &&
+    item.dueInDays != null &&
+    item.dueInDays < 0
 
 
   return (
@@ -2586,7 +2749,7 @@ function WorkItemBoardCard({
           <span className="material-symbols-outlined text-[15px]">
             schedule
           </span>
-          {item.dueLabel}
+          {item.dueLabel ?? 'No due date'}
         </span>
       </div>
     </article>
@@ -2683,7 +2846,9 @@ function WorkItemsList({
                   : 'check_circle'
 
           const overdue =
-            item.status !== 'done' && item.dueInDays < 0
+            item.status !== 'done' &&
+    item.dueInDays != null &&
+    item.dueInDays < 0
 
 
           return (
@@ -2743,7 +2908,7 @@ function WorkItemsList({
                 <span className="material-symbols-outlined text-[16px]">
                   schedule
                 </span>
-                {item.dueLabel}
+                {item.dueLabel ?? 'No due date'}
               </div>
             </div>
           )
