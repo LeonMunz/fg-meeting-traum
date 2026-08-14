@@ -2372,7 +2372,6 @@ function ProjectWorkItemsPanel({
   const statusColumns = workItemStatusOptions.map((status) => ({
     status: status.value,
     label: status.label,
-    icon: status.icon,
   }))
 
   const typeFilters: Array<{
@@ -2642,17 +2641,11 @@ function ProjectWorkItemsPanel({
                 className="min-w-0 rounded-xl border border-outline-variant bg-surface-container-low/55"
               >
                 <div className="flex items-center justify-between border-b border-outline-variant px-4 py-3">
-                  <div className="flex items-center gap-2">
-                    <span className="material-symbols-outlined text-[18px] text-on-surface-variant">
-                      {column.icon}
-                    </span>
+                  <span className="text-sm font-semibold text-on-surface">
+                    {column.label}
+                  </span>
 
-                    <span className="text-sm font-semibold text-on-surface">
-                      {column.label}
-                    </span>
-                  </div>
-
-                  <span className="inline-flex min-w-6 items-center justify-center rounded-full bg-surface-container-high px-2 py-0.5 text-[11px] font-semibold text-on-surface-variant">
+                  <span className="text-xs font-medium text-on-surface-variant">
                     {columnItems.length}
                   </span>
                 </div>
@@ -2685,71 +2678,109 @@ function ProjectWorkItemsPanel({
   )
 }
 
+const workItemTypeIcons: Record<DemoWorkItemType, string> = {
+  epic: 'account_tree',
+  milestone: 'flag',
+  deliverable: 'inventory_2',
+  task: 'assignment',
+}
+
+const workItemStatusDisplay: Record<
+  DemoWorkItemStatus,
+  {
+    glyph: string
+    className: string
+  }
+> = {
+  todo: {
+    glyph: '○',
+    className: 'text-on-surface-variant',
+  },
+  in_progress: {
+    glyph: '◐',
+    className: 'text-primary',
+  },
+  review: {
+    glyph: '●',
+    className: 'text-on-surface',
+  },
+  done: {
+    glyph: '✓',
+    className: 'text-emerald-700',
+  },
+}
+
+function getWorkItemDueDisplay(item: DemoWorkItem) {
+  if (item.status === 'done') {
+    return {
+      label: '—',
+      attention: false,
+    }
+  }
+
+  if (item.dueInDays != null && item.dueInDays < 0) {
+    const overdueDays = Math.abs(item.dueInDays)
+
+    return {
+      label: `${overdueDays}d overdue`,
+      attention: true,
+    }
+  }
+
+  return {
+    label: item.dueLabel ?? '—',
+    attention: false,
+  }
+}
+
 function WorkItemBoardCard({
   item,
 }: {
   item: DemoWorkItem
 }) {
-  const typeIcon =
-    item.type === 'epic'
-      ? 'account_tree'
-      : item.type === 'milestone'
-        ? 'flag'
-        : item.type === 'deliverable'
-          ? 'inventory_2'
-          : 'check_box_outline_blank'
-
-  const overdue =
-    item.status !== 'done' &&
-    item.dueInDays != null &&
-    item.dueInDays < 0
-
+  const due = getWorkItemDueDisplay(item)
 
   return (
-    <article className="rounded-lg border border-outline-variant bg-surface-container-lowest p-4 shadow-sm">
-      <div className="flex items-center justify-between gap-3">
-        <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-on-surface-variant">
-          <span className="material-symbols-outlined text-[16px]">
-            {typeIcon}
-          </span>
-          {workItemTypeLabels[item.type]}
+    <article className="rounded-lg border border-outline-variant/60 bg-surface-container-lowest px-3.5 py-3 transition hover:bg-surface-container-low/45">
+      <div className="flex items-start gap-2">
+        <span
+          title={workItemTypeLabels[item.type]}
+          aria-label={workItemTypeLabels[item.type]}
+          className="material-symbols-outlined mt-0.5 shrink-0 text-[15px] text-on-surface-variant"
+        >
+          {workItemTypeIcons[item.type]}
         </span>
 
-        {item.blockedReason && (
-          <span className="inline-flex items-center gap-1 rounded-full bg-error-container px-2 py-0.5 text-[10px] font-semibold text-error">
-            <span className="material-symbols-outlined text-[13px]">
-              block
-            </span>
-            Blocked
-          </span>
-        )}
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-start gap-2">
+            <h3 className="min-w-0 flex-1 text-sm font-semibold leading-5 text-on-surface">
+              {item.title}
+            </h3>
+
+            {item.blockedReason && (
+              <span
+                title={item.blockedReason}
+                className="mt-0.5 shrink-0 text-[11px] font-medium text-error"
+              >
+                · Blocked
+              </span>
+            )}
+          </div>
+        </div>
       </div>
 
-      <h3 className="mt-3 text-sm font-semibold leading-5 text-on-surface">
-        {item.title}
-      </h3>
-
-      {item.blockedReason && (
-        <p className="mt-2 line-clamp-2 text-xs leading-5 text-error">
-          {item.blockedReason}
-        </p>
-      )}
-
-      <div className="mt-4 flex items-center justify-between gap-3 border-t border-outline-variant pt-3">
+      <div className="mt-3.5 flex items-center justify-between gap-3 pl-[23px]">
         <WorkItemAssignees assignees={item.assignees} />
 
         <span
           className={[
-            'inline-flex shrink-0 items-center gap-1 text-[11px] font-medium',
-            overdue
-              ? 'text-error'
-              : 'text-on-surface-variant',
+            'shrink-0 text-[11px]',
+            due.attention
+              ? 'font-medium text-error'
+              : 'font-normal text-on-surface-variant',
           ].join(' ')}
         >
-          <span className="material-symbols-outlined text-[15px]">
-            schedule
-          </span>
-          {item.dueLabel ?? 'No due date'}
+          {due.label}
         </span>
       </div>
     </article>
@@ -2763,14 +2794,14 @@ function WorkItemAssignees({
 }) {
   if (assignees.length === 0) {
     return (
-      <span className="text-xs text-on-surface-variant">
+      <span className="text-xs font-normal text-on-surface-variant">
         Unassigned
       </span>
     )
   }
 
   const visibleAssignees = assignees.slice(0, 2)
-  const remainingCount = assignees.length - visibleAssignees.length
+  const additionalCount = assignees.length - 1
 
   return (
     <div
@@ -2781,16 +2812,16 @@ function WorkItemAssignees({
         {visibleAssignees.map((assignee) => (
           <div
             key={assignee.id}
-            className="flex h-7 w-7 items-center justify-center rounded-full border-2 border-surface-container-lowest bg-surface-container-high text-[9px] font-semibold text-on-surface"
+            className="flex h-[22px] w-[22px] items-center justify-center rounded-full border border-surface-container-lowest bg-surface-container-high text-[8px] font-semibold text-on-surface"
           >
             {assignee.initials}
           </div>
         ))}
       </div>
 
-      <span className="truncate text-xs text-on-surface-variant">
+      <span className="truncate text-xs font-normal text-on-surface-variant">
         {assignees[0].name}
-        {remainingCount > 0 ? ` +${remainingCount}` : ''}
+        {additionalCount > 0 ? ` +${additionalCount}` : ''}
       </span>
     </div>
   )
@@ -2801,118 +2832,108 @@ function WorkItemsList({
 }: {
   items: DemoWorkItem[]
 }) {
+  const gridColumns =
+    'grid-cols-[minmax(360px,560px)_130px_180px_110px]'
+
   return (
-    <div>
-      <div className="grid grid-cols-[minmax(0,1fr)_150px_150px_180px_130px] border-b border-outline-variant bg-surface-container-low/55 px-6 py-2.5">
-        <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-on-surface-variant">
-          Work item
+    <div className="overflow-x-auto">
+      <div className="min-w-[900px]">
+        <div
+          className={[
+            'grid h-9 items-center px-6',
+            gridColumns,
+          ].join(' ')}
+        >
+          <div className="text-[11px] font-normal text-on-surface-variant/75">
+            Work item
+          </div>
+
+          <div className="text-[11px] font-normal text-on-surface-variant/75">
+            Status
+          </div>
+
+          <div className="text-[11px] font-normal text-on-surface-variant/75">
+            Assignee
+          </div>
+
+          <div className="text-[11px] font-normal text-on-surface-variant/75">
+            Due
+          </div>
         </div>
 
-        <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-on-surface-variant">
-          Type
-        </div>
+        <div className="border-t border-outline-variant/40">
+          {items.map((item, index) => {
+            const status = workItemStatusDisplay[item.status]
+            const due = getWorkItemDueDisplay(item)
 
-        <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-on-surface-variant">
-          Status
-        </div>
+            return (
+              <div
+                key={item.id}
+                className={[
+                  'grid h-[54px] items-center px-6 transition-colors hover:bg-surface-container-low/45',
+                  gridColumns,
+                  index > 0
+                    ? 'border-t border-outline-variant/25'
+                    : '',
+                ].join(' ')}
+              >
+                <div className="flex min-w-0 items-center gap-2 pr-5">
+                  <span
+                    title={workItemTypeLabels[item.type]}
+                    aria-label={workItemTypeLabels[item.type]}
+                    className="material-symbols-outlined shrink-0 text-[15px] text-on-surface-variant/80"
+                  >
+                    {workItemTypeIcons[item.type]}
+                  </span>
 
-        <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-on-surface-variant">
-          Assignee
-        </div>
-
-        <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-on-surface-variant">
-          Due
-        </div>
-      </div>
-
-      <div className="divide-y divide-outline-variant">
-        {items.map((item) => {
-          const typeIcon =
-            item.type === 'epic'
-              ? 'account_tree'
-              : item.type === 'milestone'
-                ? 'flag'
-                : item.type === 'deliverable'
-                  ? 'inventory_2'
-                  : 'check_box_outline_blank'
-
-          const statusIcon =
-            item.status === 'todo'
-              ? 'radio_button_unchecked'
-              : item.status === 'in_progress'
-                ? 'pending'
-                : item.status === 'review'
-                  ? 'rate_review'
-                  : 'check_circle'
-
-          const overdue =
-            item.status !== 'done' &&
-    item.dueInDays != null &&
-    item.dueInDays < 0
-
-
-          return (
-            <div
-              key={item.id}
-              className="grid grid-cols-[minmax(0,1fr)_150px_150px_180px_130px] items-center px-6 py-4 transition hover:bg-surface-container-low/45"
-            >
-              <div className="min-w-0 pr-6">
-                <div className="flex items-center gap-2">
-                  <span className="truncate text-sm font-medium text-on-surface">
+                  <span className="truncate text-sm font-semibold text-on-surface">
                     {item.title}
                   </span>
 
                   {item.blockedReason && (
-                    <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-error-container px-2 py-0.5 text-[10px] font-semibold text-error">
-                      <span className="material-symbols-outlined text-[13px]">
-                        block
-                      </span>
-                      Blocked
+                    <span
+                      title={item.blockedReason}
+                      className="shrink-0 text-[11px] font-medium text-error"
+                    >
+                      · Blocked
                     </span>
                   )}
                 </div>
 
-                {item.blockedReason && (
-                  <p className="mt-1 truncate text-xs text-error">
-                    {item.blockedReason}
-                  </p>
-                )}
-              </div>
-
-              <div className="flex items-center gap-1.5 text-xs font-medium text-on-surface-variant">
-                <span className="material-symbols-outlined text-[17px]">
-                  {typeIcon}
-                </span>
-                {workItemTypeLabels[item.type]}
-              </div>
-
-              <div>
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-surface-container-high px-2.5 py-1 text-xs font-medium text-on-surface">
-                  <span className="material-symbols-outlined text-[15px] text-on-surface-variant">
-                    {statusIcon}
+                <div
+                  className={[
+                    'flex items-center gap-2 text-xs font-normal',
+                    status.className,
+                  ].join(' ')}
+                >
+                  <span
+                    aria-hidden="true"
+                    className="inline-flex w-4 shrink-0 justify-center text-[15px] leading-none"
+                  >
+                    {status.glyph}
                   </span>
-                  {workItemStatusLabels[item.status]}
-                </span>
-              </div>
 
-              <WorkItemAssignees assignees={item.assignees} />
+                  <span className="text-on-surface-variant">
+                    {workItemStatusLabels[item.status]}
+                  </span>
+                </div>
 
-              <div
-                className={[
-                  'flex items-center gap-1 text-xs font-medium',
-                  overdue
-                    ? 'text-error'
-                    : 'text-on-surface-variant',
-                ].join(' ')}
-              >
-                <span className="material-symbols-outlined text-[16px]">
-                  schedule
-                </span>
-                {item.dueLabel ?? 'No due date'}
+                <WorkItemAssignees assignees={item.assignees} />
+
+                <div
+                  className={[
+                    'text-xs',
+                    due.attention
+                      ? 'font-medium text-error'
+                      : 'font-normal text-on-surface-variant',
+                  ].join(' ')}
+                >
+                  {due.label}
+                </div>
               </div>
-            </div>
-          )
-        })}
+            )
+          })}
+        </div>
       </div>
     </div>
   )
