@@ -10,6 +10,7 @@ from django.db import transaction
 from django.db.models import QuerySet
 
 from projects.models import Project, ProjectMembership
+from research_groups.models import ResearchGroupMembership
 
 from .models import WorkItem, WorkItemAssignee
 
@@ -32,9 +33,24 @@ _UNSET = object()
 def _validate_assignee_eligibility(project: Project, user) -> None:
     """Validate that a user is eligible to be assigned to a WorkItem in the project.
 
-    The user must have ProjectMembership with role 'owner' or 'member'.
+    The user must have BOTH:
+    - ResearchGroupMembership in the Project's Research Group
+    - ProjectMembership in the Project with role 'owner' or 'member'
+
     A viewer or non-member cannot be assigned.
+    Stale ProjectMembership (whose ResearchGroupMembership no longer exists)
+    is rejected.
     """
+    # Check current ResearchGroupMembership
+    if not ResearchGroupMembership.objects.filter(
+        research_group=project.research_group,
+        user=user,
+    ).exists():
+        raise WorkItemDomainError(
+            f"User '{user.username}' does not have a current "
+            "ResearchGroupMembership and cannot be assigned."
+        )
+
     membership = ProjectMembership.objects.filter(
         project=project,
         user=user,
@@ -186,28 +202,20 @@ def create_work_item(
 ) -> WorkItem:
     """Create a WorkItem atomically with assignees.
 
-    The actor must have ProjectMembership with role 'owner' or 'member'.
+    The actor must have current ProjectMembership with role 'owner' or 'member'
+    AND current ResearchGroupMembership in the Project's Research Group.
     All assignees must be eligible.
     Parent relationship must be valid.
-    """
-    # Validate: actor can write in project
-    _require_project_write_access(project, actor)
 
-    # Validate type
+    Uses transaction.atomic() with select_for_update() on the Project row
+    to serialize writes against concurrent membership changes.
+    """
+    # Validate type/status before locking
     if type not in WorkItem.Type.values:
         raise WorkItemDomainError(f"Invalid WorkItem type: {type}")
 
-    # Validate status
     if status is not None and status not in WorkItem.Status.values:
         raise WorkItemDomainError(f"Invalid WorkItem status: {status}")
-
-    # Validate parent
-    if parent_id is not None:
-        _validate_parent(project, parent_id)
-
-    # Validate assignees
-    if assignee_ids:
-        _validate_assignees(project, assignee_ids)
 
     # Determine completed_at based on initial status
     initial_completed_at = None
@@ -217,8 +225,22 @@ def create_work_item(
         initial_completed_at = timezone.now()
 
     with transaction.atomic():
+        # Lock the Project row to serialize against concurrent membership changes
+        locked_project = Project.objects.select_for_update().get(pk=project.pk)
+
+        # Re-check write access under the lock
+        _require_project_write_access(locked_project, actor)
+
+        # Validate parent under the lock
+        if parent_id is not None:
+            _validate_parent(locked_project, parent_id)
+
+        # Validate assignees under the lock
+        if assignee_ids:
+            _validate_assignees(locked_project, assignee_ids)
+
         work_item = WorkItem.objects.create(
-            project=project,
+            project=locked_project,
             type=type,
             title=title,
             description=description,
@@ -262,104 +284,51 @@ def update_work_item(
 ) -> WorkItem:
     """Update a WorkItem atomically with assignee replacement and hierarchy.
 
-    The actor must have ProjectMembership with role 'owner' or 'member'.
+    The actor must have current ProjectMembership with role 'owner' or 'member'
+    AND current ResearchGroupMembership in the Project's Research Group.
     Immutable fields (project, created_by, created_at) cannot be changed.
     completed_at is server-managed, not client-writable.
 
     Assignee replacement is atomic: if any assignee is invalid, the entire
     update rolls back.
 
-    Uses select_for_update() on the Project row for hierarchy mutations
-    to prevent concurrent cycle creation.
+    Uses transaction.atomic() with select_for_update() on the Project row
+    to serialize writes against concurrent membership changes.
     """
     project = work_item.project
 
-    # Validate: actor can write in project
-    _require_project_write_access(project, actor)
-
-    # Validate type
+    # Validate type/status before locking (no DB needed)
     if type is not None and type not in WorkItem.Type.values:
         raise WorkItemDomainError(f"Invalid WorkItem type: {type}")
 
-    # Validate status
     if status is not None and status not in WorkItem.Status.values:
         raise WorkItemDomainError(f"Invalid WorkItem status: {status}")
 
-    # Validate assignees
-    if assignee_ids is not None:
-        _validate_assignees(project, assignee_ids)
-
-    # Check if parent is being changed — requires locking
+    # Check if parent is being changed — requires hierarchy cycle validation
     parent_changing = (
         parent_id is not _UNSET and parent_id != work_item.parent_id
     )
 
-    if parent_changing:
-        _update_with_hierarchy_lock(
-            work_item=work_item,
-            actor=actor,
-            project=project,
-            type=type,
-            title=title,
-            description=description,
-            status=status,
-            assignee_ids=assignee_ids,
-            parent_id=parent_id,
-            due_date=due_date,
-            blocked_reason=blocked_reason,
-        )
-        work_item.refresh_from_db()  # Reload to get changes made under lock
-    else:
-        if parent_id is not _UNSET:
-            # Validate the provided parent even if not changing
-            _validate_parent_with_new_item(project, parent_id if parent_id is not None else None, work_item.pk)
-
-        with transaction.atomic():
-            _apply_work_item_fields(
-                work_item=work_item,
-                type=type,
-                title=title,
-                description=description,
-                status=status,
-                assignee_ids=assignee_ids,
-                due_date=due_date,
-                blocked_reason=blocked_reason,
-            )
-
-    return work_item
-
-
-def _update_with_hierarchy_lock(
-    *,
-    work_item: WorkItem,
-    actor,
-    project: Project,
-    type: Optional[str] = None,
-    title: Optional[str] = None,
-    description: Optional[str] = None,
-    status: Optional[str] = None,
-    assignee_ids: Optional[list[int]] = None,
-    parent_id: object = _UNSET,
-    due_date: object = _UNSET,
-    blocked_reason: object = _UNSET,
-) -> None:
-    """Update with Project-level locking for hierarchy safety.
-
-    Acquires select_for_update() on the Project row to serialize
-    concurrent hierarchy mutations within the same project.
-    """
     with transaction.atomic():
-        # Lock the Project row to serialize hierarchy mutations
+        # Lock the Project row to serialize against concurrent membership changes
         locked_project = Project.objects.select_for_update().get(pk=project.pk)
 
         # Reload work_item under the lock
         work_item = WorkItem.objects.select_for_update().get(pk=work_item.pk)
 
-        # Re-validate parent under the lock
-        if parent_id is not _UNSET and parent_id is not None:
-            _validate_parent_with_new_item(
-                locked_project, parent_id, work_item.pk
-            )
+        # Re-check write access under the lock
+        _require_project_write_access(locked_project, actor)
+
+        # Validate assignees under the lock
+        if assignee_ids is not None:
+            _validate_assignees(locked_project, assignee_ids)
+
+        # Validate parent under the lock
+        if parent_id is not _UNSET:
+            if parent_id is not None:
+                _validate_parent_with_new_item(
+                    locked_project, parent_id, work_item.pk
+                )
 
         _apply_work_item_fields(
             work_item=work_item,
@@ -372,6 +341,9 @@ def _update_with_hierarchy_lock(
             due_date=due_date,
             blocked_reason=blocked_reason,
         )
+
+    work_item.refresh_from_db()
+    return work_item
 
 
 def _apply_work_item_fields(
@@ -452,11 +424,23 @@ def _apply_work_item_fields(
 
 
 def _require_project_write_access(project: Project, actor) -> None:
-    """Require that the actor has write access to the project.
+    """Require that the actor has effective write access to the project.
 
-    Write access requires ProjectMembership with role 'owner' or 'member'.
+    Effective write access requires BOTH:
+    - ResearchGroupMembership in the Project's Research Group
+    - ProjectMembership with role 'owner' or 'member'
+
     A viewer cannot write.
+    Stale ProjectMembership (whose ResearchGroupMembership no longer exists)
+    is rejected.
     """
+    # Check current ResearchGroupMembership
+    if not ResearchGroupMembership.objects.filter(
+        research_group=project.research_group,
+        user=actor,
+    ).exists():
+        raise WorkItemDomainError("You do not have access to this Project.")
+
     membership = ProjectMembership.objects.filter(
         project=project,
         user=actor,

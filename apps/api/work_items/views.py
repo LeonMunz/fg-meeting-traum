@@ -12,6 +12,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from projects.models import Project, ProjectMembership
+from research_groups.models import ResearchGroupMembership
 
 from .models import WorkItem, WorkItemAssignee
 from .serializers import WorkItemSerializer
@@ -23,14 +24,29 @@ from .services import (
 
 
 def _require_project_access(request, project_id):
-    """Return (Project, membership) if user has access, else None."""
+    """Return (Project, membership) if user has effective access, else None.
+
+    Effective access requires BOTH:
+    - ResearchGroupMembership in the Project's Research Group
+    - ProjectMembership in the Project
+    """
     try:
-        membership = ProjectMembership.objects.get(
+        membership = ProjectMembership.objects.select_related(
+            "project",
+        ).get(
             project_id=project_id,
             user=request.user,
         )
     except (ProjectMembership.DoesNotExist, Project.DoesNotExist):
         return None
+
+    # Verify current ResearchGroupMembership — membership may be stale
+    if not ResearchGroupMembership.objects.filter(
+        research_group=membership.project.research_group,
+        user=request.user,
+    ).exists():
+        return None
+
     return membership.project, membership
 
 
