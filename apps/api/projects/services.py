@@ -126,6 +126,8 @@ def change_membership_role(
 
     The actor must be a Project owner.
     The active Project final-owner invariant is enforced.
+    If the target user is assigned to WorkItems in this project and
+    the new role would make them ineligible (viewer), the change is blocked.
 
     Uses select_for_update() on the Project row to serialize
     concurrent ownership-changing operations.
@@ -155,6 +157,10 @@ def change_membership_role(
         if project.status == Project.Status.ACTIVE:
             _check_final_owner_change(project, membership, new_role)
 
+        # Validate: assignment eligibility — cannot downgrade assigned user to viewer
+        if new_role == ProjectMembership.Role.VIEWER:
+            _check_assignments_block_mutation(project, membership.user)
+
         membership.role = new_role
         membership.save(update_fields=["role"])
     return membership
@@ -169,6 +175,8 @@ def remove_membership(
 
     The actor must be a Project owner.
     The active Project final-owner invariant is enforced.
+    If the target user is assigned to WorkItems in this project,
+    the removal is blocked.
 
     Uses select_for_update() on the Project row to serialize
     concurrent ownership-changing operations.
@@ -193,6 +201,9 @@ def remove_membership(
         # Validate: final-owner invariant for active projects
         if project.status == Project.Status.ACTIVE:
             _check_final_owner_removal(project, membership)
+
+        # Validate: assignment eligibility — cannot remove assigned user
+        _check_assignments_block_mutation(project, membership.user)
 
         membership.delete()
 
@@ -283,4 +294,32 @@ def _check_final_owner_removal(project: Project, membership: ProjectMembership) 
         raise ProjectDomainError(
             "Cannot remove the final owner of an active Project. "
             "Add another owner first."
+        )
+
+
+# ── Assignment lifecycle protection ──
+
+
+def _check_assignments_block_mutation(project: Project, user) -> None:
+    """Block a membership mutation if the user is assigned to WorkItems in this project.
+
+    Prevents creating invalid canonical state where a WorkItemAssignee points
+    to a user who is no longer an eligible assignee (viewer or non-member).
+
+    Does NOT silently remove or reassign WorkItems. The owner must first
+    unassign/reassign the user from the affected WorkItems.
+
+    The check is performed inside the existing transaction with the Project
+    row locked, preventing TOCTOU behavior.
+    """
+    # Lazy import to avoid import-time cycles
+    from work_items.models import WorkItemAssignee
+
+    if WorkItemAssignee.objects.filter(
+        work_item__project=project,
+        user=user,
+    ).exists():
+        raise ProjectDomainError(
+            "User must be unassigned from project work items before "
+            "this membership can become viewer or be removed."
         )

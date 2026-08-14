@@ -707,3 +707,317 @@ class ProjectMembershipAdminTest(TestCase):
             self.admin.has_module_permission(request),
             "Superuser should be able to view ProjectMembership in admin",
         )
+
+
+# ── Assignment lifecycle protection tests ──
+
+from work_items.models import WorkItem, WorkItemAssignee
+from work_items.services import create_work_item
+
+
+class AssignmentLifecycleProtectionTest(TestCase):
+    """Test that ProjectMembership mutations preserve assignment invariants.
+
+    A user with active WorkItemAssignee rows in a project cannot be:
+    - downgraded to viewer
+    - removed from the project
+
+    Eligible role changes (owner -> member, member -> owner) remain allowed.
+    """
+
+    def setUp(self):
+        self.group = ResearchGroup.objects.create(
+            name="FG Test", created_by=User.objects.create_user(
+                username="alex", password="Pass1!"
+            )
+        )
+        self.alex = User.objects.get(username="alex")
+        ResearchGroupMembership.objects.create(
+            research_group=self.group, user=self.alex,
+            role=ResearchGroupMembership.Role.ADMIN,
+        )
+
+        self.chris = User.objects.create_user(username="chris", password="Pass1!")
+        ResearchGroupMembership.objects.create(
+            research_group=self.group, user=self.chris,
+            role=ResearchGroupMembership.Role.MEMBER,
+        )
+
+        self.laura = User.objects.create_user(username="laura", password="Pass1!")
+        ResearchGroupMembership.objects.create(
+            research_group=self.group, user=self.laura,
+            role=ResearchGroupMembership.Role.MEMBER,
+        )
+
+        self.project = create_project(
+            research_group=self.group, creator=self.alex, name="Paper XYZ"
+        )
+        add_project_membership(
+            project=self.project, actor=self.alex,
+            target_user=self.chris, role=ProjectMembership.Role.MEMBER,
+        )
+        add_project_membership(
+            project=self.project, actor=self.alex,
+            target_user=self.laura, role=ProjectMembership.Role.VIEWER,
+        )
+
+    def _create_assigned_work_item(self, assignee):
+        """Create a WorkItem in Paper XYZ assigned to the given user."""
+        return create_work_item(
+            project=self.project, actor=self.alex,
+            type=WorkItem.Type.TASK, title="Test Task",
+            assignee_ids=[assignee.pk],
+        )
+
+    # ── Assigned member cannot become viewer ──
+
+    def test_assigned_member_cannot_become_viewer(self):
+        chris = self.chris
+        self._create_assigned_work_item(chris)
+
+        chris_membership = ProjectMembership.objects.get(
+            project=self.project, user=chris
+        )
+        with self.assertRaises(ProjectDomainError) as ctx:
+            change_membership_role(
+                membership=chris_membership,
+                actor=self.alex,
+                new_role=ProjectMembership.Role.VIEWER,
+            )
+        self.assertIn("unassigned", str(ctx.exception.message).lower())
+
+    def test_assigned_member_cannot_be_removed(self):
+        chris = self.chris
+        self._create_assigned_work_item(chris)
+
+        chris_membership = ProjectMembership.objects.get(
+            project=self.project, user=chris
+        )
+        with self.assertRaises(ProjectDomainError) as ctx:
+            remove_membership(
+                membership=chris_membership,
+                actor=self.alex,
+            )
+        self.assertIn("unassigned", str(ctx.exception.message).lower())
+
+    # ── Membership remains unchanged after rejection ──
+
+    def test_membership_unchanged_after_rejected_downgrade(self):
+        chris = self.chris
+        self._create_assigned_work_item(chris)
+
+        chris_membership = ProjectMembership.objects.get(
+            project=self.project, user=chris
+        )
+        self.assertEqual(chris_membership.role, ProjectMembership.Role.MEMBER)
+
+        try:
+            change_membership_role(
+                membership=chris_membership,
+                actor=self.alex,
+                new_role=ProjectMembership.Role.VIEWER,
+            )
+        except ProjectDomainError:
+            pass
+
+        # Membership role must still be member
+        updated_membership = ProjectMembership.objects.get(pk=chris_membership.pk)
+        self.assertEqual(
+            updated_membership.role, ProjectMembership.Role.MEMBER,
+            "Membership role must remain unchanged after rejected downgrade",
+        )
+
+    def test_assignment_unchanged_after_rejected_removal(self):
+        chris = self.chris
+        wi = self._create_assigned_work_item(chris)
+
+        chris_membership = ProjectMembership.objects.get(
+            project=self.project, user=chris
+        )
+        try:
+            remove_membership(
+                membership=chris_membership,
+                actor=self.alex,
+            )
+        except ProjectDomainError:
+            pass
+
+        # Assignment must still exist
+        self.assertTrue(
+            WorkItemAssignee.objects.filter(
+                work_item=wi, user=chris
+            ).exists(),
+            "Assignment must remain after rejected membership removal",
+        )
+        # Membership must still exist
+        self.assertTrue(
+            ProjectMembership.objects.filter(
+                project=self.project, user=chris
+            ).exists(),
+            "Membership must remain after rejected removal",
+        )
+
+    # ── Assigned owner can become member if not last owner ──
+
+    def test_assigned_owner_can_become_member_when_another_owner(self):
+        # Alex is owner, Chris is member
+        # Add Chris as another owner first
+        chris_membership = ProjectMembership.objects.get(
+            project=self.project, user=self.chris
+        )
+        change_membership_role(
+            membership=chris_membership,
+            actor=self.alex,
+            new_role=ProjectMembership.Role.OWNER,
+        )
+        # Now create an assignment for Chris
+        self._create_assigned_work_item(self.chris)
+
+        # Chris (owner, assigned) can become member because Alex is still owner
+        chris_membership.refresh_from_db()
+        result = change_membership_role(
+            membership=chris_membership,
+            actor=self.alex,
+            new_role=ProjectMembership.Role.MEMBER,
+        )
+        self.assertEqual(result.role, ProjectMembership.Role.MEMBER)
+
+    def test_assigned_owner_cannot_become_viewer(self):
+        # Make Chris an owner (Alex stays owner too)
+        chris_membership = ProjectMembership.objects.get(
+            project=self.project, user=self.chris
+        )
+        change_membership_role(
+            membership=chris_membership,
+            actor=self.alex,
+            new_role=ProjectMembership.Role.OWNER,
+        )
+        self._create_assigned_work_item(self.chris)
+
+        chris_membership.refresh_from_db()
+        with self.assertRaises(ProjectDomainError) as ctx:
+            change_membership_role(
+                membership=chris_membership,
+                actor=self.alex,
+                new_role=ProjectMembership.Role.VIEWER,
+            )
+        self.assertIn("unassigned", str(ctx.exception.message).lower())
+
+    def test_assigned_owner_cannot_be_removed(self):
+        # Make Chris an owner
+        chris_membership = ProjectMembership.objects.get(
+            project=self.project, user=self.chris
+        )
+        change_membership_role(
+            membership=chris_membership,
+            actor=self.alex,
+            new_role=ProjectMembership.Role.OWNER,
+        )
+        self._create_assigned_work_item(self.chris)
+
+        chris_membership.refresh_from_db()
+        with self.assertRaises(ProjectDomainError) as ctx:
+            remove_membership(
+                membership=chris_membership,
+                actor=self.alex,
+            )
+        self.assertIn("unassigned", str(ctx.exception.message).lower())
+
+    # ── Unassigned user can become viewer or be removed ──
+
+    def test_unassigned_member_can_become_viewer(self):
+        # Laura is a viewer, add another member without assignments
+        another = User.objects.create_user(username="bob", password="Pass1!")
+        ResearchGroupMembership.objects.create(
+            research_group=self.group, user=another,
+            role=ResearchGroupMembership.Role.MEMBER,
+        )
+        add_project_membership(
+            project=self.project, actor=self.alex,
+            target_user=another, role=ProjectMembership.Role.MEMBER,
+        )
+        # No assignments for 'another'
+
+        another_membership = ProjectMembership.objects.get(
+            project=self.project, user=another
+        )
+        result = change_membership_role(
+            membership=another_membership,
+            actor=self.alex,
+            new_role=ProjectMembership.Role.VIEWER,
+        )
+        self.assertEqual(result.role, ProjectMembership.Role.VIEWER)
+
+    def test_unassigned_member_can_be_removed(self):
+        another = User.objects.create_user(username="bob", password="Pass1!")
+        ResearchGroupMembership.objects.create(
+            research_group=self.group, user=another,
+            role=ResearchGroupMembership.Role.MEMBER,
+        )
+        add_project_membership(
+            project=self.project, actor=self.alex,
+            target_user=another, role=ProjectMembership.Role.MEMBER,
+        )
+        # No assignments for 'another'
+
+        another_membership = ProjectMembership.objects.get(
+            project=self.project, user=another
+        )
+        remove_membership(
+            membership=another_membership,
+            actor=self.alex,
+        )
+        self.assertFalse(
+            ProjectMembership.objects.filter(
+                project=self.project, user=another
+            ).exists()
+        )
+
+    # ── Multiple work items ──
+
+    def test_any_assignment_blocks_ineligible_mutation(self):
+        # Create two assignments for Chris
+        self._create_assigned_work_item(self.chris)
+        create_work_item(
+            project=self.project, actor=self.alex,
+            type=WorkItem.Type.TASK, title="Test Task 2",
+            assignee_ids=[self.chris.pk],
+        )
+
+        chris_membership = ProjectMembership.objects.get(
+            project=self.project, user=self.chris
+        )
+        with self.assertRaises(ProjectDomainError):
+            remove_membership(
+                membership=chris_membership,
+                actor=self.alex,
+            )
+
+    # ── Other project does not block ──
+
+    def test_assignment_in_other_project_does_not_block(self):
+        # Create a second project where Chris has access and is assigned
+        project_b = create_project(
+            research_group=self.group, creator=self.chris,
+            name="Project B"
+        )
+        create_work_item(
+            project=project_b, actor=self.chris,
+            type=WorkItem.Type.TASK, title="Task in B",
+            assignee_ids=[self.chris.pk],
+        )
+
+        # Chris has assignment in Project B but NOT in Paper XYZ
+        chris_membership = ProjectMembership.objects.get(
+            project=self.project, user=self.chris
+        )
+        # Removing from Paper XYZ should work (no assignment there)
+        remove_membership(
+            membership=chris_membership,
+            actor=self.alex,
+        )
+        self.assertFalse(
+            ProjectMembership.objects.filter(
+                project=self.project, user=self.chris
+            ).exists()
+        )

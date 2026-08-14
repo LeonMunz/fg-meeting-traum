@@ -544,3 +544,123 @@ class CSRFRegressionTest(TestCase):
             content_type="application/json",
         )
         self.assertEqual(response.status_code, 403)
+
+
+class AssignmentProtectionAPITest(_AuthMixin, APITestCase):
+    """API tests for assignment lifecycle protection.
+
+    Verifies that membership mutations return 400 when the target user
+    has active WorkItem assignments in the project.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.data = _setup_test_data()
+        # Create a WorkItem assigned to Chris in Paper XYZ
+        from work_items.models import WorkItem
+        from work_items.services import create_work_item
+
+        cls.data["assigned_work_item"] = create_work_item(
+            project=cls.data["paper_xyz"],
+            actor=cls.data["alex"],
+            type=WorkItem.Type.TASK,
+            title="API Test Task",
+            assignee_ids=[cls.data["chris"].pk],
+        )
+
+    def _get_chris_membership(self):
+        """Return Chris's membership in Paper XYZ."""
+        return ProjectMembership.objects.get(
+            project=self.data["paper_xyz"],
+            user=self.data["chris"],
+        )
+
+    def test_patch_assigned_member_to_viewer_returns_400(self):
+        """PATCH membership to viewer returns 400 when user is assigned."""
+        self._login("alex")
+        csrf = self._get_csrf_token()
+
+        chris_membership = self._get_chris_membership()
+        response = self.client.patch(
+            f"/api/projects/{self.data['paper_xyz'].pk}/memberships/{chris_membership.pk}/",
+            data={"role": "viewer"},
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=csrf,
+        )
+        self.assertEqual(response.status_code, 400)
+        # Error message must NOT leak private WorkItem titles
+        error = response.json().get("error", "")
+        self.assertNotIn("API Test Task", error)
+        self.assertIn("unassigned", error.lower())
+
+    def test_delete_assigned_member_returns_400(self):
+        """DELETE assigned member returns 400."""
+        self._login("alex")
+        csrf = self._get_csrf_token()
+
+        chris_membership = self._get_chris_membership()
+        response = self.client.delete(
+            f"/api/projects/{self.data['paper_xyz'].pk}/memberships/{chris_membership.pk}/",
+            HTTP_X_CSRFTOKEN=csrf,
+        )
+        self.assertEqual(response.status_code, 400)
+        error = response.json().get("error", "")
+        self.assertIn("unassigned", error.lower())
+
+    def test_patch_unassigned_member_to_viewer_succeeds(self):
+        """PATCH unassigned member (Laura is viewer already) to viewer succeeds."""
+        self._login("alex")
+        csrf = self._get_csrf_token()
+
+        # Create an unassigned member
+        another = User.objects.create_user(username="bob", password="DevPass1!")
+        from research_groups.models import ResearchGroupMembership
+        ResearchGroupMembership.objects.create(
+            research_group=self.data["group"],
+            user=another,
+            role=ResearchGroupMembership.Role.MEMBER,
+        )
+        add_project_membership(
+            project=self.data["paper_xyz"],
+            actor=self.data["alex"],
+            target_user=another,
+            role=ProjectMembership.Role.MEMBER,
+        )
+        another_membership = ProjectMembership.objects.get(
+            project=self.data["paper_xyz"], user=another
+        )
+        response = self.client.patch(
+            f"/api/projects/{self.data['paper_xyz'].pk}/memberships/{another_membership.pk}/",
+            data={"role": "viewer"},
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=csrf,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["role"], "viewer")
+
+    def test_delete_unassigned_member_succeeds(self):
+        """DELETE unassigned member succeeds."""
+        self._login("alex")
+        csrf = self._get_csrf_token()
+
+        another = User.objects.create_user(username="bob2", password="DevPass1!")
+        from research_groups.models import ResearchGroupMembership
+        ResearchGroupMembership.objects.create(
+            research_group=self.data["group"],
+            user=another,
+            role=ResearchGroupMembership.Role.MEMBER,
+        )
+        add_project_membership(
+            project=self.data["paper_xyz"],
+            actor=self.data["alex"],
+            target_user=another,
+            role=ProjectMembership.Role.MEMBER,
+        )
+        another_membership = ProjectMembership.objects.get(
+            project=self.data["paper_xyz"], user=another
+        )
+        response = self.client.delete(
+            f"/api/projects/{self.data['paper_xyz'].pk}/memberships/{another_membership.pk}/",
+            HTTP_X_CSRFTOKEN=csrf,
+        )
+        self.assertEqual(response.status_code, 200)

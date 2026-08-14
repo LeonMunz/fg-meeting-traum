@@ -375,6 +375,8 @@ class ProjectMembershipDetailView(APIView):
         except ProjectDomainError as exc:
             return Response({"error": exc.message}, status=400)
 
+        target_membership.refresh_from_db()
+
         return Response({
             "id": target_membership.pk,
             "role": target_membership.role,
