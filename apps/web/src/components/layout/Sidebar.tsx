@@ -37,6 +37,7 @@ export function Sidebar() {
           <NavLink
             key={item.path}
             to={item.path}
+            end={item.path === '/'}
             className={({ isActive }) =>
               [
                 'flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors',

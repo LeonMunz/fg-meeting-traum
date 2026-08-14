@@ -5,6 +5,8 @@ import { useSession } from '../api/useSession'
 import { AppShell } from '../components/layout/AppShell'
 import { LoginPage } from '../features/auth/LoginPage'
 import { DashboardPage } from '../features/dashboard/DashboardPage'
+import { ProjectDetailPage } from '../features/projects/ProjectDetailPage'
+import { ProjectListPage } from '../features/projects/ProjectListPage'
 
 function PlaceholderPage({ title }: { title: string }) {
   return (
@@ -48,7 +50,7 @@ function AppRoutes() {
       <Route path="/login" element={<LoginPage />} />
 
       <Route
-        path="/"
+        path="/*"
         element={
           <RequireAuth>
             <AppShell>
@@ -62,7 +64,12 @@ function AppRoutes() {
 
                 <Route
                   path="/projects"
-                  element={<PlaceholderPage title="Projects" />}
+                  element={<ProjectListPage />}
+                />
+
+                <Route
+                  path="/projects/:projectId"
+                  element={<ProjectDetailPage />}
                 />
 
                 <Route
