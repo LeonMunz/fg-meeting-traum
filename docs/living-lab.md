@@ -29,8 +29,28 @@ Prioritize business rules and authorization over broad visual snapshot testing.
 - Viewer cannot be assigned.
 - Parent belongs to the same Project.
 - Parent hierarchy cannot cycle.
-- `done` sets `completed_at`.
-- reopening clears `completed_at`.
+- `blockedReason` present → blocked; empty → not blocked.
+- `completed_at` set when status_definition.category becomes `done`.
+- `completed_at` cleared when status_definition.category leaves `done`.
+
+### WorkItem Configuration
+
+- Every new Project receives default TypeDefinitions: Epic, Milestone,
+  Deliverable, Task.
+- Every new Project receives default StatusDefinitions: Todo (default,
+  category todo), In Progress (in_progress), Review (review), Done (done).
+- A Project owner may create, rename, reorder, and deactivate Types,
+  Statuses, and Labels.
+- A Project member may read configuration but not mutate it.
+- A Project viewer may read configuration but not mutate WorkItems.
+- A StatusDefinition's category is immutable once referenced by a WorkItem.
+- Each Project has exactly one active default StatusDefinition (category
+  `todo`). Deactivating it is forbidden without a replacement.
+- Deactivating a used Type, Status, or Label does not affect existing
+  WorkItems. The definition remains readable.
+- WorkItem labels are a relational many-to-many join.
+- Cross-Project configuration assignment is forbidden.
+- Project A configuration is independent from Project B configuration.
 
 ### Meeting
 
@@ -195,6 +215,76 @@ Create a Work Item from a discussed Weekly item.
 
 ### Task 7
 Find the previous decision/history for an open Topic.
+
+### Configuration: Task A — Default Project Configuration
+Create a new Project. Verify it receives:
+
+- TypeDefinitions: Epic, Milestone, Deliverable, Task
+- StatusDefinitions: Todo (default), In Progress, Review, Done
+- No labels initially
+- Todo is the active default status (category `todo`)
+
+### Configuration: Task B — Project Customization
+As Project owner, add:
+
+- Type: "Experiment"
+- Status: "PI Review" (category: review)
+- Label: "Reviewer Response"
+
+Verify:
+- A Project member may use these definitions on WorkItems.
+- A Project viewer may read them but cannot configure them.
+
+### Configuration: Task C — Project Isolation
+Customize Paper XYZ with additional types, statuses, and labels.
+Verify that another Project retains its own unchanged configuration.
+No Definition may cross Project boundaries.
+
+### Configuration: Task D — Custom Done Semantics
+As Project owner, create:
+
+- Status: "Accepted" (category: done)
+
+Move a WorkItem from a non-done status to "Accepted".
+Verify `completedAt` becomes populated.
+
+Move the same WorkItem from "Accepted" to a status whose category is
+`review`. Verify `completedAt` becomes null.
+
+### Configuration: Task E — Status Category Immunity
+Create a StatusDefinition and assign it to at least one WorkItem.
+Attempt to change its semantic category.
+Expected: rejected.
+Rename remains allowed.
+
+### Configuration: Task F — Deactivation
+Deactivate a Type, Status, or Label that is referenced by at least one
+WorkItem. Verify:
+
+- The existing WorkItem retains its reference.
+- The definition remains readable.
+- The definition cannot normally be selected for new WorkItems.
+- No automatic WorkItem mutation occurs.
+
+### Configuration: Task G — Default Status Safety
+Attempt to deactivate the active default status without first assigning
+another valid active `todo` default.
+Expected: rejected.
+
+### Configuration: Task H — Privacy
+A ResearchGroup admin without ProjectMembership attempts to inspect
+the WorkItem configuration of a private Project.
+Expected: no access.
+Knowing Definition IDs must not bypass Project privacy.
+
+### Configuration: Task I — Single Source of Truth
+Verify the same WorkItem appears in:
+
+- Project Work Items view
+- My Work view
+
+Both views must show the same WorkItem ID, same TypeDefinition, same
+StatusDefinition, and same Labels. No projection-specific copies.
 
 ## Observed metrics
 

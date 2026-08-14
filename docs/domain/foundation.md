@@ -122,9 +122,329 @@ Creation is atomic:
 create Project
   +
 create ProjectMembership(role='owner') for creator
+  +
+create default WorkItem configuration for the Project
 ```
 
 The creator becomes an Owner automatically.
+
+The Project receives a usable WorkItem configuration on creation
+(see Section 3a).
+
+## 3a. Project WorkItem Configuration
+
+Each Project maintains its own WorkItem configuration.
+
+Project A configuration is independent from Project B configuration.
+
+Configuration includes:
+
+- WorkItem TypeDefinitions
+- WorkItem StatusDefinitions
+- WorkItem LabelDefinitions
+
+Configuration is:
+
+- shared by all authorized Project users
+- persisted server-side
+- Project-scoped
+- managed by Project owners
+
+Configuration is NOT:
+
+- a UI-only preference
+- a ResearchGroup-global setting
+- a generic workflow engine
+
+### 3a.1. WorkItem TypeDefinitions
+
+A WorkItemTypeDefinition identifies a kind of work item for a Project.
+
+Conceptual fields:
+
+```text
+WorkItemTypeDefinition
+
+id
+project_id
+name
+order
+active
+```
+
+The stable identity is the definition ID. The display name is editable.
+Therefore a Project owner may rename a Type without recreating existing
+WorkItems.
+
+**Default Types.** Every newly created Project receives starter
+TypeDefinitions:
+
+- Epic
+- Milestone
+- Deliverable
+- Task
+
+**Creating Types.** Project owners may create additional types:
+
+- Experiment
+- Manuscript Section
+- Figure
+- Dataset
+
+**Deactivating Types.** Referenced TypeDefinitions use deactivation
+rather than destructive removal. An inactive TypeDefinition:
+
+- remains readable
+- remains attached to WorkItems that already reference it
+- does not mutate existing WorkItems
+- cannot normally be selected for a new WorkItem
+
+No automatic reassignment occurs when a Type is deactivated.
+
+**Types and Hierarchy.** WorkItem type does not govern hierarchy rules.
+A Project may define custom Types without a workflow engine or parent
+type matrix.
+
+### 3a.2. WorkItem StatusDefinitions
+
+A WorkItemStatusDefinition identifies a workflow status for a Project.
+
+Conceptual fields:
+
+```text
+WorkItemStatusDefinition
+
+id
+project_id
+name
+category
+order
+active
+is_default
+```
+
+The visible name is Project-configurable. The system semantic category
+remains fixed.
+
+**Allowed semantic categories:**
+
+```text
+todo
+in_progress
+review
+done
+```
+
+Categories preserve cross-Project system behavior:
+
+- Is this WorkItem broadly todo?
+- Is it in progress?
+- Is it under review?
+- Is it completed?
+- Should completed_at be populated?
+
+Custom display name does not change system semantic meaning.
+
+**Default Statuses.** Every newly created Project receives:
+
+- "Todo" — category: todo — is_default: true
+- "In Progress" — category: in_progress
+- "Review" — category: review
+- "Done" — category: done
+
+Only "Todo" is initially the default status.
+
+**Default Status Invariant.** Each Project must have exactly one active
+default WorkItem status. The default status is used when a new WorkItem
+is created without an explicit status. For Core simplicity, the default
+status must belong to category `todo`.
+
+**Status Category Safety.** Once a StatusDefinition is referenced by
+any WorkItem, its category must not be changed. A Project owner may
+still rename, reorder, or deactivate it. Changing the category on an
+already-used status is forbidden because it could silently reinterpret
+existing WorkItems and make completed_at inconsistent.
+
+If a Project needs different semantics, the owner should:
+
+1. Create a new StatusDefinition with the desired category.
+2. Explicitly move WorkItems to the new StatusDefinition.
+3. Optionally deactivate the old definition.
+
+**Deactivating Statuses.** Referenced StatusDefinitions use
+deactivation rather than destructive removal. An inactive StatusDefinition:
+
+- remains readable
+- remains attached to existing WorkItems
+- cannot normally be selected as a new transition target
+- does not automatically move WorkItems elsewhere
+
+The Project must always retain exactly one active default status.
+Deactivating the current default is forbidden until another valid
+active default status (category `todo`) has been selected.
+
+**Completion and Category.** When a WorkItem transitions to a
+StatusDefinition whose category is `done`, the server sets
+`completed_at`. When the WorkItem transitions from a `done` category
+to a non-`done` category, the server clears `completed_at`. A
+transition between two `done` statuses does not clear `completed_at`.
+
+### 3a.3. WorkItem LabelDefinitions
+
+A WorkItemLabelDefinition identifies a lightweight category for
+WorkItems in a Project.
+
+Conceptual fields:
+
+```text
+WorkItemLabelDefinition
+
+id
+project_id
+name
+order
+active
+```
+
+A WorkItem may have zero or multiple labels.
+
+The relationship is a relational many-to-many join.
+
+**Creating Labels.** Project owners may create labels:
+
+- Manuscript
+- Dataset
+- Reviewer Response
+- Urgent
+
+**Deactivating Labels.** Referenced Labels use deactivation rather
+than destructive removal. An inactive Label:
+
+- stays attached to existing WorkItems
+- remains readable
+- cannot normally be newly assigned
+- does not disappear from historical or current WorkItems automatically
+
+**Label Color.** Label color and other visual presentation metadata
+are currently an unresolved product/UI decision.
+
+### 3a.4. Same-Project Configuration Invariant
+
+Canonical invariant:
+
+```text
+WorkItem.project
+==
+WorkItem.type_definition.project
+==
+WorkItem.status_definition.project
+```
+
+Every WorkItem label must also satisfy:
+
+```text
+label.project == WorkItem.project
+```
+
+Cross-Project configuration assignment is invalid.
+
+Knowing a Definition ID must not bypass Project authorization.
+
+### 3a.5. Project Configuration Permissions
+
+**Project Owner** may:
+
+- read WorkItem configuration
+- create, rename, reorder, and deactivate TypeDefinitions
+- create, rename, reorder, and deactivate StatusDefinitions
+  (subject to default status and category safety invariants)
+- select or change the default StatusDefinition (subject to invariants)
+- create, rename, reorder, and deactivate LabelDefinitions
+
+**Project Member** may:
+
+- read configuration
+- use active Types, Statuses, and Labels in WorkItem writes
+- read inactive definitions when referenced by existing WorkItems
+
+May NOT configure the Project workflow.
+
+**Project Viewer** may:
+
+- read Project configuration
+- read WorkItems and their definitions/labels
+
+May NOT configure workflow or mutate WorkItems.
+
+**No ProjectMembership:**
+
+No access to Project configuration.
+
+**ResearchGroup Admin:**
+
+Does NOT bypass Project privacy. Effective access still requires
+both current ResearchGroupMembership and current ProjectMembership.
+
+### 3a.6. Configuration vs. UI Preferences
+
+**Project WorkItem Configuration** (Types, Statuses, Labels):
+
+- shared by all Project users
+- persisted server-side
+- canonical domain state
+- owner-managed
+- Project-scoped
+
+**UI Preferences** (board vs. list view, local search text, active
+filter, sort order, collapsed sections):
+
+- presentation behavior
+- not canonical Project workflow state
+
+UI preferences must not be modeled as shared Project workflow
+configuration.
+
+### 3a.7. Future API Direction
+
+WorkItem writes will reference stable definition IDs rather than
+display-name strings:
+
+```text
+typeDefinitionId
+statusDefinitionId
+labelIds[]
+```
+
+rather than globally fixed identifiers such as:
+
+```text
+"Task"
+"Writing"
+"Urgent"
+```
+
+The final API contract will be defined by the backend implementation
+slice.
+
+### 3a.8. Migration Requirement
+
+The current Core implementation stores WorkItem type and status as
+fixed strings. A future implementation must safely migrate existing
+Projects and WorkItems:
+
+For each existing Project:
+
+1. Create local TypeDefinitions: Epic, Milestone, Deliverable, Task.
+2. Create local StatusDefinitions: Todo (todo, default), In
+   Progress (in_progress), Review (review), Done (done).
+3. Map every existing WorkItem to the corresponding Definition
+   for that Project.
+
+Existing WorkItem identity and data must remain intact. No duplicate
+WorkItems, no loss of assignment or hierarchy.
+
+This migration is a backend implementation concern, not a
+documentation implementation.
 
 ## 4. Project Membership
 
@@ -211,40 +531,44 @@ The exact group-removal workflow can be implemented when group administration is
 
 All actionable project work uses one shared WorkItem base entity.
 
-### WorkItemType
+WorkItem types and statuses are defined per Project (see Section 3a).
+Each Project maintains its own WorkItemTypeDefinitions and
+WorkItemStatusDefinitions.
 
-```ts
-type WorkItemType =
-  | 'epic'
-  | 'milestone'
-  | 'deliverable'
-  | 'task'
-```
+### 6.1. WorkItem Type
 
-Semantics:
+A WorkItem references exactly one WorkItemTypeDefinition belonging to
+its Project. The Project is the configuration boundary.
 
-- **Epic** — large initiative/work area
-- **Milestone** — important project checkpoint/target
-- **Deliverable** — concrete result to deliver
-- **Task** — concrete executable work
+Newly created Projects receive default TypeDefinitions:
 
-Types share the first common workflow and may gain type-specific rules only after validated need.
+- Epic — large initiative/work area
+- Milestone — important project checkpoint/target
+- Deliverable — concrete result to deliver
+- Task — concrete executable work
 
-### WorkItemStatus
+Project owners may create additional Types or rename existing ones.
 
-```ts
-type WorkItemStatus =
-  | 'todo'
-  | 'in_progress'
-  | 'review'
-  | 'done'
-```
+### 6.2. WorkItem Status
 
-Initial board:
+A WorkItem references exactly one WorkItemStatusDefinition belonging to
+its Project.
 
-```text
-To Do → In Progress → Review → Done
-```
+Each StatusDefinition carries a fixed semantic category:
+
+- todo
+- in_progress
+- review
+- done
+
+The visible name is configurable. The category is not.
+
+Newly created Projects receive default StatusDefinitions:
+
+- "Todo" (category: todo)
+- "In Progress" (category: in_progress)
+- "Review" (category: review)
+- "Done" (category: done)
 
 ## 7. Work Item conceptual API model
 
@@ -253,14 +577,13 @@ type WorkItem = {
   id: string
 
   projectId: string
-  type: WorkItemType
+
+  typeDefinitionId: string
+  statusDefinitionId: string
+  labelDefinitionIds: string[]
 
   title: string
   description?: string
-
-  status: WorkItemStatus
-
-  assigneeIds: string[]
 
   parentId?: string
 
@@ -278,7 +601,18 @@ type WorkItem = {
 }
 ```
 
-This API shape does not prescribe PostgreSQL storage.
+The API shape does not prescribe PostgreSQL storage.
+
+`typeDefinitionId` and `statusDefinitionId` reference Project-scoped
+configuration definitions, not globally fixed string enums.
+
+`labelDefinitionIds` is an API representation of the many-to-many
+relationship. The database stores a relational join table.
+
+The canonical UI must resolve the display names and categories from
+the referenced definitions. When a broad system category is needed
+(e.g., completion reasoning, dashboard projections), the system uses
+the StatusDefinition's semantic category.
 
 ## 8. Project is mandatory
 
@@ -352,21 +686,39 @@ The UI may derive:
 const isBlocked = Boolean(workItem.blockedReason)
 ```
 
+**Custom "Blocked" Status.** A Project may define a custom visible
+status named "Blocked" (or similar). This status still carries one
+canonical category (e.g., `in_progress`). A custom status named
+"Blocked" does NOT replace `blockedReason`.
+
+- `blockedReason` answers: *why is this WorkItem blocked?*
+- A "Blocked" status answers: *which workflow column does this
+  WorkItem sit in?*
+
+Both concepts can coexist independently.
+
 ## 12. Completion semantics
 
-When status changes to:
+Completion is derived from the referenced StatusDefinition's semantic
+category.
+
+When a WorkItem's status_definition.category changes to `done`:
 
 ```text
-done
+completed_at is set server-side
 ```
 
-set:
+When a WorkItem's status_definition.category changes from `done` to a
+non-`done` category:
 
 ```text
-completed_at
+completed_at is cleared
 ```
 
-When a completed Work Item is reopened, clear `completed_at`.
+A transition between two statuses whose categories are both `done`
+does not clear `completed_at`.
+
+`completed_at` is server-managed. The client must not set it directly.
 
 This transition behavior must be tested.
 
@@ -469,18 +821,23 @@ These are the non-negotiable contract of the Core phase:
 6. Every active Project has at least one Owner.
 7. Without ProjectMembership, a Project workspace and its private content are inaccessible.
 8. Every Work Item belongs to exactly one Project.
-9. No projectless Epic, Milestone, Deliverable, or Task exists.
-10. Every Work Item assignee is a Project Owner or Member.
-11. A Viewer cannot be an assignee.
-12. Work Item parent/child relations stay inside one Project.
-13. Work Item hierarchy is acyclic.
-14. `blocked` is derived from `blockedReason`, not a workflow status.
-15. `done` sets `completed_at`; reopening clears it.
-16. My Work and Project Board reference the same Work Items.
-17. API ID lists do not imply PostgreSQL foreign-key arrays.
-18. Many-to-many relationships are relational.
-19. Project authorization is enforced by the server.
-20. Permission-filtered list endpoints do not leak private resources.
+9. Every WorkItem references a WorkItemTypeDefinition belonging to its own Project.
+10. Every WorkItem references a WorkItemStatusDefinition belonging to its own Project.
+11. Every WorkItem label belongs to the WorkItem's own Project.
+12. Knowing a Definition ID must not bypass Project authorization.
+13. Every Work Item assignee is a Project Owner or Member.
+14. A Viewer cannot be an assignee.
+15. Work Item parent/child relations stay inside one Project.
+16. Work Item hierarchy is acyclic.
+17. `blocked` is derived from `blockedReason`, not a workflow status.
+18. A StatusDefinition's category is immutable once referenced by a WorkItem.
+19. Each Project has exactly one active default StatusDefinition (category `todo`).
+20. `completed_at` is set when status_definition.category becomes `done`; cleared when it leaves `done`.
+21. My Work and Project Board reference the same Work Items.
+22. API ID lists do not imply PostgreSQL foreign-key arrays.
+23. Many-to-many relationships are relational.
+24. Project authorization is enforced by the server.
+25. Permission-filtered list endpoints do not leak private resources.
 
 ## 20. Core acceptance flow
 
@@ -489,9 +846,13 @@ The Foundation is complete only when this end-to-end scenario works:
 ```text
 Alex logs in
 → creates Paper XYZ
-→ becomes Owner
+→ Paper XYZ receives default WorkItem configuration
+  (Epic, Milestone, Deliverable, Task;
+   Todo, In Progress, Review, Done)
+→ Alex becomes Owner
 → adds Chris as Member
-→ creates "Rewrite Introduction" assigned to Chris
+→ creates "Rewrite Introduction" (type: Task, status: Todo)
+  assigned to Chris
 
 Chris logs in
 → sees Paper XYZ
@@ -501,5 +862,13 @@ Chris logs in
 Maria logs in
 → cannot see Paper XYZ
 ```
+
+Paper XYZ:
+
+- has its own default WorkItem configuration.
+- "Rewrite Introduction" is the SAME canonical WorkItem in both
+  My Work and Project Board.
+- WorkItem type is the Project's Task TypeDefinition.
+- WorkItem status is the Project's Todo StatusDefinition.
 
 Do not start the Meeting domain before this flow is reliable.
