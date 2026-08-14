@@ -104,6 +104,7 @@ class ProjectMembershipModelTest(TestCase):
             project=self.project,
             user=self.user,
             role=ProjectMembership.Role.OWNER,
+            added_by=self.user,
         )
         self.assertEqual(membership.role, "owner")
 
@@ -112,6 +113,7 @@ class ProjectMembershipModelTest(TestCase):
             project=self.project,
             user=self.user,
             role=ProjectMembership.Role.MEMBER,
+            added_by=self.user,
         )
         self.assertEqual(membership.role, "member")
 
@@ -120,6 +122,7 @@ class ProjectMembershipModelTest(TestCase):
             project=self.project,
             user=self.user,
             role=ProjectMembership.Role.VIEWER,
+            added_by=self.user,
         )
         self.assertEqual(membership.role, "viewer")
 
@@ -128,12 +131,14 @@ class ProjectMembershipModelTest(TestCase):
             project=self.project,
             user=self.user,
             role=ProjectMembership.Role.OWNER,
+            added_by=self.user,
         )
         with self.assertRaises(IntegrityError):
             ProjectMembership.objects.create(
                 project=self.project,
                 user=self.user,
                 role=ProjectMembership.Role.MEMBER,
+                added_by=self.user,
             )
 
     def test_membership_independence(self):
@@ -147,6 +152,7 @@ class ProjectMembershipModelTest(TestCase):
             project=self.project,
             user=self.user,
             role=ProjectMembership.Role.OWNER,
+            added_by=self.user,
         )
         self.assertEqual(
             self.project.memberships.filter(user=self.user).count(), 1
@@ -166,11 +172,13 @@ class ProjectMembershipModelTest(TestCase):
             project=self.project,
             user=self.user,
             role=ProjectMembership.Role.OWNER,
+            added_by=self.user,
         )
         ProjectMembership.objects.create(
             project=project_b,
             user=self.user,
             role=ProjectMembership.Role.MEMBER,
+            added_by=self.user,
         )
         self.assertEqual(
             ProjectMembership.objects.filter(user=self.user).count(), 2
@@ -487,3 +495,130 @@ class UpdateProjectTest(TestCase):
                 actor=self.owner,
                 status="invalid",
             )
+
+
+class UserDeletionInvariantTest(TestCase):
+    """Test that deleting a User cannot bypass the final-owner invariant.
+
+    ProjectMembership.user uses on_delete=RESTRICT, so the DB will
+    refuse to delete a User who still has active ProjectMemberships.
+    This prevents silently making an active Project ownerless.
+    """
+
+    def setUp(self):
+        self.group = ResearchGroup.objects.create(
+            name="FG Test",
+            created_by=User.objects.create_user(
+                username="owner1", password="Pass1!",
+            ),
+        )
+        self.owner1 = User.objects.get(username="owner1")
+        ResearchGroupMembership.objects.create(
+            research_group=self.group,
+            user=self.owner1,
+            role=ResearchGroupMembership.Role.MEMBER,
+        )
+        self.project = create_project(
+            research_group=self.group,
+            creator=self.owner1,
+            name="Deletion Test",
+        )
+
+    def test_cannot_delete_user_with_project_membership(self):
+        """Deleting a User with ProjectMembership is blocked by RESTRICT."""
+        from django.db.utils import IntegrityError
+        with self.assertRaises(IntegrityError):
+            self.owner1.delete()
+
+    def test_project_still_has_owner_after_failed_user_deletion(self):
+        """Project remains intact after a failed User deletion."""
+        with self.assertRaises(Exception):
+            self.owner1.delete()
+
+        # Project and membership must still exist
+        self.project.refresh_from_db()
+        self.assertTrue(
+            ProjectMembership.objects.filter(
+                project=self.project,
+                user__username="owner1",
+                role=ProjectMembership.Role.OWNER,
+            ).exists(),
+        )
+
+
+class OwnershipLockingTest(TestCase):
+    """Verify that ownership-mutating services use select_for_update().
+
+    Full concurrent testing requires deterministic scheduling across
+    threads which is outside Django TestCase's transaction-per-test model.
+    These tests verify the locking structure is in place.
+    """
+
+    def setUp(self):
+        self.group = ResearchGroup.objects.create(
+            name="FG Test",
+            created_by=User.objects.create_user(
+                username="owner1", password="Pass1!",
+            ),
+        )
+        self.owner1 = User.objects.get(username="owner1")
+        ResearchGroupMembership.objects.create(
+            research_group=self.group,
+            user=self.owner1,
+            role=ResearchGroupMembership.Role.MEMBER,
+        )
+        self.owner2 = User.objects.create_user(
+            username="owner2", password="Pass1!",
+        )
+        ResearchGroupMembership.objects.create(
+            research_group=self.group,
+            user=self.owner2,
+            role=ResearchGroupMembership.Role.MEMBER,
+        )
+        self.project = create_project(
+            research_group=self.group,
+            creator=self.owner1,
+            name="Locking Test",
+        )
+
+    def test_change_membership_role_uses_atomic_transaction(self):
+        """change_membership_role must wrap mutations in transaction.atomic()."""
+        import inspect
+        source = inspect.getsource(change_membership_role)
+        self.assertIn("transaction.atomic", source)
+        self.assertIn("select_for_update", source)
+
+    def test_remove_membership_uses_atomic_transaction(self):
+        """remove_membership must wrap mutations in transaction.atomic()."""
+        import inspect
+        source = inspect.getsource(remove_membership)
+        self.assertIn("transaction.atomic", source)
+        self.assertIn("select_for_update", source)
+
+    def test_project_locked_before_owner_check(self):
+        """The Project row must be locked before the final-owner check runs.
+
+        This ensures concurrent downgrades/removals are serialized.
+        Verified by source structure: select_for_update on Project
+        comes before _check_final_owner_*.
+        """
+        import inspect
+        source = inspect.getsource(change_membership_role)
+        # Verify ordering: lock project before checking invariant
+        lock_pos = source.index("Project.objects.select_for_update")
+        check_pos = source.index("_check_final_owner_change")
+        self.assertLess(
+            lock_pos, check_pos,
+            "Project row must be locked before final-owner check",
+        )
+
+    def test_project_locked_before_removal_check(self):
+        """remove_membership: lock Project row before final-owner check."""
+        import inspect
+        source = inspect.getsource(remove_membership)
+        lock_pos = source.index("Project.objects.select_for_update")
+        check_pos = source.index("_check_final_owner_removal")
+        self.assertLess(
+            lock_pos, check_pos,
+            "Project row must be locked before final-owner check",
+        )

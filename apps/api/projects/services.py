@@ -126,25 +126,37 @@ def change_membership_role(
 
     The actor must be a Project owner.
     The active Project final-owner invariant is enforced.
-    """
-    # Validate: actor is Project owner
-    actor_membership = ProjectMembership.objects.filter(
-        project=membership.project,
-        user=actor,
-    ).first()
-    if actor_membership is None or actor_membership.role != ProjectMembership.Role.OWNER:
-        raise ProjectDomainError("Only a Project owner can manage memberships.")
 
+    Uses select_for_update() on the Project row to serialize
+    concurrent ownership-changing operations.
+    """
     # Validate role
     if new_role not in ProjectMembership.Role.values:
         raise ProjectDomainError(f"Invalid membership role: {new_role}")
 
-    # Validate: final-owner invariant for active projects
-    if membership.project.status == Project.Status.ACTIVE:
-        _check_final_owner_change(membership.project, membership, new_role)
+    with transaction.atomic():
+        # Lock the Project row to serialize concurrent owner mutations
+        project = Project.objects.select_for_update().get(pk=membership.project.pk)
 
-    membership.role = new_role
-    membership.save(update_fields=["role"])
+        # Reload membership under the lock to get the latest state
+        membership = ProjectMembership.objects.select_for_update().get(
+            pk=membership.pk
+        )
+
+        # Validate: actor is Project owner
+        actor_membership = ProjectMembership.objects.select_for_update().filter(
+            project=project,
+            user=actor,
+        ).first()
+        if actor_membership is None or actor_membership.role != ProjectMembership.Role.OWNER:
+            raise ProjectDomainError("Only a Project owner can manage memberships.")
+
+        # Validate: final-owner invariant for active projects
+        if project.status == Project.Status.ACTIVE:
+            _check_final_owner_change(project, membership, new_role)
+
+        membership.role = new_role
+        membership.save(update_fields=["role"])
     return membership
 
 
@@ -157,20 +169,32 @@ def remove_membership(
 
     The actor must be a Project owner.
     The active Project final-owner invariant is enforced.
+
+    Uses select_for_update() on the Project row to serialize
+    concurrent ownership-changing operations.
     """
-    # Validate: actor is Project owner
-    actor_membership = ProjectMembership.objects.filter(
-        project=membership.project,
-        user=actor,
-    ).first()
-    if actor_membership is None or actor_membership.role != ProjectMembership.Role.OWNER:
-        raise ProjectDomainError("Only a Project owner can manage memberships.")
+    with transaction.atomic():
+        # Lock the Project row to serialize concurrent owner mutations
+        project = Project.objects.select_for_update().get(pk=membership.project.pk)
 
-    # Validate: final-owner invariant for active projects
-    if membership.project.status == Project.Status.ACTIVE:
-        _check_final_owner_removal(membership.project, membership)
+        # Reload membership under the lock to get the latest state
+        membership = ProjectMembership.objects.select_for_update().get(
+            pk=membership.pk
+        )
 
-    membership.delete()
+        # Validate: actor is Project owner
+        actor_membership = ProjectMembership.objects.select_for_update().filter(
+            project=project,
+            user=actor,
+        ).first()
+        if actor_membership is None or actor_membership.role != ProjectMembership.Role.OWNER:
+            raise ProjectDomainError("Only a Project owner can manage memberships.")
+
+        # Validate: final-owner invariant for active projects
+        if project.status == Project.Status.ACTIVE:
+            _check_final_owner_removal(project, membership)
+
+        membership.delete()
 
 
 def update_project(

@@ -59,7 +59,7 @@ class ProjectMembership(models.Model):
     )
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
+        on_delete=models.RESTRICT,
         related_name="project_memberships",
     )
     role = models.CharField(max_length=16, choices=Role.choices)
@@ -68,8 +68,6 @@ class ProjectMembership(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         related_name="project_memberships_added",
-        null=True,
-        blank=True,
     )
 
     class Meta:

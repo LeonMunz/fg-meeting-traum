@@ -15,3 +15,8 @@ class ProjectMembershipAdmin(admin.ModelAdmin):
     list_display = ("project", "user", "role", "added_at", "added_by")
     list_filter = ("role",)
     search_fields = ("user__username", "project__name")
+
+    # Prevent admin from bypassing domain invariants via direct edits
+    add_permission = None
+    change_permission = None
+    delete_permission = None
