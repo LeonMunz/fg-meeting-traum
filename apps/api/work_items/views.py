@@ -7,6 +7,8 @@ Read authorization uses the existing Project security boundary:
 - PATCH update: requires ProjectMembership owner/member (not viewer)
 """
 
+from datetime import date, datetime
+
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -63,7 +65,9 @@ def _serialize_work_item(work_item):
         "status": data["status"],
         "assigneeIds": data["assigneeIds"],
         "parentId": data["parentId"],
-        "dueDate": data["dueDate"].isoformat() if data["dueDate"] else None,
+        "dueDate": data["dueDate"].isoformat()
+        if isinstance(data["dueDate"], (date, datetime))
+        else data["dueDate"],
         "blockedReason": data["blockedReason"] or None,
         "completedAt": data["completedAt"],
         "createdAt": data["createdAt"],
