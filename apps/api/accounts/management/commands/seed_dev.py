@@ -22,6 +22,8 @@ from django.core.management.base import BaseCommand
 from research_groups.models import ResearchGroup, ResearchGroupMembership
 from projects.models import Project, ProjectMembership
 from projects.services import add_project_membership
+from work_items.models import WorkItem, WorkItemAssignee
+from work_items.services import create_work_item
 
 User = get_user_model()
 
@@ -36,6 +38,7 @@ class Command(BaseCommand):
         group_created = self._seed_research_group()
         group_memberships_created = self._seed_memberships()
         projects_created, project_memberships_created = self._seed_projects()
+        work_items_created = self._seed_work_items()
 
         self.stdout.write(
             self.style.SUCCESS(
@@ -44,7 +47,8 @@ class Command(BaseCommand):
                 f"{group_created} research group created, "
                 f"{group_memberships_created} group memberships created, "
                 f"{projects_created} projects created, "
-                f"{project_memberships_created} project memberships created."
+                f"{project_memberships_created} project memberships created, "
+                f"{work_items_created} work items seeded."
             )
         )
 
@@ -189,3 +193,78 @@ class Command(BaseCommand):
         # Alex/Chris/Laura have NO membership in Maria's project
 
         return projects_created, memberships_created
+
+    def _seed_work_items(self):
+        """Seed WorkItems for Paper XYZ (idempotent).
+
+        Creates:
+        - Epic: Literature Review (no assignee, status=in_progress)
+        - Task: Rewrite Introduction (Chris, status=todo)
+        - Milestone: First Draft Complete (Alex, status=todo)
+
+        Uses get_or_create on title within the project for idempotency.
+        """
+        paper_xyz = Project.objects.get(name="Paper XYZ")
+        alex = User.objects.get(username="alex")
+        chris = User.objects.get(username="chris")
+
+        created = 0
+
+        # ── Epic: Literature Review ──
+        epic, is_new = WorkItem.objects.get_or_create(
+            project=paper_xyz,
+            title="Literature Review",
+            defaults={
+                "type": WorkItem.Type.EPIC,
+                "status": WorkItem.Status.IN_PROGRESS,
+                "created_by": alex,
+                "description": "Survey and summarize related work.",
+            },
+        )
+        if is_new:
+            created += 1
+            self.stdout.write(f"  Created WorkItem: [epic] Literature Review")
+
+        # ── Task: Rewrite Introduction (child of Epic) ──
+        task, is_new = WorkItem.objects.get_or_create(
+            project=paper_xyz,
+            title="Rewrite Introduction",
+            defaults={
+                "type": WorkItem.Type.TASK,
+                "status": WorkItem.Status.TODO,
+                "parent": epic,
+                "created_by": alex,
+                "description": "Update introduction with new context from literature review.",
+            },
+        )
+        if is_new:
+            created += 1
+            self.stdout.write(f"  Created WorkItem: [task] Rewrite Introduction")
+            # Assign Chris
+            WorkItemAssignee.objects.get_or_create(
+                work_item=task, user=chris,
+            )
+            self.stdout.write(f"  Assigned Chris → Rewrite Introduction")
+
+        # ── Milestone: First Draft Complete ──
+        milestone, is_new = WorkItem.objects.get_or_create(
+            project=paper_xyz,
+            title="First Draft Complete",
+            defaults={
+                "type": WorkItem.Type.MILESTONE,
+                "status": WorkItem.Status.TODO,
+                "created_by": alex,
+                "description": "All sections drafted and ready for internal review.",
+                "due_date": "2025-12-01",
+            },
+        )
+        if is_new:
+            created += 1
+            self.stdout.write(f"  Created WorkItem: [milestone] First Draft Complete")
+            # Assign Alex
+            WorkItemAssignee.objects.get_or_create(
+                work_item=milestone, user=alex,
+            )
+            self.stdout.write(f"  Assigned Alex → First Draft Complete")
+
+        return created
