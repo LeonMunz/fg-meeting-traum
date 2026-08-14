@@ -270,3 +270,68 @@ class WorkItemDetailView(APIView):
 
         work_item.refresh_from_db()
         return Response(_serialize_work_item(work_item))
+
+
+# ── My Work Authorized Projection ──
+
+
+class MyWorkView(APIView):
+    """GET /api/research-groups/{group_id}/my-work/
+
+    Returns WorkItems assigned to the current user in Projects they
+    have access to within the specified Research Group.
+
+    My Work is a QUERY / PROJECTION over canonical WorkItems:
+    - No separate MyWork model
+    - No duplicated WorkItem rows
+    - Same WorkItem IDs as Project WorkItem views
+
+    Authorization:
+    - Requires authentication (IsAuthenticated)
+    - Requires ResearchGroupMembership in the requested group
+    - Requires ProjectMembership (owner or member) on each WorkItem's project
+    - Returns 404 if user is not a member of the Research Group
+      (non-leaking behavior)
+
+    The response uses the same canonical WorkItem API representation
+    as GET /api/projects/{project_id}/work-items/
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, group_id):
+        # Verify ResearchGroupMembership — non-leaking 404
+        try:
+            ResearchGroupMembership.objects.get(
+                research_group_id=group_id,
+                user=request.user,
+            )
+        except (ResearchGroupMembership.DoesNotExist,
+                ResearchGroupMembership.MultipleObjectsReturned):
+            return Response(
+                {"error": "Research group not found"},
+                status=404,
+            )
+
+        # Query: WorkItems assigned to current user where:
+        # 1. WorkItemAssignee.user == request.user
+        # 2. WorkItem.project.research_group_id == group_id
+        # 3. ProjectMembership exists for request.user on the project
+        # 4. ProjectMembership role is owner or member (defense-in-depth)
+        work_items = (
+            WorkItem.objects
+            .filter(
+                assignee_relations__user=request.user,
+                project__research_group_id=group_id,
+                project__memberships__user=request.user,
+                project__memberships__role__in=[
+                    ProjectMembership.Role.OWNER,
+                    ProjectMembership.Role.MEMBER,
+                ],
+            )
+            .distinct()
+            .select_related("project", "created_by", "parent")
+        )
+
+        data = [_serialize_work_item(wi) for wi in work_items]
+        return Response(data)
