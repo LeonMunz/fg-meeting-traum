@@ -17,6 +17,11 @@ from projects.views import (
 from research_groups.views import ResearchGroupDetailView, ResearchGroupListView
 
 
+from work_items.views import (
+    ProjectWorkItemListCreateView,
+    WorkItemDetailView,
+)
+
 def csrf_protect_view(view_class):
     """Apply csrf_protect to a DRF view.
 
@@ -44,4 +49,7 @@ urlpatterns = [
     path('api/projects/<int:project_id>/memberships/', ProjectMembershipListView.as_view(), name='project-memberships-list'),
     path('api/projects/<int:project_id>/memberships/<int:membership_id>/', ProjectMembershipDetailView.as_view(), name='project-membership-detail'),
     path('api/research-groups/<int:group_id>/members/', ResearchGroupMembersView.as_view(), name='research-group-members'),
+    # Work Items
+    path('api/projects/<int:project_id>/work-items/', ProjectWorkItemListCreateView.as_view(), name='project-work-items-list'),
+    path('api/work-items/<int:work_item_id>/', WorkItemDetailView.as_view(), name='work-item-detail'),
 ]

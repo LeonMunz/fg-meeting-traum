@@ -1,0 +1,500 @@
+"""Work Item application/domain operations.
+
+Centralizes domain rules for WorkItem creation and mutation.
+Every operation receives the authenticated actor explicitly.
+"""
+
+from typing import Optional
+
+from django.db import transaction
+from django.db.models import QuerySet
+
+from projects.models import Project, ProjectMembership
+
+from .models import WorkItem, WorkItemAssignee
+
+
+class WorkItemDomainError(Exception):
+    """Raised when a WorkItem domain invariant is violated."""
+
+    def __init__(self, message: str):
+        self.message = message
+        super().__init__(message)
+
+
+# Sentinel to distinguish "not provided" from "explicitly None"
+_UNSET = object()
+
+
+# ── Assignee validation ──
+
+
+def _validate_assignee_eligibility(project: Project, user) -> None:
+    """Validate that a user is eligible to be assigned to a WorkItem in the project.
+
+    The user must have ProjectMembership with role 'owner' or 'member'.
+    A viewer or non-member cannot be assigned.
+    """
+    membership = ProjectMembership.objects.filter(
+        project=project,
+        user=user,
+    ).first()
+    if membership is None:
+        raise WorkItemDomainError(
+            f"User '{user.username}' does not have ProjectMembership and cannot be assigned."
+        )
+    if membership.role == ProjectMembership.Role.VIEWER:
+        raise WorkItemDomainError(
+            f"User '{user.username}' is a viewer and cannot be assigned to a WorkItem."
+        )
+
+
+def _validate_assignees(project: Project, user_ids: list[int]) -> None:
+    """Validate all assignees are eligible for the project."""
+    from django.contrib.auth import get_user_model
+    User = get_user_model()
+
+    if not user_ids:
+        return
+
+    users = User.objects.filter(pk__in=user_ids)
+    user_ids_in_db = set(users.values_list("pk", flat=True))
+
+    # Check all requested IDs exist
+    missing = set(user_ids) - user_ids_in_db
+    if missing:
+        raise WorkItemDomainError(
+            f"User IDs not found: {sorted(missing)}"
+        )
+
+    for user in users:
+        _validate_assignee_eligibility(project, user)
+
+
+# ── Hierarchy validation ──
+
+
+def _validate_parent(project: Project, parent_id: Optional[int]) -> None:
+    """Validate parent relationship for a WorkItem.
+
+    Rules:
+    - Parent must belong to the same Project
+    - Cannot parent self
+    - No cycles allowed
+    """
+    if parent_id is None:
+        return
+
+    try:
+        parent = WorkItem.objects.get(pk=parent_id)
+    except WorkItem.DoesNotExist:
+        raise WorkItemDomainError("Parent WorkItem does not exist.")
+
+    if parent.project_id != project.pk:
+        raise WorkItemDomainError(
+            "Parent WorkItem must belong to the same Project."
+        )
+
+    # Cycle detection: walk up the parent chain from the parent
+    visited = {parent_id}
+    current = parent
+    while current.parent is not None:
+        if current.parent_id in visited:
+            raise WorkItemDomainError(
+                "Adding this parent would create a cycle in the WorkItem hierarchy."
+            )
+        visited.add(current.parent_id)
+        current = current.parent
+
+
+def _validate_parent_with_new_item(
+    project: Project, parent_id: Optional[int], work_item_id: int
+) -> None:
+    """Validate parent relationship for a new WorkItem that doesn't exist yet.
+
+    Used during creation when we know the item ID is not yet in the tree.
+    The new item's ID should not appear in the ancestry chain (it won't,
+    since it's new).
+    """
+    if parent_id is None:
+        return
+
+    try:
+        parent = WorkItem.objects.get(pk=parent_id)
+    except WorkItem.DoesNotExist:
+        raise WorkItemDomainError("Parent WorkItem does not exist.")
+
+    if parent.project_id != project.pk:
+        raise WorkItemDomainError(
+            "Parent WorkItem must belong to the same Project."
+        )
+
+    # Self-parent check (shouldn't happen for new items but defensive)
+    if parent_id == work_item_id:
+        raise WorkItemDomainError("A WorkItem cannot be its own parent.")
+
+    # Cycle detection from the parent upward
+    visited = {parent_id}
+    current = parent
+    while current.parent is not None:
+        if current.parent_id == work_item_id:
+            raise WorkItemDomainError(
+                "Adding this parent would create a cycle in the WorkItem hierarchy."
+            )
+        if current.parent_id in visited:
+            raise WorkItemDomainError(
+                "Adding this parent would create a cycle in the WorkItem hierarchy."
+            )
+        visited.add(current.parent_id)
+        current = current.parent
+
+
+# ── Status / completion handling ──
+
+
+def _apply_status_completion(work_item: WorkItem, new_status: str) -> None:
+    """Apply completion semantics when status changes.
+
+    When status transitions to 'done', set completed_at if not already set.
+    When status transitions from 'done' to another status, clear completed_at.
+    If status is not done, completed_at must always be None.
+    If status is done, completed_at must always be set.
+    """
+    if new_status == WorkItem.Status.DONE:
+        if work_item.completed_at is None:
+            from django.utils import timezone
+            work_item.completed_at = timezone.now()
+    else:
+        work_item.completed_at = None
+
+
+# ── Core operations ──
+
+
+def create_work_item(
+    *,
+    project: Project,
+    actor,
+    type: str,
+    title: str,
+    description: str = "",
+    status: Optional[str] = None,
+    assignee_ids: Optional[list[int]] = None,
+    parent_id: Optional[int] = None,
+    due_date: Optional[str] = None,
+    blocked_reason: Optional[str] = None,
+) -> WorkItem:
+    """Create a WorkItem atomically with assignees.
+
+    The actor must have ProjectMembership with role 'owner' or 'member'.
+    All assignees must be eligible.
+    Parent relationship must be valid.
+    """
+    # Validate: actor can write in project
+    _require_project_write_access(project, actor)
+
+    # Validate type
+    if type not in WorkItem.Type.values:
+        raise WorkItemDomainError(f"Invalid WorkItem type: {type}")
+
+    # Validate status
+    if status is not None and status not in WorkItem.Status.values:
+        raise WorkItemDomainError(f"Invalid WorkItem status: {status}")
+
+    # Validate parent
+    if parent_id is not None:
+        _validate_parent(project, parent_id)
+
+    # Validate assignees
+    if assignee_ids:
+        _validate_assignees(project, assignee_ids)
+
+    # Determine completed_at based on initial status
+    initial_completed_at = None
+    final_status = status or WorkItem.Status.TODO
+    if final_status == WorkItem.Status.DONE:
+        from django.utils import timezone
+        initial_completed_at = timezone.now()
+
+    with transaction.atomic():
+        work_item = WorkItem.objects.create(
+            project=project,
+            type=type,
+            title=title,
+            description=description,
+            status=final_status,
+            parent_id=parent_id,
+            due_date=due_date,
+            blocked_reason=blocked_reason or "",
+            completed_at=initial_completed_at,
+            created_by=actor,
+        )
+
+        # Create assignees (deduplicate to handle duplicate IDs safely)
+        if assignee_ids:
+            from django.contrib.auth import get_user_model
+            User = get_user_model()
+            seen_user_ids = set()
+            for user_id in assignee_ids:
+                if user_id in seen_user_ids:
+                    continue
+                seen_user_ids.add(user_id)
+                WorkItemAssignee.objects.create(
+                    work_item=work_item,
+                    user=User.objects.get(pk=user_id),
+                )
+
+    return work_item
+
+
+def update_work_item(
+    *,
+    work_item: WorkItem,
+    actor,
+    type: Optional[str] = None,
+    title: Optional[str] = None,
+    description: Optional[str] = None,
+    status: Optional[str] = None,
+    assignee_ids: Optional[list[int]] = None,
+    parent_id: object = _UNSET,
+    due_date: object = _UNSET,
+    blocked_reason: object = _UNSET,
+) -> WorkItem:
+    """Update a WorkItem atomically with assignee replacement and hierarchy.
+
+    The actor must have ProjectMembership with role 'owner' or 'member'.
+    Immutable fields (project, created_by, created_at) cannot be changed.
+    completed_at is server-managed, not client-writable.
+
+    Assignee replacement is atomic: if any assignee is invalid, the entire
+    update rolls back.
+
+    Uses select_for_update() on the Project row for hierarchy mutations
+    to prevent concurrent cycle creation.
+    """
+    project = work_item.project
+
+    # Validate: actor can write in project
+    _require_project_write_access(project, actor)
+
+    # Validate type
+    if type is not None and type not in WorkItem.Type.values:
+        raise WorkItemDomainError(f"Invalid WorkItem type: {type}")
+
+    # Validate status
+    if status is not None and status not in WorkItem.Status.values:
+        raise WorkItemDomainError(f"Invalid WorkItem status: {status}")
+
+    # Validate assignees
+    if assignee_ids is not None:
+        _validate_assignees(project, assignee_ids)
+
+    # Check if parent is being changed — requires locking
+    parent_changing = (
+        parent_id is not _UNSET and parent_id != work_item.parent_id
+    )
+
+    if parent_changing:
+        _update_with_hierarchy_lock(
+            work_item=work_item,
+            actor=actor,
+            project=project,
+            type=type,
+            title=title,
+            description=description,
+            status=status,
+            assignee_ids=assignee_ids,
+            parent_id=parent_id,
+            due_date=due_date,
+            blocked_reason=blocked_reason,
+        )
+        work_item.refresh_from_db()  # Reload to get changes made under lock
+    else:
+        if parent_id is not _UNSET:
+            # Validate the provided parent even if not changing
+            _validate_parent_with_new_item(project, parent_id if parent_id is not None else None, work_item.pk)
+
+        with transaction.atomic():
+            _apply_work_item_fields(
+                work_item=work_item,
+                type=type,
+                title=title,
+                description=description,
+                status=status,
+                assignee_ids=assignee_ids,
+                due_date=due_date,
+                blocked_reason=blocked_reason,
+            )
+
+    return work_item
+
+
+def _update_with_hierarchy_lock(
+    *,
+    work_item: WorkItem,
+    actor,
+    project: Project,
+    type: Optional[str] = None,
+    title: Optional[str] = None,
+    description: Optional[str] = None,
+    status: Optional[str] = None,
+    assignee_ids: Optional[list[int]] = None,
+    parent_id: object = _UNSET,
+    due_date: object = _UNSET,
+    blocked_reason: object = _UNSET,
+) -> None:
+    """Update with Project-level locking for hierarchy safety.
+
+    Acquires select_for_update() on the Project row to serialize
+    concurrent hierarchy mutations within the same project.
+    """
+    with transaction.atomic():
+        # Lock the Project row to serialize hierarchy mutations
+        locked_project = Project.objects.select_for_update().get(pk=project.pk)
+
+        # Reload work_item under the lock
+        work_item = WorkItem.objects.select_for_update().get(pk=work_item.pk)
+
+        # Re-validate parent under the lock
+        if parent_id is not _UNSET and parent_id is not None:
+            _validate_parent_with_new_item(
+                locked_project, parent_id, work_item.pk
+            )
+
+        _apply_work_item_fields(
+            work_item=work_item,
+            type=type,
+            title=title,
+            description=description,
+            status=status,
+            assignee_ids=assignee_ids,
+            parent_id=parent_id,
+            due_date=due_date,
+            blocked_reason=blocked_reason,
+        )
+
+
+def _apply_work_item_fields(
+    *,
+    work_item: WorkItem,
+    type: Optional[str] = None,
+    title: Optional[str] = None,
+    description: Optional[str] = None,
+    status: Optional[str] = None,
+    assignee_ids: Optional[list[int]] = None,
+    parent_id: object = _UNSET,
+    due_date: object = _UNSET,
+    blocked_reason: object = _UNSET,
+) -> None:
+    """Apply field changes to a WorkItem and handle side effects.
+
+    Assignee replacement is atomic (delete all, create new).
+    completed_at is derived from status transitions.
+    """
+    update_fields = []
+
+    if type is not None:
+        work_item.type = type
+        update_fields.append("type")
+    if title is not None:
+        work_item.title = title
+        update_fields.append("title")
+    if description is not None:
+        work_item.description = description
+        update_fields.append("description")
+    if parent_id is not _UNSET:
+        if parent_id != work_item.parent_id:
+            work_item.parent_id = parent_id if parent_id is not None else None
+            update_fields.append("parent")
+    if due_date is not _UNSET:
+        work_item.due_date = due_date if due_date != "" else None
+        update_fields.append("due_date")
+    if blocked_reason is not _UNSET:
+        work_item.blocked_reason = blocked_reason
+        update_fields.append("blocked_reason")
+
+    # Status transition with completion handling
+    if status is not None:
+        work_item.status = status
+        update_fields.append("status")
+        _apply_status_completion(work_item, status)
+        update_fields.append("completed_at")
+    else:
+        # Even when status is not being changed, ensure completed_at
+        # is consistent with the current status. This prevents a client
+        # from arbitrarily setting completed_at through admin or raw ORM.
+        if work_item.status == WorkItem.Status.DONE:
+            if work_item.completed_at is None:
+                from django.utils import timezone
+                work_item.completed_at = timezone.now()
+                update_fields.append("completed_at")
+        else:
+            if work_item.completed_at is not None:
+                work_item.completed_at = None
+                update_fields.append("completed_at")
+
+    work_item.save(update_fields=update_fields)
+
+    # Atomic assignee replacement
+    if assignee_ids is not None:
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        work_item.assignee_relations.all().delete()
+        seen_user_ids = set()
+        for user_id in assignee_ids:
+            if user_id in seen_user_ids:
+                continue
+            seen_user_ids.add(user_id)
+            WorkItemAssignee.objects.create(
+                work_item=work_item,
+                user=User.objects.get(pk=user_id),
+            )
+
+
+def _require_project_write_access(project: Project, actor) -> None:
+    """Require that the actor has write access to the project.
+
+    Write access requires ProjectMembership with role 'owner' or 'member'.
+    A viewer cannot write.
+    """
+    membership = ProjectMembership.objects.filter(
+        project=project,
+        user=actor,
+    ).first()
+    if membership is None:
+        raise WorkItemDomainError("You do not have access to this Project.")
+    if membership.role == ProjectMembership.Role.VIEWER:
+        raise WorkItemDomainError("A viewer cannot modify WorkItems.")
+
+
+def set_assignees(
+    *,
+    work_item: WorkItem,
+    actor,
+    assignee_ids: list[int],
+) -> WorkItem:
+    """Replace all assignees on a WorkItem atomically.
+
+    The actor must have write access to the project.
+    All assignees must be eligible.
+    If any assignee is invalid, the entire operation rolls back.
+    """
+    project = work_item.project
+    _require_project_write_access(project, actor)
+    _validate_assignees(project, assignee_ids)
+
+    with transaction.atomic():
+        work_item.assignee_relations.all().delete()
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        seen_user_ids = set()
+        for user_id in assignee_ids:
+            if user_id in seen_user_ids:
+                continue
+            seen_user_ids.add(user_id)
+            WorkItemAssignee.objects.create(
+                work_item=work_item,
+                user=User.objects.get(pk=user_id),
+            )
+
+    return work_item

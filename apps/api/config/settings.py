@@ -42,6 +42,7 @@ INSTALLED_APPS = [
     'accounts',
     'research_groups',
     'projects',
+    'work_items',
 ]
 
 MIDDLEWARE = [
