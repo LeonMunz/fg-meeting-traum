@@ -137,28 +137,62 @@ def create_meeting_item(
     )
 
 
-def update_meeting_status(
+def update_meeting(
     *,
     meeting,
     actor,
-    status,
+    title=None,
+    scheduled_at=None,
+    status=None,
 ):
     _require_research_group_membership(
         research_group=meeting.research_group,
         user=actor,
     )
 
-    if status not in Meeting.Status.values:
-        raise MeetingDomainError(
-            "Invalid Meeting status."
+    update_fields = []
+
+    if title is not None:
+        title = title.strip()
+        if not title:
+            raise MeetingDomainError(
+                "Meeting title is required."
+            )
+        meeting.title = title
+        update_fields.append("title")
+
+    if scheduled_at is not None:
+        meeting.scheduled_at = scheduled_at
+        update_fields.append("scheduled_at")
+
+    if status is not None:
+        if status not in Meeting.Status.values:
+            raise MeetingDomainError(
+                "Invalid Meeting status."
+            )
+        meeting.status = status
+        update_fields.append("status")
+
+    if update_fields:
+        update_fields.append("updated_at")
+        meeting.save(
+            update_fields=update_fields,
         )
 
-    meeting.status = status
-    meeting.save(
-        update_fields=["status", "updated_at"],
+    return meeting
+
+
+def remove_meeting_participant(
+    *,
+    participant,
+    actor,
+):
+    _require_research_group_membership(
+        research_group=participant.meeting.research_group,
+        user=actor,
     )
 
-    return meeting
+    participant.delete()
 
 
 def update_meeting_item(
