@@ -5,7 +5,7 @@ export type AddableProjectRole = 'owner' | 'member' | 'viewer'
 export type DirectoryUser = {
   id: string
   name: string
-  email: string
+  username: string
   initials: string
 }
 
@@ -14,7 +14,10 @@ type AddProjectMemberDialogProps = {
   users: DirectoryUser[]
   excludedUserIds: string[]
   onClose: () => void
-  onAdd: (user: DirectoryUser, role: AddableProjectRole) => void
+  onAdd: (
+    user: DirectoryUser,
+    role: AddableProjectRole,
+  ) => Promise<void>
 }
 
 export function AddProjectMemberDialog({
@@ -27,6 +30,9 @@ export function AddProjectMemberDialog({
   const [query, setQuery] = useState('')
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null)
   const [role, setRole] = useState<AddableProjectRole>('member')
+  const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] =
+    useState<string | null>(null)
 
   useEffect(() => {
     if (!open) return
@@ -34,6 +40,8 @@ export function AddProjectMemberDialog({
     setQuery('')
     setSelectedUserId(null)
     setRole('member')
+    setSubmitting(false)
+    setSubmitError(null)
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -62,7 +70,7 @@ export function AddProjectMemberDialog({
 
       return (
         user.name.toLowerCase().includes(normalizedQuery) ||
-        user.email.toLowerCase().includes(normalizedQuery)
+        user.username.toLowerCase().includes(normalizedQuery)
       )
     })
   }, [excludedUserIds, query, users])
@@ -78,11 +86,24 @@ export function AddProjectMemberDialog({
     return null
   }
 
-  const handleSubmit = () => {
-    if (!selectedUser) return
+  const handleSubmit = async () => {
+    if (!selectedUser || submitting) return
 
-    onAdd(selectedUser, role)
-    onClose()
+    setSubmitting(true)
+    setSubmitError(null)
+
+    try {
+      await onAdd(selectedUser, role)
+      onClose()
+    } catch (error) {
+      setSubmitError(
+        error instanceof Error
+          ? error.message
+          : 'Project member could not be added.',
+      )
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   return (
@@ -146,7 +167,7 @@ export function AddProjectMemberDialog({
                 autoFocus
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="Search by name or email..."
+                placeholder="Search by name or username..."
                 className="h-10 w-full rounded-lg border border-outline-variant bg-surface-container-lowest pl-10 pr-3 text-sm text-on-surface outline-none transition placeholder:text-on-surface-variant/60 focus:border-primary focus:ring-2 focus:ring-primary/15"
               />
             </div>
@@ -179,7 +200,7 @@ export function AddProjectMemberDialog({
                           </div>
 
                           <div className="truncate text-xs text-on-surface-variant">
-                            {user.email}
+                            @{user.username}
                           </div>
                         </div>
 
@@ -206,13 +227,22 @@ export function AddProjectMemberDialog({
 
                   <p className="mt-1 text-xs leading-5 text-on-surface-variant">
                     {hasEligibleUsers
-                      ? 'Try another name or email address.'
+                      ? 'Try another name or username.'
                       : 'There are no additional research-group members available to add.'}
                   </p>
                 </div>
               )}
             </div>
           </div>
+
+          {submitError && (
+            <div
+              role="alert"
+              className="rounded-lg bg-error-container px-4 py-3 text-sm text-error"
+            >
+              {submitError}
+            </div>
+          )}
 
           <fieldset>
             <legend className="mb-2 text-sm font-medium text-on-surface">
@@ -395,14 +425,14 @@ export function AddProjectMemberDialog({
 
           <button
             type="button"
-            disabled={!selectedUser}
-            onClick={handleSubmit}
+            disabled={!selectedUser || submitting}
+            onClick={() => void handleSubmit()}
             className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-45"
           >
             <span className="material-symbols-outlined text-[18px]">
               person_add
             </span>
-            Add member
+            {submitting ? 'Adding…' : 'Add member'}
           </button>
         </div>
       </div>
