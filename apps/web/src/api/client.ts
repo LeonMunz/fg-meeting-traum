@@ -1,8 +1,9 @@
 /**
  * Minimal API client with session cookies and CSRF handling.
  *
- * - Sends cookies with every request (credentials: 'same-origin').
- * - For unsafe methods, obtains a CSRF token before sending.
+ * - Sends cookies with every request.
+ * - Obtains a CSRF token before unsafe requests.
+ * - Converts non-2xx responses into ApiError.
  */
 
 export async function apiGet<T>(url: string): Promise<T> {
@@ -10,28 +11,62 @@ export async function apiGet<T>(url: string): Promise<T> {
     credentials: 'same-origin',
     headers: { Accept: 'application/json' },
   })
-  if (!res.ok) {
-    throw new ApiError(res.status, await res.json().catch(() => null))
-  }
-  return res.json()
+
+  return parseResponse<T>(res)
 }
 
-export async function apiPost<T>(url: string, body: unknown): Promise<T> {
+export async function apiPost<T>(
+  url: string,
+  body: unknown,
+): Promise<T> {
+  return apiUnsafeRequest<T>('POST', url, body)
+}
+
+export async function apiPatch<T>(
+  url: string,
+  body: unknown,
+): Promise<T> {
+  return apiUnsafeRequest<T>('PATCH', url, body)
+}
+
+export async function apiDelete<T>(url: string): Promise<T> {
+  return apiUnsafeRequest<T>('DELETE', url)
+}
+
+async function apiUnsafeRequest<T>(
+  method: 'POST' | 'PATCH' | 'DELETE',
+  url: string,
+  body?: unknown,
+): Promise<T> {
   const csrfToken = await getCsrftoken()
+
   const res = await fetch(url, {
-    method: 'POST',
+    method,
     credentials: 'same-origin',
     headers: {
       Accept: 'application/json',
       'Content-Type': 'application/json',
       'X-CSRFToken': csrfToken ?? '',
     },
-    body: JSON.stringify(body),
+    body: body === undefined ? undefined : JSON.stringify(body),
   })
+
+  return parseResponse<T>(res)
+}
+
+async function parseResponse<T>(res: Response): Promise<T> {
   if (!res.ok) {
-    throw new ApiError(res.status, await res.json().catch(() => null))
+    throw new ApiError(
+      res.status,
+      await res.json().catch(() => null),
+    )
   }
-  return res.json()
+
+  if (res.status === 204) {
+    return undefined as T
+  }
+
+  return res.json() as Promise<T>
 }
 
 /** Retrieve the Django CSRF token cookie value. */
@@ -40,15 +75,21 @@ async function getCsrftoken(): Promise<string | null> {
     .split(';')
     .map((c) => c.trim())
     .find((c) => c.startsWith('csrftoken='))
-  if (cookie) return cookie.split('=')[1]
 
-  // No cookie yet — obtain one from the CSRF endpoint
+  if (cookie) {
+    return cookie.split('=')[1]
+  }
+
   try {
-    await fetch('/api/auth/csrf/', { credentials: 'same-origin' })
+    await fetch('/api/auth/csrf/', {
+      credentials: 'same-origin',
+    })
+
     const newCookie = document.cookie
       .split(';')
       .map((c) => c.trim())
       .find((c) => c.startsWith('csrftoken='))
+
     return newCookie?.split('=')[1] ?? null
   } catch {
     return null

@@ -1,9 +1,8 @@
-import { useState } from 'react'
-
 import { ResearchGroupSelector } from './ResearchGroupSelector'
+import { useResearchGroup } from './useResearchGroup'
 
 export function ResearchGroupPage() {
-  const [selectedGroupId, setSelectedGroupId] = useState<number>()
+  const { activeResearchGroup } = useResearchGroup()
 
   return (
     <div className="mx-auto max-w-[1440px] p-10">
@@ -19,14 +18,12 @@ export function ResearchGroupPage() {
         <div className="mb-4 text-sm font-medium text-on-surface">
           Your groups
         </div>
-        <ResearchGroupSelector
-          onSelect={setSelectedGroupId}
-          selectedGroupId={selectedGroupId}
-        />
 
-        {selectedGroupId != null && (
+        <ResearchGroupSelector />
+
+        {activeResearchGroup && (
           <div className="mt-6 rounded-lg bg-primary-container/30 px-4 py-3 text-sm text-on-primary-container">
-            Active group selected.
+            Active group: {activeResearchGroup.name}
           </div>
         )}
       </div>

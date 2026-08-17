@@ -1,32 +1,18 @@
-import { useEffect, useState } from 'react'
+import { useResearchGroup } from './useResearchGroup'
 
-import { listResearchGroups } from '../../api/research-groups'
-import type { ApiResearchGroup } from '../../api/types'
-
-interface ResearchGroupSelectorProps {
-  onSelect: (groupId: number) => void
-  selectedGroupId?: number
-}
-
-export function ResearchGroupSelector({
-  onSelect,
-  selectedGroupId,
-}: ResearchGroupSelectorProps) {
-  const [groups, setGroups] = useState<ApiResearchGroup[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    listResearchGroups()
-      .then(setGroups)
-      .catch((err) => setError(err.message ?? 'Failed to load groups'))
-      .finally(() => setLoading(false))
-  }, [])
+export function ResearchGroupSelector() {
+  const {
+    groups,
+    activeResearchGroupId,
+    loading,
+    error,
+    setActiveResearchGroupId,
+  } = useResearchGroup()
 
   if (loading) {
     return (
       <div className="flex items-center gap-2 text-sm text-on-surface-variant">
-        <span className="material-symbols-outlined text-[18px] animate-spin">
+        <span className="material-symbols-outlined animate-spin text-[18px]">
           refresh
         </span>
         Loading…
@@ -37,7 +23,7 @@ export function ResearchGroupSelector({
   if (error) {
     return (
       <div className="text-sm text-error">
-        {error}
+        Research groups unavailable
       </div>
     )
   }
@@ -45,7 +31,7 @@ export function ResearchGroupSelector({
   if (groups.length === 0) {
     return (
       <div className="text-sm text-on-surface-variant">
-        Not a member of any research group yet.
+        No research group
       </div>
     )
   }
@@ -53,19 +39,25 @@ export function ResearchGroupSelector({
   return (
     <div className="flex flex-wrap gap-2">
       {groups.map((group) => {
-        const isSelected = group.id === selectedGroupId
+        const isSelected =
+          group.id === activeResearchGroupId
+
         return (
           <button
             key={group.id}
             type="button"
-            onClick={() => onSelect(group.id)}
-            className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-sm font-medium transition ${
+            onClick={() =>
+              setActiveResearchGroupId(group.id)
+            }
+            className={[
+              'flex items-center gap-2 rounded-lg border px-3 py-1.5 text-sm font-medium transition',
               isSelected
                 ? 'border-primary bg-primary-container text-on-primary-container'
-                : 'border-outline-variant bg-surface-container-lowest text-on-surface hover:border-primary/40'
-            }`}
+                : 'border-outline-variant bg-surface-container-lowest text-on-surface hover:border-primary/40',
+            ].join(' ')}
           >
             {group.name}
+
             <span className="text-[10px] font-normal uppercase tracking-wide opacity-60">
               {group.role}
             </span>

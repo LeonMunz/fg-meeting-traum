@@ -1,183 +1,264 @@
-import { useMemo, useState } from 'react'
-import { useLocation, useNavigate } from 'react-router'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react'
+import { useNavigate } from 'react-router'
 
+import { ApiError } from '../../api/client'
+import {
+  createProject,
+  listProjects,
+} from '../../api/projects'
+import type {
+  ApiProject,
+  ApiProjectRole,
+  ApiProjectStatus,
+} from '../../api/types'
+import { useResearchGroup } from '../research-group/useResearchGroup'
 import {
   CreateProjectDialog,
   type CreateProjectInput,
 } from './CreateProjectDialog'
 
-type DemoProjectStatus = 'active' | 'paused' | 'completed'
-type DemoProjectRole = 'owner' | 'member' | 'viewer'
-
-type DemoProject = {
-  id: string
-  name: string
-  description: string
-  status: DemoProjectStatus
-  role: DemoProjectRole
-  memberCount: number
-  memberInitials: string[]
-  updatedLabel: string
-}
-
-const initialProjects: DemoProject[] = [
-  {
-    id: 'quantum-materials',
-    name: 'Quantum Materials Study',
-    description:
-      'Experimental and computational research on topological quantum materials.',
-    status: 'active',
-    role: 'owner',
-    memberCount: 5,
-    memberInitials: ['LM', 'CS', 'AK'],
-    updatedLabel: 'Updated today',
-  },
-  {
-    id: 'ai-engineering',
-    name: 'AI Engineering Lab',
-    description:
-      'Applied research on reliable AI systems, evaluation and research tooling.',
-    status: 'active',
-    role: 'member',
-    memberCount: 8,
-    memberInitials: ['JB', 'MS', 'LM'],
-    updatedLabel: 'Updated yesterday',
-  },
-  {
-    id: 'grant-proposal',
-    name: 'Collaborative Grant Proposal',
-    description:
-      'Preparation of the next interdisciplinary funding proposal and work plan.',
-    status: 'paused',
-    role: 'viewer',
-    memberCount: 4,
-    memberInitials: ['NW', 'CS', 'TR'],
-    updatedLabel: 'Updated Aug 8',
-  },
-  {
-    id: 'cluster-upgrade',
-    name: 'Research Cluster Upgrade',
-    description:
-      'Planning and documentation for the laboratory compute infrastructure refresh.',
-    status: 'completed',
-    role: 'member',
-    memberCount: 3,
-    memberInitials: ['AK', 'JB', 'LM'],
-    updatedLabel: 'Updated Jul 29',
-  },
-]
-
-const statusLabels: Record<DemoProjectStatus, string> = {
+const statusLabels: Record<ApiProjectStatus, string> = {
   active: 'Active',
   paused: 'Paused',
   completed: 'Completed',
 }
 
-const roleLabels: Record<DemoProjectRole, string> = {
+const roleLabels: Record<ApiProjectRole, string> = {
   owner: 'Owner',
   member: 'Member',
   viewer: 'Viewer',
 }
 
-const roleIcons: Record<DemoProjectRole, string> = {
+const roleIcons: Record<ApiProjectRole, string> = {
   owner: 'shield_person',
   member: 'person',
   viewer: 'visibility',
 }
 
-const statusDotStyles: Record<DemoProjectStatus, string> = {
+const statusDotStyles: Record<ApiProjectStatus, string> = {
   active: 'bg-emerald-500',
   paused: 'bg-amber-500',
   completed: 'bg-outline',
 }
 
-type StatusFilter = 'all' | DemoProjectStatus
+type StatusFilter = 'all' | ApiProjectStatus
 
-const filters: Array<{ value: StatusFilter; label: string }> = [
+const filters: Array<{
+  value: StatusFilter
+  label: string
+}> = [
   { value: 'all', label: 'All' },
   { value: 'active', label: 'Active' },
   { value: 'paused', label: 'Paused' },
   { value: 'completed', label: 'Completed' },
 ]
 
-export function ProjectListPage() {
-  const navigate = useNavigate()
-  const location = useLocation()
-
-  const [projects, setProjects] = useState<DemoProject[]>(initialProjects)
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
-  const [searchQuery, setSearchQuery] = useState('')
-  const [createDialogOpen, setCreateDialogOpen] = useState(false)
-
-  const handleCreateProject = (input: CreateProjectInput) => {
-    const newProject: DemoProject = {
-      id: crypto.randomUUID(),
-      name: input.name,
-      description:
-        input.description || 'No project description has been added yet.',
-      status: input.status,
-      role: 'owner',
-      memberCount: 1,
-      memberInitials: ['AD'],
-      updatedLabel: 'Updated just now',
+function getApiErrorMessage(
+  error: unknown,
+  fallback: string,
+) {
+  if (
+    error instanceof ApiError &&
+    error.detail &&
+    typeof error.detail === 'object' &&
+    'error' in error.detail
+  ) {
+    const detail = error.detail as {
+      error?: unknown
     }
 
-    setProjects((currentProjects) => [newProject, ...currentProjects])
-    setStatusFilter('all')
-    setSearchQuery('')
+    if (typeof detail.error === 'string') {
+      return detail.error
+    }
   }
 
-  const previewState =
-    new URLSearchParams(location.search).get('preview')
+  if (error instanceof Error && error.message) {
+    return error.message
+  }
 
-  const isLoading = previewState === 'loading'
-  const isError = previewState === 'error'
-  const forceEmpty = previewState === 'empty'
+  return fallback
+}
+
+function formatUpdatedAt(value: string) {
+  const updatedAt = new Date(value)
+
+  if (Number.isNaN(updatedAt.getTime())) {
+    return '—'
+  }
+
+  const now = new Date()
+
+  const updatedDay = new Date(
+    updatedAt.getFullYear(),
+    updatedAt.getMonth(),
+    updatedAt.getDate(),
+  )
+
+  const today = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate(),
+  )
+
+  const diffDays = Math.round(
+    (today.getTime() - updatedDay.getTime()) /
+      86_400_000,
+  )
+
+  if (diffDays === 0) {
+    return 'Today'
+  }
+
+  if (diffDays === 1) {
+    return 'Yesterday'
+  }
+
+  return new Intl.DateTimeFormat('en', {
+    month: 'short',
+    day: 'numeric',
+  }).format(updatedAt)
+}
+
+export function ProjectListPage() {
+  const navigate = useNavigate()
+
+  const {
+    activeResearchGroupId,
+    activeResearchGroup,
+    loading: researchGroupsLoading,
+    error: researchGroupsError,
+  } = useResearchGroup()
+
+  const [projects, setProjects] = useState<ApiProject[]>([])
+  const [projectsLoading, setProjectsLoading] =
+    useState(false)
+  const [projectsError, setProjectsError] =
+    useState<string | null>(null)
+  const [statusFilter, setStatusFilter] =
+    useState<StatusFilter>('all')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [createDialogOpen, setCreateDialogOpen] =
+    useState(false)
+
+  const loadProjects = useCallback(async () => {
+    if (activeResearchGroupId == null) {
+      setProjects([])
+      setProjectsLoading(false)
+      return
+    }
+
+    setProjectsLoading(true)
+    setProjectsError(null)
+
+    try {
+      const nextProjects = await listProjects(
+        activeResearchGroupId,
+      )
+
+      setProjects(nextProjects)
+    } catch (error) {
+      setProjects([])
+      setProjectsError(
+        getApiErrorMessage(
+          error,
+          'Projects could not be loaded.',
+        ),
+      )
+    } finally {
+      setProjectsLoading(false)
+    }
+  }, [activeResearchGroupId])
+
+  useEffect(() => {
+    void loadProjects()
+  }, [loadProjects])
+
+  const handleCreateProject = async (
+    input: CreateProjectInput,
+  ) => {
+    if (activeResearchGroupId == null) {
+      setProjectsError(
+        'Select a research group before creating a project.',
+      )
+      return
+    }
+
+    setProjectsError(null)
+
+    try {
+      const project = await createProject(
+        activeResearchGroupId,
+        {
+          name: input.name,
+          description: input.description,
+          status: input.status,
+        },
+      )
+
+      setProjects((currentProjects) => [
+        project,
+        ...currentProjects.filter(
+          (currentProject) =>
+            currentProject.id !== project.id,
+        ),
+      ])
+
+      setStatusFilter('all')
+      setSearchQuery('')
+    } catch (error) {
+      setProjectsError(
+        getApiErrorMessage(
+          error,
+          'Project could not be created.',
+        ),
+      )
+    }
+  }
 
   const hasActiveFilters =
-    statusFilter !== 'all' || searchQuery.trim().length > 0
+    statusFilter !== 'all' ||
+    searchQuery.trim().length > 0
 
   const visibleProjects = useMemo(() => {
     const query = searchQuery.trim().toLowerCase()
-    const sourceProjects = forceEmpty ? [] : projects
 
-    return sourceProjects.filter((project) => {
+    return projects.filter((project) => {
       const matchesStatus =
-        statusFilter === 'all' || project.status === statusFilter
+        statusFilter === 'all' ||
+        project.status === statusFilter
 
       const matchesSearch =
         query.length === 0 ||
         project.name.toLowerCase().includes(query) ||
-        project.description.toLowerCase().includes(query)
+        project.description
+          .toLowerCase()
+          .includes(query)
 
       return matchesStatus && matchesSearch
     })
-  }, [forceEmpty, projects, searchQuery, statusFilter])
-
-  const projectCount = forceEmpty ? 0 : projects.length
+  }, [projects, searchQuery, statusFilter])
 
   const clearFilters = () => {
     setStatusFilter('all')
     setSearchQuery('')
   }
 
-  const clearPreviewState = () => {
-    const params = new URLSearchParams(location.search)
-    params.delete('preview')
+  const isLoading =
+    researchGroupsLoading || projectsLoading
 
-    const search = params.toString()
+  const error =
+    researchGroupsError || projectsError
 
-    navigate(
-      {
-        pathname: location.pathname,
-        search: search ? `?${search}` : '',
-      },
-      { replace: true },
-    )
-  }
+  const hasResearchGroup =
+    activeResearchGroupId != null
 
   return (
-    <div className="mx-auto w-full max-w-[1440px] px-6 py-8 lg:px-10 lg:py-10">
+    <div className="w-full px-6 py-8 lg:px-8 lg:py-10 xl:px-10">
       <header className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-3xl font-semibold tracking-tight text-on-surface">
@@ -185,15 +266,17 @@ export function ProjectListPage() {
           </h1>
 
           <p className="mt-1.5 max-w-2xl text-sm leading-6 text-on-surface-variant">
-            Organize research work in separate project spaces with their own
-            members, roles and lifecycle.
+            {activeResearchGroup
+              ? `Projects you can access in ${activeResearchGroup.name}.`
+              : 'Organize research work in separate project spaces.'}
           </p>
         </div>
 
         <button
           type="button"
+          disabled={!hasResearchGroup || isLoading}
           onClick={() => setCreateDialogOpen(true)}
-          className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-primary/90"
+          className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-45"
         >
           <span className="material-symbols-outlined text-[19px]">
             add
@@ -206,13 +289,16 @@ export function ProjectListPage() {
         <div className="flex flex-col gap-4 border-b border-outline-variant pb-4 md:flex-row md:items-center md:justify-between">
           <div className="flex flex-wrap items-center gap-1">
             {filters.map((filter) => {
-              const isActive = statusFilter === filter.value
+              const isActive =
+                statusFilter === filter.value
 
               return (
                 <button
                   key={filter.value}
                   type="button"
-                  onClick={() => setStatusFilter(filter.value)}
+                  onClick={() =>
+                    setStatusFilter(filter.value)
+                  }
                   className={[
                     'rounded-lg px-3 py-2 text-sm font-medium transition',
                     isActive
@@ -227,7 +313,9 @@ export function ProjectListPage() {
           </div>
 
           <label className="relative block w-full md:max-w-xs">
-            <span className="sr-only">Search projects</span>
+            <span className="sr-only">
+              Search projects
+            </span>
 
             <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[18px] text-on-surface-variant">
               search
@@ -236,7 +324,9 @@ export function ProjectListPage() {
             <input
               type="search"
               value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
+              onChange={(event) =>
+                setSearchQuery(event.target.value)
+              }
               placeholder="Search projects..."
               className="h-10 w-full rounded-lg border border-outline-variant bg-surface-container-lowest pl-10 pr-4 text-sm text-on-surface outline-none transition placeholder:text-on-surface-variant/70 focus:border-primary focus:ring-2 focus:ring-primary/15"
             />
@@ -245,7 +335,7 @@ export function ProjectListPage() {
 
         {isLoading ? (
           <ProjectListSkeleton />
-        ) : isError ? (
+        ) : error ? (
           <div
             role="alert"
             className="mt-8 flex min-h-72 flex-col items-center justify-center rounded-xl border border-outline-variant bg-surface-container-lowest px-6 py-12 text-center shadow-sm"
@@ -261,13 +351,12 @@ export function ProjectListPage() {
             </h2>
 
             <p className="mt-1 max-w-md text-sm leading-6 text-on-surface-variant">
-              Something went wrong while loading your projects. Your current
-              filters have not been changed.
+              {error}
             </p>
 
             <button
               type="button"
-              onClick={clearPreviewState}
+              onClick={() => void loadProjects()}
               className="mt-5 inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-outline-variant bg-surface-container-lowest px-4 text-sm font-semibold text-on-surface transition hover:border-primary/40 hover:bg-surface-container-low"
             >
               <span className="material-symbols-outlined text-[18px]">
@@ -276,9 +365,26 @@ export function ProjectListPage() {
               Try again
             </button>
           </div>
+        ) : !hasResearchGroup ? (
+          <div className="mt-8 flex min-h-72 flex-col items-center justify-center rounded-xl border border-dashed border-outline-variant bg-surface-container-lowest px-6 py-12 text-center">
+            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-surface-container-high text-on-surface-variant">
+              <span className="material-symbols-outlined text-[23px]">
+                groups
+              </span>
+            </div>
+
+            <h2 className="mt-4 text-base font-semibold text-on-surface">
+              No research group available
+            </h2>
+
+            <p className="mt-1 max-w-md text-sm leading-6 text-on-surface-variant">
+              You need access to a research group before
+              projects can be created or opened.
+            </p>
+          </div>
         ) : visibleProjects.length > 0 ? (
           <div className="mt-4 overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest">
-            <div className="hidden h-9 grid-cols-[minmax(360px,1fr)_120px_120px_180px_110px] items-center px-6 lg:grid">
+            <div className="hidden h-9 grid-cols-[minmax(360px,1fr)_120px_120px_120px] items-center px-6 lg:grid">
               <div className="text-[11px] font-normal text-on-surface-variant/75">
                 Project
               </div>
@@ -292,36 +398,21 @@ export function ProjectListPage() {
               </div>
 
               <div className="text-[11px] font-normal text-on-surface-variant/75">
-                Members
-              </div>
-
-              <div className="text-[11px] font-normal text-on-surface-variant/75">
                 Updated
               </div>
             </div>
 
             <div className="border-t border-outline-variant/40">
-              {visibleProjects.map((project, index) => {
-                const updatedLabel = project.updatedLabel.replace(
-                  /^Updated\s+/,
-                  '',
-                )
-
-                const visibleInitials = project.memberInitials.slice(0, 2)
-                const hiddenMemberCount = Math.max(
-                  project.memberCount - visibleInitials.length,
-                  0,
-                )
-
-                return (
+              {visibleProjects.map(
+                (project, index) => (
                   <article
                     key={project.id}
                     role="link"
                     tabIndex={0}
                     onClick={() =>
-                      navigate(`/projects/${project.id}`, {
-                        state: { project },
-                      })
+                      navigate(
+                        `/projects/${project.id}`,
+                      )
                     }
                     onKeyDown={(event) => {
                       if (
@@ -329,14 +420,14 @@ export function ProjectListPage() {
                         event.key === ' '
                       ) {
                         event.preventDefault()
-                        navigate(`/projects/${project.id}`, {
-                          state: { project },
-                        })
+                        navigate(
+                          `/projects/${project.id}`,
+                        )
                       }
                     }}
                     className={[
                       'group grid cursor-pointer gap-4 px-5 py-3.5 transition-colors hover:bg-surface-container-low/45 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary sm:px-6',
-                      'lg:min-h-[68px] lg:grid-cols-[minmax(360px,1fr)_120px_120px_180px_110px] lg:items-center lg:gap-0',
+                      'lg:min-h-[68px] lg:grid-cols-[minmax(360px,1fr)_120px_120px_120px] lg:items-center lg:gap-0',
                       index > 0
                         ? 'border-t border-outline-variant/25'
                         : '',
@@ -348,7 +439,8 @@ export function ProjectListPage() {
                       </h2>
 
                       <p className="mt-1 truncate text-xs font-normal text-on-surface-variant">
-                        {project.description}
+                        {project.description ||
+                          'No description'}
                       </p>
                     </div>
 
@@ -361,12 +453,18 @@ export function ProjectListPage() {
                         <span
                           className={[
                             'h-1.5 w-1.5 shrink-0 rounded-full',
-                            statusDotStyles[project.status],
+                            statusDotStyles[
+                              project.status
+                            ],
                           ].join(' ')}
                         />
 
                         <span>
-                          {statusLabels[project.status]}
+                          {
+                            statusLabels[
+                              project.status
+                            ]
+                          }
                         </span>
                       </div>
                     </div>
@@ -378,43 +476,28 @@ export function ProjectListPage() {
 
                       <div className="flex items-center gap-1.5 text-xs font-normal text-on-surface-variant">
                         <span className="material-symbols-outlined text-[15px]">
-                          {roleIcons[project.role]}
+                          {
+                            roleIcons[
+                              project.currentUserRole
+                            ]
+                          }
                         </span>
 
-                        <span>{roleLabels[project.role]}</span>
-                      </div>
-                    </div>
-
-                    <div>
-                      <div className="mb-1 text-[10px] text-on-surface-variant lg:hidden">
-                        Members
-                      </div>
-
-                      <div className="flex min-w-0 items-center gap-2">
-                        <div className="flex shrink-0 -space-x-1.5">
-                          {visibleInitials.map((initials) => (
-                            <div
-                              key={initials}
-                              className="flex h-[22px] w-[22px] items-center justify-center rounded-full border border-surface-container-lowest bg-surface-container-high text-[8px] font-semibold text-on-surface"
-                            >
-                              {initials}
-                            </div>
-                          ))}
-                        </div>
-
-                        <span className="truncate text-xs font-normal text-on-surface-variant">
-                          {project.memberCount === 1
-                            ? '1 member'
-                            : hiddenMemberCount > 0
-                              ? `+${hiddenMemberCount}`
-                              : `${project.memberCount} members`}
+                        <span>
+                          {
+                            roleLabels[
+                              project.currentUserRole
+                            ]
+                          }
                         </span>
                       </div>
                     </div>
 
                     <div className="flex items-center justify-between gap-3">
                       <span className="text-xs font-normal text-on-surface-variant">
-                        {updatedLabel}
+                        {formatUpdatedAt(
+                          project.updatedAt,
+                        )}
                       </span>
 
                       <span className="material-symbols-outlined translate-x-[-2px] text-[17px] text-on-surface-variant/40 opacity-0 transition group-hover:translate-x-0 group-hover:text-primary group-hover:opacity-100">
@@ -422,11 +505,12 @@ export function ProjectListPage() {
                       </span>
                     </div>
                   </article>
-                )
-              })}
+                ),
+              )}
             </div>
           </div>
-        ) : projectCount === 0 && !hasActiveFilters ? (
+        ) : projects.length === 0 &&
+          !hasActiveFilters ? (
           <div className="mt-8 flex min-h-72 flex-col items-center justify-center rounded-xl border border-dashed border-outline-variant bg-surface-container-lowest px-6 py-12 text-center">
             <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary-fixed text-primary">
               <span className="material-symbols-outlined text-[23px]">
@@ -439,13 +523,16 @@ export function ProjectListPage() {
             </h2>
 
             <p className="mt-1 max-w-md text-sm leading-6 text-on-surface-variant">
-              Create your first project to organize work, members and project
-              access in a separate workspace.
+              Create your first project to organize work,
+              members and project access in a separate
+              workspace.
             </p>
 
             <button
               type="button"
-              onClick={() => setCreateDialogOpen(true)}
+              onClick={() =>
+                setCreateDialogOpen(true)
+              }
               className="mt-5 inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-primary/90"
             >
               <span className="material-symbols-outlined text-[18px]">
@@ -467,7 +554,8 @@ export function ProjectListPage() {
             </h2>
 
             <p className="mt-1 max-w-sm text-sm leading-6 text-on-surface-variant">
-              No projects match your current search and status filters.
+              No projects match your current search and
+              status filters.
             </p>
 
             <button
@@ -499,47 +587,39 @@ function ProjectListSkeleton() {
       aria-hidden="true"
       className="mt-4 overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest"
     >
-      <div className="hidden h-9 grid-cols-[minmax(360px,1fr)_120px_120px_180px_110px] items-center px-6 lg:grid">
+      <div className="hidden h-9 grid-cols-[minmax(360px,1fr)_120px_120px_120px] items-center px-6 lg:grid">
         <div className="h-2.5 w-12 rounded bg-surface-container-low" />
         <div className="h-2.5 w-10 rounded bg-surface-container-low" />
         <div className="h-2.5 w-8 rounded bg-surface-container-low" />
-        <div className="h-2.5 w-12 rounded bg-surface-container-low" />
         <div className="h-2.5 w-10 rounded bg-surface-container-low" />
       </div>
 
       <div className="border-t border-outline-variant/40">
-        {Array.from({ length: 4 }).map((_, index) => (
-          <div
-            key={index}
-            className={[
-              'grid animate-pulse gap-4 px-6 py-3.5',
-              'lg:min-h-[68px] lg:grid-cols-[minmax(360px,1fr)_120px_120px_180px_110px] lg:items-center lg:gap-0',
-              index > 0
-                ? 'border-t border-outline-variant/25'
-                : '',
-            ].join(' ')}
-          >
-            <div className="pr-8">
-              <div className="h-3.5 w-52 rounded bg-surface-container-high" />
-              <div className="mt-2 h-2.5 w-full max-w-md rounded bg-surface-container-low" />
-            </div>
-
-            <div className="h-3 w-14 rounded bg-surface-container-low" />
-
-            <div className="h-3 w-14 rounded bg-surface-container-low" />
-
-            <div className="flex items-center gap-2">
-              <div className="flex -space-x-1.5">
-                <div className="h-[22px] w-[22px] rounded-full bg-surface-container-high" />
-                <div className="h-[22px] w-[22px] rounded-full bg-surface-container-high" />
+        {Array.from({ length: 4 }).map(
+          (_, index) => (
+            <div
+              key={index}
+              className={[
+                'grid animate-pulse gap-4 px-6 py-3.5',
+                'lg:min-h-[68px] lg:grid-cols-[minmax(360px,1fr)_120px_120px_120px] lg:items-center lg:gap-0',
+                index > 0
+                  ? 'border-t border-outline-variant/25'
+                  : '',
+              ].join(' ')}
+            >
+              <div className="pr-8">
+                <div className="h-3.5 w-52 rounded bg-surface-container-high" />
+                <div className="mt-2 h-2.5 w-full max-w-md rounded bg-surface-container-low" />
               </div>
 
-              <div className="h-3 w-8 rounded bg-surface-container-low" />
-            </div>
+              <div className="h-3 w-14 rounded bg-surface-container-low" />
 
-            <div className="h-3 w-16 rounded bg-surface-container-low" />
-          </div>
-        ))}
+              <div className="h-3 w-14 rounded bg-surface-container-low" />
+
+              <div className="h-3 w-16 rounded bg-surface-container-low" />
+            </div>
+          ),
+        )}
       </div>
     </div>
   )

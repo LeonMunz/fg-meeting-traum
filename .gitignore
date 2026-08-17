@@ -21,3 +21,5 @@ __pycache__/
 *.py[cod]
 .venv/
 db.sqlite3
+playwright-report/
+test-results/

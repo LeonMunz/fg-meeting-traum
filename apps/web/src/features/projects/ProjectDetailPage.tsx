@@ -13,6 +13,25 @@ import {
 } from './AddProjectMemberDialog'
 import { RemoveProjectMemberDialog } from './RemoveProjectMemberDialog'
 import { CreateWorkItemDialog } from './CreateWorkItemDialog'
+import { ApiError } from '../../api/client'
+import {
+  addProjectMembership,
+  getProject,
+  listProjectMemberships,
+  listResearchGroupMembers,
+  removeProjectMembership,
+  updateProject,
+  updateProjectMembership,
+} from '../../api/projects'
+import type {
+  ApiProjectMembership,
+  ApiResearchGroupMember,
+  ApiWorkItem,
+} from '../../api/types'
+import {
+  createWorkItem,
+  listProjectWorkItems,
+} from '../../api/work-items'
 import { useSession } from '../../api/useSession'
 
 type ProjectStatus = 'active' | 'paused' | 'completed'
@@ -66,24 +85,16 @@ type DemoWorkItem = {
 
 type ProjectMember = {
   id: string
+  membershipId: number
+  username: string
   name: string
-  email: string
   initials: string
   role: ProjectRole
 }
 
 type ProjectDetail = {
   id: string
-  name: string
-  description: string
-  status: ProjectStatus
-  role: ProjectRole
-  updatedLabel: string
-  members: ProjectMember[]
-}
-
-type RoutedProject = {
-  id: string
+  researchGroupId: number
   name: string
   description: string
   status: ProjectStatus
@@ -91,188 +102,6 @@ type RoutedProject = {
   updatedLabel: string
 }
 
-const demoDirectoryUsers: DirectoryUser[] = [
-  {
-    id: 'alex',
-    name: 'Alex Dev',
-    email: 'alex@example.com',
-    initials: 'AD',
-  },
-  {
-    id: 'chris',
-    name: 'Chris Dev',
-    email: 'chris@example.com',
-    initials: 'CD',
-  },
-  {
-    id: 'maria',
-    name: 'Maria Dev',
-    email: 'maria@example.com',
-    initials: 'MD',
-  },
-  {
-    id: 'laura',
-    name: 'Laura Dev',
-    email: 'laura@example.com',
-    initials: 'LD',
-  },
-  {
-    id: 'nora',
-    name: 'Nora Weber',
-    email: 'nora@example.com',
-    initials: 'NW',
-  },
-  {
-    id: 'jonas',
-    name: 'Jonas Beck',
-    email: 'jonas@example.com',
-    initials: 'JB',
-  },
-  {
-    id: 'tobias',
-    name: 'Tobias Roth',
-    email: 'tobias@example.com',
-    initials: 'TR',
-  },
-]
-
-const demoProjects: Record<string, ProjectDetail> = {
-  'quantum-materials': {
-    id: 'quantum-materials',
-    name: 'Quantum Materials Study',
-    description:
-      'Experimental and computational research on topological quantum materials.',
-    status: 'active',
-    role: 'owner',
-    updatedLabel: 'Updated today',
-    members: [
-      {
-        id: 'alex',
-        name: 'Alex Dev',
-        email: 'alex@example.com',
-        initials: 'AD',
-        role: 'owner',
-      },
-      {
-        id: 'chris',
-        name: 'Chris Dev',
-        email: 'chris@example.com',
-        initials: 'CD',
-        role: 'member',
-      },
-      {
-        id: 'maria',
-        name: 'Maria Dev',
-        email: 'maria@example.com',
-        initials: 'MD',
-        role: 'member',
-      },
-      {
-        id: 'laura',
-        name: 'Laura Dev',
-        email: 'laura@example.com',
-        initials: 'LD',
-        role: 'viewer',
-      },
-    ],
-  },
-  'ai-engineering': {
-    id: 'ai-engineering',
-    name: 'AI Engineering Lab',
-    description:
-      'Applied research on reliable AI systems, evaluation and research tooling.',
-    status: 'active',
-    role: 'member',
-    updatedLabel: 'Updated yesterday',
-    members: [
-      {
-        id: 'chris',
-        name: 'Chris Dev',
-        email: 'chris@example.com',
-        initials: 'CD',
-        role: 'owner',
-      },
-      {
-        id: 'alex',
-        name: 'Alex Dev',
-        email: 'alex@example.com',
-        initials: 'AD',
-        role: 'member',
-      },
-      {
-        id: 'maria',
-        name: 'Maria Dev',
-        email: 'maria@example.com',
-        initials: 'MD',
-        role: 'member',
-      },
-    ],
-  },
-  'grant-proposal': {
-    id: 'grant-proposal',
-    name: 'Collaborative Grant Proposal',
-    description:
-      'Preparation of the next interdisciplinary funding proposal and work plan.',
-    status: 'paused',
-    role: 'viewer',
-    updatedLabel: 'Updated Aug 8',
-    members: [
-      {
-        id: 'maria',
-        name: 'Maria Dev',
-        email: 'maria@example.com',
-        initials: 'MD',
-        role: 'owner',
-      },
-      {
-        id: 'chris',
-        name: 'Chris Dev',
-        email: 'chris@example.com',
-        initials: 'CD',
-        role: 'member',
-      },
-      {
-        id: 'alex',
-        name: 'Alex Dev',
-        email: 'alex@example.com',
-        initials: 'AD',
-        role: 'viewer',
-      },
-    ],
-  },
-  'cluster-upgrade': {
-    id: 'cluster-upgrade',
-    name: 'Research Cluster Upgrade',
-    description:
-      'Planning and documentation for the laboratory compute infrastructure refresh.',
-    status: 'completed',
-    role: 'member',
-    updatedLabel: 'Updated Jul 29',
-    members: [
-      {
-        id: 'laura',
-        name: 'Laura Dev',
-        email: 'laura@example.com',
-        initials: 'LD',
-        role: 'owner',
-      },
-      {
-        id: 'alex',
-        name: 'Alex Dev',
-        email: 'alex@example.com',
-        initials: 'AD',
-        role: 'member',
-      },
-      {
-        id: 'chris',
-        name: 'Chris Dev',
-        email: 'chris@example.com',
-        initials: 'CD',
-        role: 'member',
-      },
-    ],
-  },
-}
 
 const demoActivities: Record<
   string,
@@ -334,94 +163,6 @@ const demoActivities: Record<
     },
   ],
 }
-
-const demoWorkItems: Record<string, DemoWorkItem[]> = {
-  'quantum-materials': [
-    {
-      id: 'wi-1',
-      title: 'Calibrate cryostat for low-temperature measurements',
-      type: 'task',
-      status: 'in_progress',
-      assignees: [
-        { id: 'alex', name: 'Alex Dev', initials: 'AD' },
-      ],
-      dueInDays: 1,
-      dueLabel: 'Tomorrow',
-      blockedReason: null,
-      parentId: null,
-    },
-    {
-      id: 'wi-2',
-      title: 'Review measurement protocol',
-      type: 'deliverable',
-      status: 'todo',
-      assignees: [
-        { id: 'chris', name: 'Chris Dev', initials: 'CD' },
-        { id: 'maria', name: 'Maria Dev', initials: 'MD' },
-      ],
-      dueInDays: 3,
-      dueLabel: 'Aug 17',
-      blockedReason: null,
-      parentId: null,
-    },
-    {
-      id: 'wi-3',
-      title: 'Resolve sample holder issue',
-      type: 'task',
-      status: 'todo',
-      assignees: [
-        { id: 'maria', name: 'Maria Dev', initials: 'MD' },
-      ],
-      dueInDays: 2,
-      dueLabel: 'Aug 16',
-      blockedReason: 'Replacement sample holder is still unavailable.',
-      parentId: null,
-    },
-    {
-      id: 'wi-4',
-      title: 'Prepare milestone review',
-      type: 'milestone',
-      status: 'todo',
-      assignees: [
-        { id: 'chris', name: 'Chris Dev', initials: 'CD' },
-      ],
-      dueInDays: 6,
-      dueLabel: 'Aug 20',
-      blockedReason: null,
-      parentId: null,
-    },
-    {
-      id: 'wi-5',
-      title: 'Update literature matrix',
-      type: 'task',
-      status: 'review',
-      assignees: [
-        { id: 'alex', name: 'Alex Dev', initials: 'AD' },
-      ],
-      dueInDays: -2,
-      dueLabel: 'Aug 12',
-      blockedReason: null,
-      parentId: null,
-    },
-    {
-      id: 'wi-6',
-      title: 'Archive initial dataset',
-      type: 'task',
-      status: 'done',
-      assignees: [
-        { id: 'chris', name: 'Chris Dev', initials: 'CD' },
-      ],
-      dueInDays: -1,
-      dueLabel: 'Completed yesterday',
-      blockedReason: null,
-      parentId: null,
-    },
-  ],
-  'ai-engineering': [],
-  'grant-proposal': [],
-  'cluster-upgrade': [],
-}
-
 
 const workItemStatusLabels: Record<DemoWorkItemStatus, string> = {
   todo: 'To do',
@@ -629,12 +370,219 @@ const tabs: Array<{ id: ProjectTab; label: string }> = [
   { id: 'settings', label: 'Settings' },
 ]
 
+function getPersonName(
+  firstName: string,
+  lastName: string,
+  username: string,
+) {
+  const fullName = `${firstName} ${lastName}`.trim()
+  return fullName || username
+}
+
+function getPersonInitials(
+  firstName: string,
+  lastName: string,
+  username: string,
+) {
+  const initials = [firstName, lastName]
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .map((value) => value[0]?.toUpperCase())
+    .join('')
+
+  return initials || username.slice(0, 2).toUpperCase()
+}
+
+function mapProjectMembership(
+  membership: ApiProjectMembership,
+): ProjectMember {
+  return {
+    id: String(membership.user.id),
+    membershipId: membership.id,
+    username: membership.user.username,
+    name: getPersonName(
+      membership.user.firstName,
+      membership.user.lastName,
+      membership.user.username,
+    ),
+    initials: getPersonInitials(
+      membership.user.firstName,
+      membership.user.lastName,
+      membership.user.username,
+    ),
+    role: membership.role,
+  }
+}
+
+function mapResearchGroupMember(
+  member: ApiResearchGroupMember,
+): DirectoryUser {
+  return {
+    id: String(member.id),
+    name: getPersonName(
+      member.firstName,
+      member.lastName,
+      member.username,
+    ),
+    username: member.username,
+    initials: getPersonInitials(
+      member.firstName,
+      member.lastName,
+      member.username,
+    ),
+  }
+}
+
+function getWorkItemDueFields(
+  dueDate: string | null,
+) {
+  if (!dueDate) {
+    return {
+      dueInDays: null,
+      dueLabel: null,
+    }
+  }
+
+  const [year, month, day] = dueDate
+    .split('-')
+    .map(Number)
+
+  if (
+    !Number.isInteger(year) ||
+    !Number.isInteger(month) ||
+    !Number.isInteger(day)
+  ) {
+    return {
+      dueInDays: null,
+      dueLabel: null,
+    }
+  }
+
+  const targetDate = new Date(
+    year,
+    month - 1,
+    day,
+  )
+
+  const now = new Date()
+
+  const today = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate(),
+  )
+
+  const dueInDays = Math.round(
+    (targetDate.getTime() - today.getTime()) /
+      86_400_000,
+  )
+
+  const dueLabel =
+    dueInDays === 0
+      ? 'Today'
+      : dueInDays === 1
+        ? 'Tomorrow'
+        : new Intl.DateTimeFormat('en', {
+            month: 'short',
+            day: 'numeric',
+          }).format(targetDate)
+
+  return {
+    dueInDays,
+    dueLabel,
+  }
+}
+
+function mapApiWorkItem(
+  item: ApiWorkItem,
+  members: ProjectMember[],
+): DemoWorkItem {
+  const due = getWorkItemDueFields(item.dueDate)
+
+  return {
+    id: String(item.id),
+    title: item.title,
+    type: item.type,
+    status: item.status,
+    assignees: item.assigneeIds.map(
+      (assigneeId) => {
+        const member = members.find(
+          (candidate) =>
+            candidate.id === String(assigneeId),
+        )
+
+        return {
+          id: String(assigneeId),
+          name:
+            member?.name ??
+            `User ${assigneeId}`,
+          initials:
+            member?.initials ?? '?',
+        }
+      },
+    ),
+    dueInDays: due.dueInDays,
+    dueLabel: due.dueLabel,
+    blockedReason: item.blockedReason,
+    parentId:
+      item.parentId == null
+        ? null
+        : String(item.parentId),
+  }
+}
+
+function getWorkItemErrorMessage(
+  error: unknown,
+  fallback: string,
+) {
+  if (
+    error instanceof ApiError &&
+    error.detail &&
+    typeof error.detail === 'object' &&
+    'error' in error.detail
+  ) {
+    const detail =
+      error.detail as { error?: unknown }
+
+    if (typeof detail.error === 'string') {
+      return detail.error
+    }
+  }
+
+  return fallback
+}
+
+function getMembershipErrorMessage(
+  error: unknown,
+  fallback: string,
+) {
+  if (
+    error instanceof ApiError &&
+    error.detail &&
+    typeof error.detail === 'object' &&
+    'error' in error.detail
+  ) {
+    const detail = error.detail as { error?: unknown }
+
+    if (typeof detail.error === 'string') {
+      return detail.error
+    }
+  }
+
+  return fallback
+}
+
 export function ProjectDetailPage() {
   const { projectId } = useParams()
   const location = useLocation()
   const navigate = useNavigate()
   const { user } = useSession()
   const [activeTab, setActiveTab] = useState<ProjectTab>('overview')
+
+  const [project, setProject] = useState<ProjectDetail | null>(null)
+  const [projectLoading, setProjectLoading] = useState(true)
+  const [projectLoadError, setProjectLoadError] =
+    useState<'not-found' | 'error' | null>(null)
 
   const [projectName, setProjectName] = useState('')
   const [projectDescription, setProjectDescription] = useState('')
@@ -645,12 +593,26 @@ export function ProjectDetailPage() {
   const [settingsDescription, setSettingsDescription] = useState('')
   const [settingsStatus, setSettingsStatus] =
     useState<ProjectStatus>('active')
+  const [settingsSaving, setSettingsSaving] =
+    useState(false)
+  const [settingsError, setSettingsError] =
+    useState<string | null>(null)
 
   const [members, setMembers] = useState<ProjectMember[]>([])
+  const [directoryUsers, setDirectoryUsers] =
+    useState<DirectoryUser[]>([])
+  const [membersLoading, setMembersLoading] = useState(false)
+  const [membersError, setMembersError] =
+    useState<string | null>(null)
   const [addMemberDialogOpen, setAddMemberDialogOpen] = useState(false)
   const [memberToRemove, setMemberToRemove] =
     useState<ProjectMember | null>(null)
-  const [workItems, setWorkItems] = useState<DemoWorkItem[]>([])
+  const [apiWorkItems, setApiWorkItems] =
+    useState<ApiWorkItem[]>([])
+  const [workItemsLoading, setWorkItemsLoading] =
+    useState(false)
+  const [workItemsError, setWorkItemsError] =
+    useState<string | null>(null)
   const [createWorkItemDialogOpen, setCreateWorkItemDialogOpen] =
     useState(false)
   const [workItemFocus, setWorkItemFocus] =
@@ -715,49 +677,180 @@ export function ProjectDetailPage() {
   ])
 
 
-  const routedProject = (
-    location.state as { project?: RoutedProject } | null
-  )?.project
-
-  const project = useMemo<ProjectDetail | null>(() => {
-    if (!projectId) return null
-
-    const existingProject = demoProjects[projectId]
-    if (existingProject) return existingProject
-
-    if (routedProject?.id === projectId) {
-      return {
-        ...routedProject,
-        members: [
-          {
-            id: 'alex',
-            name: 'Alex Dev',
-            email: 'alex@example.com',
-            initials: 'AD',
-            role: 'owner',
-          },
-        ],
-      }
+  useEffect(() => {
+    if (!projectId) {
+      setProject(null)
+      setProjectLoadError('not-found')
+      setProjectLoading(false)
+      return
     }
 
-    return null
-  }, [projectId, routedProject])
+    const parsedProjectId = Number(projectId)
+
+    if (
+      !Number.isInteger(parsedProjectId) ||
+      parsedProjectId <= 0
+    ) {
+      setProject(null)
+      setProjectLoadError('not-found')
+      setProjectLoading(false)
+      return
+    }
+
+    let cancelled = false
+
+    setProject(null)
+    setProjectLoadError(null)
+    setProjectLoading(true)
+
+    getProject(parsedProjectId)
+      .then((apiProject) => {
+        if (cancelled) return
+
+        const updatedAt = new Date(apiProject.updatedAt)
+
+        const updatedLabel = Number.isNaN(updatedAt.getTime())
+          ? 'Updated recently'
+          : `Updated ${new Intl.DateTimeFormat('en', {
+              month: 'short',
+              day: 'numeric',
+            }).format(updatedAt)}`
+
+        setProject({
+          id: String(apiProject.id),
+          researchGroupId: apiProject.researchGroupId,
+          name: apiProject.name,
+          description: apiProject.description,
+          status: apiProject.status,
+          role: apiProject.currentUserRole,
+          updatedLabel,
+        })
+      })
+      .catch((error) => {
+        if (cancelled) return
+
+        setProject(null)
+
+        if (error instanceof ApiError && error.status === 404) {
+          setProjectLoadError('not-found')
+          return
+        }
+
+        setProjectLoadError('error')
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setProjectLoading(false)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [projectId])
 
   useEffect(() => {
-    setMembers(project?.members ?? [])
+    if (!project) {
+      setMembers([])
+      setDirectoryUsers([])
+      setMembersLoading(false)
+      setMembersError(null)
+      return
+    }
+
+    const numericProjectId = Number(project.id)
+    let cancelled = false
+
+    setMembers([])
+    setDirectoryUsers([])
+    setMembersLoading(true)
+    setMembersError(null)
+
+    Promise.all([
+      listProjectMemberships(numericProjectId),
+      listResearchGroupMembers(project.researchGroupId),
+    ])
+      .then(([projectMemberships, researchGroupMembers]) => {
+        if (cancelled) return
+
+        setMembers(
+          projectMemberships.map(mapProjectMembership),
+        )
+
+        setDirectoryUsers(
+          researchGroupMembers.map(mapResearchGroupMember),
+        )
+      })
+      .catch((error) => {
+        if (cancelled) return
+
+        setMembers([])
+        setDirectoryUsers([])
+        setMembersError(
+          getMembershipErrorMessage(
+            error,
+            'Project members could not be loaded.',
+          ),
+        )
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setMembersLoading(false)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [project])
+
+  useEffect(() => {
+    if (!project) {
+      setApiWorkItems([])
+      setWorkItemsLoading(false)
+      setWorkItemsError(null)
+      return
+    }
+
+    const numericProjectId = Number(project.id)
+    let cancelled = false
+
+    setApiWorkItems([])
+    setWorkItemsLoading(true)
+    setWorkItemsError(null)
+
+    listProjectWorkItems(numericProjectId)
+      .then((items) => {
+        if (!cancelled) {
+          setApiWorkItems(items)
+        }
+      })
+      .catch((error) => {
+        if (cancelled) return
+
+        setApiWorkItems([])
+        setWorkItemsError(
+          getWorkItemErrorMessage(
+            error,
+            'Work items could not be loaded.',
+          ),
+        )
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setWorkItemsLoading(false)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [project])
+
+  useEffect(() => {
     setAddMemberDialogOpen(false)
     setMemberToRemove(null)
     setCreateWorkItemDialogOpen(false)
-    setWorkItems(
-      project
-        ? (demoWorkItems[project.id] ?? []).map((item) => ({
-            ...item,
-            assignees: item.assignees.map((assignee) => ({
-              ...assignee,
-            })),
-          }))
-        : [],
-    )
 
     if (project) {
       setProjectName(project.name)
@@ -795,11 +888,11 @@ export function ProjectDetailPage() {
     )
   }
 
-  if (isPreviewLoading) {
+  if (isPreviewLoading || projectLoading) {
     return <ProjectDetailSkeleton />
   }
 
-  if (isPreviewError) {
+  if (isPreviewError || projectLoadError === 'error') {
     return (
       <div className="mx-auto w-full max-w-[1440px] px-6 py-10 lg:px-10">
         <Link
@@ -898,9 +991,13 @@ export function ProjectDetailPage() {
     )
   }
 
+  const currentUserId =
+    user ? String(user.id) : null
+
   const currentMemberRole =
-    members.find((member) => member.id === user?.username)?.role ??
-    project.role
+    members.find(
+      (member) => member.id === currentUserId,
+    )?.role ?? project.role
 
   const ownerCount = members.filter(
     (member) => member.role === 'owner',
@@ -917,6 +1014,10 @@ export function ProjectDetailPage() {
     return a.name.localeCompare(b.name)
   })
 
+  const workItems = apiWorkItems.map(
+    (item) => mapApiWorkItem(item, members),
+  )
+
   const isReadOnly = currentMemberRole === 'viewer'
   const canManageMembers = currentMemberRole === 'owner'
   const canEditProjectSettings = currentMemberRole === 'owner'
@@ -932,109 +1033,191 @@ export function ProjectDetailPage() {
     setSettingsName(projectName)
     setSettingsDescription(projectDescription)
     setSettingsStatus(projectStatus)
+    setSettingsError(null)
   }
 
-  const handleSaveProjectSettings = () => {
-    if (!canEditProjectSettings || !settingsValid) {
+  const handleSaveProjectSettings = async () => {
+    if (
+      !canEditProjectSettings ||
+      !settingsValid ||
+      settingsSaving
+    ) {
       return
     }
 
-    setProjectName(settingsName.trim())
-    setProjectDescription(settingsDescription.trim())
-    setProjectStatus(settingsStatus)
+    const numericProjectId = Number(project.id)
 
-    setSettingsName(settingsName.trim())
-    setSettingsDescription(settingsDescription.trim())
+    if (
+      !Number.isInteger(numericProjectId) ||
+      numericProjectId <= 0
+    ) {
+      setSettingsError('Invalid Project ID.')
+      return
+    }
+
+    setSettingsSaving(true)
+    setSettingsError(null)
+
+    try {
+      const updated = await updateProject(
+        numericProjectId,
+        {
+          name: settingsName.trim(),
+          description: settingsDescription.trim(),
+          status: settingsStatus,
+        },
+      )
+
+      setProjectName(updated.name)
+      setProjectDescription(updated.description)
+      setProjectStatus(updated.status)
+
+      setSettingsName(updated.name)
+      setSettingsDescription(updated.description)
+      setSettingsStatus(updated.status)
+    } catch (error) {
+      setSettingsError(
+        getMembershipErrorMessage(
+          error,
+          'Project settings could not be saved.',
+        ),
+      )
+    } finally {
+      setSettingsSaving(false)
+    }
   }
 
-  const handleAddMember = (
-    user: DirectoryUser,
+  const handleAddMember = async (
+    directoryUser: DirectoryUser,
     role: AddableProjectRole,
   ) => {
-    if (!canManageMembers) return
+    if (!canManageMembers) {
+      throw new Error(
+        'Only a Project owner can manage memberships.',
+      )
+    }
 
-    setMembers((currentMembers) => {
-      if (currentMembers.some((member) => member.id === user.id)) {
-        return currentMembers
-      }
+    const numericProjectId = Number(project.id)
+    const numericUserId = Number(directoryUser.id)
 
-      return [
-        ...currentMembers,
+    if (
+      !Number.isInteger(numericProjectId) ||
+      !Number.isInteger(numericUserId)
+    ) {
+      throw new Error('Invalid project or user ID.')
+    }
+
+    setMembersError(null)
+
+    try {
+      const membership = await addProjectMembership(
+        numericProjectId,
         {
-          ...user,
+          userId: numericUserId,
           role,
         },
-      ]
-    })
+      )
+
+      const mappedMembership =
+        mapProjectMembership(membership)
+
+      setMembers((currentMembers) => [
+        ...currentMembers.filter(
+          (member) =>
+            member.id !== mappedMembership.id,
+        ),
+        mappedMembership,
+      ])
+    } catch (error) {
+      const message = getMembershipErrorMessage(
+        error,
+        'Project member could not be added.',
+      )
+
+      setMembersError(message)
+      throw new Error(message)
+    }
   }
 
-  const handleMemberRoleChange = (
+  const handleMemberRoleChange = async (
     memberId: string,
     role: AddableProjectRole,
   ) => {
     if (!canManageMembers) return
 
-    setMembers((currentMembers) => {
-      const targetMember = currentMembers.find(
-        (member) => member.id === memberId,
+    const targetMember = members.find(
+      (member) => member.id === memberId,
+    )
+
+    if (!targetMember) return
+
+    setMembersError(null)
+
+    try {
+      const membership =
+        await updateProjectMembership(
+          Number(project.id),
+          targetMember.membershipId,
+          { role },
+        )
+
+      const mappedMembership =
+        mapProjectMembership(membership)
+
+      setMembers((currentMembers) =>
+        currentMembers.map((member) =>
+          member.id === mappedMembership.id
+            ? mappedMembership
+            : member,
+        ),
       )
-
-      if (!targetMember) {
-        return currentMembers
-      }
-
-      const currentOwnerCount = currentMembers.filter(
-        (member) => member.role === 'owner',
-      ).length
-
-      const wouldRemoveLastOwner =
-        targetMember.role === 'owner' &&
-        role !== 'owner' &&
-        currentOwnerCount <= 1
-
-      if (wouldRemoveLastOwner) {
-        return currentMembers
-      }
-
-      return currentMembers.map((member) =>
-        member.id === memberId
-          ? {
-              ...member,
-              role,
-            }
-          : member,
+    } catch (error) {
+      setMembersError(
+        getMembershipErrorMessage(
+          error,
+          'Project role could not be changed.',
+        ),
       )
-    })
+    }
   }
 
-  const handleConfirmRemoveMember = () => {
+  const handleConfirmRemoveMember = async () => {
     if (!canManageMembers || !memberToRemove) {
-      setMemberToRemove(null)
       return
     }
 
-    setMembers((currentMembers) => {
-      const currentOwnerCount = currentMembers.filter(
-        (member) => member.role === 'owner',
-      ).length
+    setMembersError(null)
 
-      const wouldRemoveLastOwner =
-        memberToRemove.role === 'owner' &&
-        currentOwnerCount <= 1
-
-      if (wouldRemoveLastOwner) {
-        return currentMembers
-      }
-
-      return currentMembers.filter(
-        (member) => member.id !== memberToRemove.id,
+    try {
+      await removeProjectMembership(
+        Number(project.id),
+        memberToRemove.membershipId,
       )
-    })
 
-    setMemberToRemove(null)
+      const removedUserId = memberToRemove.id
+
+      setMembers((currentMembers) =>
+        currentMembers.filter(
+          (member) => member.id !== removedUserId,
+        ),
+      )
+
+      setMemberToRemove(null)
+
+      if (removedUserId === currentUserId) {
+        navigate('/projects')
+      }
+    } catch (error) {
+      setMembersError(
+        getMembershipErrorMessage(
+          error,
+          'Project member could not be removed.',
+        ),
+      )
+    }
   }
 
-  const handleCreateWorkItem = (input: {
+  const handleCreateWorkItem = async (input: {
     title: string
     type: DemoWorkItemType
     status: DemoWorkItemStatus
@@ -1043,77 +1226,72 @@ export function ProjectDetailPage() {
     dueDate: string | null
     blockedReason: string | null
   }) => {
-    if (isReadOnly) return
+    if (isReadOnly) {
+      throw new Error(
+        'A viewer cannot create Work Items.',
+      )
+    }
 
-    const assignableMembers = members.filter(
-      (member) => member.role !== 'viewer',
+    const numericProjectId = Number(project.id)
+
+    const assigneeIds = input.assigneeIds.map(
+      (id) => Number(id),
     )
 
-    const assignees = assignableMembers
-      .filter((member) => input.assigneeIds.includes(member.id))
-      .map((member) => ({
-        id: member.id,
-        name: member.name,
-        initials: member.initials,
-      }))
-
-    const validParentId =
-      input.parentId &&
-      workItems.some((item) => item.id === input.parentId)
-        ? input.parentId
-        : null
-
-    let dueInDays: number | null = null
-    let dueLabel: string | null = null
-
-    if (input.dueDate) {
-      const [year, month, day] = input.dueDate
-        .split('-')
-        .map(Number)
-
-      const targetDate = new Date(year, month - 1, day)
-      const today = new Date()
-      const todayStart = new Date(
-        today.getFullYear(),
-        today.getMonth(),
-        today.getDate(),
+    if (
+      !Number.isInteger(numericProjectId) ||
+      assigneeIds.some(
+        (id) => !Number.isInteger(id),
       )
-
-      dueInDays = Math.round(
-        (targetDate.getTime() - todayStart.getTime()) /
-          (24 * 60 * 60 * 1000),
+    ) {
+      throw new Error(
+        'Invalid Project or assignee ID.',
       )
-
-      dueLabel =
-        dueInDays === 0
-          ? 'Today'
-          : dueInDays === 1
-            ? 'Tomorrow'
-            : new Intl.DateTimeFormat('en', {
-                month: 'short',
-                day: 'numeric',
-              }).format(targetDate)
     }
 
-    const localId =
-      typeof globalThis.crypto?.randomUUID === 'function'
-        ? globalThis.crypto.randomUUID()
-        : `${Date.now()}-${Math.random().toString(16).slice(2)}`
+    let parentId: number | null = null
 
-    const newWorkItem: DemoWorkItem = {
-      id: `local-${localId}`,
-      title: input.title.trim(),
-      type: input.type,
-      status: input.status,
-      assignees,
-      dueInDays,
-      dueLabel,
-      blockedReason: input.blockedReason?.trim() || null,
-      parentId: validParentId,
+    if (input.parentId != null) {
+      parentId = Number(input.parentId)
+
+      if (!Number.isInteger(parentId)) {
+        throw new Error(
+          'Invalid parent Work Item ID.',
+        )
+      }
     }
 
-    setWorkItems((current) => [newWorkItem, ...current])
-    setCreateWorkItemDialogOpen(false)
+    setWorkItemsError(null)
+
+    try {
+      const created = await createWorkItem(
+        numericProjectId,
+        {
+          title: input.title.trim(),
+          type: input.type,
+          status: input.status,
+          assigneeIds,
+          parentId,
+          dueDate: input.dueDate,
+          blockedReason: input.blockedReason,
+        },
+      )
+
+      setApiWorkItems((current) => [
+        created,
+        ...current.filter(
+          (item) => item.id !== created.id,
+        ),
+      ])
+    } catch (error) {
+      const message = getWorkItemErrorMessage(
+        error,
+        'Work item could not be created.',
+      )
+
+      setWorkItemsError(message)
+      throw new Error(message)
+    }
   }
 
   const projectActivities = forceEmptyActivity
@@ -1124,7 +1302,8 @@ export function ProjectDetailPage() {
     ? []
     : workItems
 
-  const currentUserMemberId = user?.username ?? null
+  const currentUserMemberId =
+    user ? String(user.id) : null
 
 
   const focusedWorkItems = projectWorkItems.filter((item) => {
@@ -1195,7 +1374,7 @@ export function ProjectDetailPage() {
   })
 
   return (
-    <div className="mx-auto w-full max-w-[1440px] px-6 py-8 lg:px-10 lg:py-10">
+    <div className="w-full px-6 py-8 lg:px-8 lg:py-10 xl:px-10">
       <Link
         to="/projects"
         className="inline-flex items-center gap-1.5 text-sm font-medium text-on-surface-variant transition hover:text-primary"
@@ -1305,393 +1484,335 @@ export function ProjectDetailPage() {
       </header>
 
       {activeTab === 'overview' && (
-        <div className="mt-6 space-y-6">
-          <div className="grid gap-6 lg:grid-cols-12">
-            <section className="overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest shadow-sm lg:col-span-8">
-              <div className="border-b border-outline-variant px-6 py-4">
-                <h2 className="font-semibold text-on-surface">
-                  Project overview
+        <div className="mt-7 grid gap-10 lg:grid-cols-[minmax(0,1fr)_300px] xl:grid-cols-[minmax(0,1fr)_320px]">
+          <div className="min-w-0 space-y-10">
+            <section>
+              <div className="flex min-h-8 items-center justify-between border-b border-outline-variant/50 pb-3">
+                <h2 className="text-sm font-semibold text-on-surface">
+                  Description
                 </h2>
 
-                <p className="mt-0.5 text-xs text-on-surface-variant">
-                  Project description and context
-                </p>
+                {canEditProjectSettings &&
+                  projectDescription.trim().length > 0 &&
+                  !forceEmptyDescription && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('settings')}
+                      className="text-xs font-medium text-on-surface-variant transition hover:text-primary"
+                    >
+                      Edit
+                    </button>
+                  )}
               </div>
 
-              <div className="px-6 py-6">
-                <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-on-surface-variant">
-                  Description
+              {projectDescription.trim().length > 0 &&
+              !forceEmptyDescription ? (
+                <p className="max-w-3xl pt-4 text-sm leading-6 text-on-surface">
+                  {projectDescription}
+                </p>
+              ) : (
+                <div className="flex min-h-28 items-center justify-between gap-6 py-5">
+                  <div className="flex items-start gap-3">
+                    <span className="material-symbols-outlined mt-0.5 text-[17px] text-on-surface-variant">
+                      notes
+                    </span>
+
+                    <div>
+                      <p className="text-sm font-medium text-on-surface">
+                        No description yet
+                      </p>
+
+                      <p className="mt-1 max-w-lg text-xs leading-5 text-on-surface-variant">
+                        Add context so project members can quickly understand
+                        the purpose of this project.
+                      </p>
+                    </div>
+                  </div>
+
+                  {canEditProjectSettings && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('settings')}
+                      className="shrink-0 text-xs font-medium text-primary transition hover:opacity-75"
+                    >
+                      Add description
+                    </button>
+                  )}
+                </div>
+              )}
+            </section>
+
+            <section>
+              <div className="flex flex-col gap-3 border-b border-outline-variant/50 pb-3 sm:flex-row sm:items-end sm:justify-between">
+                <div>
+                  <h2 className="text-sm font-semibold text-on-surface">
+                    Work items
+                  </h2>
+
+                  <p className="mt-1 text-xs text-on-surface-variant">
+                    Project work that currently needs attention.
+                  </p>
                 </div>
 
-                {projectDescription.trim().length > 0 &&
-                !forceEmptyDescription ? (
-                  <p className="mt-2 max-w-3xl text-sm leading-6 text-on-surface">
-                    {projectDescription}
-                  </p>
-                ) : (
-                  <div className="mt-3 flex items-center justify-between gap-6 rounded-lg border border-dashed border-outline-variant bg-surface-container-low/45 px-4 py-4">
-                    <div className="flex items-start gap-3">
-                      <span className="material-symbols-outlined mt-0.5 text-[19px] text-on-surface-variant">
-                        notes
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('work-items')}
+                  className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-on-surface-variant transition hover:text-primary"
+                >
+                  View all
+
+                  <span className="material-symbols-outlined text-[15px]">
+                    arrow_forward
+                  </span>
+                </button>
+              </div>
+
+              <div className="py-3">
+                <div className="flex flex-wrap items-center gap-3">
+                  <label className="flex items-center gap-2">
+                    <span className="text-xs font-normal text-on-surface-variant">
+                      Focus
+                    </span>
+
+                    <select
+                      value={workItemFocus}
+                      onChange={(event) =>
+                        setWorkItemFocus(event.target.value as WorkItemFocus)
+                      }
+                      className="h-8 rounded-lg border border-outline-variant bg-surface-container-lowest px-2.5 text-xs font-normal text-on-surface outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15"
+                    >
+                      <option value="due-3-days">Due next 3 days</option>
+                      <option value="due-week">Due this week</option>
+                      <option value="overdue">Overdue</option>
+                      <option value="blocked">Blocked</option>
+                      <option value="mine">My open work</option>
+                      <option value="recently-completed">
+                        Recently completed
+                      </option>
+                      <option value="all-open">All open</option>
+                      <option value="custom">Custom filter…</option>
+                    </select>
+                  </label>
+
+                  {workItemFocus !== 'custom' && (
+                    <button
+                      type="button"
+                      onClick={() => setWorkItemFocus('custom')}
+                      className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2 text-xs font-normal text-on-surface-variant transition hover:bg-surface-container-low hover:text-on-surface"
+                    >
+                      <span className="material-symbols-outlined text-[15px]">
+                        tune
+                      </span>
+                      Customize
+                    </button>
+                  )}
+
+                  <span className="ml-auto text-xs font-normal text-on-surface-variant">
+                    {focusedWorkItems.length}{' '}
+                    {focusedWorkItems.length === 1 ? 'item' : 'items'}
+                  </span>
+                </div>
+
+                {workItemFocus === 'custom' && (
+                  <div className="mt-3 grid gap-3 border-t border-outline-variant/35 pt-3 sm:grid-cols-2 xl:grid-cols-4">
+                    <label>
+                      <span className="mb-1 block text-xs font-normal text-on-surface-variant">
+                        Due within
                       </span>
 
-                      <div>
-                        <p className="text-sm font-medium text-on-surface">
-                          No description yet
-                        </p>
+                      <div className="flex h-8 items-center rounded-lg border border-outline-variant bg-surface-container-lowest">
+                        <input
+                          type="number"
+                          min={1}
+                          max={90}
+                          value={customDueDays}
+                          onChange={(event) =>
+                            setCustomDueDays(
+                              Math.max(1, Number(event.target.value) || 1),
+                            )
+                          }
+                          className="min-w-0 flex-1 bg-transparent px-2.5 text-xs outline-none"
+                        />
 
-                        <p className="mt-0.5 text-xs leading-5 text-on-surface-variant">
-                          Add context so project members can quickly understand
-                          the purpose of this project.
-                        </p>
+                        <span className="pr-2.5 text-xs text-on-surface-variant">
+                          days
+                        </span>
                       </div>
-                    </div>
+                    </label>
 
-                    {canEditProjectSettings && (
-                      <button
-                        type="button"
-                        onClick={() => setActiveTab('settings')}
-                        className="shrink-0 text-sm font-semibold text-primary transition hover:opacity-75"
+                    <label>
+                      <span className="mb-1 block text-xs font-normal text-on-surface-variant">
+                        Status
+                      </span>
+
+                      <select
+                        value={customStatus}
+                        onChange={(event) =>
+                          setCustomStatus(
+                            event.target.value as CustomWorkItemStatus,
+                          )
+                        }
+                        className="h-8 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-2.5 text-xs outline-none focus:border-primary"
                       >
-                        Add description
-                      </button>
-                    )}
+                        <option value="all">Any status</option>
+
+                        {workItemStatusOptions.map((status) => (
+                          <option
+                            key={status.value}
+                            value={status.value}
+                          >
+                            {status.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <label>
+                      <span className="mb-1 block text-xs font-normal text-on-surface-variant">
+                        Type
+                      </span>
+
+                      <select
+                        value={customType}
+                        onChange={(event) =>
+                          setCustomType(
+                            event.target.value as CustomWorkItemType,
+                          )
+                        }
+                        className="h-8 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-2.5 text-xs outline-none focus:border-primary"
+                      >
+                        <option value="all">Any type</option>
+
+                        {workItemTypeOptions.map((type) => (
+                          <option
+                            key={type.value}
+                            value={type.value}
+                          >
+                            {type.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <label>
+                      <span className="mb-1 block text-xs font-normal text-on-surface-variant">
+                        Assignee
+                      </span>
+
+                      <select
+                        value={customAssignee}
+                        onChange={(event) =>
+                          setCustomAssignee(
+                            event.target.value as 'all' | 'me',
+                          )
+                        }
+                        className="h-8 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-2.5 text-xs outline-none focus:border-primary"
+                      >
+                        <option value="all">Anyone</option>
+                        <option value="me">Me</option>
+                      </select>
+                    </label>
                   </div>
                 )}
               </div>
-            </section>
 
-            <section className="overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest shadow-sm lg:col-span-4">
-              <div className="border-b border-outline-variant px-5 py-4">
-                <h2 className="font-semibold text-on-surface">
-                  Latest activity
-                </h2>
+              {projectWorkItems.length === 0 ? (
+                <div className="flex min-h-36 items-center justify-center border-t border-outline-variant/35 py-8">
+                  <div className="flex items-start gap-3">
+                    <span className="material-symbols-outlined mt-0.5 text-[18px] text-on-surface-variant">
+                      checklist
+                    </span>
 
-                <p className="mt-0.5 text-xs text-on-surface-variant">
-                  Recent changes in this project
-                </p>
-              </div>
+                    <div>
+                      <p className="text-sm font-medium text-on-surface">
+                        No work items yet
+                      </p>
 
-              {projectActivities.length > 0 ? (
-                <div className="divide-y divide-outline-variant">
-                  {projectActivities.map((activity) => (
-                    <div
-                      key={activity.id}
-                      className="flex gap-3 px-5 py-4"
-                    >
-                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-surface-container-high text-on-surface-variant">
-                        <span className="material-symbols-outlined text-[17px]">
-                          {activity.icon}
-                        </span>
-                      </div>
-
-                      <div className="min-w-0">
-                        <div className="text-sm font-medium text-on-surface">
-                          {activity.title}
-                        </div>
-
-                        <div className="mt-1 text-xs text-on-surface-variant">
-                          {activity.meta}
-                        </div>
-                      </div>
+                      <p className="mt-1 max-w-md text-xs leading-5 text-on-surface-variant">
+                        Work created for this project will appear here.
+                      </p>
                     </div>
-                  ))}
+                  </div>
+                </div>
+              ) : focusedWorkItems.length > 0 ? (
+                <div className="border-t border-outline-variant/35">
+                  <WorkItemsList items={focusedWorkItems.slice(0, 5)} />
                 </div>
               ) : (
-                <div className="flex min-h-40 flex-col items-center justify-center px-5 py-8 text-center">
-                  <span className="material-symbols-outlined text-[22px] text-on-surface-variant">
-                    history
-                  </span>
+                <div className="flex min-h-28 items-center justify-center border-t border-outline-variant/35 py-7">
+                  <div className="flex items-start gap-3">
+                    <span className="material-symbols-outlined mt-0.5 text-[18px] text-on-surface-variant">
+                      filter_alt_off
+                    </span>
 
-                  <p className="mt-2 text-sm font-medium text-on-surface">
-                    No activity yet
-                  </p>
+                    <div>
+                      <p className="text-sm font-medium text-on-surface">
+                        No work items match this focus
+                      </p>
 
-                  <p className="mt-1 max-w-xs text-xs leading-5 text-on-surface-variant">
-                    Recent project changes will appear here.
-                  </p>
+                      <p className="mt-1 text-xs text-on-surface-variant">
+                        Choose another preset or customize the filter.
+                      </p>
+                    </div>
+                  </div>
                 </div>
               )}
             </section>
           </div>
 
-          <section className="overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest shadow-sm">
-            <div className="flex flex-col gap-4 border-b border-outline-variant px-6 py-4 lg:flex-row lg:items-center lg:justify-between">
+          <aside className="min-w-0">
+            <div className="flex min-h-8 items-center border-b border-outline-variant/50 pb-3">
+              <h2 className="text-sm font-semibold text-on-surface">
+                Latest activity
+              </h2>
+            </div>
+
+            {projectActivities.length > 0 ? (
               <div>
-                <h2 className="font-semibold text-on-surface">
-                  Work Items
-                </h2>
-
-                <p className="mt-0.5 text-xs text-on-surface-variant">
-                  Focus on the project work that currently needs attention.
-                </p>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setActiveTab('work-items')}
-                className="inline-flex items-center gap-1 text-sm font-medium text-primary transition hover:opacity-75"
-              >
-                View all
-
-                <span className="material-symbols-outlined text-[17px]">
-                  arrow_forward
-                </span>
-              </button>
-            </div>
-
-            <div className="border-b border-outline-variant bg-surface-container-low/45 px-6 py-3">
-              <div className="flex flex-wrap items-center gap-3">
-                <label className="flex items-center gap-2">
-                  <span className="text-xs font-medium text-on-surface-variant">
-                    Focus
-                  </span>
-
-                  <select
-                    value={workItemFocus}
-                    onChange={(event) =>
-                      setWorkItemFocus(event.target.value as WorkItemFocus)
-                    }
-                    className="h-9 rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm font-medium text-on-surface outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15"
-                  >
-                    <option value="due-3-days">Due next 3 days</option>
-                    <option value="due-week">Due this week</option>
-                    <option value="overdue">Overdue</option>
-                    <option value="blocked">Blocked</option>
-                    <option value="mine">My open work</option>
-                    <option value="recently-completed">
-                      Recently completed
-                    </option>
-                    <option value="all-open">All open</option>
-                    <option value="custom">Custom filter…</option>
-                  </select>
-                </label>
-
-                {workItemFocus !== 'custom' && (
-                  <button
-                    type="button"
-                    onClick={() => setWorkItemFocus('custom')}
-                    className="inline-flex h-9 items-center gap-1.5 rounded-lg px-3 text-sm font-medium text-on-surface-variant transition hover:bg-surface-container-high hover:text-on-surface"
-                  >
-                    <span className="material-symbols-outlined text-[17px]">
-                      tune
-                    </span>
-                    Customize
-                  </button>
-                )}
-
-                <span className="ml-auto text-xs text-on-surface-variant">
-                  {focusedWorkItems.length}{' '}
-                  {focusedWorkItems.length === 1 ? 'item' : 'items'}
-                </span>
-              </div>
-
-              {workItemFocus === 'custom' && (
-                <div className="mt-3 grid gap-3 border-t border-outline-variant pt-3 sm:grid-cols-2 xl:grid-cols-4">
-                  <label>
-                    <span className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.1em] text-on-surface-variant">
-                      Due within
-                    </span>
-
-                    <div className="flex h-9 items-center rounded-lg border border-outline-variant bg-surface-container-lowest">
-                      <input
-                        type="number"
-                        min={1}
-                        max={90}
-                        value={customDueDays}
-                        onChange={(event) =>
-                          setCustomDueDays(
-                            Math.max(1, Number(event.target.value) || 1),
-                          )
-                        }
-                        className="min-w-0 flex-1 bg-transparent px-3 text-sm outline-none"
-                      />
-
-                      <span className="pr-3 text-xs text-on-surface-variant">
-                        days
-                      </span>
-                    </div>
-                  </label>
-
-                  <label>
-                    <span className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.1em] text-on-surface-variant">
-                      Status
-                    </span>
-
-                    <select
-                      value={customStatus}
-                      onChange={(event) =>
-                        setCustomStatus(
-                          event.target.value as CustomWorkItemStatus,
-                        )
-                      }
-                      className="h-9 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm outline-none focus:border-primary"
-                    >
-                      <option value="all">Any status</option>
-
-                      {workItemStatusOptions.map((status) => (
-                        <option
-                          key={status.value}
-                          value={status.value}
-                        >
-                          {status.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-
-                  <label>
-                    <span className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.1em] text-on-surface-variant">
-                      Type
-                    </span>
-
-                    <select
-                      value={customType}
-                      onChange={(event) =>
-                        setCustomType(
-                          event.target.value as CustomWorkItemType,
-                        )
-                      }
-                      className="h-9 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm outline-none focus:border-primary"
-                    >
-                      <option value="all">Any type</option>
-
-                      {workItemTypeOptions.map((type) => (
-                        <option
-                          key={type.value}
-                          value={type.value}
-                        >
-                          {type.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-
-                  <label>
-                    <span className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.1em] text-on-surface-variant">
-                      Assignee
-                    </span>
-
-                    <select
-                      value={customAssignee}
-                      onChange={(event) =>
-                        setCustomAssignee(
-                          event.target.value as 'all' | 'me',
-                        )
-                      }
-                      className="h-9 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm outline-none focus:border-primary"
-                    >
-                      <option value="all">Anyone</option>
-                      <option value="me">Me</option>
-                    </select>
-                  </label>
-                </div>
-              )}
-            </div>
-
-            {projectWorkItems.length === 0 ? (
-              <div className="flex min-h-48 flex-col items-center justify-center px-6 py-10 text-center">
-                <div className="flex h-11 w-11 items-center justify-center rounded-full bg-surface-container-high text-on-surface-variant">
-                  <span className="material-symbols-outlined text-[22px]">
-                    checklist
-                  </span>
-                </div>
-
-                <p className="mt-3 text-sm font-semibold text-on-surface">
-                  No work items yet
-                </p>
-
-                <p className="mt-1 max-w-md text-xs leading-5 text-on-surface-variant">
-                  Work created for this project will appear here. The full Work
-                  Items workflow is the next UI slice.
-                </p>
-              </div>
-            ) : focusedWorkItems.length > 0 ? (
-              <div className="divide-y divide-outline-variant">
-                {focusedWorkItems.slice(0, 5).map((item) => (
+                {projectActivities.map((activity, index) => (
                   <div
-                    key={item.id}
-                    className="grid gap-3 px-6 py-4 sm:grid-cols-[minmax(0,1fr)_130px_150px_110px] sm:items-center"
+                    key={activity.id}
+                    className={[
+                      'flex min-h-[48px] items-center gap-2.5 py-2.5',
+                      index > 0
+                        ? 'border-t border-outline-variant/25'
+                        : '',
+                    ].join(' ')}
                   >
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="material-symbols-outlined text-[18px] text-on-surface-variant">
-                          {item.type === 'milestone'
-                            ? 'flag'
-                            : item.type === 'deliverable'
-                              ? 'inventory_2'
-                              : item.type === 'epic'
-                                ? 'account_tree'
-                                : 'check_box_outline_blank'}
-                        </span>
+                    <span className="material-symbols-outlined w-5 shrink-0 text-[15px] text-on-surface-variant">
+                      {activity.icon}
+                    </span>
 
-                        <span className="truncate text-sm font-medium text-on-surface">
-                          {item.title}
-                        </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-xs font-medium text-on-surface">
+                        {activity.title}
                       </div>
 
-                      <div className="mt-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-on-surface-variant sm:hidden">
-                        {workItemTypeLabels[item.type]}
+                      <div className="mt-0.5 truncate text-[11px] font-normal text-on-surface-variant">
+                        {activity.meta}
                       </div>
-                    </div>
-
-                    <div>
-                      <span className="text-xs font-medium text-on-surface-variant">
-                        {workItemTypeLabels[item.type]}
-                      </span>
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <span className="inline-flex rounded-full bg-surface-container-high px-2.5 py-1 text-xs font-medium text-on-surface">
-                        {workItemStatusLabels[item.status]}
-                      </span>
-
-                      {item.blockedReason && (
-                        <span
-                          title={item.blockedReason}
-                          className="inline-flex items-center gap-1 rounded-full bg-error-container px-2.5 py-1 text-xs font-medium text-error"
-                        >
-                          <span className="material-symbols-outlined text-[13px]">
-                            block
-                          </span>
-                          Blocked
-                        </span>
-                      )}
-                    </div>
-
-                    <div className="flex items-center justify-between gap-3 sm:justify-end">
-                      <span
-                        className={[
-                          'text-xs',
-                          item.dueInDays != null &&
-                          item.dueInDays < 0 &&
-                          item.status !== 'done'
-                            ? 'font-semibold text-error'
-                            : 'text-on-surface-variant',
-                        ].join(' ')}
-                      >
-                        {item.dueLabel ?? 'No due date'}
-                      </span>
                     </div>
                   </div>
                 ))}
               </div>
             ) : (
-              <div className="flex min-h-36 flex-col items-center justify-center px-6 py-8 text-center">
-                <span className="material-symbols-outlined text-[22px] text-on-surface-variant">
-                  filter_alt_off
+              <div className="flex min-h-28 items-start gap-2.5 py-5">
+                <span className="material-symbols-outlined mt-0.5 text-[16px] text-on-surface-variant">
+                  history
                 </span>
 
-                <p className="mt-2 text-sm font-medium text-on-surface">
-                  No Work Items match this focus
-                </p>
+                <div>
+                  <p className="text-xs font-medium text-on-surface">
+                    No activity yet
+                  </p>
 
-                <p className="mt-1 text-xs text-on-surface-variant">
-                  Choose another preset or customize the filter.
-                </p>
+                  <p className="mt-1 text-[11px] leading-5 text-on-surface-variant">
+                    Recent project changes will appear here.
+                  </p>
+                </div>
               </div>
             )}
-          </section>
+          </aside>
         </div>
       )}
 
@@ -1735,6 +1856,24 @@ export function ProjectDetailPage() {
             )}
           </div>
 
+          {membersError && (
+            <div
+              role="alert"
+              className="border-b border-error/20 bg-error-container/35 px-6 py-3 text-sm text-error"
+            >
+              {membersError}
+            </div>
+          )}
+
+          {membersLoading && (
+            <div className="flex items-center gap-2 border-b border-outline-variant px-6 py-3 text-sm text-on-surface-variant">
+              <span className="material-symbols-outlined animate-spin text-[18px]">
+                refresh
+              </span>
+              Loading project members…
+            </div>
+          )}
+
           <div className="hidden border-b border-outline-variant bg-surface-container-low px-6 py-2.5 sm:grid sm:grid-cols-[minmax(0,1fr)_190px_52px]">
             <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-on-surface-variant">
               Member
@@ -1773,7 +1912,7 @@ export function ProjectDetailPage() {
                       </div>
 
                       <div className="truncate text-xs text-on-surface-variant">
-                        {member.email}
+                        @{member.username}
                       </div>
                     </div>
                   </div>
@@ -1885,21 +2024,44 @@ export function ProjectDetailPage() {
         </section>
       )}
 
-      {activeTab === 'work-items' && (
-        <ProjectWorkItemsPanel
-          items={projectWorkItems}
-          eligibleAssignees={sortedMembers.filter(
-            (member) => member.role !== 'viewer',
-          )}
-          readOnly={isReadOnly}
-          onCreate={() => setCreateWorkItemDialogOpen(true)}
-          preferencesKey={
-            user
-              ? `fg-workspace:project-work-items:v1:${user.id}:${project.id}`
-              : null
-          }
-        />
-      )}
+      {activeTab === 'work-items' &&
+        workItemsError && (
+          <div
+            role="alert"
+            className="mt-6 rounded-xl border border-error/20 bg-error-container/35 px-5 py-4 text-sm text-error"
+          >
+            {workItemsError}
+          </div>
+        )}
+
+      {activeTab === 'work-items' &&
+        workItemsLoading && (
+          <div className="mt-6 flex min-h-40 items-center justify-center rounded-xl border border-outline-variant bg-surface-container-lowest text-sm text-on-surface-variant">
+            <span className="material-symbols-outlined mr-2 animate-spin text-[18px]">
+              refresh
+            </span>
+            Loading work items…
+          </div>
+        )}
+
+      {activeTab === 'work-items' &&
+        !workItemsLoading && (
+          <ProjectWorkItemsPanel
+            items={projectWorkItems}
+            eligibleAssignees={sortedMembers.filter(
+              (member) => member.role !== 'viewer',
+            )}
+            readOnly={isReadOnly}
+            onCreate={() =>
+              setCreateWorkItemDialogOpen(true)
+            }
+            preferencesKey={
+              user
+                ? `fg-workspace:project-work-items:v1:${user.id}:${project.id}`
+                : null
+            }
+          />
+        )}
 
       {activeTab === 'settings' && (
         <section className="mt-6 overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest shadow-sm">
@@ -2112,18 +2274,29 @@ export function ProjectDetailPage() {
 
           </div>
 
+          {settingsError && (
+            <div
+              role="alert"
+              className="border-t border-error/20 bg-error-container/35 px-6 py-3 text-sm text-error"
+            >
+              {settingsError}
+            </div>
+          )}
+
           {canEditProjectSettings && (
             <div className="flex flex-col gap-3 border-t border-outline-variant bg-surface-container-low/45 px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
               <div className="text-xs text-on-surface-variant">
-                {settingsDirty
-                  ? 'You have unsaved changes.'
-                  : 'All changes are saved in the current UI session.'}
+                {settingsSaving
+                  ? 'Saving changes…'
+                  : settingsDirty
+                    ? 'You have unsaved changes.'
+                    : 'All changes are saved.'}
               </div>
 
               <div className="flex items-center justify-end gap-3">
                 <button
                   type="button"
-                  disabled={!settingsDirty}
+                  disabled={!settingsDirty || settingsSaving}
                   onClick={handleResetProjectSettings}
                   className="h-9 rounded-lg px-4 text-sm font-medium text-on-surface-variant transition hover:bg-surface-container-high hover:text-on-surface disabled:cursor-not-allowed disabled:opacity-40"
                 >
@@ -2132,14 +2305,22 @@ export function ProjectDetailPage() {
 
                 <button
                   type="button"
-                  disabled={!settingsDirty || !settingsValid}
-                  onClick={handleSaveProjectSettings}
+                  disabled={
+                    !settingsDirty ||
+                    !settingsValid ||
+                    settingsSaving
+                  }
+                  onClick={() =>
+                    void handleSaveProjectSettings()
+                  }
                   className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-45"
                 >
                   <span className="material-symbols-outlined text-[18px]">
                     save
                   </span>
-                  Save changes
+                  {settingsSaving
+                    ? 'Saving…'
+                    : 'Save changes'}
                 </button>
               </div>
             </div>
@@ -2150,7 +2331,7 @@ export function ProjectDetailPage() {
 
       <AddProjectMemberDialog
         open={addMemberDialogOpen}
-        users={demoDirectoryUsers}
+        users={directoryUsers}
         excludedUserIds={members.map((member) => member.id)}
         onClose={() => setAddMemberDialogOpen(false)}
         onAdd={handleAddMember}

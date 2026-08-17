@@ -5,8 +5,10 @@ import { useSession } from '../api/useSession'
 import { AppShell } from '../components/layout/AppShell'
 import { LoginPage } from '../features/auth/LoginPage'
 import { DashboardPage } from '../features/dashboard/DashboardPage'
+import { MyWorkPage } from '../features/my-work/MyWorkPage'
 import { ProjectDetailPage } from '../features/projects/ProjectDetailPage'
 import { ProjectListPage } from '../features/projects/ProjectListPage'
+import { ResearchGroupProvider } from '../features/research-group/ResearchGroupProvider'
 
 function PlaceholderPage({ title }: { title: string }) {
   return (
@@ -53,13 +55,14 @@ function AppRoutes() {
         path="/*"
         element={
           <RequireAuth>
-            <AppShell>
-              <Routes>
+            <ResearchGroupProvider>
+              <AppShell>
+                <Routes>
                 <Route path="/" element={<DashboardPage />} />
 
                 <Route
                   path="/my-work"
-                  element={<PlaceholderPage title="My Work" />}
+                  element={<MyWorkPage />}
                 />
 
                 <Route
@@ -118,8 +121,9 @@ function AppRoutes() {
                 />
 
                 <Route path="*" element={<Navigate to="/" replace />} />
-              </Routes>
-            </AppShell>
+                </Routes>
+              </AppShell>
+            </ResearchGroupProvider>
           </RequireAuth>
         }
       />

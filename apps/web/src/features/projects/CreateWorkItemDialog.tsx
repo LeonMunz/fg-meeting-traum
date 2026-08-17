@@ -29,7 +29,7 @@ type CreateWorkItemDialogProps = {
     parentId: string | null
     dueDate: string | null
     blockedReason: string | null
-  }) => void
+  }) => Promise<void>
 }
 
 const typeOptions: Array<{
@@ -75,6 +75,9 @@ export function CreateWorkItemDialog({
   const [parentId, setParentId] = useState('')
   const [dueDate, setDueDate] = useState('')
   const [blockedReason, setBlockedReason] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] =
+    useState<string | null>(null)
 
   const sortedAssignees = useMemo(
     () => [...assignees].sort((a, b) => a.name.localeCompare(b.name)),
@@ -96,6 +99,8 @@ export function CreateWorkItemDialog({
     setParentId('')
     setDueDate('')
     setBlockedReason('')
+    setSubmitting(false)
+    setSubmitError(null)
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -120,22 +125,39 @@ export function CreateWorkItemDialog({
     )
   }
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (
+    event: FormEvent<HTMLFormElement>,
+  ) => {
     event.preventDefault()
 
     const normalizedTitle = title.trim()
 
-    if (!normalizedTitle) return
+    if (!normalizedTitle || submitting) return
 
-    onCreate({
-      title: normalizedTitle,
-      type,
-      status,
-      assigneeIds,
-      parentId: parentId || null,
-      dueDate: dueDate || null,
-      blockedReason: blockedReason.trim() || null,
-    })
+    setSubmitting(true)
+    setSubmitError(null)
+
+    try {
+      await onCreate({
+        title: normalizedTitle,
+        type,
+        status,
+        assigneeIds,
+        parentId: parentId || null,
+        dueDate: dueDate || null,
+        blockedReason: blockedReason.trim() || null,
+      })
+
+      onClose()
+    } catch (error) {
+      setSubmitError(
+        error instanceof Error
+          ? error.message
+          : 'Work item could not be created.',
+      )
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   return (
@@ -356,6 +378,15 @@ export function CreateWorkItemDialog({
             </label>
           </div>
 
+          {submitError && (
+            <div
+              role="alert"
+              className="border-t border-error/20 bg-error-container/35 px-6 py-3 text-sm text-error"
+            >
+              {submitError}
+            </div>
+          )}
+
           <div className="flex items-center justify-end gap-3 border-t border-outline-variant bg-surface-container-low/45 px-6 py-4">
             <button
               type="button"
@@ -367,13 +398,13 @@ export function CreateWorkItemDialog({
 
             <button
               type="submit"
-              disabled={!title.trim()}
+              disabled={!title.trim() || submitting}
               className="inline-flex h-9 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-45"
             >
               <span className="material-symbols-outlined text-[18px]">
                 add
               </span>
-              Create work item
+              {submitting ? 'Creating…' : 'Create work item'}
             </button>
           </div>
         </form>
