@@ -148,3 +148,84 @@ export interface ApiUpdateWorkItemInput {
   dueDate?: string | null
   blockedReason?: string | null
 }
+
+/* ── Meeting ───────────────────────────────────────────────────── */
+
+export type ApiMeetingStatus =
+  | 'upcoming'
+  | 'live'
+  | 'completed'
+
+export interface ApiMeeting {
+  id: number
+  researchGroupId: number
+  title: string
+  scheduledAt: string
+  status: ApiMeetingStatus
+  participantIds: number[]
+  createdById: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ApiCreateMeetingInput {
+  title: string
+  scheduledAt: string
+  status?: ApiMeetingStatus
+}
+
+export interface ApiUpdateMeetingInput {
+  title?: string
+  scheduledAt?: string
+  status?: ApiMeetingStatus
+}
+
+export interface ApiMeetingParticipantUser {
+  id: number
+  username: string
+  firstName: string
+  lastName: string
+}
+
+export interface ApiMeetingParticipant {
+  id: number
+  user: ApiMeetingParticipantUser
+  addedAt: string
+}
+
+export interface ApiAddMeetingParticipantInput {
+  userId: number
+}
+
+export type ApiMeetingItemStatus =
+  | 'open'
+  | 'discussed'
+
+export interface ApiMeetingItem {
+  id: number
+  meetingId: number
+  title: string
+  notes: string
+  position: number
+  status: ApiMeetingItemStatus
+  workItemIds: number[]
+  createdById: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ApiCreateMeetingItemInput {
+  title: string
+  notes?: string
+}
+
+export interface ApiUpdateMeetingItemInput {
+  title?: string
+  notes?: string
+  status?: ApiMeetingItemStatus
+}
+
+export interface ApiCreateMeetingWorkItemInput
+  extends ApiCreateWorkItemInput {
+  projectId: number
+}
