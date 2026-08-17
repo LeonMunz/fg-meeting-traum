@@ -1,10 +1,8 @@
 import { useSession } from '../../api/useSession'
 import { ResearchGroupSelector } from '../../features/research-group/ResearchGroupSelector'
-import { useState } from 'react'
 
 export function TopBar() {
   const { user, logout } = useSession()
-  const [_selectedGroupId, setSelectedGroupId] = useState<number>()
 
   return (
     <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-outline-variant bg-surface/95 px-6 backdrop-blur">
@@ -23,20 +21,22 @@ export function TopBar() {
       <div className="ml-6 flex items-center gap-4">
         {user && (
           <div className="flex items-center gap-3">
-            <ResearchGroupSelector
-              onSelect={setSelectedGroupId}
-              selectedGroupId={_selectedGroupId}
-            />
+            <ResearchGroupSelector />
 
             <div className="h-5 w-px bg-outline-variant" />
 
             <div className="flex items-center gap-2">
               <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-xs font-medium text-white">
-                {(user.firstName?.[0] ?? user.username[0] ?? '?').toUpperCase()}
+                {(user.firstName?.[0] ??
+                  user.username[0] ??
+                  '?'
+                ).toUpperCase()}
               </div>
+
               <span className="text-sm font-medium text-on-surface">
                 {user.firstName || user.username}
               </span>
+
               <button
                 type="button"
                 onClick={() => logout()}

@@ -13,6 +13,8 @@ import {
 } from './AddProjectMemberDialog'
 import { RemoveProjectMemberDialog } from './RemoveProjectMemberDialog'
 import { CreateWorkItemDialog } from './CreateWorkItemDialog'
+import { ApiError } from '../../api/client'
+import { getProject } from '../../api/projects'
 import { useSession } from '../../api/useSession'
 
 type ProjectStatus = 'active' | 'paused' | 'completed'
@@ -82,14 +84,6 @@ type ProjectDetail = {
   members: ProjectMember[]
 }
 
-type RoutedProject = {
-  id: string
-  name: string
-  description: string
-  status: ProjectStatus
-  role: ProjectRole
-  updatedLabel: string
-}
 
 const demoDirectoryUsers: DirectoryUser[] = [
   {
@@ -135,144 +129,6 @@ const demoDirectoryUsers: DirectoryUser[] = [
     initials: 'TR',
   },
 ]
-
-const demoProjects: Record<string, ProjectDetail> = {
-  'quantum-materials': {
-    id: 'quantum-materials',
-    name: 'Quantum Materials Study',
-    description:
-      'Experimental and computational research on topological quantum materials.',
-    status: 'active',
-    role: 'owner',
-    updatedLabel: 'Updated today',
-    members: [
-      {
-        id: 'alex',
-        name: 'Alex Dev',
-        email: 'alex@example.com',
-        initials: 'AD',
-        role: 'owner',
-      },
-      {
-        id: 'chris',
-        name: 'Chris Dev',
-        email: 'chris@example.com',
-        initials: 'CD',
-        role: 'member',
-      },
-      {
-        id: 'maria',
-        name: 'Maria Dev',
-        email: 'maria@example.com',
-        initials: 'MD',
-        role: 'member',
-      },
-      {
-        id: 'laura',
-        name: 'Laura Dev',
-        email: 'laura@example.com',
-        initials: 'LD',
-        role: 'viewer',
-      },
-    ],
-  },
-  'ai-engineering': {
-    id: 'ai-engineering',
-    name: 'AI Engineering Lab',
-    description:
-      'Applied research on reliable AI systems, evaluation and research tooling.',
-    status: 'active',
-    role: 'member',
-    updatedLabel: 'Updated yesterday',
-    members: [
-      {
-        id: 'chris',
-        name: 'Chris Dev',
-        email: 'chris@example.com',
-        initials: 'CD',
-        role: 'owner',
-      },
-      {
-        id: 'alex',
-        name: 'Alex Dev',
-        email: 'alex@example.com',
-        initials: 'AD',
-        role: 'member',
-      },
-      {
-        id: 'maria',
-        name: 'Maria Dev',
-        email: 'maria@example.com',
-        initials: 'MD',
-        role: 'member',
-      },
-    ],
-  },
-  'grant-proposal': {
-    id: 'grant-proposal',
-    name: 'Collaborative Grant Proposal',
-    description:
-      'Preparation of the next interdisciplinary funding proposal and work plan.',
-    status: 'paused',
-    role: 'viewer',
-    updatedLabel: 'Updated Aug 8',
-    members: [
-      {
-        id: 'maria',
-        name: 'Maria Dev',
-        email: 'maria@example.com',
-        initials: 'MD',
-        role: 'owner',
-      },
-      {
-        id: 'chris',
-        name: 'Chris Dev',
-        email: 'chris@example.com',
-        initials: 'CD',
-        role: 'member',
-      },
-      {
-        id: 'alex',
-        name: 'Alex Dev',
-        email: 'alex@example.com',
-        initials: 'AD',
-        role: 'viewer',
-      },
-    ],
-  },
-  'cluster-upgrade': {
-    id: 'cluster-upgrade',
-    name: 'Research Cluster Upgrade',
-    description:
-      'Planning and documentation for the laboratory compute infrastructure refresh.',
-    status: 'completed',
-    role: 'member',
-    updatedLabel: 'Updated Jul 29',
-    members: [
-      {
-        id: 'laura',
-        name: 'Laura Dev',
-        email: 'laura@example.com',
-        initials: 'LD',
-        role: 'owner',
-      },
-      {
-        id: 'alex',
-        name: 'Alex Dev',
-        email: 'alex@example.com',
-        initials: 'AD',
-        role: 'member',
-      },
-      {
-        id: 'chris',
-        name: 'Chris Dev',
-        email: 'chris@example.com',
-        initials: 'CD',
-        role: 'member',
-      },
-    ],
-  },
-}
 
 const demoActivities: Record<
   string,
@@ -636,6 +492,11 @@ export function ProjectDetailPage() {
   const { user } = useSession()
   const [activeTab, setActiveTab] = useState<ProjectTab>('overview')
 
+  const [project, setProject] = useState<ProjectDetail | null>(null)
+  const [projectLoading, setProjectLoading] = useState(true)
+  const [projectLoadError, setProjectLoadError] =
+    useState<'not-found' | 'error' | null>(null)
+
   const [projectName, setProjectName] = useState('')
   const [projectDescription, setProjectDescription] = useState('')
   const [projectStatus, setProjectStatus] =
@@ -715,33 +576,77 @@ export function ProjectDetailPage() {
   ])
 
 
-  const routedProject = (
-    location.state as { project?: RoutedProject } | null
-  )?.project
-
-  const project = useMemo<ProjectDetail | null>(() => {
-    if (!projectId) return null
-
-    const existingProject = demoProjects[projectId]
-    if (existingProject) return existingProject
-
-    if (routedProject?.id === projectId) {
-      return {
-        ...routedProject,
-        members: [
-          {
-            id: 'alex',
-            name: 'Alex Dev',
-            email: 'alex@example.com',
-            initials: 'AD',
-            role: 'owner',
-          },
-        ],
-      }
+  useEffect(() => {
+    if (!projectId) {
+      setProject(null)
+      setProjectLoadError('not-found')
+      setProjectLoading(false)
+      return
     }
 
-    return null
-  }, [projectId, routedProject])
+    const parsedProjectId = Number(projectId)
+
+    if (
+      !Number.isInteger(parsedProjectId) ||
+      parsedProjectId <= 0
+    ) {
+      setProject(null)
+      setProjectLoadError('not-found')
+      setProjectLoading(false)
+      return
+    }
+
+    let cancelled = false
+
+    setProject(null)
+    setProjectLoadError(null)
+    setProjectLoading(true)
+
+    getProject(parsedProjectId)
+      .then((apiProject) => {
+        if (cancelled) return
+
+        const updatedAt = new Date(apiProject.updatedAt)
+
+        const updatedLabel = Number.isNaN(updatedAt.getTime())
+          ? 'Updated recently'
+          : `Updated ${new Intl.DateTimeFormat('en', {
+              month: 'short',
+              day: 'numeric',
+            }).format(updatedAt)}`
+
+        setProject({
+          id: String(apiProject.id),
+          name: apiProject.name,
+          description: apiProject.description,
+          status: apiProject.status,
+          role: apiProject.currentUserRole,
+          updatedLabel,
+          members: [],
+        })
+      })
+      .catch((error) => {
+        if (cancelled) return
+
+        setProject(null)
+
+        if (error instanceof ApiError && error.status === 404) {
+          setProjectLoadError('not-found')
+          return
+        }
+
+        setProjectLoadError('error')
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setProjectLoading(false)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [projectId])
 
   useEffect(() => {
     setMembers(project?.members ?? [])
@@ -795,11 +700,11 @@ export function ProjectDetailPage() {
     )
   }
 
-  if (isPreviewLoading) {
+  if (isPreviewLoading || projectLoading) {
     return <ProjectDetailSkeleton />
   }
 
-  if (isPreviewError) {
+  if (isPreviewError || projectLoadError === 'error') {
     return (
       <div className="mx-auto w-full max-w-[1440px] px-6 py-10 lg:px-10">
         <Link
