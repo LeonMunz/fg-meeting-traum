@@ -23,6 +23,15 @@ from work_items.views import (
     WorkItemDetailView,
 )
 
+from meetings.views import (
+    MeetingDetailView,
+    MeetingItemDetailView,
+    MeetingItemListCreateView,
+    MeetingParticipantDetailView,
+    MeetingParticipantListCreateView,
+    ResearchGroupMeetingListCreateView,
+)
+
 def csrf_protect_view(view_class):
     """Apply csrf_protect to a DRF view.
 
@@ -55,4 +64,12 @@ urlpatterns = [
     path('api/work-items/<int:work_item_id>/', WorkItemDetailView.as_view(), name='work-item-detail'),
     # My Work — authorized projection over assigned WorkItems
     path('api/research-groups/<int:group_id>/my-work/', MyWorkView.as_view(), name='research-group-my-work'),
+
+    # Meetings
+    path('api/research-groups/<int:group_id>/meetings/', ResearchGroupMeetingListCreateView.as_view(), name='research-group-meetings-list'),
+    path('api/meetings/<int:meeting_id>/', MeetingDetailView.as_view(), name='meeting-detail'),
+    path('api/meetings/<int:meeting_id>/participants/', MeetingParticipantListCreateView.as_view(), name='meeting-participants-list'),
+    path('api/meetings/<int:meeting_id>/participants/<int:participant_id>/', MeetingParticipantDetailView.as_view(), name='meeting-participant-detail'),
+    path('api/meetings/<int:meeting_id>/items/', MeetingItemListCreateView.as_view(), name='meeting-items-list'),
+    path('api/meeting-items/<int:meeting_item_id>/', MeetingItemDetailView.as_view(), name='meeting-item-detail'),
 ]

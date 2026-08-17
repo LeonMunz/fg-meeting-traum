@@ -19,8 +19,9 @@ from .services import (
     add_meeting_participant,
     create_meeting,
     create_meeting_item,
+    remove_meeting_participant,
     update_meeting_item,
-    update_meeting_status,
+    update_meeting,
 )
 
 
@@ -194,7 +195,7 @@ class MeetingDomainTest(TestCase):
     def test_meeting_status_can_be_updated(self):
         meeting = self.create_default_meeting()
 
-        update_meeting_status(
+        update_meeting(
             meeting=meeting,
             actor=self.alex,
             status=Meeting.Status.LIVE,
@@ -205,6 +206,56 @@ class MeetingDomainTest(TestCase):
         self.assertEqual(
             meeting.status,
             Meeting.Status.LIVE,
+        )
+
+    def test_meeting_metadata_can_be_updated(self):
+        meeting = self.create_default_meeting()
+        new_scheduled_at = (
+            self.scheduled_at + timedelta(hours=2)
+        )
+
+        update_meeting(
+            meeting=meeting,
+            actor=self.alex,
+            title="Updated Weekly",
+            scheduled_at=new_scheduled_at,
+            status=Meeting.Status.LIVE,
+        )
+
+        meeting.refresh_from_db()
+
+        self.assertEqual(
+            meeting.title,
+            "Updated Weekly",
+        )
+        self.assertEqual(
+            meeting.scheduled_at,
+            new_scheduled_at,
+        )
+        self.assertEqual(
+            meeting.status,
+            Meeting.Status.LIVE,
+        )
+
+    def test_meeting_participant_can_be_removed(self):
+        meeting = self.create_default_meeting()
+
+        participant = add_meeting_participant(
+            meeting=meeting,
+            actor=self.alex,
+            target_user=self.chris,
+        )
+
+        remove_meeting_participant(
+            participant=participant,
+            actor=self.alex,
+        )
+
+        self.assertFalse(
+            MeetingParticipant.objects.filter(
+                meeting=meeting,
+                user=self.chris,
+            ).exists()
         )
 
     def test_meeting_item_can_be_marked_discussed(self):
