@@ -25,7 +25,12 @@ import {
 import type {
   ApiProjectMembership,
   ApiResearchGroupMember,
+  ApiWorkItem,
 } from '../../api/types'
+import {
+  createWorkItem,
+  listProjectWorkItems,
+} from '../../api/work-items'
 import { useSession } from '../../api/useSession'
 
 type ProjectStatus = 'active' | 'paused' | 'completed'
@@ -157,94 +162,6 @@ const demoActivities: Record<
     },
   ],
 }
-
-const demoWorkItems: Record<string, DemoWorkItem[]> = {
-  'quantum-materials': [
-    {
-      id: 'wi-1',
-      title: 'Calibrate cryostat for low-temperature measurements',
-      type: 'task',
-      status: 'in_progress',
-      assignees: [
-        { id: 'alex', name: 'Alex Dev', initials: 'AD' },
-      ],
-      dueInDays: 1,
-      dueLabel: 'Tomorrow',
-      blockedReason: null,
-      parentId: null,
-    },
-    {
-      id: 'wi-2',
-      title: 'Review measurement protocol',
-      type: 'deliverable',
-      status: 'todo',
-      assignees: [
-        { id: 'chris', name: 'Chris Dev', initials: 'CD' },
-        { id: 'maria', name: 'Maria Dev', initials: 'MD' },
-      ],
-      dueInDays: 3,
-      dueLabel: 'Aug 17',
-      blockedReason: null,
-      parentId: null,
-    },
-    {
-      id: 'wi-3',
-      title: 'Resolve sample holder issue',
-      type: 'task',
-      status: 'todo',
-      assignees: [
-        { id: 'maria', name: 'Maria Dev', initials: 'MD' },
-      ],
-      dueInDays: 2,
-      dueLabel: 'Aug 16',
-      blockedReason: 'Replacement sample holder is still unavailable.',
-      parentId: null,
-    },
-    {
-      id: 'wi-4',
-      title: 'Prepare milestone review',
-      type: 'milestone',
-      status: 'todo',
-      assignees: [
-        { id: 'chris', name: 'Chris Dev', initials: 'CD' },
-      ],
-      dueInDays: 6,
-      dueLabel: 'Aug 20',
-      blockedReason: null,
-      parentId: null,
-    },
-    {
-      id: 'wi-5',
-      title: 'Update literature matrix',
-      type: 'task',
-      status: 'review',
-      assignees: [
-        { id: 'alex', name: 'Alex Dev', initials: 'AD' },
-      ],
-      dueInDays: -2,
-      dueLabel: 'Aug 12',
-      blockedReason: null,
-      parentId: null,
-    },
-    {
-      id: 'wi-6',
-      title: 'Archive initial dataset',
-      type: 'task',
-      status: 'done',
-      assignees: [
-        { id: 'chris', name: 'Chris Dev', initials: 'CD' },
-      ],
-      dueInDays: -1,
-      dueLabel: 'Completed yesterday',
-      blockedReason: null,
-      parentId: null,
-    },
-  ],
-  'ai-engineering': [],
-  'grant-proposal': [],
-  'cluster-upgrade': [],
-}
-
 
 const workItemStatusLabels: Record<DemoWorkItemStatus, string> = {
   todo: 'To do',
@@ -515,6 +432,125 @@ function mapResearchGroupMember(
   }
 }
 
+function getWorkItemDueFields(
+  dueDate: string | null,
+) {
+  if (!dueDate) {
+    return {
+      dueInDays: null,
+      dueLabel: null,
+    }
+  }
+
+  const [year, month, day] = dueDate
+    .split('-')
+    .map(Number)
+
+  if (
+    !Number.isInteger(year) ||
+    !Number.isInteger(month) ||
+    !Number.isInteger(day)
+  ) {
+    return {
+      dueInDays: null,
+      dueLabel: null,
+    }
+  }
+
+  const targetDate = new Date(
+    year,
+    month - 1,
+    day,
+  )
+
+  const now = new Date()
+
+  const today = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate(),
+  )
+
+  const dueInDays = Math.round(
+    (targetDate.getTime() - today.getTime()) /
+      86_400_000,
+  )
+
+  const dueLabel =
+    dueInDays === 0
+      ? 'Today'
+      : dueInDays === 1
+        ? 'Tomorrow'
+        : new Intl.DateTimeFormat('en', {
+            month: 'short',
+            day: 'numeric',
+          }).format(targetDate)
+
+  return {
+    dueInDays,
+    dueLabel,
+  }
+}
+
+function mapApiWorkItem(
+  item: ApiWorkItem,
+  members: ProjectMember[],
+): DemoWorkItem {
+  const due = getWorkItemDueFields(item.dueDate)
+
+  return {
+    id: String(item.id),
+    title: item.title,
+    type: item.type,
+    status: item.status,
+    assignees: item.assigneeIds.map(
+      (assigneeId) => {
+        const member = members.find(
+          (candidate) =>
+            candidate.id === String(assigneeId),
+        )
+
+        return {
+          id: String(assigneeId),
+          name:
+            member?.name ??
+            `User ${assigneeId}`,
+          initials:
+            member?.initials ?? '?',
+        }
+      },
+    ),
+    dueInDays: due.dueInDays,
+    dueLabel: due.dueLabel,
+    blockedReason: item.blockedReason,
+    parentId:
+      item.parentId == null
+        ? null
+        : String(item.parentId),
+  }
+}
+
+function getWorkItemErrorMessage(
+  error: unknown,
+  fallback: string,
+) {
+  if (
+    error instanceof ApiError &&
+    error.detail &&
+    typeof error.detail === 'object' &&
+    'error' in error.detail
+  ) {
+    const detail =
+      error.detail as { error?: unknown }
+
+    if (typeof detail.error === 'string') {
+      return detail.error
+    }
+  }
+
+  return fallback
+}
+
 function getMembershipErrorMessage(
   error: unknown,
   fallback: string,
@@ -566,7 +602,12 @@ export function ProjectDetailPage() {
   const [addMemberDialogOpen, setAddMemberDialogOpen] = useState(false)
   const [memberToRemove, setMemberToRemove] =
     useState<ProjectMember | null>(null)
-  const [workItems, setWorkItems] = useState<DemoWorkItem[]>([])
+  const [apiWorkItems, setApiWorkItems] =
+    useState<ApiWorkItem[]>([])
+  const [workItemsLoading, setWorkItemsLoading] =
+    useState(false)
+  const [workItemsError, setWorkItemsError] =
+    useState<string | null>(null)
   const [createWorkItemDialogOpen, setCreateWorkItemDialogOpen] =
     useState(false)
   const [workItemFocus, setWorkItemFocus] =
@@ -759,19 +800,52 @@ export function ProjectDetailPage() {
   }, [project])
 
   useEffect(() => {
+    if (!project) {
+      setApiWorkItems([])
+      setWorkItemsLoading(false)
+      setWorkItemsError(null)
+      return
+    }
+
+    const numericProjectId = Number(project.id)
+    let cancelled = false
+
+    setApiWorkItems([])
+    setWorkItemsLoading(true)
+    setWorkItemsError(null)
+
+    listProjectWorkItems(numericProjectId)
+      .then((items) => {
+        if (!cancelled) {
+          setApiWorkItems(items)
+        }
+      })
+      .catch((error) => {
+        if (cancelled) return
+
+        setApiWorkItems([])
+        setWorkItemsError(
+          getWorkItemErrorMessage(
+            error,
+            'Work items could not be loaded.',
+          ),
+        )
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setWorkItemsLoading(false)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [project])
+
+  useEffect(() => {
     setAddMemberDialogOpen(false)
     setMemberToRemove(null)
     setCreateWorkItemDialogOpen(false)
-    setWorkItems(
-      project
-        ? (demoWorkItems[project.id] ?? []).map((item) => ({
-            ...item,
-            assignees: item.assignees.map((assignee) => ({
-              ...assignee,
-            })),
-          }))
-        : [],
-    )
 
     if (project) {
       setProjectName(project.name)
@@ -935,6 +1009,10 @@ export function ProjectDetailPage() {
     return a.name.localeCompare(b.name)
   })
 
+  const workItems = apiWorkItems.map(
+    (item) => mapApiWorkItem(item, members),
+  )
+
   const isReadOnly = currentMemberRole === 'viewer'
   const canManageMembers = currentMemberRole === 'owner'
   const canEditProjectSettings = currentMemberRole === 'owner'
@@ -1095,7 +1173,7 @@ export function ProjectDetailPage() {
     }
   }
 
-  const handleCreateWorkItem = (input: {
+  const handleCreateWorkItem = async (input: {
     title: string
     type: DemoWorkItemType
     status: DemoWorkItemStatus
@@ -1104,77 +1182,72 @@ export function ProjectDetailPage() {
     dueDate: string | null
     blockedReason: string | null
   }) => {
-    if (isReadOnly) return
+    if (isReadOnly) {
+      throw new Error(
+        'A viewer cannot create Work Items.',
+      )
+    }
 
-    const assignableMembers = members.filter(
-      (member) => member.role !== 'viewer',
+    const numericProjectId = Number(project.id)
+
+    const assigneeIds = input.assigneeIds.map(
+      (id) => Number(id),
     )
 
-    const assignees = assignableMembers
-      .filter((member) => input.assigneeIds.includes(member.id))
-      .map((member) => ({
-        id: member.id,
-        name: member.name,
-        initials: member.initials,
-      }))
-
-    const validParentId =
-      input.parentId &&
-      workItems.some((item) => item.id === input.parentId)
-        ? input.parentId
-        : null
-
-    let dueInDays: number | null = null
-    let dueLabel: string | null = null
-
-    if (input.dueDate) {
-      const [year, month, day] = input.dueDate
-        .split('-')
-        .map(Number)
-
-      const targetDate = new Date(year, month - 1, day)
-      const today = new Date()
-      const todayStart = new Date(
-        today.getFullYear(),
-        today.getMonth(),
-        today.getDate(),
+    if (
+      !Number.isInteger(numericProjectId) ||
+      assigneeIds.some(
+        (id) => !Number.isInteger(id),
       )
-
-      dueInDays = Math.round(
-        (targetDate.getTime() - todayStart.getTime()) /
-          (24 * 60 * 60 * 1000),
+    ) {
+      throw new Error(
+        'Invalid Project or assignee ID.',
       )
-
-      dueLabel =
-        dueInDays === 0
-          ? 'Today'
-          : dueInDays === 1
-            ? 'Tomorrow'
-            : new Intl.DateTimeFormat('en', {
-                month: 'short',
-                day: 'numeric',
-              }).format(targetDate)
     }
 
-    const localId =
-      typeof globalThis.crypto?.randomUUID === 'function'
-        ? globalThis.crypto.randomUUID()
-        : `${Date.now()}-${Math.random().toString(16).slice(2)}`
+    let parentId: number | null = null
 
-    const newWorkItem: DemoWorkItem = {
-      id: `local-${localId}`,
-      title: input.title.trim(),
-      type: input.type,
-      status: input.status,
-      assignees,
-      dueInDays,
-      dueLabel,
-      blockedReason: input.blockedReason?.trim() || null,
-      parentId: validParentId,
+    if (input.parentId != null) {
+      parentId = Number(input.parentId)
+
+      if (!Number.isInteger(parentId)) {
+        throw new Error(
+          'Invalid parent Work Item ID.',
+        )
+      }
     }
 
-    setWorkItems((current) => [newWorkItem, ...current])
-    setCreateWorkItemDialogOpen(false)
+    setWorkItemsError(null)
+
+    try {
+      const created = await createWorkItem(
+        numericProjectId,
+        {
+          title: input.title.trim(),
+          type: input.type,
+          status: input.status,
+          assigneeIds,
+          parentId,
+          dueDate: input.dueDate,
+          blockedReason: input.blockedReason,
+        },
+      )
+
+      setApiWorkItems((current) => [
+        created,
+        ...current.filter(
+          (item) => item.id !== created.id,
+        ),
+      ])
+    } catch (error) {
+      const message = getWorkItemErrorMessage(
+        error,
+        'Work item could not be created.',
+      )
+
+      setWorkItemsError(message)
+      throw new Error(message)
+    }
   }
 
   const projectActivities = forceEmptyActivity
@@ -1907,21 +1980,44 @@ export function ProjectDetailPage() {
         </section>
       )}
 
-      {activeTab === 'work-items' && (
-        <ProjectWorkItemsPanel
-          items={projectWorkItems}
-          eligibleAssignees={sortedMembers.filter(
-            (member) => member.role !== 'viewer',
-          )}
-          readOnly={isReadOnly}
-          onCreate={() => setCreateWorkItemDialogOpen(true)}
-          preferencesKey={
-            user
-              ? `fg-workspace:project-work-items:v1:${user.id}:${project.id}`
-              : null
-          }
-        />
-      )}
+      {activeTab === 'work-items' &&
+        workItemsError && (
+          <div
+            role="alert"
+            className="mt-6 rounded-xl border border-error/20 bg-error-container/35 px-5 py-4 text-sm text-error"
+          >
+            {workItemsError}
+          </div>
+        )}
+
+      {activeTab === 'work-items' &&
+        workItemsLoading && (
+          <div className="mt-6 flex min-h-40 items-center justify-center rounded-xl border border-outline-variant bg-surface-container-lowest text-sm text-on-surface-variant">
+            <span className="material-symbols-outlined mr-2 animate-spin text-[18px]">
+              refresh
+            </span>
+            Loading work items…
+          </div>
+        )}
+
+      {activeTab === 'work-items' &&
+        !workItemsLoading && (
+          <ProjectWorkItemsPanel
+            items={projectWorkItems}
+            eligibleAssignees={sortedMembers.filter(
+              (member) => member.role !== 'viewer',
+            )}
+            readOnly={isReadOnly}
+            onCreate={() =>
+              setCreateWorkItemDialogOpen(true)
+            }
+            preferencesKey={
+              user
+                ? `fg-workspace:project-work-items:v1:${user.id}:${project.id}`
+                : null
+            }
+          />
+        )}
 
       {activeTab === 'settings' && (
         <section className="mt-6 overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest shadow-sm">
