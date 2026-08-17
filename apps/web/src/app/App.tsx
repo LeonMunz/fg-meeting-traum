@@ -5,6 +5,7 @@ import { useSession } from '../api/useSession'
 import { AppShell } from '../components/layout/AppShell'
 import { LoginPage } from '../features/auth/LoginPage'
 import { DashboardPage } from '../features/dashboard/DashboardPage'
+import { MyWorkPage } from '../features/my-work/MyWorkPage'
 import { ProjectDetailPage } from '../features/projects/ProjectDetailPage'
 import { ProjectListPage } from '../features/projects/ProjectListPage'
 import { ResearchGroupProvider } from '../features/research-group/ResearchGroupProvider'
@@ -61,7 +62,7 @@ function AppRoutes() {
 
                 <Route
                   path="/my-work"
-                  element={<PlaceholderPage title="My Work" />}
+                  element={<MyWorkPage />}
                 />
 
                 <Route
