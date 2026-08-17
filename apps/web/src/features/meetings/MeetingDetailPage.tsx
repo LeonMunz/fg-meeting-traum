@@ -22,12 +22,15 @@ import {
   updateMeetingItem,
 } from '../../api/meetings'
 import { listResearchGroupMembers } from '../../api/projects'
+import { CreateMeetingWorkItemDialog } from './CreateMeetingWorkItemDialog'
+
 import type {
   ApiMeeting,
   ApiMeetingItem,
   ApiMeetingParticipant,
   ApiMeetingStatus,
   ApiResearchGroupMember,
+  ApiWorkItem,
 } from '../../api/types'
 
 const meetingStatusLabels: Record<
@@ -166,6 +169,11 @@ export function MeetingDetailPage() {
 
   const [updatingMeeting, setUpdatingMeeting] =
     useState(false)
+
+  const [
+    workItemSource,
+    setWorkItemSource,
+  ] = useState<ApiMeetingItem | null>(null)
 
   const loadMeeting = useCallback(async () => {
     if (meetingId == null) {
@@ -499,6 +507,33 @@ export function MeetingDetailPage() {
     }
   }
 
+  const handleWorkItemCreated = (
+    workItem: ApiWorkItem,
+  ) => {
+    if (!workItemSource) {
+      return
+    }
+
+    const meetingItemId =
+      workItemSource.id
+
+    setItems((current) =>
+      current.map((item) =>
+        item.id === meetingItemId
+          ? {
+              ...item,
+              workItemIds: [
+                ...new Set([
+                  ...item.workItemIds,
+                  workItem.id,
+                ]),
+              ],
+            }
+          : item,
+      ),
+    )
+  }
+
   if (loading) {
     return (
       <div className="w-full px-6 py-8 lg:px-8 lg:py-10 xl:px-10">
@@ -760,7 +795,22 @@ export function MeetingDetailPage() {
                       )}
                     </div>
 
-                    <button
+                    <div className="flex shrink-0 items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setWorkItemSource(item)
+                        }
+                        className="inline-flex h-9 items-center gap-2 rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-xs font-semibold text-on-surface transition hover:border-primary/40 hover:bg-surface-container-low"
+                      >
+                        <span className="material-symbols-outlined text-[17px]">
+                          add_task
+                        </span>
+
+                        Create work item
+                      </button>
+
+                      <button
                       type="button"
                       disabled={
                         updatingItemId === item.id
@@ -790,6 +840,7 @@ export function MeetingDetailPage() {
                         ? 'Discussed'
                         : 'Mark discussed'}
                     </button>
+                    </div>
                   </div>
                 </article>
               ))}
@@ -923,6 +974,20 @@ export function MeetingDetailPage() {
           </div>
         </aside>
       </div>
+
+      <CreateMeetingWorkItemDialog
+        open={workItemSource != null}
+        researchGroupId={
+          meeting.researchGroupId
+        }
+        meetingItem={workItemSource}
+        onClose={() =>
+          setWorkItemSource(null)
+        }
+        onCreated={
+          handleWorkItemCreated
+        }
+      />
     </div>
   )
 }

@@ -5,6 +5,9 @@ import {
 
 import {
   login,
+  logout,
+  openProject,
+  openProjects,
 } from './helpers'
 
 const MEETING_TITLE =
@@ -303,5 +306,338 @@ test(
         'Meeting status',
       ),
     ).toHaveValue('live')
+  },
+)
+
+test(
+  'Meeting agenda creates canonical project work for Chris',
+  async ({ page }) => {
+    const projectName =
+      'E2E Meeting Work Project'
+
+    const taskTitle =
+      'E2E Meeting Chris Task'
+
+    // --------------------------------------------------------
+    // Alex creates a Project for the Meeting follow-up.
+    // --------------------------------------------------------
+
+    await login(page, 'alex')
+    await openProjects(page)
+
+    await page
+      .getByRole('button', {
+        name: /New project/,
+      })
+      .click()
+
+    const createProjectDialog =
+      page.getByRole('dialog', {
+        name: 'Create project',
+      })
+
+    await expect(
+      createProjectDialog,
+    ).toBeVisible()
+
+    await createProjectDialog
+      .getByLabel('Project name')
+      .fill(projectName)
+
+    await createProjectDialog
+      .getByLabel('Description')
+      .fill(
+        'Project created by the Meeting browser acceptance test.',
+      )
+
+    await createProjectDialog
+      .getByRole('button', {
+        name: /Create project/,
+      })
+      .click()
+
+    await expect(
+      page.getByText(
+        projectName,
+        { exact: true },
+      ),
+    ).toBeVisible()
+
+    await openProject(
+      page,
+      projectName,
+    )
+
+    // --------------------------------------------------------
+    // Chris becomes a normal Project member.
+    // --------------------------------------------------------
+
+    await page
+      .getByRole('button', {
+        name: /Members/,
+      })
+      .click()
+
+    await page
+      .getByRole('button', {
+        name: /Add member/,
+      })
+      .click()
+
+    const addMemberDialog =
+      page.getByRole('dialog', {
+        name: 'Add project member',
+      })
+
+    await addMemberDialog
+      .getByLabel('Select person')
+      .fill('chris')
+
+    const chrisResult =
+      addMemberDialog
+        .getByRole('button')
+        .filter({
+          hasText: '@chris',
+        })
+
+    await expect(
+      chrisResult,
+    ).toBeVisible()
+
+    await chrisResult.click()
+
+    await addMemberDialog
+      .getByRole('button', {
+        name: /Add member/,
+      })
+      .click()
+
+    await expect(
+      addMemberDialog,
+    ).not.toBeVisible()
+
+    await expect(
+      page.getByText(
+        '@chris',
+        { exact: true },
+      ),
+    ).toBeVisible()
+
+    // --------------------------------------------------------
+    // Alex creates a Meeting and Agenda Item.
+    // --------------------------------------------------------
+
+    await page
+      .getByRole('link', {
+        name: /Meetings/,
+      })
+      .click()
+
+    await expect(page).toHaveURL(
+      /\/meetings$/,
+    )
+
+    await page
+      .getByRole('button', {
+        name: /New meeting/,
+      })
+      .click()
+
+    await page
+      .getByLabel('Title')
+      .fill('E2E Work Meeting')
+
+    await page
+      .getByLabel('Date and time')
+      .fill('2030-02-03T11:00')
+
+    await page
+      .locator('form')
+      .getByRole('button', {
+        name: /Create meeting/,
+      })
+      .click()
+
+    const meetingRow =
+      page
+        .getByRole('button')
+        .filter({
+          hasText: 'E2E Work Meeting',
+        })
+
+    await expect(
+      meetingRow,
+    ).toBeVisible()
+
+    await meetingRow.click()
+
+    await expect(page).toHaveURL(
+      /\/meetings\/\d+$/,
+    )
+
+    await page
+      .getByLabel('Agenda item')
+      .fill(taskTitle)
+
+    await page
+      .getByLabel('Notes')
+      .fill(
+        'Create a real Project task for Chris.',
+      )
+
+    await page
+      .getByRole('button', {
+        name: /Add agenda item/,
+      })
+      .click()
+
+    const agendaItem =
+      page
+        .locator('article')
+        .filter({
+          has: page.getByText(
+            taskTitle,
+            { exact: true },
+          ),
+        })
+
+    await expect(
+      agendaItem,
+    ).toBeVisible()
+
+    // --------------------------------------------------------
+    // Agenda Item creates canonical WorkItem.
+    // --------------------------------------------------------
+
+    await agendaItem
+      .getByRole('button')
+      .filter({
+        hasText: 'Create work item',
+      })
+      .click()
+
+    const workItemDialog =
+      page.getByRole('dialog', {
+        name: 'Create work item',
+      })
+
+    await expect(
+      workItemDialog,
+    ).toBeVisible()
+
+    await workItemDialog
+      .getByLabel('Project')
+      .selectOption({
+        label: projectName,
+      })
+
+    await expect(
+      workItemDialog.getByLabel('Title'),
+    ).toHaveValue(taskTitle)
+
+    const assigneeGroup =
+      workItemDialog.getByRole(
+        'group',
+        {
+          name: 'Assignees',
+        },
+      )
+
+    const chrisCheckbox =
+      assigneeGroup.getByRole(
+        'checkbox',
+        {
+          name: /Chris|chris/i,
+        },
+      )
+
+    await expect(
+      chrisCheckbox,
+    ).toBeVisible()
+
+    await chrisCheckbox.check()
+
+    await workItemDialog
+      .getByRole('button', {
+        name: /Create work item/,
+      })
+      .click()
+
+    await expect(
+      workItemDialog,
+    ).not.toBeVisible()
+
+    await expect(
+      agendaItem,
+    ).toContainText(
+      '1 linked work item',
+    )
+
+    // Reload proves MeetingItem -> WorkItem link persistence.
+    await page.reload()
+
+    const persistedAgendaItem =
+      page
+        .locator('article')
+        .filter({
+          has: page.getByText(
+            taskTitle,
+            { exact: true },
+          ),
+        })
+
+    await expect(
+      persistedAgendaItem,
+    ).toContainText(
+      '1 linked work item',
+    )
+
+    // --------------------------------------------------------
+    // Chris sees exactly that canonical WorkItem in My Work.
+    // --------------------------------------------------------
+
+    await logout(page)
+    await login(page, 'chris')
+
+    await page
+      .getByRole('link', {
+        name: /My Work/,
+      })
+      .click()
+
+    await expect(page).toHaveURL(
+      /\/my-work$/,
+    )
+
+    await expect(
+      page.getByText(
+        taskTitle,
+        { exact: true },
+      ),
+    ).toBeVisible()
+
+    await expect(
+      page.getByText(
+        projectName,
+        { exact: true },
+      ),
+    ).toBeVisible()
+
+    // Reload proves Chris sees persisted canonical Project work.
+    await page.reload()
+
+    await expect(
+      page.getByText(
+        taskTitle,
+        { exact: true },
+      ),
+    ).toBeVisible()
+
+    await expect(
+      page.getByText(
+        projectName,
+        { exact: true },
+      ),
+    ).toBeVisible()
   },
 )
