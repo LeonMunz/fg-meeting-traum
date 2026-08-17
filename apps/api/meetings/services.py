@@ -3,9 +3,15 @@ from django.db.models import Max
 
 from research_groups.models import ResearchGroupMembership
 
+from work_items.services import (
+    WorkItemDomainError,
+    create_work_item,
+)
+
 from .models import (
     Meeting,
     MeetingItem,
+    MeetingItemWorkItem,
     MeetingParticipant,
 )
 
@@ -238,3 +244,67 @@ def update_meeting_item(
         )
 
     return meeting_item
+
+
+
+@transaction.atomic
+def create_work_item_from_meeting_item(
+    *,
+    meeting_item,
+    project,
+    actor,
+    type,
+    title,
+    description="",
+    status=None,
+    assignee_ids=None,
+    parent_id=None,
+    due_date=None,
+    blocked_reason=None,
+):
+    """Create a canonical WorkItem from a MeetingItem.
+
+    The WorkItem service remains authoritative for Project write access,
+    assignee eligibility, hierarchy and WorkItem invariants.
+
+    A Meeting may only create work inside a Project belonging to the same
+    Research Group.
+    """
+    _require_research_group_membership(
+        research_group=meeting_item.meeting.research_group,
+        user=actor,
+    )
+
+    if (
+        project.research_group_id
+        != meeting_item.meeting.research_group_id
+    ):
+        raise MeetingDomainError(
+            "Project must belong to the Meeting's Research Group."
+        )
+
+    try:
+        work_item = create_work_item(
+            project=project,
+            actor=actor,
+            type=type,
+            title=title,
+            description=description,
+            status=status,
+            assignee_ids=assignee_ids,
+            parent_id=parent_id,
+            due_date=due_date,
+            blocked_reason=blocked_reason,
+        )
+    except WorkItemDomainError as exc:
+        raise MeetingDomainError(
+            exc.message
+        ) from exc
+
+    MeetingItemWorkItem.objects.create(
+        meeting_item=meeting_item,
+        work_item=work_item,
+        created_by=actor,
+    )
+
+    return work_item

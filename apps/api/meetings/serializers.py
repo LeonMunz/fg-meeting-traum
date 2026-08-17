@@ -1,5 +1,7 @@
 from rest_framework import serializers
 
+from work_items.models import WorkItem
+
 from .models import Meeting, MeetingItem
 
 
@@ -141,4 +143,46 @@ class MeetingItemPatchSerializer(serializers.Serializer):
     status = serializers.ChoiceField(
         choices=MeetingItem.Status.choices,
         required=False,
+    )
+
+
+
+class MeetingWorkItemCreateSerializer(serializers.Serializer):
+    projectId = serializers.IntegerField(
+        min_value=1,
+    )
+    type = serializers.ChoiceField(
+        choices=WorkItem.Type.choices,
+    )
+    title = serializers.CharField(
+        max_length=255,
+        allow_blank=False,
+    )
+    description = serializers.CharField(
+        required=False,
+        allow_blank=True,
+    )
+    status = serializers.ChoiceField(
+        choices=WorkItem.Status.choices,
+        required=False,
+    )
+    assigneeIds = serializers.ListField(
+        child=serializers.IntegerField(
+            min_value=1,
+        ),
+        required=False,
+    )
+    parentId = serializers.IntegerField(
+        min_value=1,
+        required=False,
+        allow_null=True,
+    )
+    dueDate = serializers.DateField(
+        required=False,
+        allow_null=True,
+    )
+    blockedReason = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        allow_null=True,
     )

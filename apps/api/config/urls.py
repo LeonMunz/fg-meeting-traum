@@ -27,6 +27,7 @@ from meetings.views import (
     MeetingDetailView,
     MeetingItemDetailView,
     MeetingItemListCreateView,
+    MeetingItemWorkItemCreateView,
     MeetingParticipantDetailView,
     MeetingParticipantListCreateView,
     ResearchGroupMeetingListCreateView,
@@ -72,4 +73,5 @@ urlpatterns = [
     path('api/meetings/<int:meeting_id>/participants/<int:participant_id>/', MeetingParticipantDetailView.as_view(), name='meeting-participant-detail'),
     path('api/meetings/<int:meeting_id>/items/', MeetingItemListCreateView.as_view(), name='meeting-items-list'),
     path('api/meeting-items/<int:meeting_item_id>/', MeetingItemDetailView.as_view(), name='meeting-item-detail'),
+    path('api/meeting-items/<int:meeting_item_id>/work-items/', MeetingItemWorkItemCreateView.as_view(), name='meeting-item-work-items-create'),
 ]
