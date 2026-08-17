@@ -20,6 +20,7 @@ import {
   listProjectMemberships,
   listResearchGroupMembers,
   removeProjectMembership,
+  updateProject,
   updateProjectMembership,
 } from '../../api/projects'
 import type {
@@ -592,6 +593,10 @@ export function ProjectDetailPage() {
   const [settingsDescription, setSettingsDescription] = useState('')
   const [settingsStatus, setSettingsStatus] =
     useState<ProjectStatus>('active')
+  const [settingsSaving, setSettingsSaving] =
+    useState(false)
+  const [settingsError, setSettingsError] =
+    useState<string | null>(null)
 
   const [members, setMembers] = useState<ProjectMember[]>([])
   const [directoryUsers, setDirectoryUsers] =
@@ -1028,19 +1033,58 @@ export function ProjectDetailPage() {
     setSettingsName(projectName)
     setSettingsDescription(projectDescription)
     setSettingsStatus(projectStatus)
+    setSettingsError(null)
   }
 
-  const handleSaveProjectSettings = () => {
-    if (!canEditProjectSettings || !settingsValid) {
+  const handleSaveProjectSettings = async () => {
+    if (
+      !canEditProjectSettings ||
+      !settingsValid ||
+      settingsSaving
+    ) {
       return
     }
 
-    setProjectName(settingsName.trim())
-    setProjectDescription(settingsDescription.trim())
-    setProjectStatus(settingsStatus)
+    const numericProjectId = Number(project.id)
 
-    setSettingsName(settingsName.trim())
-    setSettingsDescription(settingsDescription.trim())
+    if (
+      !Number.isInteger(numericProjectId) ||
+      numericProjectId <= 0
+    ) {
+      setSettingsError('Invalid Project ID.')
+      return
+    }
+
+    setSettingsSaving(true)
+    setSettingsError(null)
+
+    try {
+      const updated = await updateProject(
+        numericProjectId,
+        {
+          name: settingsName.trim(),
+          description: settingsDescription.trim(),
+          status: settingsStatus,
+        },
+      )
+
+      setProjectName(updated.name)
+      setProjectDescription(updated.description)
+      setProjectStatus(updated.status)
+
+      setSettingsName(updated.name)
+      setSettingsDescription(updated.description)
+      setSettingsStatus(updated.status)
+    } catch (error) {
+      setSettingsError(
+        getMembershipErrorMessage(
+          error,
+          'Project settings could not be saved.',
+        ),
+      )
+    } finally {
+      setSettingsSaving(false)
+    }
   }
 
   const handleAddMember = async (
@@ -2230,18 +2274,29 @@ export function ProjectDetailPage() {
 
           </div>
 
+          {settingsError && (
+            <div
+              role="alert"
+              className="border-t border-error/20 bg-error-container/35 px-6 py-3 text-sm text-error"
+            >
+              {settingsError}
+            </div>
+          )}
+
           {canEditProjectSettings && (
             <div className="flex flex-col gap-3 border-t border-outline-variant bg-surface-container-low/45 px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
               <div className="text-xs text-on-surface-variant">
-                {settingsDirty
-                  ? 'You have unsaved changes.'
-                  : 'All changes are saved in the current UI session.'}
+                {settingsSaving
+                  ? 'Saving changes…'
+                  : settingsDirty
+                    ? 'You have unsaved changes.'
+                    : 'All changes are saved.'}
               </div>
 
               <div className="flex items-center justify-end gap-3">
                 <button
                   type="button"
-                  disabled={!settingsDirty}
+                  disabled={!settingsDirty || settingsSaving}
                   onClick={handleResetProjectSettings}
                   className="h-9 rounded-lg px-4 text-sm font-medium text-on-surface-variant transition hover:bg-surface-container-high hover:text-on-surface disabled:cursor-not-allowed disabled:opacity-40"
                 >
@@ -2250,14 +2305,22 @@ export function ProjectDetailPage() {
 
                 <button
                   type="button"
-                  disabled={!settingsDirty || !settingsValid}
-                  onClick={handleSaveProjectSettings}
+                  disabled={
+                    !settingsDirty ||
+                    !settingsValid ||
+                    settingsSaving
+                  }
+                  onClick={() =>
+                    void handleSaveProjectSettings()
+                  }
                   className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-45"
                 >
                   <span className="material-symbols-outlined text-[18px]">
                     save
                   </span>
-                  Save changes
+                  {settingsSaving
+                    ? 'Saving…'
+                    : 'Save changes'}
                 </button>
               </div>
             </div>
