@@ -6,6 +6,8 @@ import { AppShell } from '../components/layout/AppShell'
 import { LoginPage } from '../features/auth/LoginPage'
 import { DashboardPage } from '../features/dashboard/DashboardPage'
 import { MyWorkPage } from '../features/my-work/MyWorkPage'
+import { MeetingListPage } from '../features/meetings/MeetingListPage'
+import { MeetingDetailPage } from '../features/meetings/MeetingDetailPage'
 import { ProjectDetailPage } from '../features/projects/ProjectDetailPage'
 import { ProjectListPage } from '../features/projects/ProjectListPage'
 import { ResearchGroupProvider } from '../features/research-group/ResearchGroupProvider'
@@ -82,8 +84,14 @@ function AppRoutes() {
 
                 <Route
                   path="/meetings"
-                  element={<PlaceholderPage title="Meetings" />}
+                  element={<MeetingListPage />}
                 />
+
+                <Route
+                  path="/meetings/:meetingId"
+                  element={<MeetingDetailPage />}
+                />
+
 
                 <Route
                   path="/kvp"
