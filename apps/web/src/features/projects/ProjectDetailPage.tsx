@@ -14,7 +14,18 @@ import {
 import { RemoveProjectMemberDialog } from './RemoveProjectMemberDialog'
 import { CreateWorkItemDialog } from './CreateWorkItemDialog'
 import { ApiError } from '../../api/client'
-import { getProject } from '../../api/projects'
+import {
+  addProjectMembership,
+  getProject,
+  listProjectMemberships,
+  listResearchGroupMembers,
+  removeProjectMembership,
+  updateProjectMembership,
+} from '../../api/projects'
+import type {
+  ApiProjectMembership,
+  ApiResearchGroupMember,
+} from '../../api/types'
 import { useSession } from '../../api/useSession'
 
 type ProjectStatus = 'active' | 'paused' | 'completed'
@@ -68,67 +79,23 @@ type DemoWorkItem = {
 
 type ProjectMember = {
   id: string
+  membershipId: number
+  username: string
   name: string
-  email: string
   initials: string
   role: ProjectRole
 }
 
 type ProjectDetail = {
   id: string
+  researchGroupId: number
   name: string
   description: string
   status: ProjectStatus
   role: ProjectRole
   updatedLabel: string
-  members: ProjectMember[]
 }
 
-
-const demoDirectoryUsers: DirectoryUser[] = [
-  {
-    id: 'alex',
-    name: 'Alex Dev',
-    email: 'alex@example.com',
-    initials: 'AD',
-  },
-  {
-    id: 'chris',
-    name: 'Chris Dev',
-    email: 'chris@example.com',
-    initials: 'CD',
-  },
-  {
-    id: 'maria',
-    name: 'Maria Dev',
-    email: 'maria@example.com',
-    initials: 'MD',
-  },
-  {
-    id: 'laura',
-    name: 'Laura Dev',
-    email: 'laura@example.com',
-    initials: 'LD',
-  },
-  {
-    id: 'nora',
-    name: 'Nora Weber',
-    email: 'nora@example.com',
-    initials: 'NW',
-  },
-  {
-    id: 'jonas',
-    name: 'Jonas Beck',
-    email: 'jonas@example.com',
-    initials: 'JB',
-  },
-  {
-    id: 'tobias',
-    name: 'Tobias Roth',
-    email: 'tobias@example.com',
-    initials: 'TR',
-  },
-]
 
 const demoActivities: Record<
   string,
@@ -485,6 +452,89 @@ const tabs: Array<{ id: ProjectTab; label: string }> = [
   { id: 'settings', label: 'Settings' },
 ]
 
+function getPersonName(
+  firstName: string,
+  lastName: string,
+  username: string,
+) {
+  const fullName = `${firstName} ${lastName}`.trim()
+  return fullName || username
+}
+
+function getPersonInitials(
+  firstName: string,
+  lastName: string,
+  username: string,
+) {
+  const initials = [firstName, lastName]
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .map((value) => value[0]?.toUpperCase())
+    .join('')
+
+  return initials || username.slice(0, 2).toUpperCase()
+}
+
+function mapProjectMembership(
+  membership: ApiProjectMembership,
+): ProjectMember {
+  return {
+    id: String(membership.user.id),
+    membershipId: membership.id,
+    username: membership.user.username,
+    name: getPersonName(
+      membership.user.firstName,
+      membership.user.lastName,
+      membership.user.username,
+    ),
+    initials: getPersonInitials(
+      membership.user.firstName,
+      membership.user.lastName,
+      membership.user.username,
+    ),
+    role: membership.role,
+  }
+}
+
+function mapResearchGroupMember(
+  member: ApiResearchGroupMember,
+): DirectoryUser {
+  return {
+    id: String(member.id),
+    name: getPersonName(
+      member.firstName,
+      member.lastName,
+      member.username,
+    ),
+    username: member.username,
+    initials: getPersonInitials(
+      member.firstName,
+      member.lastName,
+      member.username,
+    ),
+  }
+}
+
+function getMembershipErrorMessage(
+  error: unknown,
+  fallback: string,
+) {
+  if (
+    error instanceof ApiError &&
+    error.detail &&
+    typeof error.detail === 'object' &&
+    'error' in error.detail
+  ) {
+    const detail = error.detail as { error?: unknown }
+
+    if (typeof detail.error === 'string') {
+      return detail.error
+    }
+  }
+
+  return fallback
+}
+
 export function ProjectDetailPage() {
   const { projectId } = useParams()
   const location = useLocation()
@@ -508,6 +558,11 @@ export function ProjectDetailPage() {
     useState<ProjectStatus>('active')
 
   const [members, setMembers] = useState<ProjectMember[]>([])
+  const [directoryUsers, setDirectoryUsers] =
+    useState<DirectoryUser[]>([])
+  const [membersLoading, setMembersLoading] = useState(false)
+  const [membersError, setMembersError] =
+    useState<string | null>(null)
   const [addMemberDialogOpen, setAddMemberDialogOpen] = useState(false)
   const [memberToRemove, setMemberToRemove] =
     useState<ProjectMember | null>(null)
@@ -617,12 +672,12 @@ export function ProjectDetailPage() {
 
         setProject({
           id: String(apiProject.id),
+          researchGroupId: apiProject.researchGroupId,
           name: apiProject.name,
           description: apiProject.description,
           status: apiProject.status,
           role: apiProject.currentUserRole,
           updatedLabel,
-          members: [],
         })
       })
       .catch((error) => {
@@ -649,7 +704,61 @@ export function ProjectDetailPage() {
   }, [projectId])
 
   useEffect(() => {
-    setMembers(project?.members ?? [])
+    if (!project) {
+      setMembers([])
+      setDirectoryUsers([])
+      setMembersLoading(false)
+      setMembersError(null)
+      return
+    }
+
+    const numericProjectId = Number(project.id)
+    let cancelled = false
+
+    setMembers([])
+    setDirectoryUsers([])
+    setMembersLoading(true)
+    setMembersError(null)
+
+    Promise.all([
+      listProjectMemberships(numericProjectId),
+      listResearchGroupMembers(project.researchGroupId),
+    ])
+      .then(([projectMemberships, researchGroupMembers]) => {
+        if (cancelled) return
+
+        setMembers(
+          projectMemberships.map(mapProjectMembership),
+        )
+
+        setDirectoryUsers(
+          researchGroupMembers.map(mapResearchGroupMember),
+        )
+      })
+      .catch((error) => {
+        if (cancelled) return
+
+        setMembers([])
+        setDirectoryUsers([])
+        setMembersError(
+          getMembershipErrorMessage(
+            error,
+            'Project members could not be loaded.',
+          ),
+        )
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setMembersLoading(false)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [project])
+
+  useEffect(() => {
     setAddMemberDialogOpen(false)
     setMemberToRemove(null)
     setCreateWorkItemDialogOpen(false)
@@ -803,9 +912,13 @@ export function ProjectDetailPage() {
     )
   }
 
+  const currentUserId =
+    user ? String(user.id) : null
+
   const currentMemberRole =
-    members.find((member) => member.id === user?.username)?.role ??
-    project.role
+    members.find(
+      (member) => member.id === currentUserId,
+    )?.role ?? project.role
 
   const ownerCount = members.filter(
     (member) => member.role === 'owner',
@@ -852,91 +965,134 @@ export function ProjectDetailPage() {
     setSettingsDescription(settingsDescription.trim())
   }
 
-  const handleAddMember = (
-    user: DirectoryUser,
+  const handleAddMember = async (
+    directoryUser: DirectoryUser,
     role: AddableProjectRole,
   ) => {
-    if (!canManageMembers) return
+    if (!canManageMembers) {
+      throw new Error(
+        'Only a Project owner can manage memberships.',
+      )
+    }
 
-    setMembers((currentMembers) => {
-      if (currentMembers.some((member) => member.id === user.id)) {
-        return currentMembers
-      }
+    const numericProjectId = Number(project.id)
+    const numericUserId = Number(directoryUser.id)
 
-      return [
-        ...currentMembers,
+    if (
+      !Number.isInteger(numericProjectId) ||
+      !Number.isInteger(numericUserId)
+    ) {
+      throw new Error('Invalid project or user ID.')
+    }
+
+    setMembersError(null)
+
+    try {
+      const membership = await addProjectMembership(
+        numericProjectId,
         {
-          ...user,
+          userId: numericUserId,
           role,
         },
-      ]
-    })
+      )
+
+      const mappedMembership =
+        mapProjectMembership(membership)
+
+      setMembers((currentMembers) => [
+        ...currentMembers.filter(
+          (member) =>
+            member.id !== mappedMembership.id,
+        ),
+        mappedMembership,
+      ])
+    } catch (error) {
+      const message = getMembershipErrorMessage(
+        error,
+        'Project member could not be added.',
+      )
+
+      setMembersError(message)
+      throw new Error(message)
+    }
   }
 
-  const handleMemberRoleChange = (
+  const handleMemberRoleChange = async (
     memberId: string,
     role: AddableProjectRole,
   ) => {
     if (!canManageMembers) return
 
-    setMembers((currentMembers) => {
-      const targetMember = currentMembers.find(
-        (member) => member.id === memberId,
+    const targetMember = members.find(
+      (member) => member.id === memberId,
+    )
+
+    if (!targetMember) return
+
+    setMembersError(null)
+
+    try {
+      const membership =
+        await updateProjectMembership(
+          Number(project.id),
+          targetMember.membershipId,
+          { role },
+        )
+
+      const mappedMembership =
+        mapProjectMembership(membership)
+
+      setMembers((currentMembers) =>
+        currentMembers.map((member) =>
+          member.id === mappedMembership.id
+            ? mappedMembership
+            : member,
+        ),
       )
-
-      if (!targetMember) {
-        return currentMembers
-      }
-
-      const currentOwnerCount = currentMembers.filter(
-        (member) => member.role === 'owner',
-      ).length
-
-      const wouldRemoveLastOwner =
-        targetMember.role === 'owner' &&
-        role !== 'owner' &&
-        currentOwnerCount <= 1
-
-      if (wouldRemoveLastOwner) {
-        return currentMembers
-      }
-
-      return currentMembers.map((member) =>
-        member.id === memberId
-          ? {
-              ...member,
-              role,
-            }
-          : member,
+    } catch (error) {
+      setMembersError(
+        getMembershipErrorMessage(
+          error,
+          'Project role could not be changed.',
+        ),
       )
-    })
+    }
   }
 
-  const handleConfirmRemoveMember = () => {
+  const handleConfirmRemoveMember = async () => {
     if (!canManageMembers || !memberToRemove) {
-      setMemberToRemove(null)
       return
     }
 
-    setMembers((currentMembers) => {
-      const currentOwnerCount = currentMembers.filter(
-        (member) => member.role === 'owner',
-      ).length
+    setMembersError(null)
 
-      const wouldRemoveLastOwner =
-        memberToRemove.role === 'owner' &&
-        currentOwnerCount <= 1
-
-      if (wouldRemoveLastOwner) {
-        return currentMembers
-      }
-
-      return currentMembers.filter(
-        (member) => member.id !== memberToRemove.id,
+    try {
+      await removeProjectMembership(
+        Number(project.id),
+        memberToRemove.membershipId,
       )
-    })
 
-    setMemberToRemove(null)
+      const removedUserId = memberToRemove.id
+
+      setMembers((currentMembers) =>
+        currentMembers.filter(
+          (member) => member.id !== removedUserId,
+        ),
+      )
+
+      setMemberToRemove(null)
+
+      if (removedUserId === currentUserId) {
+        navigate('/projects')
+      }
+    } catch (error) {
+      setMembersError(
+        getMembershipErrorMessage(
+          error,
+          'Project member could not be removed.',
+        ),
+      )
+    }
   }
 
   const handleCreateWorkItem = (input: {
@@ -1029,7 +1185,8 @@ export function ProjectDetailPage() {
     ? []
     : workItems
 
-  const currentUserMemberId = user?.username ?? null
+  const currentUserMemberId =
+    user ? String(user.id) : null
 
 
   const focusedWorkItems = projectWorkItems.filter((item) => {
@@ -1582,6 +1739,24 @@ export function ProjectDetailPage() {
             )}
           </div>
 
+          {membersError && (
+            <div
+              role="alert"
+              className="border-b border-error/20 bg-error-container/35 px-6 py-3 text-sm text-error"
+            >
+              {membersError}
+            </div>
+          )}
+
+          {membersLoading && (
+            <div className="flex items-center gap-2 border-b border-outline-variant px-6 py-3 text-sm text-on-surface-variant">
+              <span className="material-symbols-outlined animate-spin text-[18px]">
+                refresh
+              </span>
+              Loading project members…
+            </div>
+          )}
+
           <div className="hidden border-b border-outline-variant bg-surface-container-low px-6 py-2.5 sm:grid sm:grid-cols-[minmax(0,1fr)_190px_52px]">
             <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-on-surface-variant">
               Member
@@ -1620,7 +1795,7 @@ export function ProjectDetailPage() {
                       </div>
 
                       <div className="truncate text-xs text-on-surface-variant">
-                        {member.email}
+                        @{member.username}
                       </div>
                     </div>
                   </div>
@@ -1997,7 +2172,7 @@ export function ProjectDetailPage() {
 
       <AddProjectMemberDialog
         open={addMemberDialogOpen}
-        users={demoDirectoryUsers}
+        users={directoryUsers}
         excludedUserIds={members.map((member) => member.id)}
         onClose={() => setAddMemberDialogOpen(false)}
         onAdd={handleAddMember}
