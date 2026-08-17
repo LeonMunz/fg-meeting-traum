@@ -1195,7 +1195,7 @@ export function ProjectDetailPage() {
   })
 
   return (
-    <div className="mx-auto w-full max-w-[1440px] px-6 py-8 lg:px-10 lg:py-10">
+    <div className="w-full px-6 py-8 lg:px-8 lg:py-10 xl:px-10">
       <Link
         to="/projects"
         className="inline-flex items-center gap-1.5 text-sm font-medium text-on-surface-variant transition hover:text-primary"
@@ -1305,393 +1305,335 @@ export function ProjectDetailPage() {
       </header>
 
       {activeTab === 'overview' && (
-        <div className="mt-6 space-y-6">
-          <div className="grid gap-6 lg:grid-cols-12">
-            <section className="overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest shadow-sm lg:col-span-8">
-              <div className="border-b border-outline-variant px-6 py-4">
-                <h2 className="font-semibold text-on-surface">
-                  Project overview
+        <div className="mt-7 grid gap-10 lg:grid-cols-[minmax(0,1fr)_300px] xl:grid-cols-[minmax(0,1fr)_320px]">
+          <div className="min-w-0 space-y-10">
+            <section>
+              <div className="flex min-h-8 items-center justify-between border-b border-outline-variant/50 pb-3">
+                <h2 className="text-sm font-semibold text-on-surface">
+                  Description
                 </h2>
 
-                <p className="mt-0.5 text-xs text-on-surface-variant">
-                  Project description and context
-                </p>
+                {canEditProjectSettings &&
+                  projectDescription.trim().length > 0 &&
+                  !forceEmptyDescription && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('settings')}
+                      className="text-xs font-medium text-on-surface-variant transition hover:text-primary"
+                    >
+                      Edit
+                    </button>
+                  )}
               </div>
 
-              <div className="px-6 py-6">
-                <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-on-surface-variant">
-                  Description
+              {projectDescription.trim().length > 0 &&
+              !forceEmptyDescription ? (
+                <p className="max-w-3xl pt-4 text-sm leading-6 text-on-surface">
+                  {projectDescription}
+                </p>
+              ) : (
+                <div className="flex min-h-28 items-center justify-between gap-6 py-5">
+                  <div className="flex items-start gap-3">
+                    <span className="material-symbols-outlined mt-0.5 text-[17px] text-on-surface-variant">
+                      notes
+                    </span>
+
+                    <div>
+                      <p className="text-sm font-medium text-on-surface">
+                        No description yet
+                      </p>
+
+                      <p className="mt-1 max-w-lg text-xs leading-5 text-on-surface-variant">
+                        Add context so project members can quickly understand
+                        the purpose of this project.
+                      </p>
+                    </div>
+                  </div>
+
+                  {canEditProjectSettings && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('settings')}
+                      className="shrink-0 text-xs font-medium text-primary transition hover:opacity-75"
+                    >
+                      Add description
+                    </button>
+                  )}
+                </div>
+              )}
+            </section>
+
+            <section>
+              <div className="flex flex-col gap-3 border-b border-outline-variant/50 pb-3 sm:flex-row sm:items-end sm:justify-between">
+                <div>
+                  <h2 className="text-sm font-semibold text-on-surface">
+                    Work items
+                  </h2>
+
+                  <p className="mt-1 text-xs text-on-surface-variant">
+                    Project work that currently needs attention.
+                  </p>
                 </div>
 
-                {projectDescription.trim().length > 0 &&
-                !forceEmptyDescription ? (
-                  <p className="mt-2 max-w-3xl text-sm leading-6 text-on-surface">
-                    {projectDescription}
-                  </p>
-                ) : (
-                  <div className="mt-3 flex items-center justify-between gap-6 rounded-lg border border-dashed border-outline-variant bg-surface-container-low/45 px-4 py-4">
-                    <div className="flex items-start gap-3">
-                      <span className="material-symbols-outlined mt-0.5 text-[19px] text-on-surface-variant">
-                        notes
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('work-items')}
+                  className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-on-surface-variant transition hover:text-primary"
+                >
+                  View all
+
+                  <span className="material-symbols-outlined text-[15px]">
+                    arrow_forward
+                  </span>
+                </button>
+              </div>
+
+              <div className="py-3">
+                <div className="flex flex-wrap items-center gap-3">
+                  <label className="flex items-center gap-2">
+                    <span className="text-xs font-normal text-on-surface-variant">
+                      Focus
+                    </span>
+
+                    <select
+                      value={workItemFocus}
+                      onChange={(event) =>
+                        setWorkItemFocus(event.target.value as WorkItemFocus)
+                      }
+                      className="h-8 rounded-lg border border-outline-variant bg-surface-container-lowest px-2.5 text-xs font-normal text-on-surface outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15"
+                    >
+                      <option value="due-3-days">Due next 3 days</option>
+                      <option value="due-week">Due this week</option>
+                      <option value="overdue">Overdue</option>
+                      <option value="blocked">Blocked</option>
+                      <option value="mine">My open work</option>
+                      <option value="recently-completed">
+                        Recently completed
+                      </option>
+                      <option value="all-open">All open</option>
+                      <option value="custom">Custom filter…</option>
+                    </select>
+                  </label>
+
+                  {workItemFocus !== 'custom' && (
+                    <button
+                      type="button"
+                      onClick={() => setWorkItemFocus('custom')}
+                      className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2 text-xs font-normal text-on-surface-variant transition hover:bg-surface-container-low hover:text-on-surface"
+                    >
+                      <span className="material-symbols-outlined text-[15px]">
+                        tune
+                      </span>
+                      Customize
+                    </button>
+                  )}
+
+                  <span className="ml-auto text-xs font-normal text-on-surface-variant">
+                    {focusedWorkItems.length}{' '}
+                    {focusedWorkItems.length === 1 ? 'item' : 'items'}
+                  </span>
+                </div>
+
+                {workItemFocus === 'custom' && (
+                  <div className="mt-3 grid gap-3 border-t border-outline-variant/35 pt-3 sm:grid-cols-2 xl:grid-cols-4">
+                    <label>
+                      <span className="mb-1 block text-xs font-normal text-on-surface-variant">
+                        Due within
                       </span>
 
-                      <div>
-                        <p className="text-sm font-medium text-on-surface">
-                          No description yet
-                        </p>
+                      <div className="flex h-8 items-center rounded-lg border border-outline-variant bg-surface-container-lowest">
+                        <input
+                          type="number"
+                          min={1}
+                          max={90}
+                          value={customDueDays}
+                          onChange={(event) =>
+                            setCustomDueDays(
+                              Math.max(1, Number(event.target.value) || 1),
+                            )
+                          }
+                          className="min-w-0 flex-1 bg-transparent px-2.5 text-xs outline-none"
+                        />
 
-                        <p className="mt-0.5 text-xs leading-5 text-on-surface-variant">
-                          Add context so project members can quickly understand
-                          the purpose of this project.
-                        </p>
+                        <span className="pr-2.5 text-xs text-on-surface-variant">
+                          days
+                        </span>
                       </div>
-                    </div>
+                    </label>
 
-                    {canEditProjectSettings && (
-                      <button
-                        type="button"
-                        onClick={() => setActiveTab('settings')}
-                        className="shrink-0 text-sm font-semibold text-primary transition hover:opacity-75"
+                    <label>
+                      <span className="mb-1 block text-xs font-normal text-on-surface-variant">
+                        Status
+                      </span>
+
+                      <select
+                        value={customStatus}
+                        onChange={(event) =>
+                          setCustomStatus(
+                            event.target.value as CustomWorkItemStatus,
+                          )
+                        }
+                        className="h-8 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-2.5 text-xs outline-none focus:border-primary"
                       >
-                        Add description
-                      </button>
-                    )}
+                        <option value="all">Any status</option>
+
+                        {workItemStatusOptions.map((status) => (
+                          <option
+                            key={status.value}
+                            value={status.value}
+                          >
+                            {status.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <label>
+                      <span className="mb-1 block text-xs font-normal text-on-surface-variant">
+                        Type
+                      </span>
+
+                      <select
+                        value={customType}
+                        onChange={(event) =>
+                          setCustomType(
+                            event.target.value as CustomWorkItemType,
+                          )
+                        }
+                        className="h-8 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-2.5 text-xs outline-none focus:border-primary"
+                      >
+                        <option value="all">Any type</option>
+
+                        {workItemTypeOptions.map((type) => (
+                          <option
+                            key={type.value}
+                            value={type.value}
+                          >
+                            {type.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <label>
+                      <span className="mb-1 block text-xs font-normal text-on-surface-variant">
+                        Assignee
+                      </span>
+
+                      <select
+                        value={customAssignee}
+                        onChange={(event) =>
+                          setCustomAssignee(
+                            event.target.value as 'all' | 'me',
+                          )
+                        }
+                        className="h-8 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-2.5 text-xs outline-none focus:border-primary"
+                      >
+                        <option value="all">Anyone</option>
+                        <option value="me">Me</option>
+                      </select>
+                    </label>
                   </div>
                 )}
               </div>
-            </section>
 
-            <section className="overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest shadow-sm lg:col-span-4">
-              <div className="border-b border-outline-variant px-5 py-4">
-                <h2 className="font-semibold text-on-surface">
-                  Latest activity
-                </h2>
+              {projectWorkItems.length === 0 ? (
+                <div className="flex min-h-36 items-center justify-center border-t border-outline-variant/35 py-8">
+                  <div className="flex items-start gap-3">
+                    <span className="material-symbols-outlined mt-0.5 text-[18px] text-on-surface-variant">
+                      checklist
+                    </span>
 
-                <p className="mt-0.5 text-xs text-on-surface-variant">
-                  Recent changes in this project
-                </p>
-              </div>
+                    <div>
+                      <p className="text-sm font-medium text-on-surface">
+                        No work items yet
+                      </p>
 
-              {projectActivities.length > 0 ? (
-                <div className="divide-y divide-outline-variant">
-                  {projectActivities.map((activity) => (
-                    <div
-                      key={activity.id}
-                      className="flex gap-3 px-5 py-4"
-                    >
-                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-surface-container-high text-on-surface-variant">
-                        <span className="material-symbols-outlined text-[17px]">
-                          {activity.icon}
-                        </span>
-                      </div>
-
-                      <div className="min-w-0">
-                        <div className="text-sm font-medium text-on-surface">
-                          {activity.title}
-                        </div>
-
-                        <div className="mt-1 text-xs text-on-surface-variant">
-                          {activity.meta}
-                        </div>
-                      </div>
+                      <p className="mt-1 max-w-md text-xs leading-5 text-on-surface-variant">
+                        Work created for this project will appear here.
+                      </p>
                     </div>
-                  ))}
+                  </div>
+                </div>
+              ) : focusedWorkItems.length > 0 ? (
+                <div className="border-t border-outline-variant/35">
+                  <WorkItemsList items={focusedWorkItems.slice(0, 5)} />
                 </div>
               ) : (
-                <div className="flex min-h-40 flex-col items-center justify-center px-5 py-8 text-center">
-                  <span className="material-symbols-outlined text-[22px] text-on-surface-variant">
-                    history
-                  </span>
+                <div className="flex min-h-28 items-center justify-center border-t border-outline-variant/35 py-7">
+                  <div className="flex items-start gap-3">
+                    <span className="material-symbols-outlined mt-0.5 text-[18px] text-on-surface-variant">
+                      filter_alt_off
+                    </span>
 
-                  <p className="mt-2 text-sm font-medium text-on-surface">
-                    No activity yet
-                  </p>
+                    <div>
+                      <p className="text-sm font-medium text-on-surface">
+                        No work items match this focus
+                      </p>
 
-                  <p className="mt-1 max-w-xs text-xs leading-5 text-on-surface-variant">
-                    Recent project changes will appear here.
-                  </p>
+                      <p className="mt-1 text-xs text-on-surface-variant">
+                        Choose another preset or customize the filter.
+                      </p>
+                    </div>
+                  </div>
                 </div>
               )}
             </section>
           </div>
 
-          <section className="overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest shadow-sm">
-            <div className="flex flex-col gap-4 border-b border-outline-variant px-6 py-4 lg:flex-row lg:items-center lg:justify-between">
+          <aside className="min-w-0">
+            <div className="flex min-h-8 items-center border-b border-outline-variant/50 pb-3">
+              <h2 className="text-sm font-semibold text-on-surface">
+                Latest activity
+              </h2>
+            </div>
+
+            {projectActivities.length > 0 ? (
               <div>
-                <h2 className="font-semibold text-on-surface">
-                  Work Items
-                </h2>
-
-                <p className="mt-0.5 text-xs text-on-surface-variant">
-                  Focus on the project work that currently needs attention.
-                </p>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setActiveTab('work-items')}
-                className="inline-flex items-center gap-1 text-sm font-medium text-primary transition hover:opacity-75"
-              >
-                View all
-
-                <span className="material-symbols-outlined text-[17px]">
-                  arrow_forward
-                </span>
-              </button>
-            </div>
-
-            <div className="border-b border-outline-variant bg-surface-container-low/45 px-6 py-3">
-              <div className="flex flex-wrap items-center gap-3">
-                <label className="flex items-center gap-2">
-                  <span className="text-xs font-medium text-on-surface-variant">
-                    Focus
-                  </span>
-
-                  <select
-                    value={workItemFocus}
-                    onChange={(event) =>
-                      setWorkItemFocus(event.target.value as WorkItemFocus)
-                    }
-                    className="h-9 rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm font-medium text-on-surface outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15"
-                  >
-                    <option value="due-3-days">Due next 3 days</option>
-                    <option value="due-week">Due this week</option>
-                    <option value="overdue">Overdue</option>
-                    <option value="blocked">Blocked</option>
-                    <option value="mine">My open work</option>
-                    <option value="recently-completed">
-                      Recently completed
-                    </option>
-                    <option value="all-open">All open</option>
-                    <option value="custom">Custom filter…</option>
-                  </select>
-                </label>
-
-                {workItemFocus !== 'custom' && (
-                  <button
-                    type="button"
-                    onClick={() => setWorkItemFocus('custom')}
-                    className="inline-flex h-9 items-center gap-1.5 rounded-lg px-3 text-sm font-medium text-on-surface-variant transition hover:bg-surface-container-high hover:text-on-surface"
-                  >
-                    <span className="material-symbols-outlined text-[17px]">
-                      tune
-                    </span>
-                    Customize
-                  </button>
-                )}
-
-                <span className="ml-auto text-xs text-on-surface-variant">
-                  {focusedWorkItems.length}{' '}
-                  {focusedWorkItems.length === 1 ? 'item' : 'items'}
-                </span>
-              </div>
-
-              {workItemFocus === 'custom' && (
-                <div className="mt-3 grid gap-3 border-t border-outline-variant pt-3 sm:grid-cols-2 xl:grid-cols-4">
-                  <label>
-                    <span className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.1em] text-on-surface-variant">
-                      Due within
-                    </span>
-
-                    <div className="flex h-9 items-center rounded-lg border border-outline-variant bg-surface-container-lowest">
-                      <input
-                        type="number"
-                        min={1}
-                        max={90}
-                        value={customDueDays}
-                        onChange={(event) =>
-                          setCustomDueDays(
-                            Math.max(1, Number(event.target.value) || 1),
-                          )
-                        }
-                        className="min-w-0 flex-1 bg-transparent px-3 text-sm outline-none"
-                      />
-
-                      <span className="pr-3 text-xs text-on-surface-variant">
-                        days
-                      </span>
-                    </div>
-                  </label>
-
-                  <label>
-                    <span className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.1em] text-on-surface-variant">
-                      Status
-                    </span>
-
-                    <select
-                      value={customStatus}
-                      onChange={(event) =>
-                        setCustomStatus(
-                          event.target.value as CustomWorkItemStatus,
-                        )
-                      }
-                      className="h-9 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm outline-none focus:border-primary"
-                    >
-                      <option value="all">Any status</option>
-
-                      {workItemStatusOptions.map((status) => (
-                        <option
-                          key={status.value}
-                          value={status.value}
-                        >
-                          {status.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-
-                  <label>
-                    <span className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.1em] text-on-surface-variant">
-                      Type
-                    </span>
-
-                    <select
-                      value={customType}
-                      onChange={(event) =>
-                        setCustomType(
-                          event.target.value as CustomWorkItemType,
-                        )
-                      }
-                      className="h-9 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm outline-none focus:border-primary"
-                    >
-                      <option value="all">Any type</option>
-
-                      {workItemTypeOptions.map((type) => (
-                        <option
-                          key={type.value}
-                          value={type.value}
-                        >
-                          {type.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-
-                  <label>
-                    <span className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.1em] text-on-surface-variant">
-                      Assignee
-                    </span>
-
-                    <select
-                      value={customAssignee}
-                      onChange={(event) =>
-                        setCustomAssignee(
-                          event.target.value as 'all' | 'me',
-                        )
-                      }
-                      className="h-9 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm outline-none focus:border-primary"
-                    >
-                      <option value="all">Anyone</option>
-                      <option value="me">Me</option>
-                    </select>
-                  </label>
-                </div>
-              )}
-            </div>
-
-            {projectWorkItems.length === 0 ? (
-              <div className="flex min-h-48 flex-col items-center justify-center px-6 py-10 text-center">
-                <div className="flex h-11 w-11 items-center justify-center rounded-full bg-surface-container-high text-on-surface-variant">
-                  <span className="material-symbols-outlined text-[22px]">
-                    checklist
-                  </span>
-                </div>
-
-                <p className="mt-3 text-sm font-semibold text-on-surface">
-                  No work items yet
-                </p>
-
-                <p className="mt-1 max-w-md text-xs leading-5 text-on-surface-variant">
-                  Work created for this project will appear here. The full Work
-                  Items workflow is the next UI slice.
-                </p>
-              </div>
-            ) : focusedWorkItems.length > 0 ? (
-              <div className="divide-y divide-outline-variant">
-                {focusedWorkItems.slice(0, 5).map((item) => (
+                {projectActivities.map((activity, index) => (
                   <div
-                    key={item.id}
-                    className="grid gap-3 px-6 py-4 sm:grid-cols-[minmax(0,1fr)_130px_150px_110px] sm:items-center"
+                    key={activity.id}
+                    className={[
+                      'flex min-h-[48px] items-center gap-2.5 py-2.5',
+                      index > 0
+                        ? 'border-t border-outline-variant/25'
+                        : '',
+                    ].join(' ')}
                   >
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="material-symbols-outlined text-[18px] text-on-surface-variant">
-                          {item.type === 'milestone'
-                            ? 'flag'
-                            : item.type === 'deliverable'
-                              ? 'inventory_2'
-                              : item.type === 'epic'
-                                ? 'account_tree'
-                                : 'check_box_outline_blank'}
-                        </span>
+                    <span className="material-symbols-outlined w-5 shrink-0 text-[15px] text-on-surface-variant">
+                      {activity.icon}
+                    </span>
 
-                        <span className="truncate text-sm font-medium text-on-surface">
-                          {item.title}
-                        </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-xs font-medium text-on-surface">
+                        {activity.title}
                       </div>
 
-                      <div className="mt-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-on-surface-variant sm:hidden">
-                        {workItemTypeLabels[item.type]}
+                      <div className="mt-0.5 truncate text-[11px] font-normal text-on-surface-variant">
+                        {activity.meta}
                       </div>
-                    </div>
-
-                    <div>
-                      <span className="text-xs font-medium text-on-surface-variant">
-                        {workItemTypeLabels[item.type]}
-                      </span>
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <span className="inline-flex rounded-full bg-surface-container-high px-2.5 py-1 text-xs font-medium text-on-surface">
-                        {workItemStatusLabels[item.status]}
-                      </span>
-
-                      {item.blockedReason && (
-                        <span
-                          title={item.blockedReason}
-                          className="inline-flex items-center gap-1 rounded-full bg-error-container px-2.5 py-1 text-xs font-medium text-error"
-                        >
-                          <span className="material-symbols-outlined text-[13px]">
-                            block
-                          </span>
-                          Blocked
-                        </span>
-                      )}
-                    </div>
-
-                    <div className="flex items-center justify-between gap-3 sm:justify-end">
-                      <span
-                        className={[
-                          'text-xs',
-                          item.dueInDays != null &&
-                          item.dueInDays < 0 &&
-                          item.status !== 'done'
-                            ? 'font-semibold text-error'
-                            : 'text-on-surface-variant',
-                        ].join(' ')}
-                      >
-                        {item.dueLabel ?? 'No due date'}
-                      </span>
                     </div>
                   </div>
                 ))}
               </div>
             ) : (
-              <div className="flex min-h-36 flex-col items-center justify-center px-6 py-8 text-center">
-                <span className="material-symbols-outlined text-[22px] text-on-surface-variant">
-                  filter_alt_off
+              <div className="flex min-h-28 items-start gap-2.5 py-5">
+                <span className="material-symbols-outlined mt-0.5 text-[16px] text-on-surface-variant">
+                  history
                 </span>
 
-                <p className="mt-2 text-sm font-medium text-on-surface">
-                  No Work Items match this focus
-                </p>
+                <div>
+                  <p className="text-xs font-medium text-on-surface">
+                    No activity yet
+                  </p>
 
-                <p className="mt-1 text-xs text-on-surface-variant">
-                  Choose another preset or customize the filter.
-                </p>
+                  <p className="mt-1 text-[11px] leading-5 text-on-surface-variant">
+                    Recent project changes will appear here.
+                  </p>
+                </div>
               </div>
             )}
-          </section>
+          </aside>
         </div>
       )}
 
