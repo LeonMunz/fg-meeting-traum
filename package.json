@@ -7,9 +7,15 @@
   "scripts": {
     "dev": "npm run dev --workspace=web",
     "build": "npm run build --workspace=web",
-    "lint": "npm run lint --workspace=web"
+    "lint": "npm run lint --workspace=web",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:ui": "playwright test --ui"
   },
   "engines": {
     "node": ">=24"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1"
   }
 }
