@@ -4,6 +4,9 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from projects.models import ProjectMembership
+from work_items.views import serialize_work_item
+
 from research_groups.models import (
     ResearchGroupMembership,
 )
@@ -20,12 +23,14 @@ from .serializers import (
     MeetingItemSerializer,
     MeetingPatchSerializer,
     MeetingSerializer,
+    MeetingWorkItemCreateSerializer,
 )
 from .services import (
     MeetingDomainError,
     add_meeting_participant,
     create_meeting,
     create_meeting_item,
+    create_work_item_from_meeting_item,
     remove_meeting_participant,
     update_meeting,
     update_meeting_item,
@@ -526,4 +531,102 @@ class MeetingItemDetailView(APIView):
 
         return Response(
             MeetingItemSerializer(item).data
+        )
+
+
+
+class MeetingItemWorkItemCreateView(APIView):
+    """POST /api/meeting-items/{meeting_item_id}/work-items/
+
+    Create one canonical WorkItem from a MeetingItem and retain the
+    historical MeetingItem -> WorkItem relationship.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, meeting_item_id):
+        item = _require_meeting_item_access(
+            request,
+            meeting_item_id,
+        )
+        if item is None:
+            return Response(
+                {"error": "Meeting item not found"},
+                status=404,
+            )
+
+        serializer = MeetingWorkItemCreateSerializer(
+            data=request.data,
+        )
+        if not serializer.is_valid():
+            return Response(
+                serializer.errors,
+                status=400,
+            )
+
+        data = serializer.validated_data
+
+        membership = (
+            ProjectMembership.objects
+            .select_related(
+                "project",
+                "project__research_group",
+            )
+            .filter(
+                project_id=data["projectId"],
+                project__research_group_id=(
+                    item.meeting.research_group_id
+                ),
+                user=request.user,
+            )
+            .first()
+        )
+
+        if membership is None:
+            return Response(
+                {"error": "Project not found"},
+                status=404,
+            )
+
+        if membership.role == ProjectMembership.Role.VIEWER:
+            return Response(
+                {
+                    "error": (
+                        "A viewer cannot create WorkItems."
+                    )
+                },
+                status=403,
+            )
+
+        try:
+            work_item = create_work_item_from_meeting_item(
+                meeting_item=item,
+                project=membership.project,
+                actor=request.user,
+                type=data["type"],
+                title=data["title"],
+                description=data.get(
+                    "description",
+                    "",
+                ),
+                status=data.get("status"),
+                assignee_ids=data.get(
+                    "assigneeIds",
+                    [],
+                ),
+                parent_id=data.get("parentId"),
+                due_date=data.get("dueDate"),
+                blocked_reason=data.get(
+                    "blockedReason",
+                ),
+            )
+        except MeetingDomainError as exc:
+            return Response(
+                {"error": exc.message},
+                status=400,
+            )
+
+        return Response(
+            serialize_work_item(work_item),
+            status=201,
         )

@@ -52,7 +52,7 @@ def _require_project_access(request, project_id):
     return membership.project, membership
 
 
-def _serialize_work_item(work_item):
+def serialize_work_item(work_item):
     """Serialize a WorkItem to the API response shape."""
     serializer = WorkItemSerializer(work_item)
     data = serializer.data
@@ -105,7 +105,7 @@ class ProjectWorkItemListCreateView(APIView):
             project_id=project_id,
         ).select_related("project", "created_by", "parent")
 
-        data = [_serialize_work_item(wi) for wi in work_items]
+        data = [serialize_work_item(wi) for wi in work_items]
         return Response(data)
 
     def post(self, request, project_id):
@@ -162,7 +162,7 @@ class ProjectWorkItemListCreateView(APIView):
         except WorkItemDomainError as exc:
             return Response({"error": exc.message}, status=400)
 
-        return Response(_serialize_work_item(wi), status=201)
+        return Response(serialize_work_item(wi), status=201)
 
 
 # ── WorkItem Detail (Read/Update) ──
@@ -199,7 +199,7 @@ class WorkItemDetailView(APIView):
                 status=404,
             )
 
-        return Response(_serialize_work_item(work_item))
+        return Response(serialize_work_item(work_item))
 
     def patch(self, request, work_item_id):
         try:
@@ -273,7 +273,7 @@ class WorkItemDetailView(APIView):
             return Response({"error": exc.message}, status=400)
 
         work_item.refresh_from_db()
-        return Response(_serialize_work_item(work_item))
+        return Response(serialize_work_item(work_item))
 
 
 # ── My Work Authorized Projection ──
@@ -337,5 +337,5 @@ class MyWorkView(APIView):
             .select_related("project", "created_by", "parent")
         )
 
-        data = [_serialize_work_item(wi) for wi in work_items]
+        data = [serialize_work_item(wi) for wi in work_items]
         return Response(data)
