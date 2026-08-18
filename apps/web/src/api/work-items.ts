@@ -6,6 +6,7 @@ import {
 
 import type {
   ApiCreateWorkItemInput,
+  ApiPersonalWorkItem,
   ApiUpdateWorkItemInput,
   ApiWorkItem,
 } from './types'
@@ -47,9 +48,14 @@ export async function updateWorkItem(
 }
 
 export async function listMyWork(
-  researchGroupId: number,
-): Promise<ApiWorkItem[]> {
-  return apiGet<ApiWorkItem[]>(
-    `/api/research-groups/${researchGroupId}/my-work/`,
+  researchGroupId?: number,
+): Promise<ApiPersonalWorkItem[]> {
+  const query =
+    researchGroupId == null
+      ? ''
+      : `?group=${researchGroupId}`
+
+  return apiGet<ApiPersonalWorkItem[]>(
+    `/api/me/work-items/${query}`,
   )
 }

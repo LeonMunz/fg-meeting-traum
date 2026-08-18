@@ -339,3 +339,101 @@ class MyWorkView(APIView):
 
         data = [serialize_work_item(wi) for wi in work_items]
         return Response(data)
+
+
+# ── Personal My Work Projection ──
+
+
+class PersonalMyWorkView(APIView):
+    """GET /api/me/work-items/
+
+    Personal projection of all WorkItems assigned to the current user
+    across every Research Group they currently belong to.
+
+    Optional:
+        ?group=<research_group_id>
+
+    Authorization remains based on canonical memberships:
+    - current ResearchGroupMembership
+    - current ProjectMembership with owner/member role
+    - current WorkItem assignment
+
+    Project privacy is unchanged. Research Group membership alone never
+    grants access to Project work.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        group_param = request.query_params.get("group")
+
+        group_id = None
+
+        if group_param is not None:
+            try:
+                group_id = int(group_param)
+            except (TypeError, ValueError):
+                return Response(
+                    {"error": "group must be a valid Research Group ID."},
+                    status=400,
+                )
+
+            if group_id <= 0:
+                return Response(
+                    {"error": "group must be a valid Research Group ID."},
+                    status=400,
+                )
+
+            if not ResearchGroupMembership.objects.filter(
+                research_group_id=group_id,
+                user=request.user,
+            ).exists():
+                # Do not leak whether another Research Group exists.
+                return Response(
+                    {"error": "Research group not found"},
+                    status=404,
+                )
+
+        work_items = (
+            WorkItem.objects
+            .filter(
+                assignee_relations__user=request.user,
+                project__memberships__user=request.user,
+                project__memberships__role__in=[
+                    ProjectMembership.Role.OWNER,
+                    ProjectMembership.Role.MEMBER,
+                ],
+                project__research_group__memberships__user=request.user,
+            )
+            .distinct()
+            .select_related(
+                "project",
+                "project__research_group",
+                "created_by",
+                "parent",
+            )
+        )
+
+        if group_id is not None:
+            work_items = work_items.filter(
+                project__research_group_id=group_id,
+            )
+
+        data = []
+
+        for work_item in work_items:
+            item = serialize_work_item(work_item)
+
+            item.update({
+                "projectName": work_item.project.name,
+                "researchGroupId": (
+                    work_item.project.research_group_id
+                ),
+                "researchGroupName": (
+                    work_item.project.research_group.name
+                ),
+            })
+
+            data.append(item)
+
+        return Response(data)

@@ -112,6 +112,7 @@ function getInitials(person: {
 
   return `${first}${last}`.toUpperCase()
 }
+import { useSyncResearchGroupContext } from '../research-group/useSyncResearchGroupContext'
 
 export function MeetingDetailPage() {
   const navigate = useNavigate()
@@ -127,6 +128,11 @@ export function MeetingDetailPage() {
 
   const [meeting, setMeeting] =
     useState<ApiMeeting | null>(null)
+
+  useSyncResearchGroupContext(
+    meeting?.researchGroupId,
+  )
+
 
   const [participants, setParticipants] =
     useState<ApiMeetingParticipant[]>([])

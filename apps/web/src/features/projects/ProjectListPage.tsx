@@ -16,7 +16,7 @@ import type {
   ApiProjectRole,
   ApiProjectStatus,
 } from '../../api/types'
-import { useResearchGroup } from '../research-group/useResearchGroup'
+import { useResearchGroupListScope } from '../research-group/useResearchGroupListScope'
 import {
   CreateProjectDialog,
   type CreateProjectInput,
@@ -132,7 +132,7 @@ export function ProjectListPage() {
     activeResearchGroup,
     loading: researchGroupsLoading,
     error: researchGroupsError,
-  } = useResearchGroup()
+  } = useResearchGroupListScope()
 
   const [projects, setProjects] = useState<ApiProject[]>([])
   const [projectsLoading, setProjectsLoading] =

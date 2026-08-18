@@ -56,7 +56,7 @@ export async function openProjects(
     .click()
 
   await expect(page).toHaveURL(
-    /\/projects$/,
+    /\/projects\?group=\d+$/,
   )
 }
 

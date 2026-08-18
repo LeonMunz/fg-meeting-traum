@@ -571,6 +571,7 @@ function getMembershipErrorMessage(
 
   return fallback
 }
+import { useSyncResearchGroupContext } from '../research-group/useSyncResearchGroupContext'
 
 export function ProjectDetailPage() {
   const { projectId } = useParams()
@@ -580,6 +581,11 @@ export function ProjectDetailPage() {
   const [activeTab, setActiveTab] = useState<ProjectTab>('overview')
 
   const [project, setProject] = useState<ProjectDetail | null>(null)
+
+  useSyncResearchGroupContext(
+    project?.researchGroupId,
+  )
+
   const [projectLoading, setProjectLoading] = useState(true)
   const [projectLoadError, setProjectLoadError] =
     useState<'not-found' | 'error' | null>(null)

@@ -14,10 +14,16 @@ from projects.views import (
     ResearchGroupMembersView,
     ResearchGroupProjectListView,
 )
-from research_groups.views import ResearchGroupDetailView, ResearchGroupListView
+from research_groups.views import (
+    ResearchGroupDetailView,
+    ResearchGroupListView,
+    ResearchGroupMembershipDetailView,
+    ResearchGroupMembershipListView,
+)
 
 
 from work_items.views import (
+    PersonalMyWorkView,
     MyWorkView,
     ProjectWorkItemListCreateView,
     WorkItemDetailView,
@@ -55,6 +61,8 @@ urlpatterns = [
     path('api/auth/me/', MeView.as_view(), name='me'),
     path('api/research-groups/', ResearchGroupListView.as_view(), name='research-groups-list'),
     path('api/research-groups/<int:pk>/', ResearchGroupDetailView.as_view(), name='research-groups-detail'),
+    path('api/research-groups/<int:group_id>/memberships/', ResearchGroupMembershipListView.as_view(), name='research-group-memberships-list'),
+    path('api/research-groups/<int:group_id>/memberships/<int:membership_id>/', ResearchGroupMembershipDetailView.as_view(), name='research-group-membership-detail'),
     path('api/research-groups/<int:group_id>/projects/', ResearchGroupProjectListView.as_view(), name='research-group-projects-list'),
     path('api/projects/<int:project_id>/', ProjectDetailView.as_view(), name='project-detail'),
     path('api/projects/<int:project_id>/memberships/', ProjectMembershipListView.as_view(), name='project-memberships-list'),
@@ -64,6 +72,7 @@ urlpatterns = [
     path('api/projects/<int:project_id>/work-items/', ProjectWorkItemListCreateView.as_view(), name='project-work-items-list'),
     path('api/work-items/<int:work_item_id>/', WorkItemDetailView.as_view(), name='work-item-detail'),
     # My Work — authorized projection over assigned WorkItems
+    path('api/me/work-items/', PersonalMyWorkView.as_view(), name='personal-my-work'),
     path('api/research-groups/<int:group_id>/my-work/', MyWorkView.as_view(), name='research-group-my-work'),
 
     # Meetings

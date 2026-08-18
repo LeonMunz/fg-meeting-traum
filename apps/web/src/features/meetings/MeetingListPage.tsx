@@ -15,7 +15,7 @@ import type {
   ApiMeeting,
   ApiMeetingStatus,
 } from '../../api/types'
-import { useResearchGroup } from '../research-group/useResearchGroup'
+import { useResearchGroupListScope } from '../research-group/useResearchGroupListScope'
 import {
   CreateMeetingDialog,
   type CreateMeetingInput,
@@ -74,7 +74,7 @@ export function MeetingListPage() {
     activeResearchGroup,
     loading: researchGroupsLoading,
     error: researchGroupsError,
-  } = useResearchGroup()
+  } = useResearchGroupListScope()
 
   const [meetings, setMeetings] =
     useState<ApiMeeting[]>([])
