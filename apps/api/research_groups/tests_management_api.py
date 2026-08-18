@@ -16,7 +16,7 @@ from research_groups.models import (
 User = get_user_model()
 
 
-class ResearchGroupManagementApiTest(
+class ResearchGroupManagementApiFixture(
     APITestCase,
 ):
     @classmethod
@@ -86,6 +86,9 @@ class ResearchGroupManagementApiTest(
             200,
         )
 
+class ResearchGroupManagementApiTest(
+    ResearchGroupManagementApiFixture,
+):
     def test_admin_can_update_group_name(self):
         self.login("rg_admin")
 
@@ -432,7 +435,7 @@ class ResearchGroupManagementApiTest(
 
 
 class ResearchGroupMemberCandidateApiTest(
-    ResearchGroupManagementApiTest,
+    ResearchGroupManagementApiFixture,
 ):
     def test_admin_can_search_member_candidates(
         self,
