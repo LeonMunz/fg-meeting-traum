@@ -9,6 +9,7 @@ import type {
   ApiAddProjectMembershipInput,
   ApiCreateProjectInput,
   ApiDeleteProjectMembershipResponse,
+  ApiDeleteProjectResponse,
   ApiProject,
   ApiProjectMembership,
   ApiResearchGroupMember,
@@ -49,6 +50,32 @@ export async function updateProject(
   return apiPatch<ApiProject>(
     `/api/projects/${projectId}/`,
     input,
+  )
+}
+
+export async function archiveProject(
+  projectId: number,
+): Promise<ApiProject> {
+  return apiPost<ApiProject>(
+    `/api/projects/${projectId}/archive/`,
+    {},
+  )
+}
+
+export async function restoreProject(
+  projectId: number,
+): Promise<ApiProject> {
+  return apiPost<ApiProject>(
+    `/api/projects/${projectId}/restore/`,
+    {},
+  )
+}
+
+export async function deleteProject(
+  projectId: number,
+): Promise<ApiDeleteProjectResponse> {
+  return apiDelete<ApiDeleteProjectResponse>(
+    `/api/projects/${projectId}/`,
   )
 }
 
