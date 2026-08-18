@@ -12,14 +12,21 @@ import {
   type DirectoryUser,
 } from './AddProjectMemberDialog'
 import { RemoveProjectMemberDialog } from './RemoveProjectMemberDialog'
+import {
+  ProjectLifecycleDialog,
+  type ProjectLifecycleAction,
+} from './ProjectLifecycleDialog'
 import { CreateWorkItemDialog } from './CreateWorkItemDialog'
 import { ApiError } from '../../api/client'
 import {
   addProjectMembership,
+  archiveProject,
+  deleteProject,
   getProject,
   listProjectMemberships,
   listResearchGroupMembers,
   removeProjectMembership,
+  restoreProject,
   updateProject,
   updateProjectMembership,
 } from '../../api/projects'
@@ -98,6 +105,7 @@ type ProjectDetail = {
   name: string
   description: string
   status: ProjectStatus
+  archivedAt: string | null
   role: ProjectRole
   updatedLabel: string
 }
@@ -604,6 +612,12 @@ export function ProjectDetailPage() {
     useState(false)
   const [settingsError, setSettingsError] =
     useState<string | null>(null)
+  const [lifecycleAction, setLifecycleAction] =
+    useState<ProjectLifecycleAction | null>(null)
+  const [lifecycleSaving, setLifecycleSaving] =
+    useState(false)
+  const [lifecycleError, setLifecycleError] =
+    useState<string | null>(null)
 
   const [members, setMembers] = useState<ProjectMember[]>([])
   const [directoryUsers, setDirectoryUsers] =
@@ -729,6 +743,7 @@ export function ProjectDetailPage() {
           name: apiProject.name,
           description: apiProject.description,
           status: apiProject.status,
+          archivedAt: apiProject.archivedAt,
           role: apiProject.currentUserRole,
           updatedLabel,
         })
@@ -858,6 +873,8 @@ export function ProjectDetailPage() {
     setAddMemberDialogOpen(false)
     setMemberToRemove(null)
     setCreateWorkItemDialogOpen(false)
+    setLifecycleAction(null)
+    setLifecycleError(null)
 
     if (project) {
       setProjectName(project.name)
@@ -1025,9 +1042,144 @@ export function ProjectDetailPage() {
     (item) => mapApiWorkItem(item, members),
   )
 
-  const isReadOnly = currentMemberRole === 'viewer'
-  const canManageMembers = currentMemberRole === 'owner'
-  const canEditProjectSettings = currentMemberRole === 'owner'
+  const isArchived = project.archivedAt !== null
+  const isViewer = currentMemberRole === 'viewer'
+  const isOwner = currentMemberRole === 'owner'
+
+  const isReadOnly =
+    isViewer || isArchived
+
+  const canManageMembers =
+    isOwner && !isArchived
+
+  const canEditProjectSettings =
+    isOwner && !isArchived
+
+  const canManageProjectLifecycle =
+    isOwner
+
+  const projectHasWork =
+    apiWorkItems.length > 0
+
+  const canDeleteProject =
+    canManageProjectLifecycle &&
+    !workItemsLoading &&
+    !workItemsError &&
+    !projectHasWork
+
+  const applyLifecycleProject = (
+    archivedAt: string | null,
+  ) => {
+    setProject((currentProject) =>
+      currentProject
+        ? {
+            ...currentProject,
+            archivedAt,
+          }
+        : currentProject,
+    )
+  }
+
+  const handleRestoreProject = async () => {
+    if (
+      !canManageProjectLifecycle ||
+      lifecycleSaving
+    ) {
+      return
+    }
+
+    const numericProjectId = Number(project.id)
+
+    if (
+      !Number.isInteger(numericProjectId) ||
+      numericProjectId <= 0
+    ) {
+      setLifecycleError('Invalid Project ID.')
+      return
+    }
+
+    setLifecycleSaving(true)
+    setLifecycleError(null)
+
+    try {
+      const restored = await restoreProject(
+        numericProjectId,
+      )
+
+      applyLifecycleProject(
+        restored.archivedAt,
+      )
+    } catch (error) {
+      setLifecycleError(
+        getMembershipErrorMessage(
+          error,
+          'Project could not be restored.',
+        ),
+      )
+    } finally {
+      setLifecycleSaving(false)
+    }
+  }
+
+  const handleConfirmLifecycle = async () => {
+    if (
+      !lifecycleAction ||
+      !canManageProjectLifecycle ||
+      lifecycleSaving
+    ) {
+      return
+    }
+
+    const numericProjectId = Number(project.id)
+
+    if (
+      !Number.isInteger(numericProjectId) ||
+      numericProjectId <= 0
+    ) {
+      setLifecycleError('Invalid Project ID.')
+      return
+    }
+
+    setLifecycleSaving(true)
+    setLifecycleError(null)
+
+    try {
+      if (lifecycleAction === 'archive') {
+        const archived = await archiveProject(
+          numericProjectId,
+        )
+
+        applyLifecycleProject(
+          archived.archivedAt,
+        )
+
+        setLifecycleAction(null)
+        return
+      }
+
+      await deleteProject(
+        numericProjectId,
+      )
+
+      navigate(
+        `/projects?group=${project.researchGroupId}`,
+        { replace: true },
+      )
+    } catch (error) {
+      setLifecycleError(
+        getMembershipErrorMessage(
+          error,
+          lifecycleAction === 'archive'
+            ? 'Project could not be archived.'
+            : 'Project could not be deleted.',
+        ),
+      )
+
+      setLifecycleAction(null)
+    } finally {
+      setLifecycleSaving(false)
+    }
+  }
 
   const settingsDirty =
     settingsName.trim() !== projectName ||
@@ -1235,7 +1387,9 @@ export function ProjectDetailPage() {
   }) => {
     if (isReadOnly) {
       throw new Error(
-        'A viewer cannot create Work Items.',
+        isArchived
+          ? 'Archived Projects are read-only. Restore the Project first.'
+          : 'A viewer cannot create Work Items.',
       )
     }
 
@@ -1386,7 +1540,10 @@ export function ProjectDetailPage() {
         to="/projects"
         className="inline-flex items-center gap-1.5 text-sm font-medium text-on-surface-variant transition hover:text-primary"
       >
-        <span className="material-symbols-outlined text-[18px]">
+        <span
+          aria-hidden="true"
+          className="material-symbols-outlined text-[18px]"
+        >
           arrow_back
         </span>
         Projects
@@ -1446,7 +1603,28 @@ export function ProjectDetailPage() {
           </div>
         </div>
 
-        {isReadOnly && (
+        {isArchived && (
+          <div className="mt-6 flex items-start gap-3 rounded-xl border border-outline-variant bg-surface-container-low px-4 py-3.5">
+            <span className="material-symbols-outlined mt-0.5 text-[19px] text-on-surface-variant">
+              archive
+            </span>
+
+            <div>
+              <div className="text-sm font-medium text-on-surface">
+                Archived project
+              </div>
+
+              <p className="mt-0.5 text-xs leading-5 text-on-surface-variant">
+                This project is kept for reference and is read-only.
+                {canManageProjectLifecycle
+                  ? ' Restore it from Settings to continue working.'
+                  : ''}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {isViewer && !isArchived && (
           <div className="mt-6 flex items-start gap-3 rounded-xl border border-outline-variant bg-surface-container-low px-4 py-3.5">
             <span className="material-symbols-outlined mt-0.5 text-[19px] text-on-surface-variant">
               visibility
@@ -2023,8 +2201,9 @@ export function ProjectDetailPage() {
               </span>
 
               <p className="text-xs leading-5 text-on-surface-variant">
-                Only the project owner can add or remove members and change
-                project roles.
+                {isArchived
+                  ? 'Archived projects are read-only. Restore this project before changing members or roles.'
+                  : 'Only the project owner can add or remove members and change project roles.'}
               </p>
             </div>
           )}
@@ -2127,7 +2306,9 @@ export function ProjectDetailPage() {
                 </div>
 
                 <p className="mt-0.5 text-xs leading-5 text-on-surface-variant">
-                  Only project owners can change project settings.
+                  {isArchived
+                    ? 'Restore this project before changing its settings.'
+                    : 'Only project owners can change project settings.'}
                 </p>
               </div>
             </div>
@@ -2312,7 +2493,123 @@ export function ProjectDetailPage() {
               </div>
             </fieldset>
 
+            {canManageProjectLifecycle && (
+              <div className="border-t border-outline-variant pt-6">
+                <div className="flex max-w-3xl items-start justify-between gap-6">
+                  <div>
+                    <h3 className="text-sm font-medium text-on-surface">
+                      {isArchived
+                        ? 'Restore project'
+                        : 'Archive project'}
+                    </h3>
+
+                    <p className="mt-1 max-w-xl text-xs leading-5 text-on-surface-variant">
+                      {isArchived
+                        ? 'Return this project to the current workspace and enable editing again.'
+                        : 'Remove this project from the current workspace without losing its work, members or history.'}
+                    </p>
+                  </div>
+
+                  {isArchived ? (
+                    <button
+                      type="button"
+                      disabled={lifecycleSaving}
+                      onClick={() =>
+                        void handleRestoreProject()
+                      }
+                      className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-lg border border-outline-variant bg-surface-container-lowest px-3.5 text-sm font-semibold text-on-surface transition hover:border-primary/40 hover:bg-surface-container-low disabled:cursor-not-allowed disabled:opacity-45"
+                    >
+                      <span
+                        aria-hidden="true"
+                        className="material-symbols-outlined text-[18px]"
+                      >
+                        unarchive
+                      </span>
+                      Restore
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={lifecycleSaving}
+                      onClick={() => {
+                        setLifecycleError(null)
+                        setLifecycleAction('archive')
+                      }}
+                      className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-lg border border-outline-variant bg-surface-container-lowest px-3.5 text-sm font-semibold text-on-surface transition hover:border-primary/40 hover:bg-surface-container-low disabled:cursor-not-allowed disabled:opacity-45"
+                    >
+                      <span
+                        aria-hidden="true"
+                        className="material-symbols-outlined text-[18px]"
+                      >
+                        archive
+                      </span>
+                      Archive
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {canManageProjectLifecycle && (
+              <div className="border-t border-error/20 pt-6">
+                <div className="flex max-w-3xl items-start justify-between gap-6">
+                  <div>
+                    <h3 className="text-sm font-medium text-error">
+                      Delete project
+                    </h3>
+
+                    <p className="mt-1 max-w-xl text-xs leading-5 text-on-surface-variant">
+                      Only an empty project can be permanently deleted.
+                      Projects containing work must be archived instead.
+                    </p>
+
+                    {!workItemsLoading &&
+                      projectHasWork && (
+                        <p className="mt-1.5 text-xs font-medium text-on-surface-variant">
+                          This project contains{' '}
+                          {apiWorkItems.length}{' '}
+                          {apiWorkItems.length === 1
+                            ? 'work item'
+                            : 'work items'}
+                          , so permanent deletion is unavailable.
+                        </p>
+                      )}
+                  </div>
+
+                  <button
+                    type="button"
+                    disabled={
+                      !canDeleteProject ||
+                      lifecycleSaving
+                    }
+                    onClick={() => {
+                      setLifecycleError(null)
+                      setLifecycleAction('delete')
+                    }}
+                    className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-lg border border-error/35 px-3.5 text-sm font-semibold text-error transition hover:bg-error-container/35 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <span
+                      aria-hidden="true"
+                      className="material-symbols-outlined text-[18px]"
+                    >
+                      delete
+                    </span>
+                    Delete
+                  </button>
+                </div>
+              </div>
+            )}
+
           </div>
+
+          {lifecycleError && (
+            <div
+              role="alert"
+              className="border-t border-error/20 bg-error-container/35 px-6 py-3 text-sm text-error"
+            >
+              {lifecycleError}
+            </div>
+          )}
 
           {settingsError && (
             <div
@@ -2375,6 +2672,21 @@ export function ProjectDetailPage() {
         excludedUserIds={members.map((member) => member.id)}
         onClose={() => setAddMemberDialogOpen(false)}
         onAdd={handleAddMember}
+      />
+
+      <ProjectLifecycleDialog
+        open={lifecycleAction !== null}
+        action={lifecycleAction ?? 'archive'}
+        projectName={projectName}
+        busy={lifecycleSaving}
+        onClose={() => {
+          if (!lifecycleSaving) {
+            setLifecycleAction(null)
+          }
+        }}
+        onConfirm={() =>
+          void handleConfirmLifecycle()
+        }
       />
 
       <RemoveProjectMemberDialog
