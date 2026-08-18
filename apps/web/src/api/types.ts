@@ -127,6 +127,12 @@ export interface ApiWorkItem {
   createdById: number
 }
 
+export interface ApiPersonalWorkItem extends ApiWorkItem {
+  projectName: string
+  researchGroupId: number
+  researchGroupName: string
+}
+
 export interface ApiCreateWorkItemInput {
   type: ApiWorkItemType
   title: string
