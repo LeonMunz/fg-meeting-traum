@@ -20,9 +20,17 @@ import type {
 
 export async function listProjects(
   researchGroupId: number,
+  options?: {
+    includeArchived?: boolean
+  },
 ): Promise<ApiProject[]> {
+  const query =
+    options?.includeArchived === true
+      ? '?includeArchived=true'
+      : ''
+
   return apiGet<ApiProject[]>(
-    `/api/research-groups/${researchGroupId}/projects/`,
+    `/api/research-groups/${researchGroupId}/projects/${query}`,
   )
 }
 

@@ -94,7 +94,23 @@ class ResearchGroupProjectListView(APIView):
         # AND that belong to this Research Group.
         projects = get_accessible_project_qs(request.user).filter(
             research_group_id=group_id,
-        ).select_related("research_group")
+        )
+
+        include_archived = (
+            request.query_params
+            .get("includeArchived", "")
+            .lower()
+            == "true"
+        )
+
+        if not include_archived:
+            projects = projects.filter(
+                archived_at__isnull=True,
+            )
+
+        projects = projects.select_related(
+            "research_group"
+        )
 
         data = []
         for project in projects:

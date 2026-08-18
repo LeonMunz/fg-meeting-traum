@@ -168,6 +168,47 @@ class ProjectListTest(_AuthMixin, APITestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), [])
 
+    def test_archived_project_is_hidden_by_default(self):
+        from projects.services import archive_project
+
+        archive_project(
+            project=self.data["paper_xyz"],
+            actor=self.data["alex"],
+        )
+
+        response = self._list_projects("alex")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), [])
+
+    def test_archived_project_can_be_included_explicitly(self):
+        from projects.services import archive_project
+
+        archive_project(
+            project=self.data["paper_xyz"],
+            actor=self.data["alex"],
+        )
+
+        self._login("alex")
+
+        response = self.client.get(
+            f"/api/research-groups/{self.data['group'].pk}/projects/"
+            "?includeArchived=true"
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        data = response.json()
+
+        self.assertEqual(len(data), 1)
+        self.assertEqual(
+            data[0]["id"],
+            self.data["paper_xyz"].pk,
+        )
+        self.assertIsNotNone(
+            data[0]["archivedAt"],
+        )
+
 
 # ── Project Detail Tests ──
 
