@@ -17,6 +17,11 @@ class Project(models.Model):
         choices=Status.choices,
         default=Status.ACTIVE,
     )
+    archived_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        db_index=True,
+    )
     research_group = models.ForeignKey(
         "research_groups.ResearchGroup",
         on_delete=models.RESTRICT,

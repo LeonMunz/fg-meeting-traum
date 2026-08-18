@@ -434,6 +434,11 @@ def _require_project_write_access(project: Project, actor) -> None:
     Stale ProjectMembership (whose ResearchGroupMembership no longer exists)
     is rejected.
     """
+    if project.archived_at is not None:
+        raise WorkItemDomainError(
+            "Archived Projects are read-only. Restore the Project first."
+        )
+
     # Check current ResearchGroupMembership
     if not ResearchGroupMembership.objects.filter(
         research_group=project.research_group,

@@ -196,7 +196,7 @@ class ProjectDetailView(APIView):
             )
 
         try:
-            update_project(
+            project = update_project(
                 project=project,
                 actor=request.user,
                 name=name if name is not None else None,
