@@ -508,7 +508,10 @@ export function AddResearchGroupMemberDialog({
             }
             className="inline-flex h-9 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-white transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-45"
           >
-            <span className="material-symbols-outlined text-[18px]">
+            <span
+              aria-hidden="true"
+              className="material-symbols-outlined text-[18px]"
+            >
               person_add
             </span>
 

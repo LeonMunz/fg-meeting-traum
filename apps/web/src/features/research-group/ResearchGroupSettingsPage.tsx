@@ -450,7 +450,10 @@ export function ResearchGroupSettingsPage() {
               }
               className="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg bg-primary px-3.5 text-sm font-semibold text-white transition hover:bg-primary/90"
             >
-              <span className="material-symbols-outlined text-[18px]">
+              <span
+                aria-hidden="true"
+                className="material-symbols-outlined text-[18px]"
+              >
                 person_add
               </span>
 
