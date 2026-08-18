@@ -20,6 +20,7 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         alex = User.objects.get(username="alex")
+        chris = User.objects.get(username="chris")
 
         group, _ = ResearchGroup.objects.get_or_create(
             name="Robotics Lab",
@@ -46,6 +47,27 @@ class Command(BaseCommand):
                 ResearchGroupMembership.Role.ADMIN
             )
             membership.save(
+                update_fields=["role"],
+            )
+
+        chris_membership, _ = (
+            ResearchGroupMembership.objects.get_or_create(
+                research_group=group,
+                user=chris,
+                defaults={
+                    "role": ResearchGroupMembership.Role.MEMBER,
+                },
+            )
+        )
+
+        if (
+            chris_membership.role
+            != ResearchGroupMembership.Role.MEMBER
+        ):
+            chris_membership.role = (
+                ResearchGroupMembership.Role.MEMBER
+            )
+            chris_membership.save(
                 update_fields=["role"],
             )
 
