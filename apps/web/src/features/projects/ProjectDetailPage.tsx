@@ -11,6 +11,10 @@ import {
   type AddableProjectRole,
   type DirectoryUser,
 } from './AddProjectMemberDialog'
+import {
+  ProjectAssignmentResolutionDialog,
+  type AssignmentResolutionMode,
+} from './ProjectAssignmentResolutionDialog'
 import { RemoveProjectMemberDialog } from './RemoveProjectMemberDialog'
 import {
   ProjectLifecycleDialog,
@@ -628,6 +632,13 @@ export function ProjectDetailPage() {
   const [addMemberDialogOpen, setAddMemberDialogOpen] = useState(false)
   const [memberToRemove, setMemberToRemove] =
     useState<ProjectMember | null>(null)
+  const [
+    assignmentResolutionAction,
+    setAssignmentResolutionAction,
+  ] = useState<{
+    member: ProjectMember
+    action: 'viewer' | 'remove'
+  } | null>(null)
   const [apiWorkItems, setApiWorkItems] =
     useState<ApiWorkItem[]>([])
   const [workItemsLoading, setWorkItemsLoading] =
@@ -872,6 +883,7 @@ export function ProjectDetailPage() {
   useEffect(() => {
     setAddMemberDialogOpen(false)
     setMemberToRemove(null)
+    setAssignmentResolutionAction(null)
     setCreateWorkItemDialogOpen(false)
     setLifecycleAction(null)
     setLifecycleError(null)
@@ -1066,6 +1078,91 @@ export function ProjectDetailPage() {
     !workItemsLoading &&
     !workItemsError &&
     !projectHasWork
+
+  const getAssignmentCountForMember = (
+    memberId: string,
+  ) => {
+    const numericMemberId = Number(memberId)
+
+    if (
+      !Number.isInteger(numericMemberId) ||
+      numericMemberId <= 0
+    ) {
+      return 0
+    }
+
+    return apiWorkItems.filter(
+      (item) =>
+        item.assigneeIds.includes(
+          numericMemberId,
+        ),
+    ).length
+  }
+
+  const assignmentResolutionCount =
+    assignmentResolutionAction
+      ? getAssignmentCountForMember(
+          assignmentResolutionAction.member.id,
+        )
+      : 0
+
+  const assignmentResolutionCandidates =
+    assignmentResolutionAction
+      ? sortedMembers
+          .filter(
+            (member) =>
+              member.id !==
+                assignmentResolutionAction.member.id &&
+              member.role !== 'viewer',
+          )
+          .map((member) => ({
+            id: member.id,
+            name: member.name,
+            username: member.username,
+            initials: member.initials,
+          }))
+      : []
+
+  const applyAssignmentResolutionToWorkItems = (
+    targetUserId: number,
+    resolution: AssignmentResolutionMode,
+    replacementUserId: number | null,
+  ) => {
+    setApiWorkItems((currentItems) =>
+      currentItems.map((item) => {
+        if (
+          !item.assigneeIds.includes(
+            targetUserId,
+          )
+        ) {
+          return item
+        }
+
+        const remainingAssigneeIds =
+          item.assigneeIds.filter(
+            (assigneeId) =>
+              assigneeId !== targetUserId,
+          )
+
+        if (
+          resolution === 'transfer' &&
+          replacementUserId !== null &&
+          !remainingAssigneeIds.includes(
+            replacementUserId,
+          )
+        ) {
+          remainingAssigneeIds.push(
+            replacementUserId,
+          )
+        }
+
+        return {
+          ...item,
+          assigneeIds: remainingAssigneeIds,
+        }
+      }),
+    )
+  }
 
   const applyLifecycleProject = (
     archivedAt: string | null,
@@ -1312,6 +1409,34 @@ export function ProjectDetailPage() {
 
     setMembersError(null)
 
+    if (role === 'viewer') {
+      if (workItemsLoading) {
+        setMembersError(
+          'Work items are still loading. Try again in a moment.',
+        )
+        return
+      }
+
+      if (workItemsError) {
+        setMembersError(
+          'Work items could not be verified. Reload them before changing this member to viewer.',
+        )
+        return
+      }
+
+      if (
+        getAssignmentCountForMember(
+          targetMember.id,
+        ) > 0
+      ) {
+        setAssignmentResolutionAction({
+          member: targetMember,
+          action: 'viewer',
+        })
+        return
+      }
+    }
+
     try {
       const membership =
         await updateProjectMembership(
@@ -1335,6 +1460,166 @@ export function ProjectDetailPage() {
         getMembershipErrorMessage(
           error,
           'Project role could not be changed.',
+        ),
+      )
+    }
+  }
+
+  const handleRequestRemoveMember = (
+    member: ProjectMember,
+  ) => {
+    if (!canManageMembers) return
+
+    setMembersError(null)
+
+    if (workItemsLoading) {
+      setMembersError(
+        'Work items are still loading. Try again in a moment.',
+      )
+      return
+    }
+
+    if (workItemsError) {
+      setMembersError(
+        'Work items could not be verified. Reload them before removing this member.',
+      )
+      return
+    }
+
+    if (
+      getAssignmentCountForMember(member.id) > 0
+    ) {
+      setAssignmentResolutionAction({
+        member,
+        action: 'remove',
+      })
+      return
+    }
+
+    setMemberToRemove(member)
+  }
+
+  const handleConfirmAssignmentResolution = async (
+    input: {
+      resolution: AssignmentResolutionMode
+      replacementUserId: string | null
+    },
+  ) => {
+    if (
+      !canManageMembers ||
+      !assignmentResolutionAction
+    ) {
+      throw new Error(
+        'Project membership can no longer be changed.',
+      )
+    }
+
+    const numericProjectId = Number(project.id)
+    const targetUserId = Number(
+      assignmentResolutionAction.member.id,
+    )
+
+    if (
+      !Number.isInteger(numericProjectId) ||
+      numericProjectId <= 0 ||
+      !Number.isInteger(targetUserId) ||
+      targetUserId <= 0
+    ) {
+      throw new Error(
+        'Invalid project or member ID.',
+      )
+    }
+
+    let replacementUserId: number | null =
+      null
+
+    if (input.resolution === 'transfer') {
+      replacementUserId = Number(
+        input.replacementUserId,
+      )
+
+      if (
+        !Number.isInteger(replacementUserId) ||
+        replacementUserId <= 0
+      ) {
+        throw new Error(
+          'Select a project member to receive the work.',
+        )
+      }
+    }
+
+    const action =
+      assignmentResolutionAction
+    const targetMember = action.member
+
+    try {
+      if (action.action === 'viewer') {
+        const membership =
+          await updateProjectMembership(
+            numericProjectId,
+            targetMember.membershipId,
+            {
+              role: 'viewer',
+              assignmentResolution:
+                input.resolution,
+              ...(replacementUserId !== null
+                ? { replacementUserId }
+                : {}),
+            },
+          )
+
+        const mappedMembership =
+          mapProjectMembership(membership)
+
+        setMembers((currentMembers) =>
+          currentMembers.map((member) =>
+            member.id === mappedMembership.id
+              ? mappedMembership
+              : member,
+          ),
+        )
+      } else {
+        await removeProjectMembership(
+          numericProjectId,
+          targetMember.membershipId,
+          {
+            assignmentResolution:
+              input.resolution,
+            ...(replacementUserId !== null
+              ? { replacementUserId }
+              : {}),
+          },
+        )
+
+        setMembers((currentMembers) =>
+          currentMembers.filter(
+            (member) =>
+              member.id !== targetMember.id,
+          ),
+        )
+      }
+
+      applyAssignmentResolutionToWorkItems(
+        targetUserId,
+        input.resolution,
+        replacementUserId,
+      )
+
+      setAssignmentResolutionAction(null)
+
+      if (
+        action.action === 'remove' &&
+        targetMember.id === currentUserId
+      ) {
+        navigate('/projects')
+      }
+    } catch (error) {
+      throw new Error(
+        getMembershipErrorMessage(
+          error,
+          action.action === 'remove'
+            ? 'Project member could not be removed.'
+            : 'Project role could not be changed.',
         ),
       )
     }
@@ -2177,7 +2462,9 @@ export function ProjectDetailPage() {
                       <button
                         type="button"
                         disabled={isLastOwner}
-                        onClick={() => setMemberToRemove(member)}
+                        onClick={() =>
+                          handleRequestRemoveMember(member)
+                        }
                         title={
                           isLastOwner
                             ? 'Add another owner before removing the last owner.'
@@ -2686,6 +2973,30 @@ export function ProjectDetailPage() {
         }}
         onConfirm={() =>
           void handleConfirmLifecycle()
+        }
+      />
+
+      <ProjectAssignmentResolutionDialog
+        open={assignmentResolutionAction != null}
+        action={
+          assignmentResolutionAction?.action ??
+          'viewer'
+        }
+        memberName={
+          assignmentResolutionAction?.member.name ??
+          ''
+        }
+        affectedCount={
+          assignmentResolutionCount
+        }
+        candidates={
+          assignmentResolutionCandidates
+        }
+        onClose={() =>
+          setAssignmentResolutionAction(null)
+        }
+        onConfirm={
+          handleConfirmAssignmentResolution
         }
       />
 
