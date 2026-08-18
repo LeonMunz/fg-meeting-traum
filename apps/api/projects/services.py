@@ -17,6 +17,14 @@ from research_groups.models import ResearchGroup, ResearchGroupMembership
 from .models import Project, ProjectMembership
 
 
+ASSIGNMENT_RESOLUTION_UNASSIGN = "unassign"
+ASSIGNMENT_RESOLUTION_TRANSFER = "transfer"
+ASSIGNMENT_RESOLUTION_VALUES = {
+    ASSIGNMENT_RESOLUTION_UNASSIGN,
+    ASSIGNMENT_RESOLUTION_TRANSFER,
+}
+
+
 class ProjectDomainError(Exception):
     """Raised when a domain invariant is violated."""
 
@@ -163,6 +171,8 @@ def change_membership_role(
     membership: ProjectMembership,
     actor,
     new_role: str,
+    assignment_resolution: Optional[str] = None,
+    replacement_user=None,
 ) -> ProjectMembership:
     """Change a membership role.
 
@@ -201,12 +211,62 @@ def change_membership_role(
         if project.status == Project.Status.ACTIVE:
             _check_final_owner_change(project, membership, new_role)
 
-        # Validate: assignment eligibility — cannot downgrade assigned user to viewer
+        previous_role = membership.role
+        affected_assignment_count = 0
+
         if new_role == ProjectMembership.Role.VIEWER:
-            _check_assignments_block_mutation(project, membership.user)
+            if assignment_resolution is None:
+                if replacement_user is not None:
+                    raise ProjectDomainError(
+                        "replacement_user requires an assignment resolution."
+                    )
+
+                _check_assignments_block_mutation(
+                    project,
+                    membership.user,
+                )
+            else:
+                affected_assignment_count = (
+                    _resolve_assignments_for_membership_mutation(
+                        project=project,
+                        target_user=membership.user,
+                        resolution_mode=assignment_resolution,
+                        replacement_user=replacement_user,
+                    )
+                )
+        elif (
+            assignment_resolution is not None
+            or replacement_user is not None
+        ):
+            raise ProjectDomainError(
+                "Assignment resolution is only valid when "
+                "changing a membership to viewer."
+            )
 
         membership.role = new_role
         membership.save(update_fields=["role"])
+
+        if assignment_resolution is not None:
+            record_audit_event(
+                research_group=project.research_group,
+                actor=actor,
+                event_type="project.member_assignments_resolved",
+                subject_user=membership.user,
+                project=project,
+                data={
+                    "resolution": assignment_resolution,
+                    "affectedWorkItemCount": affected_assignment_count,
+                    "replacementUserId": (
+                        replacement_user.pk
+                        if replacement_user is not None
+                        else None
+                    ),
+                    "membershipAction": "role_changed",
+                    "previousRole": previous_role,
+                    "newRole": new_role,
+                },
+            )
+
     return membership
 
 
@@ -214,6 +274,8 @@ def remove_membership(
     *,
     membership: ProjectMembership,
     actor,
+    assignment_resolution: Optional[str] = None,
+    replacement_user=None,
 ) -> None:
     """Remove a ProjectMembership.
 
@@ -248,10 +310,52 @@ def remove_membership(
         if project.status == Project.Status.ACTIVE:
             _check_final_owner_removal(project, membership)
 
-        # Validate: assignment eligibility — cannot remove assigned user
-        _check_assignments_block_mutation(project, membership.user)
+        target_user = membership.user
+        previous_role = membership.role
+        affected_assignment_count = 0
+
+        if assignment_resolution is None:
+            if replacement_user is not None:
+                raise ProjectDomainError(
+                    "replacement_user requires an assignment resolution."
+                )
+
+            _check_assignments_block_mutation(
+                project,
+                target_user,
+            )
+        else:
+            affected_assignment_count = (
+                _resolve_assignments_for_membership_mutation(
+                    project=project,
+                    target_user=target_user,
+                    resolution_mode=assignment_resolution,
+                    replacement_user=replacement_user,
+                )
+            )
 
         membership.delete()
+
+        if assignment_resolution is not None:
+            record_audit_event(
+                research_group=project.research_group,
+                actor=actor,
+                event_type="project.member_assignments_resolved",
+                subject_user=target_user,
+                project=project,
+                data={
+                    "resolution": assignment_resolution,
+                    "affectedWorkItemCount": affected_assignment_count,
+                    "replacementUserId": (
+                        replacement_user.pk
+                        if replacement_user is not None
+                        else None
+                    ),
+                    "membershipAction": "removed",
+                    "previousRole": previous_role,
+                    "newRole": None,
+                },
+            )
 
 
 def update_project(
@@ -576,6 +680,97 @@ def _check_final_owner_removal(project: Project, membership: ProjectMembership) 
 
 
 # ── Assignment lifecycle protection ──
+
+
+def _resolve_assignments_for_membership_mutation(
+    *,
+    project: Project,
+    target_user,
+    resolution_mode: str,
+    replacement_user=None,
+) -> int:
+    """Resolve target assignments without touching unrelated assignees.
+
+    The caller already holds the Project lock and transaction.
+    """
+
+    from work_items.models import WorkItemAssignee
+    from work_items.services import (
+        WorkItemDomainError,
+        validate_assignee_eligibility,
+    )
+
+    if resolution_mode not in ASSIGNMENT_RESOLUTION_VALUES:
+        raise ProjectDomainError(
+            "Invalid assignment resolution. "
+            "Use 'unassign' or 'transfer'."
+        )
+
+    if (
+        resolution_mode
+        == ASSIGNMENT_RESOLUTION_UNASSIGN
+    ):
+        if replacement_user is not None:
+            raise ProjectDomainError(
+                "Unassign resolution does not accept "
+                "a replacement user."
+            )
+
+    if (
+        resolution_mode
+        == ASSIGNMENT_RESOLUTION_TRANSFER
+    ):
+        if replacement_user is None:
+            raise ProjectDomainError(
+                "Transfer resolution requires "
+                "a replacement user."
+            )
+
+        if replacement_user.pk == target_user.pk:
+            raise ProjectDomainError(
+                "Assignments cannot be transferred "
+                "to the same user."
+            )
+
+        try:
+            validate_assignee_eligibility(
+                project=project,
+                user=replacement_user,
+            )
+        except WorkItemDomainError as exc:
+            raise ProjectDomainError(
+                exc.message
+            ) from exc
+
+    assignments = list(
+        WorkItemAssignee.objects
+        .select_for_update()
+        .filter(
+            work_item__project=project,
+            user=target_user,
+        )
+        .order_by("pk")
+    )
+
+    if (
+        resolution_mode
+        == ASSIGNMENT_RESOLUTION_TRANSFER
+    ):
+        for assignment in assignments:
+            WorkItemAssignee.objects.get_or_create(
+                work_item_id=assignment.work_item_id,
+                user=replacement_user,
+            )
+
+    if assignments:
+        WorkItemAssignee.objects.filter(
+            pk__in=[
+                assignment.pk
+                for assignment in assignments
+            ]
+        ).delete()
+
+    return len(assignments)
 
 
 def _check_assignments_block_mutation(project: Project, user) -> None:

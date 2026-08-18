@@ -29,8 +29,11 @@ export async function apiPatch<T>(
   return apiUnsafeRequest<T>('PATCH', url, body)
 }
 
-export async function apiDelete<T>(url: string): Promise<T> {
-  return apiUnsafeRequest<T>('DELETE', url)
+export async function apiDelete<T>(
+  url: string,
+  body?: unknown,
+): Promise<T> {
+  return apiUnsafeRequest<T>('DELETE', url, body)
 }
 
 async function apiUnsafeRequest<T>(

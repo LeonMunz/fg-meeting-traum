@@ -529,11 +529,50 @@ class ProjectMembershipDetailView(APIView):
                 status=400,
             )
 
+        assignment_resolution = request.data.get(
+            "assignmentResolution"
+        )
+        replacement_user_id = request.data.get(
+            "replacementUserId"
+        )
+
+        replacement_user = None
+
+        if replacement_user_id is not None:
+            if (
+                not isinstance(replacement_user_id, int)
+                or isinstance(replacement_user_id, bool)
+                or replacement_user_id <= 0
+            ):
+                return Response(
+                    {
+                        "error":
+                        "replacementUserId must be a positive integer."
+                    },
+                    status=400,
+                )
+
+            from django.contrib.auth import get_user_model
+
+            User = get_user_model()
+
+            try:
+                replacement_user = User.objects.get(
+                    pk=replacement_user_id
+                )
+            except User.DoesNotExist:
+                return Response(
+                    {"error": "Replacement user not found."},
+                    status=400,
+                )
+
         try:
             change_membership_role(
                 membership=target_membership,
                 actor=request.user,
                 new_role=new_role,
+                assignment_resolution=assignment_resolution,
+                replacement_user=replacement_user,
             )
         except ProjectDomainError as exc:
             return Response({"error": exc.message}, status=400)
@@ -582,10 +621,49 @@ class ProjectMembershipDetailView(APIView):
                 status=404,
             )
 
+        assignment_resolution = request.data.get(
+            "assignmentResolution"
+        )
+        replacement_user_id = request.data.get(
+            "replacementUserId"
+        )
+
+        replacement_user = None
+
+        if replacement_user_id is not None:
+            if (
+                not isinstance(replacement_user_id, int)
+                or isinstance(replacement_user_id, bool)
+                or replacement_user_id <= 0
+            ):
+                return Response(
+                    {
+                        "error":
+                        "replacementUserId must be a positive integer."
+                    },
+                    status=400,
+                )
+
+            from django.contrib.auth import get_user_model
+
+            User = get_user_model()
+
+            try:
+                replacement_user = User.objects.get(
+                    pk=replacement_user_id
+                )
+            except User.DoesNotExist:
+                return Response(
+                    {"error": "Replacement user not found."},
+                    status=400,
+                )
+
         try:
             remove_membership(
                 membership=target_membership,
                 actor=request.user,
+                assignment_resolution=assignment_resolution,
+                replacement_user=replacement_user,
             )
         except ProjectDomainError as exc:
             return Response({"error": exc.message}, status=400)

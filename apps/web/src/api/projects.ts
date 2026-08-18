@@ -12,6 +12,7 @@ import type {
   ApiDeleteProjectResponse,
   ApiProject,
   ApiProjectMembership,
+  ApiRemoveProjectMembershipInput,
   ApiResearchGroupMember,
   ApiUpdateProjectInput,
   ApiUpdateProjectMembershipInput,
@@ -111,9 +112,11 @@ export async function updateProjectMembership(
 export async function removeProjectMembership(
   projectId: number,
   membershipId: number,
+  input?: ApiRemoveProjectMembershipInput,
 ): Promise<ApiDeleteProjectMembershipResponse> {
   return apiDelete<ApiDeleteProjectMembershipResponse>(
     `/api/projects/${projectId}/memberships/${membershipId}/`,
+    input,
   )
 }
 

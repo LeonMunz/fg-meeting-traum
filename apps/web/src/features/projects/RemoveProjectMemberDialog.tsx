@@ -50,7 +50,10 @@ export function RemoveProjectMemberDialog({
       >
         <div className="px-6 py-6">
           <div className="flex h-11 w-11 items-center justify-center rounded-full bg-error-container text-error">
-            <span className="material-symbols-outlined text-[22px]">
+            <span
+              aria-hidden="true"
+              className="material-symbols-outlined text-[22px]"
+            >
               person_remove
             </span>
           </div>
@@ -84,7 +87,10 @@ export function RemoveProjectMemberDialog({
             onClick={onConfirm}
             className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-error px-4 text-sm font-semibold text-white shadow-sm transition hover:opacity-90"
           >
-            <span className="material-symbols-outlined text-[18px]">
+            <span
+              aria-hidden="true"
+              className="material-symbols-outlined text-[18px]"
+            >
               person_remove
             </span>
             Remove member
