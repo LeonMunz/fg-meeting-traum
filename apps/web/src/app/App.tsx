@@ -11,12 +11,15 @@ import { MeetingDetailPage } from '../features/meetings/MeetingDetailPage'
 import { ProjectDetailPage } from '../features/projects/ProjectDetailPage'
 import { ProjectListPage } from '../features/projects/ProjectListPage'
 import { ResearchGroupProvider } from '../features/research-group/ResearchGroupProvider'
+import { ResearchGroupSettingsPage } from '../features/research-group/ResearchGroupSettingsPage'
 import { useResearchGroupListScope } from '../features/research-group/useResearchGroupListScope'
 
 function ResearchGroupPlaceholderPage({
   title,
+  description,
 }: {
   title: string
+  description?: string
 }) {
   const {
     activeResearchGroup,
@@ -48,7 +51,8 @@ function ResearchGroupPlaceholderPage({
 
       <div className="mt-6 rounded-xl border border-outline-variant bg-surface-container-lowest p-8 shadow-sm">
         <p className="text-on-surface-variant">
-          This area will be implemented next.
+          {description ??
+            'This area will be implemented next.'}
         </p>
       </div>
     </div>
@@ -111,6 +115,11 @@ function AppRoutes() {
                 />
 
                 <Route
+                  path="/groups/:groupId/settings"
+                  element={<ResearchGroupSettingsPage />}
+                />
+
+                <Route
                   path="/projects"
                   element={<ProjectListPage />}
                 />
@@ -144,6 +153,16 @@ function AppRoutes() {
                 <Route
                   path="/knowledge"
                   element={<ResearchGroupPlaceholderPage title="Knowledge" />}
+                />
+
+                <Route
+                  path="/data"
+                  element={
+                    <ResearchGroupPlaceholderPage
+                      title="Data"
+                      description="Research data sources will be connected here later, for example OneDrive or Sciebo."
+                    />
+                  }
                 />
 
                 <Route

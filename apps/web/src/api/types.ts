@@ -235,3 +235,24 @@ export interface ApiCreateMeetingWorkItemInput
   extends ApiCreateWorkItemInput {
   projectId: number
 }
+
+
+export interface ApiResearchGroupMembership {
+  id: number
+  role: 'admin' | 'member'
+  joinedAt: string | null
+  user: {
+    id: number
+    username: string
+    firstName: string
+    lastName: string
+  }
+}
+
+export interface ApiUpdateResearchGroupInput {
+  name: string
+}
+
+export interface ApiUpdateResearchGroupMembershipInput {
+  role: 'admin' | 'member'
+}

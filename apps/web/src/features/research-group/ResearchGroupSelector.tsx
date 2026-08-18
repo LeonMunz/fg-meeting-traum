@@ -91,12 +91,26 @@ export function ResearchGroupSelector() {
     setActiveResearchGroupId(group.id)
     setOpen(false)
 
+    if (
+      /^\/groups\/\d+\/settings$/.test(
+        location.pathname,
+      )
+    ) {
+      navigate(
+        group.role === 'admin'
+          ? `/groups/${group.id}/settings`
+          : `/projects?group=${group.id}`,
+      )
+      return
+    }
+
     const groupListPaths = new Set([
       '/projects',
       '/goals',
       '/meetings',
       '/kvp',
       '/knowledge',
+      '/data',
       '/calendar',
       '/people',
     ])
@@ -239,6 +253,32 @@ export function ResearchGroupSelector() {
               </button>
             )
           })}
+
+          {activeResearchGroup.role === 'admin' && (
+            <>
+              <div className="my-1.5 border-t border-outline-variant" />
+
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setOpen(false)
+                  navigate(
+                    `/groups/${activeResearchGroup.id}/settings`,
+                  )
+                }}
+                className="flex w-full items-center gap-3 rounded-lg px-2.5 py-2.5 text-left text-sm font-medium text-on-surface transition hover:bg-surface-container-low"
+              >
+                <span className="material-symbols-outlined text-[18px] text-on-surface-variant">
+                  settings
+                </span>
+
+                <span>
+                  Research group settings
+                </span>
+              </button>
+            </>
+          )}
         </div>
       )}
     </div>

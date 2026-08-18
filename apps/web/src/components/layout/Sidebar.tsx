@@ -43,6 +43,11 @@ const groupNavigation = [
     icon: 'library_books',
   },
   {
+    label: 'Data',
+    path: '/data',
+    icon: 'storage',
+  },
+  {
     label: 'Calendar',
     path: '/calendar',
     icon: 'calendar_today',

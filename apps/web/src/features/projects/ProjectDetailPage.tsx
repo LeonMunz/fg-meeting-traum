@@ -36,7 +36,7 @@ import { useSession } from '../../api/useSession'
 
 type ProjectStatus = 'active' | 'paused' | 'completed'
 type ProjectRole = 'owner' | 'member' | 'viewer'
-type ProjectTab = 'overview' | 'work-items' | 'members' | 'settings'
+type ProjectTab = 'overview' | 'work-items' | 'members' | 'data' | 'settings'
 
 type DemoWorkItemStatus = 'todo' | 'in_progress' | 'review' | 'done'
 type DemoWorkItemType = 'epic' | 'milestone' | 'deliverable' | 'task'
@@ -367,6 +367,7 @@ const tabs: Array<{ id: ProjectTab; label: string }> = [
   { id: 'overview', label: 'Overview' },
   { id: 'work-items', label: 'Work Items' },
   { id: 'members', label: 'Members' },
+  { id: 'data', label: 'Data' },
   { id: 'settings', label: 'Settings' },
 ]
 
@@ -2068,6 +2069,39 @@ export function ProjectDetailPage() {
             }
           />
         )}
+
+      {activeTab === 'data' && (
+        <section className="mt-6 overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest shadow-sm">
+          <div className="border-b border-outline-variant px-6 py-5">
+            <h2 className="font-semibold text-on-surface">
+              Data
+            </h2>
+
+            <p className="mt-0.5 text-xs text-on-surface-variant">
+              Research data connected to this project.
+            </p>
+          </div>
+
+          <div className="flex min-h-44 items-center justify-center px-6 py-10">
+            <div className="flex max-w-lg items-start gap-3">
+              <span className="material-symbols-outlined mt-0.5 text-[20px] text-on-surface-variant">
+                storage
+              </span>
+
+              <div>
+                <p className="text-sm font-medium text-on-surface">
+                  No data source connected yet
+                </p>
+
+                <p className="mt-1 text-xs leading-5 text-on-surface-variant">
+                  Project data from services such as OneDrive or Sciebo
+                  will be connected here later.
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
 
       {activeTab === 'settings' && (
         <section className="mt-6 overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest shadow-sm">
