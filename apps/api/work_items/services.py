@@ -65,6 +65,19 @@ def _validate_assignee_eligibility(project: Project, user) -> None:
         )
 
 
+def validate_assignee_eligibility(
+    *,
+    project: Project,
+    user,
+) -> None:
+    """Validate whether a user may currently receive Project work."""
+
+    _validate_assignee_eligibility(
+        project,
+        user,
+    )
+
+
 def _validate_assignees(project: Project, user_ids: list[int]) -> None:
     """Validate all assignees are eligible for the project."""
     from django.contrib.auth import get_user_model
