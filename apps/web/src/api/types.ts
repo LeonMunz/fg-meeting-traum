@@ -256,3 +256,15 @@ export interface ApiUpdateResearchGroupInput {
 export interface ApiUpdateResearchGroupMembershipInput {
   role: 'admin' | 'member'
 }
+
+export interface ApiResearchGroupMemberCandidate {
+  id: number
+  username: string
+  firstName: string
+  lastName: string
+}
+
+export interface ApiAddResearchGroupMembershipInput {
+  userId: number
+  role: 'admin' | 'member'
+}

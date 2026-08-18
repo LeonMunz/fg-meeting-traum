@@ -16,6 +16,7 @@ import type {
   ApiResearchGroup,
   ApiResearchGroupMembership,
 } from '../../api/types'
+import { AddResearchGroupMemberDialog } from './AddResearchGroupMemberDialog'
 import { useResearchGroup } from './useResearchGroup'
 import { useSyncResearchGroupContext } from './useSyncResearchGroupContext'
 
@@ -123,6 +124,11 @@ export function ResearchGroupSettingsPage() {
   ] = useState<number | null>(
     null,
   )
+
+  const [
+    addMemberOpen,
+    setAddMemberOpen,
+  ] = useState(false)
 
   const loadSettings =
     useCallback(async () => {
@@ -426,14 +432,33 @@ export function ResearchGroupSettingsPage() {
         </section>
       ) : (
         <section className="mt-8 max-w-3xl">
-          <div>
-            <h2 className="text-base font-semibold text-on-surface">
-              Members
-            </h2>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 className="text-base font-semibold text-on-surface">
+                Members
+              </h2>
 
-            <p className="mt-1 text-sm text-on-surface-variant">
-              People with access to this research group.
-            </p>
+              <p className="mt-1 text-sm text-on-surface-variant">
+                People with access to this research group.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() =>
+                setAddMemberOpen(true)
+              }
+              className="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg bg-primary px-3.5 text-sm font-semibold text-white transition hover:bg-primary/90"
+            >
+              <span
+                aria-hidden="true"
+                className="material-symbols-outlined text-[18px]"
+              >
+                person_add
+              </span>
+
+              Add member
+            </button>
           </div>
 
           <div className="mt-6 overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest">
@@ -499,6 +524,19 @@ export function ResearchGroupSettingsPage() {
             </div>
           </div>
         </section>
+      )}
+      {groupId != null && (
+        <AddResearchGroupMemberDialog
+          open={addMemberOpen}
+          researchGroupId={groupId}
+          onClose={() =>
+            setAddMemberOpen(false)
+          }
+          onAdded={async () => {
+            await reloadResearchGroups()
+            await loadSettings()
+          }}
+        />
       )}
     </div>
   )

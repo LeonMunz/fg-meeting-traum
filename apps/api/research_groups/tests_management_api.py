@@ -16,7 +16,7 @@ from research_groups.models import (
 User = get_user_model()
 
 
-class ResearchGroupManagementApiTest(
+class ResearchGroupManagementApiFixture(
     APITestCase,
 ):
     @classmethod
@@ -86,6 +86,9 @@ class ResearchGroupManagementApiTest(
             200,
         )
 
+class ResearchGroupManagementApiTest(
+    ResearchGroupManagementApiFixture,
+):
     def test_admin_can_update_group_name(self):
         self.login("rg_admin")
 
@@ -428,4 +431,205 @@ class ResearchGroupManagementApiTest(
         self.assertIn(
             "rg_member",
             usernames,
+        )
+
+
+class ResearchGroupMemberCandidateApiTest(
+    ResearchGroupManagementApiFixture,
+):
+    def test_admin_can_search_member_candidates(
+        self,
+    ):
+        self.other.first_name = "Other"
+        self.other.last_name = "Scientist"
+        self.other.save(
+            update_fields=[
+                "first_name",
+                "last_name",
+            ]
+        )
+
+        self.login("rg_admin")
+
+        response = self.client.get(
+            (
+                f"/api/research-groups/{self.group.pk}"
+                "/member-candidates/?q=other"
+            )
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+        data = response.json()
+
+        self.assertEqual(
+            len(data),
+            1,
+        )
+
+        self.assertEqual(
+            data[0],
+            {
+                "id": self.other.pk,
+                "username": "rg_other",
+                "firstName": "Other",
+                "lastName": "Scientist",
+            },
+        )
+
+    def test_existing_group_members_are_excluded(
+        self,
+    ):
+        self.login("rg_admin")
+
+        response = self.client.get(
+            (
+                f"/api/research-groups/{self.group.pk}"
+                "/member-candidates/?q=rg_"
+            )
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+        usernames = {
+            item["username"]
+            for item in response.json()
+        }
+
+        self.assertNotIn(
+            "rg_admin",
+            usernames,
+        )
+
+        self.assertNotIn(
+            "rg_member",
+            usernames,
+        )
+
+        self.assertIn(
+            "rg_other",
+            usernames,
+        )
+
+    def test_candidate_search_matches_name(
+        self,
+    ):
+        self.other.first_name = "Ada"
+        self.other.last_name = "Lovelace"
+        self.other.save(
+            update_fields=[
+                "first_name",
+                "last_name",
+            ]
+        )
+
+        self.login("rg_admin")
+
+        response = self.client.get(
+            (
+                f"/api/research-groups/{self.group.pk}"
+                "/member-candidates/?q=Lovelace"
+            )
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+        self.assertEqual(
+            [
+                item["username"]
+                for item in response.json()
+            ],
+            ["rg_other"],
+        )
+
+    def test_inactive_users_are_excluded(
+        self,
+    ):
+        self.other.is_active = False
+        self.other.save(
+            update_fields=["is_active"]
+        )
+
+        self.login("rg_admin")
+
+        response = self.client.get(
+            (
+                f"/api/research-groups/{self.group.pk}"
+                "/member-candidates/?q=rg_other"
+            )
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+        self.assertEqual(
+            response.json(),
+            [],
+        )
+
+    def test_short_candidate_query_returns_empty_list(
+        self,
+    ):
+        self.login("rg_admin")
+
+        response = self.client.get(
+            (
+                f"/api/research-groups/{self.group.pk}"
+                "/member-candidates/?q=r"
+            )
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+        self.assertEqual(
+            response.json(),
+            [],
+        )
+
+    def test_member_cannot_search_candidates(
+        self,
+    ):
+        self.login("rg_member")
+
+        response = self.client.get(
+            (
+                f"/api/research-groups/{self.group.pk}"
+                "/member-candidates/?q=other"
+            )
+        )
+
+        self.assertEqual(
+            response.status_code,
+            403,
+        )
+
+    def test_outsider_cannot_discover_group_via_candidates(
+        self,
+    ):
+        self.login("rg_outsider")
+
+        response = self.client.get(
+            (
+                f"/api/research-groups/{self.group.pk}"
+                "/member-candidates/?q=other"
+            )
+        )
+
+        self.assertEqual(
+            response.status_code,
+            404,
         )

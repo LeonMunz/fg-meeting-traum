@@ -1,4 +1,5 @@
 from django.contrib.auth import get_user_model
+from django.db.models import Q
 
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -185,6 +186,106 @@ class ResearchGroupDetailView(APIView):
                 group,
                 membership,
             )
+        )
+
+
+class ResearchGroupMemberCandidateListView(
+    APIView,
+):
+    """Search users who may be added to a Research Group.
+
+    - Research Group admin only.
+    - Existing members are excluded.
+    - Inactive users are excluded.
+    - Short or empty queries return no results to avoid broad
+      account enumeration.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, group_id):
+        result = _require_group_membership(
+            request,
+            group_id,
+        )
+
+        if result is None:
+            return Response(
+                {"error": "Research group not found"},
+                status=404,
+            )
+
+        group, membership = result
+
+        if (
+            membership.role
+            != ResearchGroupMembership.Role.ADMIN
+        ):
+            return Response(
+                {
+                    "error":
+                    "Only a Research Group admin can manage memberships."
+                },
+                status=403,
+            )
+
+        query = (
+            request.query_params
+            .get("q", "")
+            .strip()
+        )
+
+        if len(query) < 2:
+            return Response([])
+
+        existing_user_ids = (
+            ResearchGroupMembership.objects
+            .filter(
+                research_group=group,
+            )
+            .values_list(
+                "user_id",
+                flat=True,
+            )
+        )
+
+        candidates = (
+            User.objects
+            .filter(is_active=True)
+            .exclude(
+                pk__in=existing_user_ids,
+            )
+            .filter(
+                Q(
+                    username__icontains=query,
+                )
+                | Q(
+                    first_name__icontains=query,
+                )
+                | Q(
+                    last_name__icontains=query,
+                )
+            )
+            .order_by(
+                "username",
+                "pk",
+            )[:20]
+        )
+
+        return Response(
+            [
+                {
+                    "id": candidate.pk,
+                    "username":
+                        candidate.username,
+                    "firstName":
+                        candidate.first_name,
+                    "lastName":
+                        candidate.last_name,
+                }
+                for candidate
+                in candidates
+            ]
         )
 
 
