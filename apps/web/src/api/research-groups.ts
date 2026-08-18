@@ -1,10 +1,13 @@
 import {
   apiGet,
   apiPatch,
+  apiPost,
 } from './client'
 
 import type {
+  ApiAddResearchGroupMembershipInput,
   ApiResearchGroup,
+  ApiResearchGroupMemberCandidate,
   ApiResearchGroupMembership,
   ApiUpdateResearchGroupInput,
   ApiUpdateResearchGroupMembershipInput,
@@ -54,6 +57,30 @@ export async function updateResearchGroupMembership(
 ): Promise<ApiResearchGroupMembership> {
   return apiPatch<ApiResearchGroupMembership>(
     `/api/research-groups/${researchGroupId}/memberships/${membershipId}/`,
+    input,
+  )
+}
+
+
+export async function searchResearchGroupMemberCandidates(
+  researchGroupId: number,
+  query: string,
+): Promise<ApiResearchGroupMemberCandidate[]> {
+  const params = new URLSearchParams({
+    q: query,
+  })
+
+  return apiGet<ApiResearchGroupMemberCandidate[]>(
+    `/api/research-groups/${researchGroupId}/member-candidates/?${params.toString()}`,
+  )
+}
+
+export async function addResearchGroupMembership(
+  researchGroupId: number,
+  input: ApiAddResearchGroupMembershipInput,
+): Promise<ApiResearchGroupMembership> {
+  return apiPost<ApiResearchGroupMembership>(
+    `/api/research-groups/${researchGroupId}/memberships/`,
     input,
   )
 }
