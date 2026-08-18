@@ -50,6 +50,7 @@ export interface ApiProject {
   name: string
   description: string
   status: ApiProjectStatus
+  archivedAt: string | null
   currentUserRole: ApiProjectRole
   createdAt: string
   updatedAt: string
@@ -65,6 +66,10 @@ export interface ApiUpdateProjectInput {
   name?: string
   description?: string
   status?: ApiProjectStatus
+}
+
+export interface ApiDeleteProjectResponse {
+  detail: string
 }
 
 /* ── Project Membership ────────────────────────────────────────── */

@@ -11,6 +11,10 @@ class ProjectSerializer(serializers.ModelSerializer):
     )
     currentUserRole = serializers.CharField(read_only=True)
     createdAt = serializers.DateTimeField(source="created_at", read_only=True)
+    archivedAt = serializers.DateTimeField(
+        source="archived_at",
+        read_only=True,
+    )
     updatedAt = serializers.DateTimeField(source="updated_at", read_only=True)
 
     class Meta:
@@ -21,6 +25,7 @@ class ProjectSerializer(serializers.ModelSerializer):
             "name",
             "description",
             "status",
+            "archivedAt",
             "currentUserRole",
             "createdAt",
             "updatedAt",

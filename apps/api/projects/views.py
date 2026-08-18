@@ -11,10 +11,13 @@ from .serializers import ProjectSerializer
 from .services import (
     ProjectDomainError,
     add_project_membership,
+    archive_project,
     change_membership_role,
     create_project,
+    delete_empty_project,
     get_accessible_project_qs,
     remove_membership,
+    restore_project,
     update_project,
 )
 
@@ -41,6 +44,29 @@ def _require_project_access(request, project_id):
     except (ProjectMembership.DoesNotExist, Project.DoesNotExist):
         return None
     return membership.project, membership
+
+
+def _project_response_data(
+    project: Project,
+    membership: ProjectMembership,
+) -> dict:
+    """Return the canonical Project API representation."""
+
+    return {
+        "id": project.pk,
+        "researchGroupId": project.research_group_id,
+        "name": project.name,
+        "description": project.description,
+        "status": project.status,
+        "archivedAt": (
+            project.archived_at.isoformat()
+            if project.archived_at is not None
+            else None
+        ),
+        "currentUserRole": membership.role,
+        "createdAt": project.created_at.isoformat(),
+        "updatedAt": project.updated_at.isoformat(),
+    }
 
 
 # ── Research Group Project List ──
@@ -73,16 +99,12 @@ class ResearchGroupProjectListView(APIView):
         data = []
         for project in projects:
             membership = project.memberships.get(user=request.user)
-            data.append({
-                "id": project.pk,
-                "researchGroupId": project.research_group.pk,
-                "name": project.name,
-                "description": project.description,
-                "status": project.status,
-                "currentUserRole": membership.role,
-                "createdAt": project.created_at.isoformat(),
-                "updatedAt": project.updated_at.isoformat(),
-            })
+            data.append(
+                _project_response_data(
+                    project,
+                    membership,
+                )
+            )
 
         return Response(data)
 
@@ -120,17 +142,17 @@ class ResearchGroupProjectListView(APIView):
         except ProjectDomainError as exc:
             return Response({"error": exc.message}, status=400)
 
-        membership = project.memberships.get(user=request.user)
-        return Response({
-            "id": project.pk,
-            "researchGroupId": project.research_group.pk,
-            "name": project.name,
-            "description": project.description,
-            "status": project.status,
-            "currentUserRole": membership.role,
-            "createdAt": project.created_at.isoformat(),
-            "updatedAt": project.updated_at.isoformat(),
-        }, status=201)
+        membership = project.memberships.get(
+            user=request.user,
+        )
+
+        return Response(
+            _project_response_data(
+                project,
+                membership,
+            ),
+            status=201,
+        )
 
 
 # ── Project Detail (Read) ──
@@ -154,16 +176,12 @@ class ProjectDetailView(APIView):
             )
         project, membership = result
 
-        return Response({
-            "id": project.pk,
-            "researchGroupId": project.research_group.pk,
-            "name": project.name,
-            "description": project.description,
-            "status": project.status,
-            "currentUserRole": membership.role,
-            "createdAt": project.created_at.isoformat(),
-            "updatedAt": project.updated_at.isoformat(),
-        })
+        return Response(
+            _project_response_data(
+                project,
+                membership,
+            )
+        )
 
     def patch(self, request, project_id):
         """PATCH /api/projects/{project_id}/
@@ -196,7 +214,7 @@ class ProjectDetailView(APIView):
             )
 
         try:
-            update_project(
+            project = update_project(
                 project=project,
                 actor=request.user,
                 name=name if name is not None else None,
@@ -206,16 +224,161 @@ class ProjectDetailView(APIView):
         except ProjectDomainError as exc:
             return Response({"error": exc.message}, status=400)
 
-        return Response({
-            "id": project.pk,
-            "researchGroupId": project.research_group.pk,
-            "name": project.name,
-            "description": project.description,
-            "status": project.status,
-            "currentUserRole": membership.role,
-            "createdAt": project.created_at.isoformat(),
-            "updatedAt": project.updated_at.isoformat(),
-        })
+        return Response(
+            _project_response_data(
+                project,
+                membership,
+            )
+        )
+
+
+    def delete(self, request, project_id):
+        """Permanently delete an empty disposable Project.
+
+        Only Project owners may delete.
+        Projects containing WorkItems must be archived instead.
+        """
+
+        result = _require_project_access(
+            request,
+            project_id,
+        )
+
+        if result is None:
+            return Response(
+                {"error": "Project not found"},
+                status=404,
+            )
+
+        project, membership = result
+
+        if (
+            membership.role
+            != ProjectMembership.Role.OWNER
+        ):
+            return Response(
+                {
+                    "error":
+                    "Only a Project owner can delete a Project."
+                },
+                status=403,
+            )
+
+        try:
+            delete_empty_project(
+                project=project,
+                actor=request.user,
+            )
+        except ProjectDomainError as exc:
+            return Response(
+                {"error": exc.message},
+                status=400,
+            )
+
+        return Response(
+            {"detail": "Project deleted"},
+            status=200,
+        )
+
+
+class ProjectArchiveView(APIView):
+    """POST /api/projects/{project_id}/archive/"""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, project_id):
+        result = _require_project_access(
+            request,
+            project_id,
+        )
+
+        if result is None:
+            return Response(
+                {"error": "Project not found"},
+                status=404,
+            )
+
+        project, membership = result
+
+        if (
+            membership.role
+            != ProjectMembership.Role.OWNER
+        ):
+            return Response(
+                {
+                    "error":
+                    "Only a Project owner can archive a Project."
+                },
+                status=403,
+            )
+
+        try:
+            project = archive_project(
+                project=project,
+                actor=request.user,
+            )
+        except ProjectDomainError as exc:
+            return Response(
+                {"error": exc.message},
+                status=400,
+            )
+
+        return Response(
+            _project_response_data(
+                project,
+                membership,
+            )
+        )
+
+
+class ProjectRestoreView(APIView):
+    """POST /api/projects/{project_id}/restore/"""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, project_id):
+        result = _require_project_access(
+            request,
+            project_id,
+        )
+
+        if result is None:
+            return Response(
+                {"error": "Project not found"},
+                status=404,
+            )
+
+        project, membership = result
+
+        if (
+            membership.role
+            != ProjectMembership.Role.OWNER
+        ):
+            return Response(
+                {
+                    "error":
+                    "Only a Project owner can restore a Project."
+                },
+                status=403,
+            )
+
+        try:
+            project = restore_project(
+                project=project,
+                actor=request.user,
+            )
+        except ProjectDomainError as exc:
+            return Response(
+                {"error": exc.message},
+                status=400,
+            )
+
+        return Response(
+            _project_response_data(
+                project,
+                membership,
+            )
+        )
 
 
 # ── Project Membership List ──

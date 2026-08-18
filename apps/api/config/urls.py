@@ -8,9 +8,11 @@ from django.views.decorators.csrf import csrf_protect
 from accounts.views import CSRFEndpoint, LoginView, LogoutView, MeView
 from config.health import HealthCheckView
 from projects.views import (
+    ProjectArchiveView,
     ProjectDetailView,
     ProjectMembershipDetailView,
     ProjectMembershipListView,
+    ProjectRestoreView,
     ResearchGroupMembersView,
     ResearchGroupProjectListView,
 )
@@ -67,6 +69,8 @@ urlpatterns = [
     path('api/research-groups/<int:group_id>/memberships/<int:membership_id>/', ResearchGroupMembershipDetailView.as_view(), name='research-group-membership-detail'),
     path('api/research-groups/<int:group_id>/projects/', ResearchGroupProjectListView.as_view(), name='research-group-projects-list'),
     path('api/projects/<int:project_id>/', ProjectDetailView.as_view(), name='project-detail'),
+    path('api/projects/<int:project_id>/archive/', ProjectArchiveView.as_view(), name='project-archive'),
+    path('api/projects/<int:project_id>/restore/', ProjectRestoreView.as_view(), name='project-restore'),
     path('api/projects/<int:project_id>/memberships/', ProjectMembershipListView.as_view(), name='project-memberships-list'),
     path('api/projects/<int:project_id>/memberships/<int:membership_id>/', ProjectMembershipDetailView.as_view(), name='project-membership-detail'),
     path('api/research-groups/<int:group_id>/members/', ResearchGroupMembersView.as_view(), name='research-group-members'),
