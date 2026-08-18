@@ -160,6 +160,9 @@ export function ProjectListPage() {
     try {
       const nextProjects = await listProjects(
         activeResearchGroupId,
+        {
+          includeArchived: true,
+        },
       )
 
       setProjects(nextProjects)
