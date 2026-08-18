@@ -93,8 +93,19 @@ export interface ApiAddProjectMembershipInput {
   role?: ApiProjectRole
 }
 
+export type ApiAssignmentResolution =
+  | 'unassign'
+  | 'transfer'
+
 export interface ApiUpdateProjectMembershipInput {
   role: ApiProjectRole
+  assignmentResolution?: ApiAssignmentResolution
+  replacementUserId?: number
+}
+
+export interface ApiRemoveProjectMembershipInput {
+  assignmentResolution?: ApiAssignmentResolution
+  replacementUserId?: number
 }
 
 export interface ApiDeleteProjectMembershipResponse {
