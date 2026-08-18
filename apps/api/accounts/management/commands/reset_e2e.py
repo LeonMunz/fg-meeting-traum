@@ -44,6 +44,11 @@ class Command(BaseCommand):
             verbosity=0,
         )
 
+        call_command(
+            "seed_e2e_scope",
+            verbosity=0,
+        )
+
         self.stdout.write(
             self.style.SUCCESS(
                 "E2E database state is ready."

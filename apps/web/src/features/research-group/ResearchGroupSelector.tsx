@@ -177,6 +177,7 @@ export function ResearchGroupSelector() {
         }
         aria-haspopup="menu"
         aria-expanded={open}
+        aria-label={`Research group: ${activeResearchGroup.name}`}
         className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left transition hover:bg-surface-container-high"
       >
         <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-surface-container-high text-[10px] font-semibold text-on-surface">

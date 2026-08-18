@@ -35,7 +35,7 @@ test(
       .click()
 
     await expect(page).toHaveURL(
-      /\/meetings$/,
+      /\/meetings\?group=\d+$/,
     )
 
     await expect(
@@ -434,7 +434,7 @@ test(
       .click()
 
     await expect(page).toHaveURL(
-      /\/meetings$/,
+      /\/meetings\?group=\d+$/,
     )
 
     await page
