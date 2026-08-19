@@ -636,6 +636,108 @@ export function ProjectDetailPage() {
   )
   const [boardStatusDropError, setBoardStatusDropError] =
     useState<string | null>(null)
+
+  // Contextual-selection close: while the (non-modal) edit inspector
+  // is open, any click landing outside both the inspector itself and
+  // every canonical Work Item target (Board card / List row /
+  // Overview row — all marked with `data-work-item-id`) closes it.
+  //
+  // One explicit exception: the Board/List view switch is marked
+  // `data-work-item-inspector-keep-open`. Switching views re-renders
+  // the SAME selected Work Item in the other view (its selected-state
+  // styling carries over) rather than navigating away from it, so —
+  // unlike every other toolbar/filter control — it must not close the
+  // inspector. This marker is intentionally narrow: only the two view
+  // toggle buttons carry it, not the surrounding toolbar.
+  //
+  // This is a single page-level boundary check, not a blind
+  // "close on any outside click": it inspects where the click
+  // actually landed via `closest()` before deciding.
+  //
+  // Registered on the CAPTURE phase, deliberately. A bubble-phase
+  // document listener runs after the clicked element's own React
+  // handler — but some Work Item targets (e.g. the inspector's own
+  // title, which turns from a button into an input on click) mutate
+  // the DOM synchronously in that handler, detaching the very node
+  // `event.target` points to before the bubble ever reaches
+  // `document`. `closest()` on a detached node can no longer find its
+  // old ancestors, which would misread a perfectly normal inspector
+  // interaction as "outside". Capture fires top-down BEFORE the
+  // target's own handler runs, while the DOM still matches what was
+  // actually clicked, so the boundary check is always accurate — and
+  // it still never blindly closes: closing only ever happens for a
+  // target that is genuinely neither marker, and this handler itself
+  // never calls stopPropagation/preventDefault, so every Work Item's
+  // own click handler (switching, opening, menus, drag handles, …)
+  // still runs completely normally afterward.
+  //
+  // Native HTML5 drag-and-drop (Board cards) never dispatches a
+  // "click" event for the drag gesture itself, so dragging a card
+  // between columns never reaches this handler at all.
+  //
+  // Declared unconditionally (before any early `return`) to satisfy
+  // rules-of-hooks — it no-ops internally whenever the drawer isn't
+  // in edit mode.
+  useEffect(() => {
+    if (workItemDrawerState?.mode !== 'edit') {
+      return
+    }
+
+    function handleDocumentClickCapture(
+      event: MouseEvent,
+    ) {
+      const target = event.target
+
+      if (!(target instanceof Element)) {
+        return
+      }
+
+      if (
+        target.closest(
+          '[data-work-item-inspector-boundary]',
+        )
+      ) {
+        return
+      }
+
+      if (target.closest('[data-work-item-id]')) {
+        return
+      }
+
+      if (
+        target.closest(
+          '[data-work-item-inspector-keep-open]',
+        )
+      ) {
+        return
+      }
+
+      // Functional update: guards against a same-tick race with a
+      // click that also opens/switches the drawer (e.g. a toolbar
+      // control that both closes this inspector AND opens Create
+      // mode). Only clear if the drawer is STILL in edit mode by the
+      // time this update actually applies — never clobber a state
+      // change queued by the click's own handler.
+      setWorkItemDrawerState((current) =>
+        current?.mode === 'edit' ? null : current,
+      )
+    }
+
+    document.addEventListener(
+      'click',
+      handleDocumentClickCapture,
+      true,
+    )
+
+    return () => {
+      document.removeEventListener(
+        'click',
+        handleDocumentClickCapture,
+        true,
+      )
+    }
+  }, [workItemDrawerState?.mode])
+
   useEffect(() => {
     if (!projectId) {
       setProject(null)
@@ -3302,6 +3404,10 @@ function ProjectWorkItemsPanel({
             <button
               type="button"
               onClick={() => setView('board')}
+              // Board/List switching is the one toolbar interaction
+              // that intentionally keeps the open Work Item inspector
+              // open — see the outside-click boundary effect above.
+              data-work-item-inspector-keep-open="true"
               className={[
                 'inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-sm font-medium transition',
                 view === 'board'
@@ -3321,6 +3427,7 @@ function ProjectWorkItemsPanel({
             <button
               type="button"
               onClick={() => setView('list')}
+              data-work-item-inspector-keep-open="true"
               className={[
                 'inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-sm font-medium transition',
                 view === 'list'
@@ -3715,6 +3822,7 @@ function WorkItemBoardCard({
         onDragHandleStart(item.id)
       }}
       onDragEnd={() => onDragHandleEnd()}
+      data-work-item-id={item.id}
       data-selected={
         selected
           ? 'true'
@@ -3878,6 +3986,7 @@ function WorkItemsList({
                     onOpen(item)
                   }
                 }}
+                data-work-item-id={item.id}
                 className={[
                   'grid h-[54px] items-center px-6 transition-colors hover:bg-surface-container-low/45',
                   gridColumns,

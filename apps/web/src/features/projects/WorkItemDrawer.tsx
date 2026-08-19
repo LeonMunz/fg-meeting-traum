@@ -2571,7 +2571,15 @@ function WorkItemInspector({
   }
 
   return (
-    <div className="fixed inset-y-0 right-0 z-40 w-full sm:w-[520px]">
+    <div
+      // Marks the entire inspector panel as an "inside the inspector"
+      // interaction region for ProjectDetailPage's outside-click close
+      // boundary — any click landing inside this subtree (including
+      // menus/pickers that render within it) must never be treated as
+      // an outside click.
+      data-work-item-inspector-boundary="true"
+      className="fixed inset-y-0 right-0 z-40 w-full sm:w-[520px]"
+    >
       <div
         role="region"
         aria-labelledby="work-item-drawer-title"

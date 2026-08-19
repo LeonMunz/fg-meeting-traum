@@ -1701,3 +1701,274 @@ test(
     ).toHaveCount(0)
   },
 )
+
+const CLOSE_PROJECT_NAME =
+  'E2E Inspector Outside Click Project'
+const CLOSE_TASK_A_TITLE =
+  'E2E Inspector Outside Click Task A'
+const CLOSE_TASK_B_TITLE =
+  'E2E Inspector Outside Click Task B'
+
+test(
+  'Work Item inspector: outside interaction closes it like ' +
+    'clearing a contextual selection, while every Work Item target ' +
+    '(Board card, List row), dragging, and the Board/List view ' +
+    'switch never close it',
+  async ({ page }) => {
+    // Wide enough that the Board's status columns and the fixed
+    // inspector drawer are both fully on-screen at once — needed for
+    // the drag step, mirroring project-work-item-board-drag.spec.ts.
+    await page.setViewportSize({
+      width: 1920,
+      height: 1000,
+    })
+
+    await login(page, 'alex')
+    await openProjects(page)
+    await createHistoryTestProject(
+      page,
+      CLOSE_PROJECT_NAME,
+    )
+
+    await createHistoryTestWorkItem(
+      page,
+      CLOSE_TASK_A_TITLE,
+    )
+    await createHistoryTestWorkItem(
+      page,
+      CLOSE_TASK_B_TITLE,
+    )
+
+    const inspector = page.getByRole('region', {
+      name: 'Work item',
+      exact: true,
+    })
+
+    const boardCardA = page.getByRole('button', {
+      name: `Open ${CLOSE_TASK_A_TITLE}`,
+    })
+    const boardCardB = page.getByRole('button', {
+      name: `Open ${CLOSE_TASK_B_TITLE}`,
+    })
+
+    // --------------------------------------------------------
+    // 1 & 2. Open A, then click B — the inspector stays open and
+    //    swaps in place to show B.
+    // --------------------------------------------------------
+
+    await boardCardA.click()
+    await expect(inspector).toBeVisible()
+
+    await boardCardB.click()
+    await expect(inspector).toBeVisible()
+    await expect(
+      inspector.getByRole('button', {
+        name: CLOSE_TASK_B_TITLE,
+        exact: true,
+      }),
+    ).toBeVisible()
+
+    // --------------------------------------------------------
+    // 3. Clicking inside the inspector keeps it open.
+    // --------------------------------------------------------
+
+    await inspector
+      .getByRole('heading', {
+        name: 'Work item',
+        exact: true,
+      })
+      .click()
+
+    await expect(inspector).toBeVisible()
+    await expect(
+      inspector.getByRole('button', {
+        name: CLOSE_TASK_B_TITLE,
+        exact: true,
+      }),
+    ).toBeVisible()
+
+    // --------------------------------------------------------
+    // 4. Clicking empty Board space (a status column with no
+    //    Work Items in it) closes the inspector.
+    // --------------------------------------------------------
+
+    const emptyColumn = page.locator(
+      '[data-board-column="done"]',
+    )
+    await expect(emptyColumn).toBeVisible()
+    await emptyColumn.click()
+
+    await expect(inspector).not.toBeVisible()
+
+    // --------------------------------------------------------
+    // 5 & 6. Reopen A on Board, then click List — this is an
+    //    intentional exception: the inspector stays open, A is
+    //    still the one displayed, and A's List row itself receives
+    //    the ordinary selected-state styling (it is not merely
+    //    "some Work Item is open", it is genuinely still A).
+    // --------------------------------------------------------
+
+    await boardCardA.click()
+    await expect(inspector).toBeVisible()
+    await expect(
+      inspector.getByRole('button', {
+        name: CLOSE_TASK_A_TITLE,
+        exact: true,
+      }),
+    ).toBeVisible()
+
+    const listToggle = page.getByRole('button', {
+      name: 'List',
+      exact: true,
+    })
+    const boardToggle = page.getByRole('button', {
+      name: 'Board',
+      exact: true,
+    })
+
+    await listToggle.click()
+
+    // List is genuinely showing (Board columns are gone)...
+    await expect(
+      page.locator('[data-board-column]'),
+    ).toHaveCount(0)
+    // ...yet the inspector never closed, and still shows A.
+    await expect(inspector).toBeVisible()
+    await expect(
+      inspector.getByRole('button', {
+        name: CLOSE_TASK_A_TITLE,
+        exact: true,
+      }),
+    ).toBeVisible()
+
+    const listRowAAfterSwitch = page.getByRole(
+      'button',
+      {
+        name: `Open ${CLOSE_TASK_A_TITLE}`,
+      },
+    )
+    await expect(
+      listRowAAfterSwitch,
+    ).toHaveClass(/outline-primary/)
+
+    // --------------------------------------------------------
+    // Switching back to Board is the same exception in reverse:
+    // inspector stays open, still on A, and A's Board card itself
+    // receives the selected-state marker.
+    // --------------------------------------------------------
+
+    await boardToggle.click()
+
+    await expect(
+      page.locator('[data-board-column]').first(),
+    ).toBeVisible()
+    await expect(inspector).toBeVisible()
+    await expect(
+      inspector.getByRole('button', {
+        name: CLOSE_TASK_A_TITLE,
+        exact: true,
+      }),
+    ).toBeVisible()
+    await expect(boardCardA).toHaveAttribute(
+      'data-selected',
+      'true',
+    )
+
+    // --------------------------------------------------------
+    // 10. An ordinary toolbar/filter interaction — unlike the
+    //    view switch — still closes the inspector, and still
+    //    performs its own normal action.
+    // --------------------------------------------------------
+
+    const searchInput = page.getByRole(
+      'searchbox',
+      { name: /Search work items/ },
+    )
+    await searchInput.click()
+
+    await expect(inspector).not.toBeVisible()
+    await expect(searchInput).toBeFocused()
+
+    // --------------------------------------------------------
+    // 7 & 8. Reopen, then drag a Work Item card to another status
+    //    column — the inspector must NOT close because of the
+    //    drag, and the status change still applies exactly as in
+    //    the dedicated drag suite.
+    // --------------------------------------------------------
+
+    await boardCardA.click()
+    await expect(inspector).toBeVisible()
+
+    const statusSelect = inspector.getByLabel(
+      'Status',
+      { exact: true },
+    )
+    await expect(statusSelect).toHaveValue('todo')
+
+    const reviewColumn = page.locator(
+      '[data-board-column="review"]',
+    )
+    await reviewColumn.scrollIntoViewIfNeeded()
+
+    const cardBox = await boardCardA.boundingBox()
+    const targetBox = await reviewColumn.boundingBox()
+
+    if (!cardBox || !targetBox) {
+      throw new Error(
+        'Work item card or target column not found.',
+      )
+    }
+
+    await page.mouse.move(
+      cardBox.x + cardBox.width / 2,
+      cardBox.y + cardBox.height / 2,
+    )
+    await page.mouse.down()
+    await page.mouse.move(
+      targetBox.x + targetBox.width / 2,
+      targetBox.y + targetBox.height / 2,
+      { steps: 20 },
+    )
+    await page.mouse.up()
+
+    // The drag never dispatched a "click" — the inspector is still
+    // open and now reflects the new (dragged-to) status.
+    await expect(inspector).toBeVisible()
+    await expect(statusSelect).toHaveValue('review')
+
+    // --------------------------------------------------------
+    // 9. List row -> another List row still switches without
+    //    closing.
+    // --------------------------------------------------------
+
+    await listToggle.click()
+    await expect(
+      page.locator('[data-board-column]'),
+    ).toHaveCount(0)
+
+    const listRowA = page.getByRole('button', {
+      name: `Open ${CLOSE_TASK_A_TITLE}`,
+    })
+    const listRowB = page.getByRole('button', {
+      name: `Open ${CLOSE_TASK_B_TITLE}`,
+    })
+
+    await listRowA.click()
+    await expect(inspector).toBeVisible()
+    await expect(
+      inspector.getByRole('button', {
+        name: CLOSE_TASK_A_TITLE,
+        exact: true,
+      }),
+    ).toBeVisible()
+
+    await listRowB.click()
+    await expect(inspector).toBeVisible()
+    await expect(
+      inspector.getByRole('button', {
+        name: CLOSE_TASK_B_TITLE,
+        exact: true,
+      }),
+    ).toBeVisible()
+  },
+)
