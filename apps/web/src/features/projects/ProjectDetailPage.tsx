@@ -3234,6 +3234,44 @@ function ProjectWorkItemsPanel({
     })),
   ]
 
+  if (items.length === 0) {
+    return (
+      <section className="mt-6 rounded-xl border border-outline-variant bg-surface-container-lowest shadow-sm">
+        <div className="px-6 py-8">
+          <h2 className="text-lg font-semibold tracking-tight text-on-surface">
+            Work Items
+          </h2>
+
+          <div className="mt-8 max-w-md">
+            <p className="text-sm font-medium text-on-surface">
+              No work items yet.
+            </p>
+
+            <p className="mt-1 text-sm leading-6 text-on-surface-variant">
+              Create the first piece of project work.
+            </p>
+
+            {!readOnly && (
+              <button
+                type="button"
+                onClick={onCreate}
+                className="mt-5 inline-flex h-9 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-primary/90"
+              >
+                <span
+                  aria-hidden="true"
+                  className="material-symbols-outlined text-[18px]"
+                >
+                  add
+                </span>
+                New work item
+              </button>
+            )}
+          </div>
+        </div>
+      </section>
+    )
+  }
+
   return (
     <section className="mt-6 overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest shadow-sm">
       <div className="flex items-start justify-between gap-8 border-b border-outline-variant px-6 py-5">
@@ -3412,36 +3450,7 @@ function ProjectWorkItemsPanel({
         </div>
       </div>
 
-      {items.length === 0 ? (
-        <div className="flex min-h-72 flex-col items-center justify-center px-6 py-12 text-center">
-          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-surface-container-high text-on-surface-variant">
-            <span className="material-symbols-outlined text-[23px]">
-              checklist
-            </span>
-          </div>
-
-          <h3 className="mt-4 text-base font-semibold text-on-surface">
-            No work items yet
-          </h3>
-
-          <p className="mt-1 max-w-md text-sm leading-6 text-on-surface-variant">
-            This project does not contain any work items yet.
-          </p>
-
-          {!readOnly && (
-            <button
-              type="button"
-              onClick={onCreate}
-              className="mt-5 inline-flex h-9 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-primary/90"
-            >
-              <span className="material-symbols-outlined text-[18px]">
-                add
-              </span>
-              Create first work item
-            </button>
-          )}
-        </div>
-      ) : filteredItems.length === 0 ? (
+      {filteredItems.length === 0 ? (
         <div className="flex min-h-64 flex-col items-center justify-center px-6 py-12 text-center">
           <div className="flex h-11 w-11 items-center justify-center rounded-full bg-surface-container-high text-on-surface-variant">
             <span className="material-symbols-outlined text-[22px]">
