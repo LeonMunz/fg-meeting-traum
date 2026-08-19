@@ -9,10 +9,22 @@ from typing import Optional
 from django.db import transaction
 from django.db.models import QuerySet
 
+from audit_history.services import record_audit_event
 from projects.models import Project, ProjectMembership
 from research_groups.models import ResearchGroupMembership
 
 from .models import WorkItem, WorkItemAssignee
+
+
+class WorkItemAuditEventType:
+    """Event types recorded for WorkItem history.
+
+    Intentionally coarse: ONE event per logical operation (not one per
+    changed field). Update details live in AuditEvent.data["changes"].
+    """
+
+    CREATED = "work_item.created"
+    UPDATED = "work_item.updated"
 
 
 class WorkItemDomainError(Exception):
@@ -197,6 +209,174 @@ def _apply_status_completion(work_item: WorkItem, new_status: str) -> None:
         work_item.completed_at = None
 
 
+# ── History diffing ──
+#
+# Snapshot the canonical fields that make up WorkItem history before and
+# after a mutation, then diff them into a structured "changes" object
+# for AuditEvent.data. Naming convention for every entry:
+#   {"from": <old>, "to": <new>}
+# except "description" (privacy/size — no bodies, just {"changed": True})
+# and "assignees" (membership diff — {"added": [...], "removed": [...]}).
+
+
+def _snapshot_work_item_state(work_item: WorkItem) -> dict:
+    """Capture the canonical, user-facing fields relevant to history.
+
+    Must be called BEFORE any mutation for a "before" snapshot, and
+    after work_item.refresh_from_db() for an "after" snapshot.
+    """
+    return {
+        "title": work_item.title,
+        "description": work_item.description,
+        "type": work_item.type,
+        "status": work_item.status,
+        "due_date": work_item.due_date,
+        # Canonical semantics: "" means unblocked, same as null.
+        "blocked_reason": work_item.blocked_reason or None,
+        "parent_id": work_item.parent_id,
+        "assignee_ids": sorted(
+            work_item.assignee_relations.values_list(
+                "user_id", flat=True,
+            )
+        ),
+    }
+
+
+def _summarize_user(user) -> dict:
+    """Display-safe user summary, matching the app's existing user
+    representation convention (see accounts.views.LoginView)."""
+    return {
+        "id": user.pk,
+        "username": user.username,
+        "firstName": user.first_name,
+        "lastName": user.last_name,
+    }
+
+
+def _summarize_parent(
+    project_id: int, parent_id: Optional[int],
+) -> Optional[dict]:
+    """Display-safe summary of a parent WorkItem for history.
+
+    Defensively scoped to project_id even though parent assignment is
+    already validated to stay within the same Project — never resolve
+    (or leak the title of) a WorkItem from another Project.
+    """
+    if parent_id is None:
+        return None
+
+    parent = (
+        WorkItem.objects
+        .filter(pk=parent_id, project_id=project_id)
+        .only("id", "title")
+        .first()
+    )
+
+    if parent is None:
+        return {"id": parent_id, "title": None}
+
+    return {"id": parent.pk, "title": parent.title}
+
+
+def _diff_work_item_changes(
+    *, project_id: int, before: dict, after: dict,
+) -> dict:
+    """Diff two WorkItem snapshots into a structured changes object.
+
+    Only includes keys for fields that actually changed. Returns {}
+    when nothing changed (callers must not record an audit event then).
+    """
+    changes: dict = {}
+
+    if before["title"] != after["title"]:
+        changes["title"] = {
+            "from": before["title"],
+            "to": after["title"],
+        }
+
+    if before["description"] != after["description"]:
+        # Never store description bodies — size/privacy.
+        changes["description"] = {"changed": True}
+
+    if before["type"] != after["type"]:
+        changes["type"] = {
+            "from": before["type"],
+            "to": after["type"],
+        }
+
+    if before["status"] != after["status"]:
+        changes["status"] = {
+            "from": before["status"],
+            "to": after["status"],
+        }
+
+    if before["due_date"] != after["due_date"]:
+        changes["dueDate"] = {
+            "from": (
+                before["due_date"].isoformat()
+                if before["due_date"] else None
+            ),
+            "to": (
+                after["due_date"].isoformat()
+                if after["due_date"] else None
+            ),
+        }
+
+    if before["blocked_reason"] != after["blocked_reason"]:
+        # from/to alone already distinguish unblocked->blocked,
+        # blocked->unblocked, and reason-changed-while-blocked.
+        changes["blockedReason"] = {
+            "from": before["blocked_reason"],
+            "to": after["blocked_reason"],
+        }
+
+    if before["parent_id"] != after["parent_id"]:
+        changes["parent"] = {
+            "from": _summarize_parent(
+                project_id, before["parent_id"],
+            ),
+            "to": _summarize_parent(
+                project_id, after["parent_id"],
+            ),
+        }
+
+    before_assignee_ids = set(before["assignee_ids"])
+    after_assignee_ids = set(after["assignee_ids"])
+
+    if before_assignee_ids != after_assignee_ids:
+        added_ids = sorted(
+            after_assignee_ids - before_assignee_ids
+        )
+        removed_ids = sorted(
+            before_assignee_ids - after_assignee_ids
+        )
+
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+
+        users_by_id = {
+            user.pk: user
+            for user in User.objects.filter(
+                pk__in=[*added_ids, *removed_ids],
+            )
+        }
+
+        changes["assignees"] = {
+            "added": [
+                _summarize_user(users_by_id[user_id])
+                for user_id in added_ids
+                if user_id in users_by_id
+            ],
+            "removed": [
+                _summarize_user(users_by_id[user_id])
+                for user_id in removed_ids
+                if user_id in users_by_id
+            ],
+        }
+
+    return changes
+
+
 # ── Core operations ──
 
 
@@ -279,6 +459,17 @@ def create_work_item(
                     user=User.objects.get(pk=user_id),
                 )
 
+        # Recorded inside the same atomic block: if anything above
+        # rolls back, no AuditEvent survives either.
+        record_audit_event(
+            research_group=locked_project.research_group,
+            actor=actor,
+            event_type=WorkItemAuditEventType.CREATED,
+            project=locked_project,
+            work_item=work_item,
+            data={},
+        )
+
     return work_item
 
 
@@ -343,6 +534,8 @@ def update_work_item(
                     locked_project, parent_id, work_item.pk
                 )
 
+        before_state = _snapshot_work_item_state(work_item)
+
         _apply_work_item_fields(
             work_item=work_item,
             type=type,
@@ -355,7 +548,29 @@ def update_work_item(
             blocked_reason=blocked_reason,
         )
 
-    work_item.refresh_from_db()
+        work_item.refresh_from_db()
+        after_state = _snapshot_work_item_state(work_item)
+
+        changes = _diff_work_item_changes(
+            project_id=locked_project.pk,
+            before=before_state,
+            after=after_state,
+        )
+
+        # Only a real canonical change produces history — a PATCH that
+        # sends unchanged values (or only touches non-audited fields)
+        # must not create a fake event. Recorded inside the same
+        # atomic block so a rollback above never leaves an AuditEvent.
+        if changes:
+            record_audit_event(
+                research_group=locked_project.research_group,
+                actor=actor,
+                event_type=WorkItemAuditEventType.UPDATED,
+                project=locked_project,
+                work_item=work_item,
+                data={"changes": changes},
+            )
+
     return work_item
 
 

@@ -56,3 +56,38 @@ class WorkItemSerializer(serializers.ModelSerializer):
         return list(
             obj.assignee_relations.values_list("user__pk", flat=True)
         )
+
+
+class WorkItemHistoryEventSerializer(serializers.Serializer):
+    """Presentation-neutral WorkItem history entry.
+
+    Serializes an audit_history.AuditEvent for the WorkItem history API
+    ONLY — deliberately narrower than the generic AuditEvent record: no
+    research_group internals, no raw subject_user, no opaque/unrelated
+    AuditEvent.data. `changes` is exactly AuditEvent.data["changes"]
+    (see work_items.services for the structured contract), or {} for
+    events (e.g. work_item.created) that carry none.
+    """
+
+    id = serializers.IntegerField()
+    eventType = serializers.CharField(source="event_type")
+    actor = serializers.SerializerMethodField()
+    changes = serializers.SerializerMethodField()
+    createdAt = serializers.DateTimeField(source="created_at")
+
+    def get_actor(self, obj):
+        actor = obj.actor
+
+        if actor is None:
+            return None
+
+        return {
+            "id": actor.pk,
+            "username": actor.username,
+            "firstName": actor.first_name,
+            "lastName": actor.last_name,
+        }
+
+    def get_changes(self, obj):
+        data = obj.data or {}
+        return data.get("changes", {})

@@ -13,12 +13,17 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from audit_history.models import AuditEvent
 from projects.models import Project, ProjectMembership
 from research_groups.models import ResearchGroupMembership
 
 from .models import WorkItem, WorkItemAssignee
-from .serializers import WorkItemSerializer
+from .serializers import (
+    WorkItemHistoryEventSerializer,
+    WorkItemSerializer,
+)
 from .services import (
+    WorkItemAuditEventType,
     WorkItemDomainError,
     create_work_item,
     update_work_item,
@@ -274,6 +279,72 @@ class WorkItemDetailView(APIView):
 
         work_item.refresh_from_db()
         return Response(serialize_work_item(work_item))
+
+
+# ── WorkItem History (read-only) ──
+
+
+class WorkItemHistoryView(APIView):
+    """GET /api/work-items/{work_item_id}/history/
+
+    Read-only WorkItem audit history. This is specifically WorkItem
+    history, not a generic AuditEvent API — it only ever returns
+    work_item.created / work_item.updated events for exactly this
+    WorkItem.
+
+    Uses the SAME effective read-access rule as GET on the WorkItem
+    itself (ProjectMembership owner/member/viewer AND current
+    ResearchGroupMembership). Research Group admin status alone does
+    not grant access to a private Project, matching WorkItem reads.
+
+    Returns newest first (AuditEvent's default ordering), bounded to
+    the latest HISTORY_LIMIT events. The API has no pagination
+    convention elsewhere, so this first slice intentionally keeps a
+    small, explicit, tested bound instead of inventing one.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    HISTORY_LIMIT = 50
+
+    def get(self, request, work_item_id):
+        try:
+            work_item = WorkItem.objects.select_related(
+                "project",
+            ).get(pk=work_item_id)
+        except WorkItem.DoesNotExist:
+            return Response(
+                {"error": "WorkItem not found"},
+                status=404,
+            )
+
+        # Check access through Project — identical rule to
+        # WorkItemDetailView.get, so a user who cannot view the
+        # WorkItem cannot read its history either.
+        result = _require_project_access(request, work_item.project_id)
+        if result is None:
+            return Response(
+                {"error": "WorkItem not found"},
+                status=404,
+            )
+
+        events = (
+            AuditEvent.objects
+            .filter(
+                work_item_id=work_item.pk,
+                event_type__in=[
+                    WorkItemAuditEventType.CREATED,
+                    WorkItemAuditEventType.UPDATED,
+                ],
+            )
+            .select_related("actor")
+            [: self.HISTORY_LIMIT]
+        )
+
+        serializer = WorkItemHistoryEventSerializer(
+            events, many=True,
+        )
+        return Response(serializer.data)
 
 
 # ── My Work Authorized Projection ──
