@@ -284,3 +284,84 @@ export interface ApiAddResearchGroupMembershipInput {
   userId: number
   role: 'admin' | 'member'
 }
+
+
+/* ── Research Group Offboarding ───────────────────────────────── */
+
+export interface ApiResearchGroupOffboardingCandidate {
+  id: number
+  username: string
+  firstName: string
+  lastName: string
+  projectRole: ApiProjectRole
+}
+
+export interface ApiResearchGroupProjectOffboardingPreview {
+  projectId: number
+  name: string
+  status: ApiProjectStatus
+  archivedAt: string | null
+  membershipRole: ApiProjectRole
+  assignmentCount: number
+  finalOwner: boolean
+  requiresOwnershipResolution: boolean
+  ownershipCandidates: ApiResearchGroupOffboardingCandidate[]
+  assignmentCandidates: ApiResearchGroupOffboardingCandidate[]
+}
+
+export interface ApiResearchGroupMemberOffboardingPreview {
+  membershipId: number
+  user: {
+    id: number
+    username: string
+    firstName: string
+    lastName: string
+  }
+  researchGroupRole: ApiResearchGroupRole
+  finalResearchGroupAdmin: boolean
+  projects: ApiResearchGroupProjectOffboardingPreview[]
+}
+
+export type ApiResearchGroupAssignmentResolutionInput =
+  | {
+      mode: 'unassign'
+    }
+  | {
+      mode: 'transfer'
+      replacementUserId: number
+    }
+
+export type ApiResearchGroupOwnershipResolutionInput =
+  | {
+      mode: 'archive'
+    }
+  | {
+      mode: 'transfer'
+      replacementUserId: number
+    }
+
+export interface ApiResearchGroupProjectOffboardingInput {
+  projectId: number
+  assignmentResolution?:
+    ApiResearchGroupAssignmentResolutionInput
+  ownershipResolution?:
+    ApiResearchGroupOwnershipResolutionInput
+}
+
+export interface ApiResearchGroupMemberOffboardingInput {
+  projects: ApiResearchGroupProjectOffboardingInput[]
+}
+
+export interface ApiResearchGroupOffboardingSummary {
+  removedProjectMembershipCount: number
+  affectedWorkItemCount: number
+  transferredAssignmentCount: number
+  unassignedAssignmentCount: number
+  ownershipTransferCount: number
+  archivedProjectCount: number
+}
+
+export interface ApiResearchGroupMemberOffboardingResponse {
+  detail: string
+  summary: ApiResearchGroupOffboardingSummary
+}

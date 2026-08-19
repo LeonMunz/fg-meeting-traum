@@ -9,6 +9,9 @@ import type {
   ApiResearchGroup,
   ApiResearchGroupMemberCandidate,
   ApiResearchGroupMembership,
+  ApiResearchGroupMemberOffboardingInput,
+  ApiResearchGroupMemberOffboardingPreview,
+  ApiResearchGroupMemberOffboardingResponse,
   ApiUpdateResearchGroupInput,
   ApiUpdateResearchGroupMembershipInput,
 } from './types'
@@ -81,6 +84,29 @@ export async function addResearchGroupMembership(
 ): Promise<ApiResearchGroupMembership> {
   return apiPost<ApiResearchGroupMembership>(
     `/api/research-groups/${researchGroupId}/memberships/`,
+    input,
+  )
+}
+
+
+/** Preview dependencies before removing a Research Group member. */
+export async function getResearchGroupMemberOffboardingPreview(
+  researchGroupId: number,
+  membershipId: number,
+): Promise<ApiResearchGroupMemberOffboardingPreview> {
+  return apiGet<ApiResearchGroupMemberOffboardingPreview>(
+    `/api/research-groups/${researchGroupId}/memberships/${membershipId}/offboarding/`,
+  )
+}
+
+/** Resolve current responsibilities and remove a Research Group member. */
+export async function offboardResearchGroupMember(
+  researchGroupId: number,
+  membershipId: number,
+  input: ApiResearchGroupMemberOffboardingInput,
+): Promise<ApiResearchGroupMemberOffboardingResponse> {
+  return apiPost<ApiResearchGroupMemberOffboardingResponse>(
+    `/api/research-groups/${researchGroupId}/memberships/${membershipId}/offboarding/`,
     input,
   )
 }
