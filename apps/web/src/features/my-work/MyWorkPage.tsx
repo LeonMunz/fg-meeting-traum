@@ -7,10 +7,8 @@ import {
 import { useNavigate } from 'react-router'
 
 import { ApiError } from '../../api/client'
-import { listProjects } from '../../api/projects'
 import type {
-  ApiProject,
-  ApiWorkItem,
+  ApiPersonalWorkItem,
   ApiWorkItemStatus,
 } from '../../api/types'
 import {
@@ -19,26 +17,37 @@ import {
 } from '../../api/work-items'
 import { useResearchGroup } from '../research-group/useResearchGroup'
 
-const statusLabels: Record<ApiWorkItemStatus, string> = {
+const statusLabels: Record<
+  ApiWorkItemStatus,
+  string
+> = {
   todo: 'To do',
   in_progress: 'In progress',
   review: 'Review',
   done: 'Done',
 }
 
-const typeLabels: Record<ApiWorkItem['type'], string> = {
+const typeLabels: Record<
+  ApiPersonalWorkItem['type'],
+  string
+> = {
   epic: 'Epic',
   milestone: 'Milestone',
   deliverable: 'Deliverable',
   task: 'Task',
 }
 
-const typeIcons: Record<ApiWorkItem['type'], string> = {
+const typeIcons: Record<
+  ApiPersonalWorkItem['type'],
+  string
+> = {
   epic: 'account_tree',
   milestone: 'flag',
   deliverable: 'inventory_2',
   task: 'check_box_outline_blank',
 }
+
+type GroupFilter = 'all' | number
 
 function getErrorMessage(
   error: unknown,
@@ -62,12 +71,15 @@ function getErrorMessage(
   return fallback
 }
 
-function formatDueDate(value: string | null) {
+function formatDueDate(
+  value: string | null,
+) {
   if (!value) {
     return 'No due date'
   }
 
-  const [year, month, day] = value.split('-').map(Number)
+  const [year, month, day] =
+    value.split('-').map(Number)
 
   if (
     !Number.isInteger(year) ||
@@ -77,7 +89,11 @@ function formatDueDate(value: string | null) {
     return value
   }
 
-  const dueDate = new Date(year, month - 1, day)
+  const dueDate = new Date(
+    year,
+    month - 1,
+    day,
+  )
 
   const now = new Date()
 
@@ -88,7 +104,8 @@ function formatDueDate(value: string | null) {
   )
 
   const diffDays = Math.round(
-    (dueDate.getTime() - today.getTime()) /
+    (dueDate.getTime() -
+      today.getTime()) /
       86_400_000,
   )
 
@@ -104,10 +121,11 @@ function formatDueDate(value: string | null) {
     return 'Due yesterday'
   }
 
-  const formatted = new Intl.DateTimeFormat('en', {
-    month: 'short',
-    day: 'numeric',
-  }).format(dueDate)
+  const formatted =
+    new Intl.DateTimeFormat('en', {
+      month: 'short',
+      day: 'numeric',
+    }).format(dueDate)
 
   if (diffDays < 0) {
     return `Overdue · ${formatted}`
@@ -118,93 +136,96 @@ function formatDueDate(value: string | null) {
 
 export function MyWorkPage() {
   const navigate = useNavigate()
+  const { groups } = useResearchGroup()
 
-  const {
-    activeResearchGroupId,
-    activeResearchGroup,
-    loading: researchGroupsLoading,
-    error: researchGroupsError,
-  } = useResearchGroup()
+  const [items, setItems] = useState<
+    ApiPersonalWorkItem[]
+  >([])
+  const [loading, setLoading] =
+    useState(false)
+  const [error, setError] =
+    useState<string | null>(null)
+  const [
+    updatingItemId,
+    setUpdatingItemId,
+  ] = useState<number | null>(null)
+  const [
+    groupFilter,
+    setGroupFilter,
+  ] = useState<GroupFilter>('all')
 
-  const [items, setItems] = useState<ApiWorkItem[]>([])
-  const [projects, setProjects] = useState<ApiProject[]>([])
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [updatingItemId, setUpdatingItemId] =
-    useState<number | null>(null)
+  const loadMyWork =
+    useCallback(async () => {
+      setLoading(true)
+      setError(null)
 
-  const loadMyWork = useCallback(async () => {
-    if (activeResearchGroupId == null) {
-      setItems([])
-      setProjects([])
-      setLoading(false)
-      return
-    }
+      try {
+        const nextItems =
+          await listMyWork()
 
-    setLoading(true)
-    setError(null)
-
-    try {
-      const [nextItems, nextProjects] =
-        await Promise.all([
-          listMyWork(activeResearchGroupId),
-          listProjects(activeResearchGroupId),
-        ])
-
-      setItems(nextItems)
-      setProjects(nextProjects)
-    } catch (loadError) {
-      setItems([])
-      setProjects([])
-      setError(
-        getErrorMessage(
-          loadError,
-          'My Work could not be loaded.',
-        ),
-      )
-    } finally {
-      setLoading(false)
-    }
-  }, [activeResearchGroupId])
+        setItems(nextItems)
+      } catch (loadError) {
+        setItems([])
+        setError(
+          getErrorMessage(
+            loadError,
+            'My Work could not be loaded.',
+          ),
+        )
+      } finally {
+        setLoading(false)
+      }
+    }, [])
 
   useEffect(() => {
     void loadMyWork()
   }, [loadMyWork])
 
-  const projectsById = useMemo(
-    () =>
-      new Map(
-        projects.map((project) => [
-          project.id,
-          project,
-        ]),
-      ),
-    [projects],
-  )
-
   const sortedItems = useMemo(() => {
     return [...items].sort((a, b) => {
-      if (a.status === 'done' && b.status !== 'done') {
+      if (
+        a.status === 'done' &&
+        b.status !== 'done'
+      ) {
         return 1
       }
 
-      if (a.status !== 'done' && b.status === 'done') {
+      if (
+        a.status !== 'done' &&
+        b.status === 'done'
+      ) {
         return -1
       }
 
       if (a.dueDate && b.dueDate) {
-        return a.dueDate.localeCompare(b.dueDate)
+        return a.dueDate.localeCompare(
+          b.dueDate,
+        )
       }
 
       if (a.dueDate) return -1
       if (b.dueDate) return 1
 
-      return b.updatedAt.localeCompare(a.updatedAt)
+      return b.updatedAt.localeCompare(
+        a.updatedAt,
+      )
     })
   }, [items])
 
+  const visibleItems = useMemo(
+    () =>
+      groupFilter === 'all'
+        ? sortedItems
+        : sortedItems.filter(
+            (item) =>
+              item.researchGroupId ===
+              groupFilter,
+          ),
+    [groupFilter, sortedItems],
+  )
+
   const handleStatusChange = async (
-    item: ApiWorkItem,
+    item: ApiPersonalWorkItem,
     status: ApiWorkItemStatus,
   ) => {
     if (status === item.status) {
@@ -215,15 +236,19 @@ export function MyWorkPage() {
     setError(null)
 
     try {
-      const updated = await updateWorkItem(
-        item.id,
-        { status },
-      )
+      const updated =
+        await updateWorkItem(
+          item.id,
+          { status },
+        )
 
       setItems((current) =>
         current.map((candidate) =>
           candidate.id === updated.id
-            ? updated
+            ? {
+                ...candidate,
+                ...updated,
+              }
             : candidate,
         ),
       )
@@ -239,27 +264,52 @@ export function MyWorkPage() {
     }
   }
 
-  const pageLoading =
-    researchGroupsLoading || loading
-
-  const pageError =
-    researchGroupsError || error
-
   return (
     <div className="w-full px-6 py-8 lg:px-8 lg:py-10 xl:px-10">
-      <header>
-        <h1 className="text-3xl font-semibold tracking-tight text-on-surface">
-          My Work
-        </h1>
+      <header className="flex items-start justify-between gap-6">
+        <div>
+          <h1 className="text-3xl font-semibold tracking-tight text-on-surface">
+            My Work
+          </h1>
 
-        <p className="mt-1.5 text-sm leading-6 text-on-surface-variant">
-          {activeResearchGroup
-            ? `Work assigned to you in ${activeResearchGroup.name}.`
-            : 'Work currently assigned to you.'}
-        </p>
+          <p className="mt-1.5 text-sm leading-6 text-on-surface-variant">
+            Everything currently assigned to you.
+          </p>
+        </div>
+
+        {groups.length > 1 && (
+          <select
+            value={groupFilter}
+            onChange={(event) => {
+              const value =
+                event.target.value
+
+              setGroupFilter(
+                value === 'all'
+                  ? 'all'
+                  : Number(value),
+              )
+            }}
+            aria-label="Filter by research group"
+            className="h-10 rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15"
+          >
+            <option value="all">
+              All research groups
+            </option>
+
+            {groups.map((group) => (
+              <option
+                key={group.id}
+                value={group.id}
+              >
+                {group.name}
+              </option>
+            ))}
+          </select>
+        )}
       </header>
 
-      {pageLoading ? (
+      {loading ? (
         <div className="mt-8 flex min-h-64 items-center justify-center rounded-xl border border-outline-variant bg-surface-container-lowest">
           <span className="material-symbols-outlined mr-2 animate-spin text-[20px] text-on-surface-variant">
             refresh
@@ -269,7 +319,7 @@ export function MyWorkPage() {
             Loading your work…
           </span>
         </div>
-      ) : pageError ? (
+      ) : error ? (
         <div
           role="alert"
           className="mt-8 flex min-h-64 flex-col items-center justify-center rounded-xl border border-outline-variant bg-surface-container-lowest px-6 py-10 text-center"
@@ -283,12 +333,14 @@ export function MyWorkPage() {
           </h2>
 
           <p className="mt-1 max-w-md text-sm text-on-surface-variant">
-            {pageError}
+            {error}
           </p>
 
           <button
             type="button"
-            onClick={() => void loadMyWork()}
+            onClick={() =>
+              void loadMyWork()
+            }
             className="mt-4 inline-flex h-9 items-center gap-2 rounded-lg border border-outline-variant px-4 text-sm font-semibold text-on-surface transition hover:bg-surface-container-low"
           >
             <span className="material-symbols-outlined text-[18px]">
@@ -297,13 +349,7 @@ export function MyWorkPage() {
             Try again
           </button>
         </div>
-      ) : activeResearchGroupId == null ? (
-        <div className="mt-8 rounded-xl border border-dashed border-outline-variant bg-surface-container-lowest px-6 py-12 text-center">
-          <p className="text-sm text-on-surface-variant">
-            No research group is currently available.
-          </p>
-        </div>
-      ) : sortedItems.length === 0 ? (
+      ) : visibleItems.length === 0 ? (
         <div className="mt-8 flex min-h-64 flex-col items-center justify-center rounded-xl border border-dashed border-outline-variant bg-surface-container-lowest px-6 py-12 text-center">
           <span className="material-symbols-outlined text-[28px] text-on-surface-variant">
             task_alt
@@ -319,7 +365,7 @@ export function MyWorkPage() {
         </div>
       ) : (
         <section className="mt-8 overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest">
-          <div className="hidden grid-cols-[minmax(320px,1fr)_170px_150px_160px] border-b border-outline-variant bg-surface-container-low px-6 py-2.5 lg:grid">
+          <div className="hidden grid-cols-[minmax(320px,1fr)_210px_150px_160px] border-b border-outline-variant bg-surface-container-low px-6 py-2.5 lg:grid">
             <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-on-surface-variant">
               Work item
             </div>
@@ -338,115 +384,126 @@ export function MyWorkPage() {
           </div>
 
           <div className="divide-y divide-outline-variant/60">
-            {sortedItems.map((item) => {
-              const project =
-                projectsById.get(item.projectId)
-
-              return (
-                <article
-                  key={item.id}
-                  className="grid gap-4 px-6 py-4 lg:grid-cols-[minmax(320px,1fr)_170px_150px_160px] lg:items-center"
+            {visibleItems.map((item) => (
+              <article
+                key={item.id}
+                className="grid gap-4 px-6 py-4 lg:grid-cols-[minmax(320px,1fr)_210px_150px_160px] lg:items-center"
+              >
+                <button
+                  type="button"
+                  onClick={() =>
+                    navigate(
+                      `/projects/${item.projectId}`,
+                    )
+                  }
+                  className="min-w-0 text-left"
                 >
-                  <button
-                    type="button"
-                    onClick={() =>
-                      navigate(
-                        `/projects/${item.projectId}`,
-                      )
-                    }
-                    className="min-w-0 text-left"
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="material-symbols-outlined shrink-0 text-[17px] text-on-surface-variant">
-                        {typeIcons[item.type]}
-                      </span>
+                  <div className="flex items-center gap-2">
+                    <span className="material-symbols-outlined shrink-0 text-[17px] text-on-surface-variant">
+                      {typeIcons[item.type]}
+                    </span>
 
-                      <span className="truncate text-sm font-semibold text-on-surface hover:text-primary">
-                        {item.title}
-                      </span>
-                    </div>
-
-                    <div className="mt-1 flex items-center gap-2 pl-[25px]">
-                      <span className="text-xs text-on-surface-variant">
-                        {typeLabels[item.type]}
-                      </span>
-
-                      {item.blockedReason && (
-                        <>
-                          <span className="text-outline">
-                            ·
-                          </span>
-
-                          <span
-                            title={item.blockedReason}
-                            className="inline-flex items-center gap-1 text-xs font-medium text-error"
-                          >
-                            <span className="material-symbols-outlined text-[14px]">
-                              block
-                            </span>
-                            Blocked
-                          </span>
-                        </>
-                      )}
-                    </div>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() =>
-                      navigate(
-                        `/projects/${item.projectId}`,
-                      )
-                    }
-                    className="truncate text-left text-xs font-medium text-on-surface-variant transition hover:text-primary"
-                  >
-                    {project?.name ??
-                      `Project ${item.projectId}`}
-                  </button>
-
-                  <div
-                    className={[
-                      'text-xs',
-                      item.dueDate &&
-                      formatDueDate(
-                        item.dueDate,
-                      ).startsWith('Overdue')
-                        ? 'font-medium text-error'
-                        : 'text-on-surface-variant',
-                    ].join(' ')}
-                  >
-                    {formatDueDate(item.dueDate)}
+                    <span className="truncate text-sm font-semibold text-on-surface hover:text-primary">
+                      {item.title}
+                    </span>
                   </div>
 
-                  <select
-                    value={item.status}
-                    disabled={
-                      updatingItemId === item.id
-                    }
-                    onChange={(event) =>
-                      void handleStatusChange(
-                        item,
-                        event.target
-                          .value as ApiWorkItemStatus,
-                      )
-                    }
-                    aria-label={`Status for ${item.title}`}
-                    className="h-9 rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm font-medium text-on-surface outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15 disabled:cursor-wait disabled:opacity-50"
-                  >
-                    {Object.entries(
-                      statusLabels,
-                    ).map(([value, label]) => (
+                  <div className="mt-1 flex items-center gap-2 pl-[25px]">
+                    <span className="text-xs text-on-surface-variant">
+                      {typeLabels[item.type]}
+                    </span>
+
+                    {item.blockedReason && (
+                      <>
+                        <span className="text-outline">
+                          ·
+                        </span>
+
+                        <span
+                          title={
+                            item.blockedReason
+                          }
+                          className="inline-flex items-center gap-1 text-xs font-medium text-error"
+                        >
+                          <span className="material-symbols-outlined text-[14px]">
+                            block
+                          </span>
+                          Blocked
+                        </span>
+                      </>
+                    )}
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    navigate(
+                      `/projects/${item.projectId}`,
+                    )
+                  }
+                  className="min-w-0 text-left"
+                >
+                  <div className="truncate text-xs font-medium text-on-surface-variant transition hover:text-primary">
+                    {item.projectName}
+                  </div>
+
+                  {groups.length > 1 && (
+                    <div className="mt-0.5 truncate text-[11px] text-on-surface-variant/70">
+                      {item.researchGroupName}
+                    </div>
+                  )}
+                </button>
+
+                <div
+                  className={[
+                    'text-xs',
+                    item.dueDate &&
+                    formatDueDate(
+                      item.dueDate,
+                    ).startsWith(
+                      'Overdue',
+                    )
+                      ? 'font-medium text-error'
+                      : 'text-on-surface-variant',
+                  ].join(' ')}
+                >
+                  {formatDueDate(
+                    item.dueDate,
+                  )}
+                </div>
+
+                <select
+                  value={item.status}
+                  disabled={
+                    updatingItemId ===
+                    item.id
+                  }
+                  onChange={(event) =>
+                    void handleStatusChange(
+                      item,
+                      event.target
+                        .value as ApiWorkItemStatus,
+                    )
+                  }
+                  aria-label={`Status for ${item.title}`}
+                  className="h-9 rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm font-medium text-on-surface outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15 disabled:cursor-wait disabled:opacity-50"
+                >
+                  {Object.entries(
+                    statusLabels,
+                  ).map(
+                    ([value, label]) => (
                       <option
                         key={value}
                         value={value}
                       >
                         {label}
                       </option>
-                    ))}
-                  </select>
-                </article>
-              )
-            })}
+                    ),
+                  )}
+                </select>
+              </article>
+            ))}
           </div>
         </section>
       )}

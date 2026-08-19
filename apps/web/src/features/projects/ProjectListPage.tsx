@@ -16,7 +16,7 @@ import type {
   ApiProjectRole,
   ApiProjectStatus,
 } from '../../api/types'
-import { useResearchGroup } from '../research-group/useResearchGroup'
+import { useResearchGroupListScope } from '../research-group/useResearchGroupListScope'
 import {
   CreateProjectDialog,
   type CreateProjectInput,
@@ -132,7 +132,7 @@ export function ProjectListPage() {
     activeResearchGroup,
     loading: researchGroupsLoading,
     error: researchGroupsError,
-  } = useResearchGroup()
+  } = useResearchGroupListScope()
 
   const [projects, setProjects] = useState<ApiProject[]>([])
   const [projectsLoading, setProjectsLoading] =
@@ -141,6 +141,8 @@ export function ProjectListPage() {
     useState<string | null>(null)
   const [statusFilter, setStatusFilter] =
     useState<StatusFilter>('all')
+  const [showArchived, setShowArchived] =
+    useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [createDialogOpen, setCreateDialogOpen] =
     useState(false)
@@ -158,6 +160,9 @@ export function ProjectListPage() {
     try {
       const nextProjects = await listProjects(
         activeResearchGroupId,
+        {
+          includeArchived: true,
+        },
       )
 
       setProjects(nextProjects)
@@ -209,6 +214,7 @@ export function ProjectListPage() {
       ])
 
       setStatusFilter('all')
+      setShowArchived(false)
       setSearchQuery('')
     } catch (error) {
       setProjectsError(
@@ -220,6 +226,17 @@ export function ProjectListPage() {
     }
   }
 
+  const archivedProjectCount = useMemo(
+    () =>
+      projects.filter(
+        (project) => project.archivedAt !== null,
+      ).length,
+    [projects],
+  )
+
+  const activeProjectCount =
+    projects.length - archivedProjectCount
+
   const hasActiveFilters =
     statusFilter !== 'all' ||
     searchQuery.trim().length > 0
@@ -228,6 +245,10 @@ export function ProjectListPage() {
     const query = searchQuery.trim().toLowerCase()
 
     return projects.filter((project) => {
+      const matchesArchiveView = showArchived
+        ? project.archivedAt !== null
+        : project.archivedAt === null
+
       const matchesStatus =
         statusFilter === 'all' ||
         project.status === statusFilter
@@ -239,13 +260,32 @@ export function ProjectListPage() {
           .toLowerCase()
           .includes(query)
 
-      return matchesStatus && matchesSearch
+      return (
+        matchesArchiveView &&
+        matchesStatus &&
+        matchesSearch
+      )
     })
-  }, [projects, searchQuery, statusFilter])
+  }, [
+    projects,
+    searchQuery,
+    showArchived,
+    statusFilter,
+  ])
 
   const clearFilters = () => {
     setStatusFilter('all')
     setSearchQuery('')
+  }
+
+  const showCurrentProjects = () => {
+    setShowArchived(false)
+    setStatusFilter('all')
+  }
+
+  const showArchivedProjects = () => {
+    setShowArchived(true)
+    setStatusFilter('all')
   }
 
   const isLoading =
@@ -290,15 +330,17 @@ export function ProjectListPage() {
           <div className="flex flex-wrap items-center gap-1">
             {filters.map((filter) => {
               const isActive =
+                !showArchived &&
                 statusFilter === filter.value
 
               return (
                 <button
                   key={filter.value}
                   type="button"
-                  onClick={() =>
+                  onClick={() => {
+                    setShowArchived(false)
                     setStatusFilter(filter.value)
-                  }
+                  }}
                   className={[
                     'rounded-lg px-3 py-2 text-sm font-medium transition',
                     isActive
@@ -310,6 +352,41 @@ export function ProjectListPage() {
                 </button>
               )
             })}
+
+            <div
+              aria-hidden="true"
+              className="mx-1 h-5 w-px bg-outline-variant"
+            />
+
+            <button
+              type="button"
+              onClick={
+                showArchived
+                  ? showCurrentProjects
+                  : showArchivedProjects
+              }
+              className={[
+                'inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition',
+                showArchived
+                  ? 'bg-secondary-container text-on-surface'
+                  : 'text-on-surface-variant hover:bg-surface-container-low hover:text-on-surface',
+              ].join(' ')}
+            >
+              <span
+                aria-hidden="true"
+                className="material-symbols-outlined text-[17px]"
+              >
+                archive
+              </span>
+
+              Archived
+
+              {archivedProjectCount > 0 && (
+                <span className="ml-0.5 text-[11px] opacity-70">
+                  {archivedProjectCount}
+                </span>
+              )}
+            </button>
           </div>
 
           <label className="relative block w-full md:max-w-xs">
@@ -434,9 +511,20 @@ export function ProjectListPage() {
                     ].join(' ')}
                   >
                     <div className="min-w-0 pr-8">
-                      <h2 className="truncate text-sm font-semibold text-on-surface">
-                        {project.name}
-                      </h2>
+                      <div className="flex min-w-0 items-center gap-2">
+                        <h2 className="truncate text-sm font-semibold text-on-surface">
+                          {project.name}
+                        </h2>
+
+                        {project.archivedAt !== null && (
+                          <span
+                            title="Archived project"
+                            className="material-symbols-outlined shrink-0 text-[15px] text-on-surface-variant/65"
+                          >
+                            archive
+                          </span>
+                        )}
+                      </div>
 
                       <p className="mt-1 truncate text-xs font-normal text-on-surface-variant">
                         {project.description ||
@@ -509,7 +597,8 @@ export function ProjectListPage() {
               )}
             </div>
           </div>
-        ) : projects.length === 0 &&
+        ) : activeProjectCount === 0 &&
+          !showArchived &&
           !hasActiveFilters ? (
           <div className="mt-8 flex min-h-72 flex-col items-center justify-center rounded-xl border border-dashed border-outline-variant bg-surface-container-lowest px-6 py-12 text-center">
             <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary-fixed text-primary">
@@ -519,27 +608,44 @@ export function ProjectListPage() {
             </div>
 
             <h2 className="mt-4 text-base font-semibold text-on-surface">
-              No projects yet
+              {archivedProjectCount > 0
+                ? 'No current projects'
+                : 'No projects yet'}
             </h2>
 
             <p className="mt-1 max-w-md text-sm leading-6 text-on-surface-variant">
-              Create your first project to organize work,
-              members and project access in a separate
-              workspace.
+              {archivedProjectCount > 0
+                ? 'Your archived projects are kept separately so the active workspace stays focused.'
+                : 'Create your first project to organize work, members and project access in a separate workspace.'}
             </p>
 
-            <button
-              type="button"
-              onClick={() =>
-                setCreateDialogOpen(true)
-              }
-              className="mt-5 inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-primary/90"
-            >
-              <span className="material-symbols-outlined text-[18px]">
-                add
-              </span>
-              Create project
-            </button>
+            <div className="mt-5 flex items-center gap-3">
+              {archivedProjectCount > 0 && (
+                <button
+                  type="button"
+                  onClick={showArchivedProjects}
+                  className="inline-flex h-9 items-center justify-center gap-2 rounded-lg px-3 text-sm font-medium text-on-surface-variant transition hover:bg-surface-container-high hover:text-on-surface"
+                >
+                  <span className="material-symbols-outlined text-[18px]">
+                    archive
+                  </span>
+                  View archived
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={() =>
+                  setCreateDialogOpen(true)
+                }
+                className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-primary/90"
+              >
+                <span className="material-symbols-outlined text-[18px]">
+                  add
+                </span>
+                Create project
+              </button>
+            </div>
           </div>
         ) : (
           <div className="mt-8 flex min-h-64 flex-col items-center justify-center rounded-xl border border-dashed border-outline-variant bg-surface-container-lowest px-6 py-12 text-center">

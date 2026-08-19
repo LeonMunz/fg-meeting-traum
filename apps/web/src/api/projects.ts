@@ -9,8 +9,10 @@ import type {
   ApiAddProjectMembershipInput,
   ApiCreateProjectInput,
   ApiDeleteProjectMembershipResponse,
+  ApiDeleteProjectResponse,
   ApiProject,
   ApiProjectMembership,
+  ApiRemoveProjectMembershipInput,
   ApiResearchGroupMember,
   ApiUpdateProjectInput,
   ApiUpdateProjectMembershipInput,
@@ -18,9 +20,17 @@ import type {
 
 export async function listProjects(
   researchGroupId: number,
+  options?: {
+    includeArchived?: boolean
+  },
 ): Promise<ApiProject[]> {
+  const query =
+    options?.includeArchived === true
+      ? '?includeArchived=true'
+      : ''
+
   return apiGet<ApiProject[]>(
-    `/api/research-groups/${researchGroupId}/projects/`,
+    `/api/research-groups/${researchGroupId}/projects/${query}`,
   )
 }
 
@@ -49,6 +59,32 @@ export async function updateProject(
   return apiPatch<ApiProject>(
     `/api/projects/${projectId}/`,
     input,
+  )
+}
+
+export async function archiveProject(
+  projectId: number,
+): Promise<ApiProject> {
+  return apiPost<ApiProject>(
+    `/api/projects/${projectId}/archive/`,
+    {},
+  )
+}
+
+export async function restoreProject(
+  projectId: number,
+): Promise<ApiProject> {
+  return apiPost<ApiProject>(
+    `/api/projects/${projectId}/restore/`,
+    {},
+  )
+}
+
+export async function deleteProject(
+  projectId: number,
+): Promise<ApiDeleteProjectResponse> {
+  return apiDelete<ApiDeleteProjectResponse>(
+    `/api/projects/${projectId}/`,
   )
 }
 
@@ -84,9 +120,11 @@ export async function updateProjectMembership(
 export async function removeProjectMembership(
   projectId: number,
   membershipId: number,
+  input?: ApiRemoveProjectMembershipInput,
 ): Promise<ApiDeleteProjectMembershipResponse> {
   return apiDelete<ApiDeleteProjectMembershipResponse>(
     `/api/projects/${projectId}/memberships/${membershipId}/`,
+    input,
   )
 }
 

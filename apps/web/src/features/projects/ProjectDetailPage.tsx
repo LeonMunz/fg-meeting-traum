@@ -11,15 +11,26 @@ import {
   type AddableProjectRole,
   type DirectoryUser,
 } from './AddProjectMemberDialog'
+import {
+  ProjectAssignmentResolutionDialog,
+  type AssignmentResolutionMode,
+} from './ProjectAssignmentResolutionDialog'
 import { RemoveProjectMemberDialog } from './RemoveProjectMemberDialog'
+import {
+  ProjectLifecycleDialog,
+  type ProjectLifecycleAction,
+} from './ProjectLifecycleDialog'
 import { CreateWorkItemDialog } from './CreateWorkItemDialog'
 import { ApiError } from '../../api/client'
 import {
   addProjectMembership,
+  archiveProject,
+  deleteProject,
   getProject,
   listProjectMemberships,
   listResearchGroupMembers,
   removeProjectMembership,
+  restoreProject,
   updateProject,
   updateProjectMembership,
 } from '../../api/projects'
@@ -36,7 +47,7 @@ import { useSession } from '../../api/useSession'
 
 type ProjectStatus = 'active' | 'paused' | 'completed'
 type ProjectRole = 'owner' | 'member' | 'viewer'
-type ProjectTab = 'overview' | 'work-items' | 'members' | 'settings'
+type ProjectTab = 'overview' | 'work-items' | 'members' | 'data' | 'settings'
 
 type DemoWorkItemStatus = 'todo' | 'in_progress' | 'review' | 'done'
 type DemoWorkItemType = 'epic' | 'milestone' | 'deliverable' | 'task'
@@ -98,6 +109,7 @@ type ProjectDetail = {
   name: string
   description: string
   status: ProjectStatus
+  archivedAt: string | null
   role: ProjectRole
   updatedLabel: string
 }
@@ -367,6 +379,7 @@ const tabs: Array<{ id: ProjectTab; label: string }> = [
   { id: 'overview', label: 'Overview' },
   { id: 'work-items', label: 'Work Items' },
   { id: 'members', label: 'Members' },
+  { id: 'data', label: 'Data' },
   { id: 'settings', label: 'Settings' },
 ]
 
@@ -571,6 +584,7 @@ function getMembershipErrorMessage(
 
   return fallback
 }
+import { useSyncResearchGroupContext } from '../research-group/useSyncResearchGroupContext'
 
 export function ProjectDetailPage() {
   const { projectId } = useParams()
@@ -580,6 +594,11 @@ export function ProjectDetailPage() {
   const [activeTab, setActiveTab] = useState<ProjectTab>('overview')
 
   const [project, setProject] = useState<ProjectDetail | null>(null)
+
+  useSyncResearchGroupContext(
+    project?.researchGroupId,
+  )
+
   const [projectLoading, setProjectLoading] = useState(true)
   const [projectLoadError, setProjectLoadError] =
     useState<'not-found' | 'error' | null>(null)
@@ -597,6 +616,12 @@ export function ProjectDetailPage() {
     useState(false)
   const [settingsError, setSettingsError] =
     useState<string | null>(null)
+  const [lifecycleAction, setLifecycleAction] =
+    useState<ProjectLifecycleAction | null>(null)
+  const [lifecycleSaving, setLifecycleSaving] =
+    useState(false)
+  const [lifecycleError, setLifecycleError] =
+    useState<string | null>(null)
 
   const [members, setMembers] = useState<ProjectMember[]>([])
   const [directoryUsers, setDirectoryUsers] =
@@ -607,6 +632,13 @@ export function ProjectDetailPage() {
   const [addMemberDialogOpen, setAddMemberDialogOpen] = useState(false)
   const [memberToRemove, setMemberToRemove] =
     useState<ProjectMember | null>(null)
+  const [
+    assignmentResolutionAction,
+    setAssignmentResolutionAction,
+  ] = useState<{
+    member: ProjectMember
+    action: 'viewer' | 'remove'
+  } | null>(null)
   const [apiWorkItems, setApiWorkItems] =
     useState<ApiWorkItem[]>([])
   const [workItemsLoading, setWorkItemsLoading] =
@@ -722,6 +754,7 @@ export function ProjectDetailPage() {
           name: apiProject.name,
           description: apiProject.description,
           status: apiProject.status,
+          archivedAt: apiProject.archivedAt,
           role: apiProject.currentUserRole,
           updatedLabel,
         })
@@ -850,7 +883,10 @@ export function ProjectDetailPage() {
   useEffect(() => {
     setAddMemberDialogOpen(false)
     setMemberToRemove(null)
+    setAssignmentResolutionAction(null)
     setCreateWorkItemDialogOpen(false)
+    setLifecycleAction(null)
+    setLifecycleError(null)
 
     if (project) {
       setProjectName(project.name)
@@ -1018,9 +1054,229 @@ export function ProjectDetailPage() {
     (item) => mapApiWorkItem(item, members),
   )
 
-  const isReadOnly = currentMemberRole === 'viewer'
-  const canManageMembers = currentMemberRole === 'owner'
-  const canEditProjectSettings = currentMemberRole === 'owner'
+  const isArchived = project.archivedAt !== null
+  const isViewer = currentMemberRole === 'viewer'
+  const isOwner = currentMemberRole === 'owner'
+
+  const isReadOnly =
+    isViewer || isArchived
+
+  const canManageMembers =
+    isOwner && !isArchived
+
+  const canEditProjectSettings =
+    isOwner && !isArchived
+
+  const canManageProjectLifecycle =
+    isOwner
+
+  const projectHasWork =
+    apiWorkItems.length > 0
+
+  const canDeleteProject =
+    canManageProjectLifecycle &&
+    !workItemsLoading &&
+    !workItemsError &&
+    !projectHasWork
+
+  const getAssignmentCountForMember = (
+    memberId: string,
+  ) => {
+    const numericMemberId = Number(memberId)
+
+    if (
+      !Number.isInteger(numericMemberId) ||
+      numericMemberId <= 0
+    ) {
+      return 0
+    }
+
+    return apiWorkItems.filter(
+      (item) =>
+        item.assigneeIds.includes(
+          numericMemberId,
+        ),
+    ).length
+  }
+
+  const assignmentResolutionCount =
+    assignmentResolutionAction
+      ? getAssignmentCountForMember(
+          assignmentResolutionAction.member.id,
+        )
+      : 0
+
+  const assignmentResolutionCandidates =
+    assignmentResolutionAction
+      ? sortedMembers
+          .filter(
+            (member) =>
+              member.id !==
+                assignmentResolutionAction.member.id &&
+              member.role !== 'viewer',
+          )
+          .map((member) => ({
+            id: member.id,
+            name: member.name,
+            username: member.username,
+            initials: member.initials,
+          }))
+      : []
+
+  const applyAssignmentResolutionToWorkItems = (
+    targetUserId: number,
+    resolution: AssignmentResolutionMode,
+    replacementUserId: number | null,
+  ) => {
+    setApiWorkItems((currentItems) =>
+      currentItems.map((item) => {
+        if (
+          !item.assigneeIds.includes(
+            targetUserId,
+          )
+        ) {
+          return item
+        }
+
+        const remainingAssigneeIds =
+          item.assigneeIds.filter(
+            (assigneeId) =>
+              assigneeId !== targetUserId,
+          )
+
+        if (
+          resolution === 'transfer' &&
+          replacementUserId !== null &&
+          !remainingAssigneeIds.includes(
+            replacementUserId,
+          )
+        ) {
+          remainingAssigneeIds.push(
+            replacementUserId,
+          )
+        }
+
+        return {
+          ...item,
+          assigneeIds: remainingAssigneeIds,
+        }
+      }),
+    )
+  }
+
+  const applyLifecycleProject = (
+    archivedAt: string | null,
+  ) => {
+    setProject((currentProject) =>
+      currentProject
+        ? {
+            ...currentProject,
+            archivedAt,
+          }
+        : currentProject,
+    )
+  }
+
+  const handleRestoreProject = async () => {
+    if (
+      !canManageProjectLifecycle ||
+      lifecycleSaving
+    ) {
+      return
+    }
+
+    const numericProjectId = Number(project.id)
+
+    if (
+      !Number.isInteger(numericProjectId) ||
+      numericProjectId <= 0
+    ) {
+      setLifecycleError('Invalid Project ID.')
+      return
+    }
+
+    setLifecycleSaving(true)
+    setLifecycleError(null)
+
+    try {
+      const restored = await restoreProject(
+        numericProjectId,
+      )
+
+      applyLifecycleProject(
+        restored.archivedAt,
+      )
+    } catch (error) {
+      setLifecycleError(
+        getMembershipErrorMessage(
+          error,
+          'Project could not be restored.',
+        ),
+      )
+    } finally {
+      setLifecycleSaving(false)
+    }
+  }
+
+  const handleConfirmLifecycle = async () => {
+    if (
+      !lifecycleAction ||
+      !canManageProjectLifecycle ||
+      lifecycleSaving
+    ) {
+      return
+    }
+
+    const numericProjectId = Number(project.id)
+
+    if (
+      !Number.isInteger(numericProjectId) ||
+      numericProjectId <= 0
+    ) {
+      setLifecycleError('Invalid Project ID.')
+      return
+    }
+
+    setLifecycleSaving(true)
+    setLifecycleError(null)
+
+    try {
+      if (lifecycleAction === 'archive') {
+        const archived = await archiveProject(
+          numericProjectId,
+        )
+
+        applyLifecycleProject(
+          archived.archivedAt,
+        )
+
+        setLifecycleAction(null)
+        return
+      }
+
+      await deleteProject(
+        numericProjectId,
+      )
+
+      navigate(
+        `/projects?group=${project.researchGroupId}`,
+        { replace: true },
+      )
+    } catch (error) {
+      setLifecycleError(
+        getMembershipErrorMessage(
+          error,
+          lifecycleAction === 'archive'
+            ? 'Project could not be archived.'
+            : 'Project could not be deleted.',
+        ),
+      )
+
+      setLifecycleAction(null)
+    } finally {
+      setLifecycleSaving(false)
+    }
+  }
 
   const settingsDirty =
     settingsName.trim() !== projectName ||
@@ -1153,6 +1409,34 @@ export function ProjectDetailPage() {
 
     setMembersError(null)
 
+    if (role === 'viewer') {
+      if (workItemsLoading) {
+        setMembersError(
+          'Work items are still loading. Try again in a moment.',
+        )
+        return
+      }
+
+      if (workItemsError) {
+        setMembersError(
+          'Work items could not be verified. Reload them before changing this member to viewer.',
+        )
+        return
+      }
+
+      if (
+        getAssignmentCountForMember(
+          targetMember.id,
+        ) > 0
+      ) {
+        setAssignmentResolutionAction({
+          member: targetMember,
+          action: 'viewer',
+        })
+        return
+      }
+    }
+
     try {
       const membership =
         await updateProjectMembership(
@@ -1176,6 +1460,166 @@ export function ProjectDetailPage() {
         getMembershipErrorMessage(
           error,
           'Project role could not be changed.',
+        ),
+      )
+    }
+  }
+
+  const handleRequestRemoveMember = (
+    member: ProjectMember,
+  ) => {
+    if (!canManageMembers) return
+
+    setMembersError(null)
+
+    if (workItemsLoading) {
+      setMembersError(
+        'Work items are still loading. Try again in a moment.',
+      )
+      return
+    }
+
+    if (workItemsError) {
+      setMembersError(
+        'Work items could not be verified. Reload them before removing this member.',
+      )
+      return
+    }
+
+    if (
+      getAssignmentCountForMember(member.id) > 0
+    ) {
+      setAssignmentResolutionAction({
+        member,
+        action: 'remove',
+      })
+      return
+    }
+
+    setMemberToRemove(member)
+  }
+
+  const handleConfirmAssignmentResolution = async (
+    input: {
+      resolution: AssignmentResolutionMode
+      replacementUserId: string | null
+    },
+  ) => {
+    if (
+      !canManageMembers ||
+      !assignmentResolutionAction
+    ) {
+      throw new Error(
+        'Project membership can no longer be changed.',
+      )
+    }
+
+    const numericProjectId = Number(project.id)
+    const targetUserId = Number(
+      assignmentResolutionAction.member.id,
+    )
+
+    if (
+      !Number.isInteger(numericProjectId) ||
+      numericProjectId <= 0 ||
+      !Number.isInteger(targetUserId) ||
+      targetUserId <= 0
+    ) {
+      throw new Error(
+        'Invalid project or member ID.',
+      )
+    }
+
+    let replacementUserId: number | null =
+      null
+
+    if (input.resolution === 'transfer') {
+      replacementUserId = Number(
+        input.replacementUserId,
+      )
+
+      if (
+        !Number.isInteger(replacementUserId) ||
+        replacementUserId <= 0
+      ) {
+        throw new Error(
+          'Select a project member to receive the work.',
+        )
+      }
+    }
+
+    const action =
+      assignmentResolutionAction
+    const targetMember = action.member
+
+    try {
+      if (action.action === 'viewer') {
+        const membership =
+          await updateProjectMembership(
+            numericProjectId,
+            targetMember.membershipId,
+            {
+              role: 'viewer',
+              assignmentResolution:
+                input.resolution,
+              ...(replacementUserId !== null
+                ? { replacementUserId }
+                : {}),
+            },
+          )
+
+        const mappedMembership =
+          mapProjectMembership(membership)
+
+        setMembers((currentMembers) =>
+          currentMembers.map((member) =>
+            member.id === mappedMembership.id
+              ? mappedMembership
+              : member,
+          ),
+        )
+      } else {
+        await removeProjectMembership(
+          numericProjectId,
+          targetMember.membershipId,
+          {
+            assignmentResolution:
+              input.resolution,
+            ...(replacementUserId !== null
+              ? { replacementUserId }
+              : {}),
+          },
+        )
+
+        setMembers((currentMembers) =>
+          currentMembers.filter(
+            (member) =>
+              member.id !== targetMember.id,
+          ),
+        )
+      }
+
+      applyAssignmentResolutionToWorkItems(
+        targetUserId,
+        input.resolution,
+        replacementUserId,
+      )
+
+      setAssignmentResolutionAction(null)
+
+      if (
+        action.action === 'remove' &&
+        targetMember.id === currentUserId
+      ) {
+        navigate('/projects')
+      }
+    } catch (error) {
+      throw new Error(
+        getMembershipErrorMessage(
+          error,
+          action.action === 'remove'
+            ? 'Project member could not be removed.'
+            : 'Project role could not be changed.',
         ),
       )
     }
@@ -1228,7 +1672,9 @@ export function ProjectDetailPage() {
   }) => {
     if (isReadOnly) {
       throw new Error(
-        'A viewer cannot create Work Items.',
+        isArchived
+          ? 'Archived Projects are read-only. Restore the Project first.'
+          : 'A viewer cannot create Work Items.',
       )
     }
 
@@ -1379,7 +1825,10 @@ export function ProjectDetailPage() {
         to="/projects"
         className="inline-flex items-center gap-1.5 text-sm font-medium text-on-surface-variant transition hover:text-primary"
       >
-        <span className="material-symbols-outlined text-[18px]">
+        <span
+          aria-hidden="true"
+          className="material-symbols-outlined text-[18px]"
+        >
           arrow_back
         </span>
         Projects
@@ -1439,7 +1888,28 @@ export function ProjectDetailPage() {
           </div>
         </div>
 
-        {isReadOnly && (
+        {isArchived && (
+          <div className="mt-6 flex items-start gap-3 rounded-xl border border-outline-variant bg-surface-container-low px-4 py-3.5">
+            <span className="material-symbols-outlined mt-0.5 text-[19px] text-on-surface-variant">
+              archive
+            </span>
+
+            <div>
+              <div className="text-sm font-medium text-on-surface">
+                Archived project
+              </div>
+
+              <p className="mt-0.5 text-xs leading-5 text-on-surface-variant">
+                This project is kept for reference and is read-only.
+                {canManageProjectLifecycle
+                  ? ' Restore it from Settings to continue working.'
+                  : ''}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {isViewer && !isArchived && (
           <div className="mt-6 flex items-start gap-3 rounded-xl border border-outline-variant bg-surface-container-low px-4 py-3.5">
             <span className="material-symbols-outlined mt-0.5 text-[19px] text-on-surface-variant">
               visibility
@@ -1992,7 +2462,9 @@ export function ProjectDetailPage() {
                       <button
                         type="button"
                         disabled={isLastOwner}
-                        onClick={() => setMemberToRemove(member)}
+                        onClick={() =>
+                          handleRequestRemoveMember(member)
+                        }
                         title={
                           isLastOwner
                             ? 'Add another owner before removing the last owner.'
@@ -2016,8 +2488,9 @@ export function ProjectDetailPage() {
               </span>
 
               <p className="text-xs leading-5 text-on-surface-variant">
-                Only the project owner can add or remove members and change
-                project roles.
+                {isArchived
+                  ? 'Archived projects are read-only. Restore this project before changing members or roles.'
+                  : 'Only the project owner can add or remove members and change project roles.'}
               </p>
             </div>
           )}
@@ -2063,6 +2536,39 @@ export function ProjectDetailPage() {
           />
         )}
 
+      {activeTab === 'data' && (
+        <section className="mt-6 overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest shadow-sm">
+          <div className="border-b border-outline-variant px-6 py-5">
+            <h2 className="font-semibold text-on-surface">
+              Data
+            </h2>
+
+            <p className="mt-0.5 text-xs text-on-surface-variant">
+              Research data connected to this project.
+            </p>
+          </div>
+
+          <div className="flex min-h-44 items-center justify-center px-6 py-10">
+            <div className="flex max-w-lg items-start gap-3">
+              <span className="material-symbols-outlined mt-0.5 text-[20px] text-on-surface-variant">
+                storage
+              </span>
+
+              <div>
+                <p className="text-sm font-medium text-on-surface">
+                  No data source connected yet
+                </p>
+
+                <p className="mt-1 text-xs leading-5 text-on-surface-variant">
+                  Project data from services such as OneDrive or Sciebo
+                  will be connected here later.
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
+
       {activeTab === 'settings' && (
         <section className="mt-6 overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest shadow-sm">
           <div className="border-b border-outline-variant px-6 py-5">
@@ -2087,7 +2593,9 @@ export function ProjectDetailPage() {
                 </div>
 
                 <p className="mt-0.5 text-xs leading-5 text-on-surface-variant">
-                  Only project owners can change project settings.
+                  {isArchived
+                    ? 'Restore this project before changing its settings.'
+                    : 'Only project owners can change project settings.'}
                 </p>
               </div>
             </div>
@@ -2272,7 +2780,123 @@ export function ProjectDetailPage() {
               </div>
             </fieldset>
 
+            {canManageProjectLifecycle && (
+              <div className="border-t border-outline-variant pt-6">
+                <div className="flex max-w-3xl items-start justify-between gap-6">
+                  <div>
+                    <h3 className="text-sm font-medium text-on-surface">
+                      {isArchived
+                        ? 'Restore project'
+                        : 'Archive project'}
+                    </h3>
+
+                    <p className="mt-1 max-w-xl text-xs leading-5 text-on-surface-variant">
+                      {isArchived
+                        ? 'Return this project to the current workspace and enable editing again.'
+                        : 'Remove this project from the current workspace without losing its work, members or history.'}
+                    </p>
+                  </div>
+
+                  {isArchived ? (
+                    <button
+                      type="button"
+                      disabled={lifecycleSaving}
+                      onClick={() =>
+                        void handleRestoreProject()
+                      }
+                      className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-lg border border-outline-variant bg-surface-container-lowest px-3.5 text-sm font-semibold text-on-surface transition hover:border-primary/40 hover:bg-surface-container-low disabled:cursor-not-allowed disabled:opacity-45"
+                    >
+                      <span
+                        aria-hidden="true"
+                        className="material-symbols-outlined text-[18px]"
+                      >
+                        unarchive
+                      </span>
+                      Restore
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={lifecycleSaving}
+                      onClick={() => {
+                        setLifecycleError(null)
+                        setLifecycleAction('archive')
+                      }}
+                      className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-lg border border-outline-variant bg-surface-container-lowest px-3.5 text-sm font-semibold text-on-surface transition hover:border-primary/40 hover:bg-surface-container-low disabled:cursor-not-allowed disabled:opacity-45"
+                    >
+                      <span
+                        aria-hidden="true"
+                        className="material-symbols-outlined text-[18px]"
+                      >
+                        archive
+                      </span>
+                      Archive
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {canManageProjectLifecycle && (
+              <div className="border-t border-error/20 pt-6">
+                <div className="flex max-w-3xl items-start justify-between gap-6">
+                  <div>
+                    <h3 className="text-sm font-medium text-error">
+                      Delete project
+                    </h3>
+
+                    <p className="mt-1 max-w-xl text-xs leading-5 text-on-surface-variant">
+                      Only an empty project can be permanently deleted.
+                      Projects containing work must be archived instead.
+                    </p>
+
+                    {!workItemsLoading &&
+                      projectHasWork && (
+                        <p className="mt-1.5 text-xs font-medium text-on-surface-variant">
+                          This project contains{' '}
+                          {apiWorkItems.length}{' '}
+                          {apiWorkItems.length === 1
+                            ? 'work item'
+                            : 'work items'}
+                          , so permanent deletion is unavailable.
+                        </p>
+                      )}
+                  </div>
+
+                  <button
+                    type="button"
+                    disabled={
+                      !canDeleteProject ||
+                      lifecycleSaving
+                    }
+                    onClick={() => {
+                      setLifecycleError(null)
+                      setLifecycleAction('delete')
+                    }}
+                    className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-lg border border-error/35 px-3.5 text-sm font-semibold text-error transition hover:bg-error-container/35 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <span
+                      aria-hidden="true"
+                      className="material-symbols-outlined text-[18px]"
+                    >
+                      delete
+                    </span>
+                    Delete
+                  </button>
+                </div>
+              </div>
+            )}
+
           </div>
+
+          {lifecycleError && (
+            <div
+              role="alert"
+              className="border-t border-error/20 bg-error-container/35 px-6 py-3 text-sm text-error"
+            >
+              {lifecycleError}
+            </div>
+          )}
 
           {settingsError && (
             <div
@@ -2335,6 +2959,45 @@ export function ProjectDetailPage() {
         excludedUserIds={members.map((member) => member.id)}
         onClose={() => setAddMemberDialogOpen(false)}
         onAdd={handleAddMember}
+      />
+
+      <ProjectLifecycleDialog
+        open={lifecycleAction !== null}
+        action={lifecycleAction ?? 'archive'}
+        projectName={projectName}
+        busy={lifecycleSaving}
+        onClose={() => {
+          if (!lifecycleSaving) {
+            setLifecycleAction(null)
+          }
+        }}
+        onConfirm={() =>
+          void handleConfirmLifecycle()
+        }
+      />
+
+      <ProjectAssignmentResolutionDialog
+        open={assignmentResolutionAction != null}
+        action={
+          assignmentResolutionAction?.action ??
+          'viewer'
+        }
+        memberName={
+          assignmentResolutionAction?.member.name ??
+          ''
+        }
+        affectedCount={
+          assignmentResolutionCount
+        }
+        candidates={
+          assignmentResolutionCandidates
+        }
+        onClose={() =>
+          setAssignmentResolutionAction(null)
+        }
+        onConfirm={
+          handleConfirmAssignmentResolution
+        }
       />
 
       <RemoveProjectMemberDialog
