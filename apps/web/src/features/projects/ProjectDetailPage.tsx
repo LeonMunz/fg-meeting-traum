@@ -634,6 +634,8 @@ export function ProjectDetailPage() {
   ] = useState<WorkItemDrawerState | null>(
     null,
   )
+  const [boardStatusDropError, setBoardStatusDropError] =
+    useState<string | null>(null)
   useEffect(() => {
     if (!projectId) {
       setProject(null)
@@ -1729,6 +1731,59 @@ export function ProjectDetailPage() {
     }
   }
 
+  const handleWorkItemStatusDrop = async (
+    workItemId: number,
+    newStatus: DemoWorkItemStatus,
+  ) => {
+    if (isReadOnly) {
+      return
+    }
+
+    const previous = apiWorkItems.find(
+      (item) => item.id === workItemId,
+    )
+
+    if (!previous || previous.status === newStatus) {
+      return
+    }
+
+    setBoardStatusDropError(null)
+
+    setApiWorkItems((current) =>
+      current.map((item) =>
+        item.id === workItemId
+          ? { ...item, status: newStatus }
+          : item,
+      ),
+    )
+
+    try {
+      const updated = await updateWorkItem(
+        workItemId,
+        { status: newStatus },
+      )
+
+      setApiWorkItems((current) =>
+        current.map((item) =>
+          item.id === updated.id ? updated : item,
+        ),
+      )
+    } catch (error) {
+      setApiWorkItems((current) =>
+        current.map((item) =>
+          item.id === workItemId ? previous : item,
+        ),
+      )
+
+      setBoardStatusDropError(
+        getWorkItemErrorMessage(
+          error,
+          'Work item status could not be updated.',
+        ),
+      )
+    }
+  }
+
   const projectWorkItems = forceEmptyWorkItems
     ? []
     : workItems
@@ -2116,6 +2171,11 @@ export function ProjectDetailPage() {
             onOpen={handleOpenWorkItem}
             selectedWorkItemId={
               selectedWorkItemId
+            }
+            onStatusDrop={handleWorkItemStatusDrop}
+            statusDropError={boardStatusDropError}
+            onDismissStatusDropError={() =>
+              setBoardStatusDropError(null)
             }
             preferencesKey={
               user
@@ -2937,6 +2997,9 @@ function ProjectWorkItemsPanel({
   onCreate,
   onOpen,
   selectedWorkItemId,
+  onStatusDrop,
+  statusDropError,
+  onDismissStatusDropError,
   preferencesKey,
 }: {
   items: DemoWorkItem[]
@@ -2945,9 +3008,19 @@ function ProjectWorkItemsPanel({
   onCreate: () => void
   onOpen: (item: DemoWorkItem) => void
   selectedWorkItemId: string | null
+  onStatusDrop: (
+    workItemId: number,
+    newStatus: DemoWorkItemStatus,
+  ) => void
+  statusDropError: string | null
+  onDismissStatusDropError: () => void
   preferencesKey: string | null
 }) {
   const [view, setView] = useState<WorkItemsView>('board')
+  const [draggedItemId, setDraggedItemId] =
+    useState<string | null>(null)
+  const [dragOverStatus, setDragOverStatus] =
+    useState<DemoWorkItemStatus | null>(null)
   const [query, setQuery] = useState('')
   const [typeFilter, setTypeFilter] =
     useState<WorkItemsTypeFilter>('all')
@@ -3257,9 +3330,9 @@ function ProjectWorkItemsPanel({
         </div>
       </div>
 
-      <div className="border-b border-outline-variant bg-surface-container-low/35 px-6 py-4">
-        <div className="flex items-center gap-4">
-          <label className="relative block w-72 shrink-0">
+      <div className="border-b border-outline-variant bg-surface-container-low/35 px-6 py-3">
+        <div className="flex flex-wrap items-center gap-2.5">
+          <label className="relative block w-56 shrink-0">
             <span className="sr-only">Search work items</span>
 
             <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[18px] text-on-surface-variant">
@@ -3270,32 +3343,44 @@ function ProjectWorkItemsPanel({
               type="search"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search work items..."
+              placeholder="Search..."
               className="h-9 w-full rounded-lg border border-outline-variant bg-surface-container-lowest pl-10 pr-3 text-sm text-on-surface outline-none transition placeholder:text-on-surface-variant/60 focus:border-primary focus:ring-2 focus:ring-primary/15"
             />
           </label>
 
-          <label className="flex items-center gap-2">
-            <span className="text-xs font-medium text-on-surface-variant">
-              Assignee
-            </span>
+          <select
+            aria-label="Filter by assignee"
+            value={assigneeFilter}
+            onChange={(event) =>
+              setAssigneeFilter(event.target.value)
+            }
+            className="h-9 min-w-32 rounded-lg border border-outline-variant bg-surface-container-lowest px-2.5 text-sm font-medium text-on-surface outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15"
+          >
+            <option value="all">Anyone</option>
 
-            <select
-              value={assigneeFilter}
-              onChange={(event) =>
-                setAssigneeFilter(event.target.value)
-              }
-              className="h-9 min-w-40 rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm font-medium text-on-surface outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15"
-            >
-              <option value="all">Anyone</option>
+            {sortedEligibleAssignees.map((assignee) => (
+              <option key={assignee.id} value={assignee.id}>
+                {assignee.name}
+              </option>
+            ))}
+          </select>
 
-              {sortedEligibleAssignees.map((assignee) => (
-                <option key={assignee.id} value={assignee.id}>
-                  {assignee.name}
-                </option>
-              ))}
-            </select>
-          </label>
+          <select
+            aria-label="Filter by type"
+            value={typeFilter}
+            onChange={(event) =>
+              setTypeFilter(
+                event.target.value as WorkItemsTypeFilter,
+              )
+            }
+            className="h-9 min-w-28 rounded-lg border border-outline-variant bg-surface-container-lowest px-2.5 text-sm font-medium text-on-surface outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15"
+          >
+            {typeFilters.map((filter) => (
+              <option key={filter.value} value={filter.value}>
+                {filter.label}
+              </option>
+            ))}
+          </select>
 
           <label className="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-2.5 text-sm font-medium text-on-surface-variant transition hover:bg-surface-container-high hover:text-on-surface">
             <input
@@ -3306,7 +3391,7 @@ function ProjectWorkItemsPanel({
               }
               className="h-4 w-4 rounded border-outline accent-primary"
             />
-            Blocked only
+            Blocked
           </label>
 
           <div className="ml-auto flex items-center gap-3">
@@ -3329,33 +3414,31 @@ function ProjectWorkItemsPanel({
             )}
           </div>
         </div>
+      </div>
 
-        <div className="mt-3 flex items-center gap-1">
-          <span className="mr-2 text-xs font-medium text-on-surface-variant">
-            Type
+      {view === 'board' && statusDropError && (
+        <div
+          role="alert"
+          className="flex items-start gap-2.5 border-b border-error/20 bg-error-container/35 px-6 py-3 text-sm text-error"
+        >
+          <span
+            aria-hidden="true"
+            className="material-symbols-outlined mt-0.5 text-[18px]"
+          >
+            error
           </span>
 
-          {typeFilters.map((filter) => {
-            const selected = typeFilter === filter.value
+          <p className="flex-1">{statusDropError}</p>
 
-            return (
-              <button
-                key={filter.value}
-                type="button"
-                onClick={() => setTypeFilter(filter.value)}
-                className={[
-                  'rounded-lg px-3 py-1.5 text-xs font-semibold transition',
-                  selected
-                    ? 'bg-secondary-container text-on-surface'
-                    : 'text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface',
-                ].join(' ')}
-              >
-                {filter.label}
-              </button>
-            )
-          })}
+          <button
+            type="button"
+            onClick={onDismissStatusDropError}
+            className="shrink-0 text-xs font-semibold text-error underline-offset-2 hover:underline"
+          >
+            Dismiss
+          </button>
         </div>
-      </div>
+      )}
 
       {filteredItems.length === 0 ? (
         <div className="flex min-h-64 flex-col items-center justify-center px-6 py-12 text-center">
@@ -3385,9 +3468,9 @@ function ProjectWorkItemsPanel({
           </button>
         </div>
       ) : view === 'board' ? (
-        <div className="overflow-x-auto bg-surface-container-low/20">
+        <div className="overflow-x-auto">
           <div
-            className="grid min-w-max gap-4 p-5"
+            className="grid min-w-max gap-3 p-4"
             style={{
               gridTemplateColumns: `repeat(${Math.max(
                 statusColumns.length,
@@ -3400,41 +3483,97 @@ function ProjectWorkItemsPanel({
               (item) => item.status === column.status,
             )
 
+            const isDragOver =
+              !readOnly &&
+              draggedItemId !== null &&
+              dragOverStatus === column.status
+
             return (
               <div
                 key={column.status}
-                className="min-w-0 rounded-xl border border-outline-variant bg-surface-container-low/55"
+                data-board-column={column.status}
+                onDragOver={(event) => {
+                  if (readOnly || draggedItemId === null) {
+                    return
+                  }
+
+                  event.preventDefault()
+                  event.dataTransfer.dropEffect = 'move'
+
+                  if (dragOverStatus !== column.status) {
+                    setDragOverStatus(column.status)
+                  }
+                }}
+                onDragLeave={(event) => {
+                  if (
+                    event.currentTarget.contains(
+                      event.relatedTarget as Node | null,
+                    )
+                  ) {
+                    return
+                  }
+
+                  setDragOverStatus((current) =>
+                    current === column.status ? null : current,
+                  )
+                }}
+                onDrop={(event) => {
+                  event.preventDefault()
+
+                  const droppedId = event.dataTransfer.getData(
+                    'text/plain',
+                  )
+
+                  setDragOverStatus(null)
+                  setDraggedItemId(null)
+
+                  if (readOnly || !droppedId) {
+                    return
+                  }
+
+                  const numericId = Number(droppedId)
+
+                  if (Number.isInteger(numericId)) {
+                    onStatusDrop(numericId, column.status)
+                  }
+                }}
+                className={[
+                  'flex min-h-[26rem] min-w-0 flex-col rounded-lg transition-colors',
+                  isDragOver
+                    ? 'bg-primary/[0.06] ring-1 ring-inset ring-primary/40'
+                    : 'bg-surface-container-low/40',
+                ].join(' ')}
               >
-                <div className="flex items-center justify-between border-b border-outline-variant px-4 py-3">
-                  <span className="text-sm font-semibold text-on-surface">
+                <div className="flex items-center gap-1.5 px-3 py-2.5">
+                  <span className="text-[13px] font-semibold text-on-surface">
                     {column.label}
                   </span>
 
-                  <span className="text-xs font-medium text-on-surface-variant">
+                  <span className="text-xs text-on-surface-variant/70">
                     {columnItems.length}
                   </span>
                 </div>
 
-                <div className="space-y-3 p-3">
-                  {columnItems.length > 0 ? (
-                    columnItems.map((item) => (
-                      <WorkItemBoardCard
-                        key={item.id}
-                        item={item}
-                        selected={
-                          selectedWorkItemId ===
-                          item.id
-                        }
-                        onOpen={onOpen}
-                      />
-                    ))
-                  ) : (
-                    <div className="flex min-h-28 items-center justify-center rounded-lg border border-dashed border-outline-variant px-3 text-center">
-                      <span className="text-xs text-on-surface-variant">
-                        No items
-                      </span>
-                    </div>
-                  )}
+                <div className="flex-1 space-y-2 px-2 pb-3">
+                  {columnItems.map((item) => (
+                    <WorkItemBoardCard
+                      key={item.id}
+                      item={item}
+                      selected={
+                        selectedWorkItemId === item.id
+                      }
+                      dragging={draggedItemId === item.id}
+                      readOnly={readOnly}
+                      onOpen={onOpen}
+                      onDragHandleStart={(itemId) =>
+                        setDraggedItemId(itemId)
+                      }
+                      onDragHandleEnd={() => {
+                        setDraggedItemId(null)
+                        setDragOverStatus(null)
+                      }}
+                    />
+                  ))}
                 </div>
               </div>
             )
@@ -3512,19 +3651,40 @@ function getWorkItemDueDisplay(item: DemoWorkItem) {
 function WorkItemBoardCard({
   item,
   selected,
+  dragging,
+  readOnly,
   onOpen,
+  onDragHandleStart,
+  onDragHandleEnd,
 }: {
   item: DemoWorkItem
   selected: boolean
+  dragging: boolean
+  readOnly: boolean
   onOpen: (item: DemoWorkItem) => void
+  onDragHandleStart: (itemId: string) => void
+  onDragHandleEnd: () => void
 }) {
-  const due = getWorkItemDueDisplay(item)
+  const isOverdue =
+    item.status !== 'done' &&
+    item.dueInDays != null &&
+    item.dueInDays < 0
+
+  const dueText = isOverdue
+    ? `${Math.abs(item.dueInDays as number)}d overdue`
+    : item.status !== 'done'
+      ? item.dueLabel
+      : null
+
+  const isBlocked = item.blockedReason !== null
+  const needsEmphasis = isBlocked || isOverdue
 
   return (
     <article
       role="button"
       tabIndex={0}
       aria-label={`Open ${item.title}`}
+      draggable={!readOnly}
       onClick={() => onOpen(item)}
       onKeyDown={(event) => {
         if (
@@ -3535,16 +3695,31 @@ function WorkItemBoardCard({
           onOpen(item)
         }
       }}
+      onDragStart={(event) => {
+        if (readOnly) {
+          return
+        }
+
+        event.dataTransfer.setData('text/plain', item.id)
+        event.dataTransfer.effectAllowed = 'move'
+        onDragHandleStart(item.id)
+      }}
+      onDragEnd={() => onDragHandleEnd()}
       data-selected={
         selected
           ? 'true'
           : undefined
       }
       className={[
-        'rounded-lg border border-outline-variant/60 bg-surface-container-lowest px-3.5 py-3 transition hover:bg-surface-container-low/45',
+        'relative rounded-lg border bg-surface-container-lowest px-3 py-2.5 transition hover:bg-surface-container-low/45',
+        needsEmphasis
+          ? 'border-error/35'
+          : 'border-outline-variant/50',
         selected
           ? 'outline outline-2 -outline-offset-2 outline-primary/55 bg-primary/5 shadow-sm'
           : '',
+        dragging ? 'opacity-40' : '',
+        readOnly ? '' : 'cursor-grab active:cursor-grabbing',
       ].join(' ')}
     >
       <div className="flex items-start gap-2">
@@ -3562,10 +3737,10 @@ function WorkItemBoardCard({
               {item.title}
             </h3>
 
-            {item.blockedReason && (
+            {isBlocked && (
               <span
-                title={item.blockedReason}
-                className="mt-0.5 shrink-0 text-[11px] font-medium text-error"
+                title={item.blockedReason ?? undefined}
+                className="mt-0.5 shrink-0 text-[11px] font-semibold text-error"
               >
                 · Blocked
               </span>
@@ -3574,19 +3749,21 @@ function WorkItemBoardCard({
         </div>
       </div>
 
-      <div className="mt-3.5 flex items-center justify-between gap-3 pl-[23px]">
+      <div className="mt-2.5 flex min-h-[22px] items-center justify-between gap-3 pl-[23px]">
         <WorkItemAssignees assignees={item.assignees} />
 
-        <span
-          className={[
-            'shrink-0 text-[11px]',
-            due.attention
-              ? 'font-medium text-error'
-              : 'font-normal text-on-surface-variant',
-          ].join(' ')}
-        >
-          {due.label}
-        </span>
+        {dueText && (
+          <span
+            className={[
+              'shrink-0 text-[11px]',
+              isOverdue
+                ? 'font-semibold text-error'
+                : 'font-normal text-on-surface-variant',
+            ].join(' ')}
+          >
+            {dueText}
+          </span>
+        )}
       </div>
     </article>
   )
