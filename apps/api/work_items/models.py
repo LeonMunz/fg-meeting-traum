@@ -96,3 +96,40 @@ class WorkItemAssignee(models.Model):
 
     def __str__(self):
         return f"{self.user.username} → [{self.work_item.type}] {self.work_item.title}"
+
+
+class WorkItemComment(models.Model):
+    """A human comment on a WorkItem.
+
+    Distinct from AuditEvent: comments are human discussion, not
+    system-recorded property history — they are never merged into the
+    audit trail, only combined with it presentation-side.
+
+    on_delete semantics mirror WorkItemAssignee: CASCADE from the
+    WorkItem (a comment has no meaning once its WorkItem is gone),
+    RESTRICT from the author so a comment's historical identity
+    remains addressable even after an account is disabled.
+    """
+
+    work_item = models.ForeignKey(
+        WorkItem,
+        on_delete=models.CASCADE,
+        related_name="comments",
+    )
+    author = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        related_name="work_item_comments",
+    )
+    body = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "work_items_comment"
+        verbose_name = "work item comment"
+        verbose_name_plural = "work item comments"
+        ordering = ["-created_at", "-id"]
+
+    def __str__(self):
+        return f"Comment by {self.author.username} on [{self.work_item.type}] {self.work_item.title}"

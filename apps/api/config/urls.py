@@ -30,6 +30,8 @@ from work_items.views import (
     PersonalMyWorkView,
     MyWorkView,
     ProjectWorkItemListCreateView,
+    WorkItemCommentDetailView,
+    WorkItemCommentListCreateView,
     WorkItemDetailView,
     WorkItemHistoryView,
 )
@@ -81,6 +83,8 @@ urlpatterns = [
     path('api/projects/<int:project_id>/work-items/', ProjectWorkItemListCreateView.as_view(), name='project-work-items-list'),
     path('api/work-items/<int:work_item_id>/', WorkItemDetailView.as_view(), name='work-item-detail'),
     path('api/work-items/<int:work_item_id>/history/', WorkItemHistoryView.as_view(), name='work-item-history'),
+    path('api/work-items/<int:work_item_id>/comments/', WorkItemCommentListCreateView.as_view(), name='work-item-comments-list'),
+    path('api/work-item-comments/<int:comment_id>/', WorkItemCommentDetailView.as_view(), name='work-item-comment-detail'),
     # My Work — authorized projection over assigned WorkItems
     path('api/me/work-items/', PersonalMyWorkView.as_view(), name='personal-my-work'),
     path('api/research-groups/<int:group_id>/my-work/', MyWorkView.as_view(), name='research-group-my-work'),

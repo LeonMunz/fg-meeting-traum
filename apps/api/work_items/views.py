@@ -17,8 +17,9 @@ from audit_history.models import AuditEvent
 from projects.models import Project, ProjectMembership
 from research_groups.models import ResearchGroupMembership
 
-from .models import WorkItem, WorkItemAssignee
+from .models import WorkItem, WorkItemAssignee, WorkItemComment
 from .serializers import (
+    WorkItemCommentSerializer,
     WorkItemHistoryEventSerializer,
     WorkItemSerializer,
 )
@@ -26,7 +27,10 @@ from .services import (
     WorkItemAuditEventType,
     WorkItemDomainError,
     create_work_item,
+    create_work_item_comment,
+    delete_work_item_comment,
     update_work_item,
+    update_work_item_comment,
 )
 
 
@@ -345,6 +349,176 @@ class WorkItemHistoryView(APIView):
             events, many=True,
         )
         return Response(serializer.data)
+
+
+# ── WorkItem Comments ──
+
+
+def serialize_work_item_comment(comment):
+    """Serialize a WorkItemComment to the API response shape."""
+    return WorkItemCommentSerializer(comment).data
+
+
+class WorkItemCommentListCreateView(APIView):
+    """GET/POST /api/work-items/{work_item_id}/comments/
+
+    GET: List comments for a WorkItem, newest first. Uses the SAME
+    effective read-access rule as GET on the WorkItem itself.
+
+    POST: Create a comment on a WorkItem.
+    Requires ProjectMembership owner/member (not viewer) — matching
+    WorkItem mutation semantics.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, work_item_id):
+        try:
+            work_item = WorkItem.objects.select_related(
+                "project",
+            ).get(pk=work_item_id)
+        except WorkItem.DoesNotExist:
+            return Response(
+                {"error": "WorkItem not found"},
+                status=404,
+            )
+
+        result = _require_project_access(request, work_item.project_id)
+        if result is None:
+            return Response(
+                {"error": "WorkItem not found"},
+                status=404,
+            )
+
+        comments = (
+            WorkItemComment.objects
+            .filter(work_item_id=work_item.pk)
+            .select_related("author")
+        )
+
+        data = [
+            serialize_work_item_comment(comment)
+            for comment in comments
+        ]
+        return Response(data)
+
+    def post(self, request, work_item_id):
+        try:
+            work_item = WorkItem.objects.select_related(
+                "project",
+            ).get(pk=work_item_id)
+        except WorkItem.DoesNotExist:
+            return Response(
+                {"error": "WorkItem not found"},
+                status=404,
+            )
+
+        result = _require_project_access(request, work_item.project_id)
+        if result is None:
+            return Response(
+                {"error": "WorkItem not found"},
+                status=404,
+            )
+        project, membership = result
+
+        # Viewer cannot comment — same boundary as WorkItem writes.
+        if membership.role == ProjectMembership.Role.VIEWER:
+            return Response(
+                {"error": "A viewer cannot comment on WorkItems."},
+                status=403,
+            )
+
+        body = request.data.get("body", "")
+
+        try:
+            comment = create_work_item_comment(
+                work_item=work_item,
+                actor=request.user,
+                body=body,
+            )
+        except WorkItemDomainError as exc:
+            return Response({"error": exc.message}, status=400)
+
+        return Response(
+            serialize_work_item_comment(comment), status=201,
+        )
+
+
+class WorkItemCommentDetailView(APIView):
+    """PATCH/DELETE /api/work-item-comments/{comment_id}/
+
+    Resolving the comment at all requires the same effective read
+    access as its parent WorkItem (non-leaking 404). Editing or
+    deleting additionally requires being the comment's own author —
+    no moderator/admin bypass.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def _get_visible_comment(self, request, comment_id):
+        """Return the comment if it exists and is visible to the
+        requester, else None. Never distinguishes "doesn't exist"
+        from "not visible" in the response."""
+        try:
+            comment = WorkItemComment.objects.select_related(
+                "work_item__project", "author",
+            ).get(pk=comment_id)
+        except WorkItemComment.DoesNotExist:
+            return None
+
+        result = _require_project_access(
+            request, comment.work_item.project_id,
+        )
+        if result is None:
+            return None
+
+        return comment
+
+    def patch(self, request, comment_id):
+        comment = self._get_visible_comment(request, comment_id)
+        if comment is None:
+            return Response(
+                {"error": "Comment not found"}, status=404,
+            )
+
+        if comment.author_id != request.user.pk:
+            return Response(
+                {"error": "You can only edit your own comment."},
+                status=403,
+            )
+
+        body = request.data.get("body", "")
+
+        try:
+            comment = update_work_item_comment(
+                comment=comment, actor=request.user, body=body,
+            )
+        except WorkItemDomainError as exc:
+            return Response({"error": exc.message}, status=400)
+
+        return Response(serialize_work_item_comment(comment))
+
+    def delete(self, request, comment_id):
+        comment = self._get_visible_comment(request, comment_id)
+        if comment is None:
+            return Response(
+                {"error": "Comment not found"}, status=404,
+            )
+
+        if comment.author_id != request.user.pk:
+            return Response(
+                {"error": "You can only delete your own comment."},
+                status=403,
+            )
+
+        try:
+            delete_work_item_comment(
+                comment=comment, actor=request.user,
+            )
+        except WorkItemDomainError as exc:
+            return Response({"error": exc.message}, status=400)
+
+        return Response(status=204)
 
 
 # ── My Work Authorized Projection ──

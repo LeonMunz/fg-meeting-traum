@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from .models import WorkItem, WorkItemAssignee
+from .models import WorkItem, WorkItemAssignee, WorkItemComment
 
 
 class WorkItemSerializer(serializers.ModelSerializer):
@@ -91,3 +91,44 @@ class WorkItemHistoryEventSerializer(serializers.Serializer):
     def get_changes(self, obj):
         data = obj.data or {}
         return data.get("changes", {})
+
+
+class WorkItemCommentSerializer(serializers.ModelSerializer):
+    """Presentation-neutral WorkItem comment entry.
+
+    Deliberately narrow: only what the Activity feed needs to render a
+    comment, matching the WorkItem/history serializers' convention of
+    exposing no unrelated internal fields.
+    """
+
+    workItemId = serializers.PrimaryKeyRelatedField(
+        source="work_item", read_only=True,
+    )
+    author = serializers.SerializerMethodField()
+    createdAt = serializers.DateTimeField(
+        source="created_at", read_only=True,
+    )
+    updatedAt = serializers.DateTimeField(
+        source="updated_at", read_only=True,
+    )
+
+    class Meta:
+        model = WorkItemComment
+        fields = (
+            "id",
+            "workItemId",
+            "author",
+            "body",
+            "createdAt",
+            "updatedAt",
+        )
+        read_only_fields = fields
+
+    def get_author(self, obj):
+        author = obj.author
+        return {
+            "id": author.pk,
+            "username": author.username,
+            "firstName": author.first_name,
+            "lastName": author.last_name,
+        }

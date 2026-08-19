@@ -13,7 +13,7 @@ from audit_history.services import record_audit_event
 from projects.models import Project, ProjectMembership
 from research_groups.models import ResearchGroupMembership
 
-from .models import WorkItem, WorkItemAssignee
+from .models import WorkItem, WorkItemAssignee, WorkItemComment
 
 
 class WorkItemAuditEventType:
@@ -719,3 +719,82 @@ def set_assignees(
             )
 
     return work_item
+
+
+# ── WorkItem Comments ──
+#
+# Human discussion, kept deliberately separate from AuditEvent history:
+# comments are never recorded as audit events and never appear in the
+# WorkItem history API. The Activity feed merges the two views
+# presentation-side only.
+
+
+def create_work_item_comment(
+    *,
+    work_item: WorkItem,
+    actor,
+    body: str,
+) -> WorkItemComment:
+    """Create a comment on a WorkItem.
+
+    Reuses the exact same write-access rule as WorkItem mutation
+    (owner/member ProjectMembership, current ResearchGroupMembership,
+    non-archived Project) so a viewer — or anyone who could not edit
+    the WorkItem itself — cannot comment on it either.
+    """
+    project = work_item.project
+    _require_project_write_access(project, actor)
+
+    cleaned_body = (body or "").strip()
+    if not cleaned_body:
+        raise WorkItemDomainError("Comment body cannot be empty.")
+
+    with transaction.atomic():
+        comment = WorkItemComment.objects.create(
+            work_item=work_item,
+            author=actor,
+            body=cleaned_body,
+        )
+
+    return comment
+
+
+def update_work_item_comment(
+    *,
+    comment: WorkItemComment,
+    actor,
+    body: str,
+) -> WorkItemComment:
+    """Edit a comment's body.
+
+    Only the comment's own author may edit it — no moderator/admin
+    bypass, matching the task's explicit scope.
+    """
+    if comment.author_id != actor.pk:
+        raise WorkItemDomainError(
+            "Only the comment's author can edit it."
+        )
+
+    cleaned_body = (body or "").strip()
+    if not cleaned_body:
+        raise WorkItemDomainError("Comment body cannot be empty.")
+
+    with transaction.atomic():
+        comment.body = cleaned_body
+        comment.save(update_fields=["body", "updated_at"])
+
+    return comment
+
+
+def delete_work_item_comment(
+    *,
+    comment: WorkItemComment,
+    actor,
+) -> None:
+    """Delete a comment. Only the comment's own author may delete it."""
+    if comment.author_id != actor.pk:
+        raise WorkItemDomainError(
+            "Only the comment's author can delete it."
+        )
+
+    comment.delete()

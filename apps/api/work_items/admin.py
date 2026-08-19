@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import WorkItem, WorkItemAssignee
+from .models import WorkItem, WorkItemAssignee, WorkItemComment
 
 
 @admin.register(WorkItem)
@@ -47,4 +47,27 @@ class WorkItemAssigneeAdmin(admin.ModelAdmin):
 
     def has_delete_permission(self, request, obj=None):
         """Prevent deleting assignees through Django admin."""
+        return False
+
+
+@admin.register(WorkItemComment)
+class WorkItemCommentAdmin(admin.ModelAdmin):
+    """Read-only admin for WorkItemComment to prevent bypassing service-layer invariants."""
+    list_display = ("work_item", "author", "created_at", "updated_at")
+    list_filter = ("author",)
+    raw_id_fields = ("work_item", "author")
+    readonly_fields = (
+        "id", "work_item", "author", "body", "created_at", "updated_at",
+    )
+
+    def has_add_permission(self, request):
+        """Prevent adding comments through Django admin."""
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        """Prevent changing comments through Django admin."""
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        """Prevent deleting comments through Django admin."""
         return False
