@@ -218,6 +218,25 @@ export interface ApiWorkItemHistoryEvent {
   createdAt: string
 }
 
+/* ── Work Item Comment ────────────────────────────────────────── */
+
+export interface ApiWorkItemComment {
+  id: number
+  workItemId: number
+  author: ApiWorkItemHistoryActor
+  body: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ApiCreateWorkItemCommentInput {
+  body: string
+}
+
+export interface ApiUpdateWorkItemCommentInput {
+  body: string
+}
+
 /* ── Meeting ───────────────────────────────────────────────────── */
 
 export type ApiMeetingStatus =

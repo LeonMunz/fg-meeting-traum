@@ -13,13 +13,20 @@ import { ApiError } from '../../api/client'
 import type {
   ApiUpdateWorkItemInput,
   ApiWorkItem,
+  ApiWorkItemComment,
   ApiWorkItemHistoryActor,
   ApiWorkItemHistoryChanges,
   ApiWorkItemHistoryEvent,
   ApiWorkItemStatus,
   ApiWorkItemType,
 } from '../../api/types'
-import { listWorkItemHistory } from '../../api/work-items'
+import {
+  createWorkItemComment,
+  deleteWorkItemComment,
+  listWorkItemComments,
+  listWorkItemHistory,
+  updateWorkItemComment,
+} from '../../api/work-items'
 
 export type WorkItemFormInput = {
   title: string
@@ -50,6 +57,7 @@ type WorkItemDrawerProps = {
   projectName: string
   item: ApiWorkItem | null
   readOnly: boolean
+  currentUserId: number | null
   assignees: AssigneeOption[]
   parentItems: ParentOption[]
   onClose: () => void
@@ -631,12 +639,120 @@ function getWorkItemHistoryErrorMessage(
   return 'History could not be loaded.'
 }
 
+/* ── Comment presentation helpers ─────────────────────────────── */
+
+function getActorInitials(
+  actor: ApiWorkItemHistoryActor,
+): string {
+  const initials = [actor.firstName, actor.lastName]
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .map((value) => value[0]?.toUpperCase())
+    .join('')
+
+  return (
+    initials ||
+    actor.username.slice(0, 2).toUpperCase()
+  )
+}
+
+function getWorkItemCommentsErrorMessage(
+  error: unknown,
+): string {
+  if (
+    error instanceof ApiError &&
+    error.detail &&
+    typeof error.detail === 'object' &&
+    'error' in error.detail
+  ) {
+    const detail = error.detail as { error?: unknown }
+
+    if (typeof detail.error === 'string') {
+      return detail.error
+    }
+  }
+
+  return 'Comments could not be loaded.'
+}
+
+function getWorkItemCommentActionErrorMessage(
+  error: unknown,
+  fallback: string,
+): string {
+  if (
+    error instanceof ApiError &&
+    error.detail &&
+    typeof error.detail === 'object' &&
+    'error' in error.detail
+  ) {
+    const detail = error.detail as { error?: unknown }
+
+    if (typeof detail.error === 'string') {
+      return detail.error
+    }
+  }
+
+  return fallback
+}
+
+// Comments and History events are different typed sources, merged
+// presentation-side only — never combined into a fake backend event.
+type ActivityFeedItem =
+  | {
+      kind: 'comment'
+      key: string
+      createdAt: string
+      comment: ApiWorkItemComment
+    }
+  | {
+      kind: 'history'
+      key: string
+      createdAt: string
+      event: ApiWorkItemHistoryEvent
+    }
+
+function buildActivityFeed(
+  comments: ApiWorkItemComment[],
+  historyEvents: ApiWorkItemHistoryEvent[],
+): ActivityFeedItem[] {
+  const items: ActivityFeedItem[] = [
+    ...comments.map(
+      (comment): ActivityFeedItem => ({
+        kind: 'comment',
+        key: `comment-${comment.id}`,
+        createdAt: comment.createdAt,
+        comment,
+      }),
+    ),
+    ...historyEvents.map(
+      (event): ActivityFeedItem => ({
+        kind: 'history',
+        key: `history-${event.id}`,
+        createdAt: event.createdAt,
+        event,
+      }),
+    ),
+  ]
+
+  // Newest first, matching both sources' native ordering. Array.sort
+  // is stable, so events with an identical timestamp keep their
+  // original relative order instead of jittering between renders.
+  items.sort(
+    (a, b) =>
+      new Date(b.createdAt).getTime() -
+      new Date(a.createdAt).getTime(),
+  )
+
+  return items
+}
+
 export function WorkItemDrawer({
   open,
   mode,
   projectName,
   item,
   readOnly,
+  currentUserId,
   assignees,
   parentItems,
   onClose,
@@ -657,6 +773,7 @@ export function WorkItemDrawer({
         projectName={projectName}
         item={item}
         readOnly={readOnly}
+        currentUserId={currentUserId}
         assignees={assignees}
         parentItems={parentItems}
         onClose={onClose}
@@ -1528,6 +1645,7 @@ function WorkItemInspector({
   projectName,
   item,
   readOnly,
+  currentUserId,
   assignees,
   parentItems,
   onClose,
@@ -1536,6 +1654,7 @@ function WorkItemInspector({
   projectName: string
   item: ApiWorkItem
   readOnly: boolean
+  currentUserId: number | null
   assignees: AssigneeOption[]
   parentItems: ParentOption[]
   onClose: () => void
@@ -1698,6 +1817,296 @@ function WorkItemInspector({
     fetchHistory(item.id)
   }, [item.id])
 
+  // ── Comments ─────────────────────────────────────────────────
+  //
+  // Human discussion. Fetched independently, exactly like History
+  // above, and merged with it presentation-side only into the
+  // Activity feed below — comments never become a second canonical
+  // Work Item state, and are never turned into fake History events.
+  const [comments, setComments] = useState<
+    ApiWorkItemComment[]
+  >([])
+  const [commentsStatus, setCommentsStatus] = useState<
+    'loading' | 'ready' | 'error'
+  >('loading')
+  const [commentsError, setCommentsError] = useState<
+    string | null
+  >(null)
+
+  const commentsRequestIdRef = useRef(0)
+
+  function fetchComments(workItemId: number) {
+    const requestId = ++commentsRequestIdRef.current
+
+    setCommentsStatus('loading')
+    setComments([])
+    setCommentsError(null)
+
+    listWorkItemComments(workItemId)
+      .then((list) => {
+        if (commentsRequestIdRef.current !== requestId) {
+          return
+        }
+
+        setComments(list)
+        setCommentsStatus('ready')
+      })
+      .catch((error) => {
+        if (commentsRequestIdRef.current !== requestId) {
+          return
+        }
+
+        setComments([])
+        setCommentsStatus('error')
+        setCommentsError(
+          getWorkItemCommentsErrorMessage(error),
+        )
+      })
+  }
+
+  useEffect(() => {
+    // Re-fetch whenever the selected Work Item changes — same
+    // race-safety contract as History's fetch above.
+    fetchComments(item.id)
+  }, [item.id])
+
+  // Per-Work-Item comment drafts, keyed by Work Item id. A ref (not
+  // state) so it survives Work Item switching without becoming a
+  // second canonical Work Item state — `commentDraft` below is a
+  // reactive mirror of only the CURRENTLY selected item's entry, so
+  // the composer stays a normal controlled textarea.
+  const commentDraftsRef = useRef<
+    Record<number, string>
+  >({})
+
+  const [commentDraft, setCommentDraft] = useState('')
+  const [
+    commentComposerExpanded,
+    setCommentComposerExpanded,
+  ] = useState(false)
+  const [commentSubmitStatus, setCommentSubmitStatus] =
+    useState<'idle' | 'submitting'>('idle')
+  const [commentSubmitError, setCommentSubmitError] =
+    useState<string | null>(null)
+
+  const [editingCommentId, setEditingCommentId] =
+    useState<number | null>(null)
+  const [editingCommentBody, setEditingCommentBody] =
+    useState('')
+  const [commentEditStatus, setCommentEditStatus] =
+    useState<'idle' | 'saving'>('idle')
+  const [commentEditError, setCommentEditError] =
+    useState<string | null>(null)
+
+  const [
+    confirmingDeleteCommentId,
+    setConfirmingDeleteCommentId,
+  ] = useState<number | null>(null)
+  const [
+    commentDeleteStatus,
+    setCommentDeleteStatus,
+  ] = useState<'idle' | 'deleting'>('idle')
+  const [commentDeleteError, setCommentDeleteError] =
+    useState<string | null>(null)
+
+  const [
+    commentActionsMenuOpenId,
+    setCommentActionsMenuOpenId,
+  ] = useState<number | null>(null)
+
+  useEffect(() => {
+    // Restore this Work Item's draft (if any) and reset every other
+    // piece of comment UI state — mirrors the property-editor reset
+    // effect above.
+    const draft = commentDraftsRef.current[item.id] ?? ''
+    setCommentDraft(draft)
+    setCommentComposerExpanded(Boolean(draft.trim()))
+    setCommentSubmitStatus('idle')
+    setCommentSubmitError(null)
+    setEditingCommentId(null)
+    setEditingCommentBody('')
+    setCommentEditStatus('idle')
+    setCommentEditError(null)
+    setConfirmingDeleteCommentId(null)
+    setCommentDeleteStatus('idle')
+    setCommentDeleteError(null)
+    setCommentActionsMenuOpenId(null)
+  }, [item.id])
+
+  function handleCommentDraftChange(value: string) {
+    commentDraftsRef.current[item.id] = value
+    setCommentDraft(value)
+  }
+
+  function collapseCommentComposer() {
+    // Esc collapses the editor but explicitly KEEPS the draft.
+    setCommentComposerExpanded(false)
+  }
+
+  function cancelCommentComposer() {
+    // Cancel is a deliberate "never mind" — unlike Esc, it discards
+    // the draft.
+    delete commentDraftsRef.current[item.id]
+    setCommentDraft('')
+    setCommentComposerExpanded(false)
+    setCommentSubmitError(null)
+  }
+
+  async function submitComment() {
+    const workItemId = item.id
+    const body = commentDraft.trim()
+
+    if (!body || commentSubmitStatus === 'submitting') {
+      return
+    }
+
+    setCommentSubmitStatus('submitting')
+    setCommentSubmitError(null)
+
+    try {
+      const created = await createWorkItemComment(
+        workItemId,
+        { body },
+      )
+
+      // Sent successfully — clear this Work Item's draft
+      // regardless of whether the inspector has since switched
+      // away from it, so it never reappears unsent.
+      delete commentDraftsRef.current[workItemId]
+
+      if (currentItemIdRef.current === workItemId) {
+        setComments((current) => [
+          created,
+          ...current,
+        ])
+        setCommentDraft('')
+        setCommentComposerExpanded(false)
+        setCommentSubmitStatus('idle')
+      }
+    } catch (error) {
+      if (currentItemIdRef.current === workItemId) {
+        setCommentSubmitStatus('idle')
+        setCommentSubmitError(
+          getWorkItemCommentActionErrorMessage(
+            error,
+            'Comment could not be posted.',
+          ),
+        )
+      }
+    }
+  }
+
+  function startEditingComment(
+    comment: ApiWorkItemComment,
+  ) {
+    setCommentActionsMenuOpenId(null)
+    setConfirmingDeleteCommentId(null)
+    setEditingCommentId(comment.id)
+    setEditingCommentBody(comment.body)
+    setCommentEditError(null)
+  }
+
+  function cancelEditingComment() {
+    // Esc/Cancel drops the in-progress edit without touching the
+    // original comment.
+    setEditingCommentId(null)
+    setEditingCommentBody('')
+    setCommentEditError(null)
+  }
+
+  async function saveEditingComment() {
+    if (editingCommentId === null) {
+      return
+    }
+
+    const body = editingCommentBody.trim()
+    if (!body || commentEditStatus === 'saving') {
+      return
+    }
+
+    const commentId = editingCommentId
+
+    setCommentEditStatus('saving')
+    setCommentEditError(null)
+
+    try {
+      const updated = await updateWorkItemComment(
+        commentId,
+        { body },
+      )
+
+      setComments((current) =>
+        current.map((existing) =>
+          existing.id === commentId
+            ? updated
+            : existing,
+        ),
+      )
+      setEditingCommentId(null)
+      setEditingCommentBody('')
+      setCommentEditStatus('idle')
+    } catch (error) {
+      setCommentEditStatus('idle')
+      setCommentEditError(
+        getWorkItemCommentActionErrorMessage(
+          error,
+          'Comment could not be saved.',
+        ),
+      )
+    }
+  }
+
+  function requestDeleteComment(commentId: number) {
+    setCommentActionsMenuOpenId(null)
+    setEditingCommentId(null)
+    setConfirmingDeleteCommentId(commentId)
+    setCommentDeleteError(null)
+  }
+
+  function cancelDeleteComment() {
+    setConfirmingDeleteCommentId(null)
+    setCommentDeleteError(null)
+  }
+
+  async function confirmDeleteComment() {
+    if (
+      confirmingDeleteCommentId === null ||
+      commentDeleteStatus === 'deleting'
+    ) {
+      return
+    }
+
+    const commentId = confirmingDeleteCommentId
+
+    setCommentDeleteStatus('deleting')
+    setCommentDeleteError(null)
+
+    try {
+      await deleteWorkItemComment(commentId)
+
+      setComments((current) =>
+        current.filter(
+          (existing) => existing.id !== commentId,
+        ),
+      )
+      setConfirmingDeleteCommentId(null)
+      setCommentDeleteStatus('idle')
+    } catch (error) {
+      setCommentDeleteStatus('idle')
+      setCommentDeleteError(
+        getWorkItemCommentActionErrorMessage(
+          error,
+          'Comment could not be deleted.',
+        ),
+      )
+    }
+  }
+
+  const activityFeed = useMemo(
+    () => buildActivityFeed(comments, historyEvents),
+    [comments, historyEvents],
+  )
+
   useEffect(() => {
     const handleKeyDown = (
       event: KeyboardEvent,
@@ -1732,6 +2141,30 @@ function WorkItemInspector({
         return
       }
 
+      if (commentActionsMenuOpenId !== null) {
+        event.preventDefault()
+        setCommentActionsMenuOpenId(null)
+        return
+      }
+
+      if (confirmingDeleteCommentId !== null) {
+        event.preventDefault()
+        cancelDeleteComment()
+        return
+      }
+
+      if (editingCommentId !== null) {
+        event.preventDefault()
+        cancelEditingComment()
+        return
+      }
+
+      if (commentComposerExpanded) {
+        event.preventDefault()
+        collapseCommentComposer()
+        return
+      }
+
       onClose()
     }
 
@@ -1749,7 +2182,11 @@ function WorkItemInspector({
   }, [
     assigneePickerOpen,
     blockedReasonEditing,
+    commentActionsMenuOpenId,
+    commentComposerExpanded,
+    confirmingDeleteCommentId,
     descriptionEditing,
+    editingCommentId,
     onClose,
     titleEditing,
   ])
@@ -1764,6 +2201,18 @@ function WorkItemInspector({
       ),
     [assignees],
   )
+
+  // For the comment composer's idle-state avatar. `assignees` is
+  // already scoped to non-viewer Project members — exactly the
+  // population that can comment — so the current user is present
+  // whenever the composer itself is shown.
+  const currentUserInitials =
+    (currentUserId !== null &&
+      assignees.find(
+        (assignee) =>
+          assignee.id === String(currentUserId),
+      )?.initials) ||
+    '?'
 
   const itemAssigneeIds = useMemo(
     () =>
@@ -2789,19 +3238,114 @@ function WorkItemInspector({
 
             <div className="border-t border-outline-variant pt-5">
               <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-on-surface-variant">
-                History
+                Activity
               </h3>
 
-              {historyStatus === 'loading' && (
-                <p className="text-xs text-on-surface-variant/70">
-                  Loading history…
-                </p>
+              {!readOnly && (
+                <div className="mb-4">
+                  {!commentComposerExpanded ? (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setCommentComposerExpanded(
+                          true,
+                        )
+                      }
+                      className="flex w-full items-center gap-2.5 rounded-lg px-1.5 py-1.5 text-left text-sm text-on-surface-variant transition hover:bg-surface-container-low"
+                    >
+                      <span
+                        aria-hidden="true"
+                        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/15 text-[11px] font-semibold text-primary"
+                      >
+                        {currentUserInitials}
+                      </span>
+                      Add a comment…
+                    </button>
+                  ) : (
+                    <div className="rounded-lg border border-outline-variant bg-surface-container-lowest p-2.5">
+                      <label
+                        htmlFor="work-item-comment-composer"
+                        className="sr-only"
+                      >
+                        Comment
+                      </label>
+
+                      <textarea
+                        id="work-item-comment-composer"
+                        autoFocus
+                        rows={3}
+                        value={commentDraft}
+                        onChange={(event) =>
+                          handleCommentDraftChange(
+                            event.target.value,
+                          )
+                        }
+                        onKeyDown={(event) => {
+                          if (
+                            (event.metaKey ||
+                              event.ctrlKey) &&
+                            event.key === 'Enter'
+                          ) {
+                            event.preventDefault()
+                            submitComment()
+                          }
+                        }}
+                        placeholder="Add a comment…"
+                        className="min-h-[4.5rem] w-full resize-y border-0 bg-transparent text-sm text-on-surface outline-none placeholder:text-on-surface-variant/60"
+                      />
+
+                      {commentSubmitError && (
+                        <p
+                          role="alert"
+                          className="mt-1 text-xs text-error"
+                        >
+                          {commentSubmitError}
+                        </p>
+                      )}
+
+                      <div className="mt-2 flex items-center justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={
+                            cancelCommentComposer
+                          }
+                          className="h-8 rounded-md px-3 text-xs font-medium text-on-surface-variant transition hover:bg-surface-container-high hover:text-on-surface"
+                        >
+                          Cancel
+                        </button>
+
+                        <button
+                          type="button"
+                          disabled={
+                            !commentDraft.trim() ||
+                            commentSubmitStatus ===
+                              'submitting'
+                          }
+                          onClick={submitComment}
+                          className="h-8 rounded-md bg-primary px-3 text-xs font-semibold text-on-primary transition hover:opacity-90 disabled:opacity-40"
+                        >
+                          {commentSubmitStatus ===
+                          'submitting'
+                            ? 'Posting…'
+                            : 'Comment'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
               )}
+
+              {historyStatus === 'loading' &&
+                commentsStatus === 'loading' && (
+                  <p className="text-xs text-on-surface-variant/70">
+                    Loading activity…
+                  </p>
+                )}
 
               {historyStatus === 'error' && (
                 <div
                   role="alert"
-                  className="flex items-center gap-2.5 text-xs text-on-surface-variant"
+                  className="mb-2 flex items-center gap-2.5 text-xs text-on-surface-variant"
                 >
                   <span className="text-error">
                     {historyError ??
@@ -2820,29 +3364,54 @@ function WorkItemInspector({
                 </div>
               )}
 
-              {historyStatus === 'ready' &&
-                historyEvents.length === 0 && (
+              {commentsStatus === 'error' && (
+                <div
+                  role="alert"
+                  className="mb-2 flex items-center gap-2.5 text-xs text-on-surface-variant"
+                >
+                  <span className="text-error">
+                    {commentsError ??
+                      'Comments could not be loaded.'}
+                  </span>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      fetchComments(item.id)
+                    }
+                    className="font-medium text-primary underline-offset-2 hover:underline"
+                  >
+                    Retry
+                  </button>
+                </div>
+              )}
+
+              {historyStatus !== 'loading' &&
+                commentsStatus !== 'loading' &&
+                activityFeed.length === 0 && (
                   <p className="text-xs text-on-surface-variant/70">
-                    No history yet.
+                    No activity yet.
                   </p>
                 )}
 
-              {historyStatus === 'ready' &&
-                historyEvents.length > 0 && (
-                  <ul className="flex flex-col">
-                    {historyEvents.map(
-                      (event, index) => {
+              {activityFeed.length > 0 && (
+                <ul className="flex flex-col">
+                  {activityFeed.map(
+                    (entry, index) => {
+                      const isLast =
+                        index ===
+                        activityFeed.length - 1
+
+                      if (entry.kind === 'history') {
+                        const event = entry.event
                         const description =
                           describeWorkItemHistoryEvent(
                             event,
                           )
-                        const isLast =
-                          index ===
-                          historyEvents.length - 1
 
                         return (
                           <li
-                            key={event.id}
+                            key={entry.key}
                             className="flex gap-2.5"
                           >
                             <div className="flex flex-col items-center">
@@ -2862,7 +3431,9 @@ function WorkItemInspector({
                             <div
                               className={[
                                 'min-w-0 flex-1',
-                                isLast ? 'pb-0.5' : 'pb-3.5',
+                                isLast
+                                  ? 'pb-0.5'
+                                  : 'pb-3.5',
                               ].join(' ')}
                             >
                               <p className="truncate text-sm text-on-surface">
@@ -2870,22 +3441,33 @@ function WorkItemInspector({
                               </p>
 
                               {description.lines.map(
-                                (line, lineIndex) =>
+                                (
+                                  line,
+                                  lineIndex,
+                                ) =>
                                   line.label ? (
                                     <div
-                                      key={lineIndex}
+                                      key={
+                                        lineIndex
+                                      }
                                       className="mt-0.5 flex gap-2 text-xs text-on-surface-variant"
                                     >
                                       <span className="w-16 shrink-0 text-on-surface-variant/60">
-                                        {line.label}
+                                        {
+                                          line.label
+                                        }
                                       </span>
                                       <span className="min-w-0 truncate">
-                                        {line.text}
+                                        {
+                                          line.text
+                                        }
                                       </span>
                                     </div>
                                   ) : (
                                     <p
-                                      key={lineIndex}
+                                      key={
+                                        lineIndex
+                                      }
                                       className="mt-0.5 truncate text-xs text-on-surface-variant"
                                     >
                                       {line.text}
@@ -2906,10 +3488,270 @@ function WorkItemInspector({
                             </div>
                           </li>
                         )
-                      },
-                    )}
-                  </ul>
-                )}
+                      }
+
+                      // Comments carry more visual weight than
+                      // quiet system History — an avatar, a
+                      // readable body, no timeline dot/connector.
+                      const comment = entry.comment
+                      const isOwn =
+                        currentUserId !== null &&
+                        comment.author.id ===
+                          currentUserId
+                      const isEditingThis =
+                        editingCommentId ===
+                        comment.id
+                      const isConfirmingDeleteThis =
+                        confirmingDeleteCommentId ===
+                        comment.id
+                      const isEdited =
+                        new Date(
+                          comment.updatedAt,
+                        ).getTime() -
+                          new Date(
+                            comment.createdAt,
+                          ).getTime() >
+                        2000
+
+                      return (
+                        <li
+                          key={entry.key}
+                          className={[
+                            'group flex gap-2.5',
+                            isLast
+                              ? 'pb-0.5'
+                              : 'pb-4',
+                          ].join(' ')}
+                        >
+                          <span
+                            aria-hidden="true"
+                            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-secondary-container text-[11px] font-semibold text-on-secondary-container"
+                          >
+                            {getActorInitials(
+                              comment.author,
+                            )}
+                          </span>
+
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex min-w-0 items-baseline gap-2">
+                                <span className="truncate text-sm font-medium text-on-surface">
+                                  {getActorDisplayName(
+                                    comment.author,
+                                  )}
+                                </span>
+                                <span
+                                  title={formatHistoryAbsoluteTime(
+                                    comment.createdAt,
+                                  )}
+                                  className="shrink-0 text-xs text-on-surface-variant/70"
+                                >
+                                  {formatHistoryRelativeTime(
+                                    comment.createdAt,
+                                  )}
+                                  {isEdited &&
+                                    ' · edited'}
+                                </span>
+                              </div>
+
+                              {isOwn &&
+                                !isEditingThis &&
+                                !isConfirmingDeleteThis && (
+                                  <div className="relative shrink-0 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100 has-[[aria-expanded=true]]:opacity-100">
+                                    <button
+                                      type="button"
+                                      aria-label="Comment actions"
+                                      aria-expanded={
+                                        commentActionsMenuOpenId ===
+                                        comment.id
+                                      }
+                                      onClick={() =>
+                                        setCommentActionsMenuOpenId(
+                                          (
+                                            current,
+                                          ) =>
+                                            current ===
+                                            comment.id
+                                              ? null
+                                              : comment.id,
+                                        )
+                                      }
+                                      className="flex h-6 w-6 items-center justify-center rounded text-on-surface-variant transition hover:bg-surface-container-high hover:text-on-surface"
+                                    >
+                                      <span
+                                        aria-hidden="true"
+                                        className="material-symbols-outlined text-[16px]"
+                                      >
+                                        more_horiz
+                                      </span>
+                                    </button>
+
+                                    {commentActionsMenuOpenId ===
+                                      comment.id && (
+                                      <div className="absolute right-0 z-10 mt-1 w-28 overflow-hidden rounded-lg border border-outline-variant bg-surface-container-lowest shadow-sm">
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            startEditingComment(
+                                              comment,
+                                            )
+                                          }
+                                          className="block w-full px-3 py-2 text-left text-xs text-on-surface transition hover:bg-surface-container-low"
+                                        >
+                                          Edit
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            requestDeleteComment(
+                                              comment.id,
+                                            )
+                                          }
+                                          className="block w-full px-3 py-2 text-left text-xs text-error transition hover:bg-surface-container-low"
+                                        >
+                                          Delete
+                                        </button>
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                            </div>
+
+                            {isEditingThis ? (
+                              <div className="mt-1">
+                                <label
+                                  htmlFor={`work-item-comment-edit-${comment.id}`}
+                                  className="sr-only"
+                                >
+                                  Edit comment
+                                </label>
+                                <textarea
+                                  id={`work-item-comment-edit-${comment.id}`}
+                                  autoFocus
+                                  rows={3}
+                                  value={
+                                    editingCommentBody
+                                  }
+                                  onChange={(
+                                    event,
+                                  ) =>
+                                    setEditingCommentBody(
+                                      event.target
+                                        .value,
+                                    )
+                                  }
+                                  onKeyDown={(
+                                    event,
+                                  ) => {
+                                    if (
+                                      (event.metaKey ||
+                                        event.ctrlKey) &&
+                                      event.key ===
+                                        'Enter'
+                                    ) {
+                                      event.preventDefault()
+                                      saveEditingComment()
+                                    }
+                                  }}
+                                  className="w-full resize-y rounded-md border border-outline-variant bg-surface-container-lowest px-2.5 py-2 text-sm text-on-surface outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
+                                />
+
+                                {commentEditError && (
+                                  <p
+                                    role="alert"
+                                    className="mt-1 text-xs text-error"
+                                  >
+                                    {
+                                      commentEditError
+                                    }
+                                  </p>
+                                )}
+
+                                <div className="mt-1.5 flex items-center justify-end gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={
+                                      cancelEditingComment
+                                    }
+                                    className="h-7 rounded-md px-2.5 text-xs font-medium text-on-surface-variant transition hover:bg-surface-container-high hover:text-on-surface"
+                                  >
+                                    Cancel
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={
+                                      !editingCommentBody.trim() ||
+                                      commentEditStatus ===
+                                        'saving'
+                                    }
+                                    onClick={
+                                      saveEditingComment
+                                    }
+                                    className="h-7 rounded-md bg-primary px-2.5 text-xs font-semibold text-on-primary transition hover:opacity-90 disabled:opacity-40"
+                                  >
+                                    {commentEditStatus ===
+                                    'saving'
+                                      ? 'Saving…'
+                                      : 'Save'}
+                                  </button>
+                                </div>
+                              </div>
+                            ) : isConfirmingDeleteThis ? (
+                              <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-on-surface-variant">
+                                <span>
+                                  Delete this
+                                  comment?
+                                </span>
+
+                                {commentDeleteError && (
+                                  <span
+                                    role="alert"
+                                    className="text-error"
+                                  >
+                                    {
+                                      commentDeleteError
+                                    }
+                                  </span>
+                                )}
+
+                                <button
+                                  type="button"
+                                  onClick={
+                                    cancelDeleteComment
+                                  }
+                                  className="font-medium text-on-surface-variant underline-offset-2 hover:underline"
+                                >
+                                  Cancel
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={
+                                    commentDeleteStatus ===
+                                    'deleting'
+                                  }
+                                  onClick={
+                                    confirmDeleteComment
+                                  }
+                                  className="font-medium text-error underline-offset-2 hover:underline disabled:opacity-50"
+                                >
+                                  {commentDeleteStatus ===
+                                  'deleting'
+                                    ? 'Deleting…'
+                                    : 'Delete'}
+                                </button>
+                              </div>
+                            ) : (
+                              <p className="mt-0.5 whitespace-pre-wrap break-words text-sm leading-6 text-on-surface">
+                                {comment.body}
+                              </p>
+                            )}
+                          </div>
+                        </li>
+                      )
+                    },
+                  )}
+                </ul>
+              )}
             </div>
           </div>
         </div>

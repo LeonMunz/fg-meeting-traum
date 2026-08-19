@@ -2859,6 +2859,7 @@ export function ProjectDetailPage() {
         projectName={project.name}
         item={selectedDrawerWorkItem}
         readOnly={isReadOnly}
+        currentUserId={user ? user.id : null}
         assignees={sortedMembers
           .filter(
             (member) =>

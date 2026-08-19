@@ -1,14 +1,18 @@
 import {
+  apiDelete,
   apiGet,
   apiPatch,
   apiPost,
 } from './client'
 
 import type {
+  ApiCreateWorkItemCommentInput,
   ApiCreateWorkItemInput,
   ApiPersonalWorkItem,
+  ApiUpdateWorkItemCommentInput,
   ApiUpdateWorkItemInput,
   ApiWorkItem,
+  ApiWorkItemComment,
   ApiWorkItemHistoryEvent,
 } from './types'
 
@@ -53,6 +57,42 @@ export async function listWorkItemHistory(
 ): Promise<ApiWorkItemHistoryEvent[]> {
   return apiGet<ApiWorkItemHistoryEvent[]>(
     `/api/work-items/${workItemId}/history/`,
+  )
+}
+
+export async function listWorkItemComments(
+  workItemId: number,
+): Promise<ApiWorkItemComment[]> {
+  return apiGet<ApiWorkItemComment[]>(
+    `/api/work-items/${workItemId}/comments/`,
+  )
+}
+
+export async function createWorkItemComment(
+  workItemId: number,
+  input: ApiCreateWorkItemCommentInput,
+): Promise<ApiWorkItemComment> {
+  return apiPost<ApiWorkItemComment>(
+    `/api/work-items/${workItemId}/comments/`,
+    input,
+  )
+}
+
+export async function updateWorkItemComment(
+  commentId: number,
+  input: ApiUpdateWorkItemCommentInput,
+): Promise<ApiWorkItemComment> {
+  return apiPatch<ApiWorkItemComment>(
+    `/api/work-item-comments/${commentId}/`,
+    input,
+  )
+}
+
+export async function deleteWorkItemComment(
+  commentId: number,
+): Promise<void> {
+  await apiDelete<void>(
+    `/api/work-item-comments/${commentId}/`,
   )
 }
 

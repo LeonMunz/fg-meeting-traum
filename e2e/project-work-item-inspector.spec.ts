@@ -5,6 +5,7 @@ import {
 
 import {
   login,
+  logout,
   openProject,
   openProjects,
 } from './helpers'
@@ -1092,8 +1093,9 @@ async function createHistoryTestWorkItem(
 }
 
 test(
-  'Work Item inspector: History renders a readable timeline, ' +
-    'updates live after edits, and stays race-safe across switches',
+  'Work Item inspector: Activity renders a readable History ' +
+    'timeline, updates live after edits, and stays race-safe ' +
+    'across switches',
   async ({ page }) => {
     await login(page, 'alex')
     await openProjects(page)
@@ -1115,11 +1117,13 @@ test(
       name: 'Work item',
       exact: true,
     })
+    // History evolved into Activity — the combined feed still
+    // renders History events, just under a renamed section heading.
     const historyHeading = inspector.getByRole(
       'heading',
-      { name: 'History', exact: true },
+      { name: 'Activity', exact: true },
     )
-    // Scope timeline-text assertions to the History list itself —
+    // Scope timeline-text assertions to the Activity feed itself —
     // "Blocked reason" wording can otherwise also match the
     // Properties section's own reason readout.
     const historyList = inspector.getByRole('list')
@@ -1295,5 +1299,405 @@ test(
     await page.unroute(
       `**/api/work-items/${taskAId}/history/`,
     )
+  },
+)
+
+const COMMENT_PROJECT_NAME =
+  'E2E Inspector Comment Project'
+const COMMENT_TASK_A_TITLE =
+  'E2E Inspector Comment Task A'
+const COMMENT_BODY_A =
+  'Can we confirm the final references before marking this done?'
+
+test(
+  'Work Item inspector: Activity comment composer expands, posts ' +
+    'via Cmd/Ctrl+Enter without closing the inspector, and reads ' +
+    'as visually distinct from System History',
+  async ({ page }) => {
+    await login(page, 'alex')
+    await openProjects(page)
+    await createHistoryTestProject(
+      page,
+      COMMENT_PROJECT_NAME,
+    )
+    await createHistoryTestWorkItem(
+      page,
+      COMMENT_TASK_A_TITLE,
+    )
+
+    const inspector = page.getByRole('region', {
+      name: 'Work item',
+      exact: true,
+    })
+    const activityHeading = inspector.getByRole(
+      'heading',
+      { name: 'Activity', exact: true },
+    )
+    const activityList = inspector.getByRole('list')
+
+    await page
+      .getByRole('button', {
+        name: `Open ${COMMENT_TASK_A_TITLE}`,
+      })
+      .click()
+    await expect(inspector).toBeVisible()
+    await expect(activityHeading).toBeVisible()
+
+    // --------------------------------------------------------
+    // 3. Idle composer is compact — a single "Add a comment…"
+    //    row, not a big form.
+    // --------------------------------------------------------
+
+    const idleComposer = inspector.getByRole(
+      'button',
+      { name: 'Add a comment…' },
+    )
+    await expect(idleComposer).toBeVisible()
+
+    const textarea = inspector.getByLabel(
+      'Comment',
+      { exact: true },
+    )
+    await expect(textarea).toHaveCount(0)
+
+    // Clicking it expands into a textarea with Cancel / Comment.
+    await idleComposer.click()
+    await expect(textarea).toBeVisible()
+    await expect(
+      inspector.getByRole('button', {
+        name: 'Cancel',
+        exact: true,
+      }),
+    ).toBeVisible()
+
+    const postButton = inspector.getByRole(
+      'button',
+      { name: 'Comment', exact: true },
+    )
+    await expect(postButton).toBeVisible()
+    await expect(postButton).toBeDisabled()
+
+    // --------------------------------------------------------
+    // 4 & 5. Cmd/Ctrl+Enter posts without clicking the button,
+    //    and the comment appears without closing the inspector.
+    // --------------------------------------------------------
+
+    await textarea.fill(COMMENT_BODY_A)
+    await expect(postButton).toBeEnabled()
+    await textarea.press('ControlOrMeta+Enter')
+
+    await expect(inspector).toBeVisible()
+    await expect(
+      activityList.getByText(COMMENT_BODY_A, {
+        exact: true,
+      }),
+    ).toBeVisible()
+
+    // Composer collapses back to idle after a successful post.
+    await expect(idleComposer).toBeVisible()
+    await expect(textarea).toHaveCount(0)
+
+    // --------------------------------------------------------
+    // 2 & 6. The System History "created" entry still renders,
+    //    in its own quiet/system voice, alongside — but visually
+    //    distinct from — the human comment's own body text.
+    // --------------------------------------------------------
+
+    await expect(
+      activityList.getByText(
+        'Alex Dev created this work item',
+      ),
+    ).toBeVisible()
+    await expect(
+      activityList.getByText('Alex Dev', {
+        exact: true,
+      }),
+    ).toBeVisible()
+    await expect(
+      activityList.getByText(COMMENT_BODY_A, {
+        exact: true,
+      }),
+    ).toBeVisible()
+  },
+)
+
+const DRAFT_PROJECT_NAME =
+  'E2E Inspector Comment Draft Project'
+const DRAFT_TASK_A_TITLE =
+  'E2E Inspector Draft Task A'
+const DRAFT_TASK_B_TITLE =
+  'E2E Inspector Draft Task B'
+const DRAFT_TEXT_A =
+  'Draft only meant for Task A — never sent yet.'
+const POSTED_COMMENT_A =
+  'Posted comment that belongs to Task A only.'
+
+test(
+  'Work Item inspector: comment drafts survive Work Item ' +
+    'switching, never leak across items, and Activity stays ' +
+    'race-safe across switches',
+  async ({ page }) => {
+    await login(page, 'alex')
+    await openProjects(page)
+    await createHistoryTestProject(
+      page,
+      DRAFT_PROJECT_NAME,
+    )
+
+    const taskAId = await createHistoryTestWorkItem(
+      page,
+      DRAFT_TASK_A_TITLE,
+    )
+    await createHistoryTestWorkItem(
+      page,
+      DRAFT_TASK_B_TITLE,
+    )
+
+    const inspector = page.getByRole('region', {
+      name: 'Work item',
+      exact: true,
+    })
+    const activityList = inspector.getByRole('list')
+
+    const boardCardA = page.getByRole('button', {
+      name: `Open ${DRAFT_TASK_A_TITLE}`,
+    })
+    const boardCardB = page.getByRole('button', {
+      name: `Open ${DRAFT_TASK_B_TITLE}`,
+    })
+
+    const idleComposer = inspector.getByRole(
+      'button',
+      { name: 'Add a comment…' },
+    )
+    const textarea = inspector.getByLabel(
+      'Comment',
+      { exact: true },
+    )
+
+    // --------------------------------------------------------
+    // 7. Open A, type an unsent draft — do not send it.
+    // --------------------------------------------------------
+
+    await boardCardA.click()
+    await expect(inspector).toBeVisible()
+    await idleComposer.click()
+    await textarea.fill(DRAFT_TEXT_A)
+
+    // --------------------------------------------------------
+    // 8 & 11. Switch to B without sending — B starts with a
+    //    clean, idle composer; A's draft never appears on B.
+    // --------------------------------------------------------
+
+    await boardCardB.click()
+    await expect(inspector).toBeVisible()
+    await expect(idleComposer).toBeVisible()
+    await expect(textarea).toHaveCount(0)
+    await expect(
+      activityList.getByText(DRAFT_TEXT_A),
+    ).toHaveCount(0)
+
+    // --------------------------------------------------------
+    // 9. Returning to A restores the composer, expanded, with
+    //    the exact unsent draft text still in it — and it was
+    //    genuinely never sent to the server.
+    // --------------------------------------------------------
+
+    await boardCardA.click()
+    await expect(inspector).toBeVisible()
+    await expect(textarea).toBeVisible()
+    await expect(textarea).toHaveValue(DRAFT_TEXT_A)
+    await expect(
+      activityList.getByText(DRAFT_TEXT_A),
+    ).toHaveCount(0)
+
+    // --------------------------------------------------------
+    // Now actually post A's comment, then confirm it never
+    // leaks onto B's Activity feed (11, continued).
+    // --------------------------------------------------------
+
+    await textarea.fill(POSTED_COMMENT_A)
+    await inspector
+      .getByRole('button', {
+        name: 'Comment',
+        exact: true,
+      })
+      .click()
+
+    await expect(
+      activityList.getByText(POSTED_COMMENT_A, {
+        exact: true,
+      }),
+    ).toBeVisible()
+
+    await boardCardB.click()
+    await expect(inspector).toBeVisible()
+    await expect(
+      activityList.getByText(POSTED_COMMENT_A, {
+        exact: true,
+      }),
+    ).toHaveCount(0)
+
+    // --------------------------------------------------------
+    // 12. Race regression: delay A's Activity responses, switch
+    //    to A and immediately back to B before they resolve — B's
+    //    Activity must never be clobbered by the late response.
+    // --------------------------------------------------------
+
+    await page.route(
+      `**/api/work-items/${taskAId}/comments/`,
+      async (route) => {
+        if (route.request().method() !== 'GET') {
+          await route.continue()
+          return
+        }
+
+        const response = await route.fetch()
+        await new Promise((resolve) =>
+          setTimeout(resolve, 1200),
+        )
+        await route.fulfill({ response })
+      },
+    )
+    await page.route(
+      `**/api/work-items/${taskAId}/history/`,
+      async (route) => {
+        const response = await route.fetch()
+        await new Promise((resolve) =>
+          setTimeout(resolve, 1200),
+        )
+        await route.fulfill({ response })
+      },
+    )
+
+    await boardCardA.click()
+    await boardCardB.click()
+
+    await expect(inspector).toBeVisible()
+    await expect(
+      activityList.getByText(POSTED_COMMENT_A, {
+        exact: true,
+      }),
+    ).toHaveCount(0)
+
+    // Give the delayed A responses time to actually land.
+    await page.waitForTimeout(1500)
+
+    // Still B's Activity — never clobbered by the delayed, stale
+    // A response landing after the switch.
+    await expect(
+      activityList.getByText(POSTED_COMMENT_A, {
+        exact: true,
+      }),
+    ).toHaveCount(0)
+
+    await page.unroute(
+      `**/api/work-items/${taskAId}/comments/`,
+    )
+    await page.unroute(
+      `**/api/work-items/${taskAId}/history/`,
+    )
+  },
+)
+
+const VIEWER_PROJECT_NAME =
+  'E2E Inspector Viewer Comment Project'
+const VIEWER_TASK_TITLE =
+  'E2E Inspector Viewer Comment Task'
+
+test(
+  'Work Item inspector: a viewer never sees an enabled comment ' +
+    'composer',
+  async ({ page }) => {
+    await login(page, 'alex')
+    await openProjects(page)
+    await createHistoryTestProject(
+      page,
+      VIEWER_PROJECT_NAME,
+    )
+    await createHistoryTestWorkItem(
+      page,
+      VIEWER_TASK_TITLE,
+    )
+
+    // --------------------------------------------------------
+    // Invite Laura as a Viewer.
+    // --------------------------------------------------------
+
+    await page
+      .getByRole('link', {
+        name: 'Settings',
+        exact: true,
+      })
+      .click()
+
+    await page
+      .getByRole('button', {
+        name: /Add member/,
+      })
+      .click()
+
+    const addMemberDialog = page.getByRole(
+      'dialog',
+      { name: 'Add project member' },
+    )
+    await expect(addMemberDialog).toBeVisible()
+
+    await addMemberDialog
+      .getByLabel('Select person')
+      .fill('laura')
+
+    await addMemberDialog
+      .getByRole('button')
+      .filter({ hasText: '@laura' })
+      .click()
+
+    await addMemberDialog
+      .getByText('Viewer', { exact: true })
+      .click()
+
+    await addMemberDialog
+      .getByRole('button', {
+        name: /Add member/,
+      })
+      .click()
+
+    await expect(
+      addMemberDialog,
+    ).not.toBeVisible()
+
+    // --------------------------------------------------------
+    // 13. As Laura (viewer), the Work Item inspector never
+    //    renders an enabled comment composer.
+    // --------------------------------------------------------
+
+    await logout(page)
+    await login(page, 'laura')
+    await openProjects(page)
+    await openProject(page, VIEWER_PROJECT_NAME)
+
+    await page
+      .getByRole('button', {
+        name: `Open ${VIEWER_TASK_TITLE}`,
+      })
+      .click()
+
+    const inspector = page.getByRole('region', {
+      name: 'Work item',
+      exact: true,
+    })
+    await expect(inspector).toBeVisible()
+
+    // No composer at all — not merely disabled.
+    await expect(
+      inspector.getByRole('button', {
+        name: 'Add a comment…',
+      }),
+    ).toHaveCount(0)
+    await expect(
+      inspector.getByLabel('Comment', {
+        exact: true,
+      }),
+    ).toHaveCount(0)
   },
 )
