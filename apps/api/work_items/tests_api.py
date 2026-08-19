@@ -586,6 +586,40 @@ class WorkItemUpdateTest(_AuthMixin, APITestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["blockedReason"], None)
 
+    def test_blocked_reason_clear_with_null(self):
+        update_work_item(
+            work_item=self.data["work_item"],
+            actor=self.data["alex"],
+            blocked_reason="Waiting on data",
+        )
+
+        response = self._patch_work_item(
+            "alex",
+            self.data["work_item"],
+            {
+                "blockedReason": None,
+            },
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+        self.assertIsNone(
+            response.json()["blockedReason"],
+        )
+
+        self.data[
+            "work_item"
+        ].refresh_from_db()
+
+        self.assertEqual(
+            self.data[
+                "work_item"
+            ].blocked_reason,
+            "",
+        )
+
     def test_done_sets_completed_at(self):
         response = self._patch_work_item(
             "alex", self.data["work_item"], {

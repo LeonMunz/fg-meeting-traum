@@ -569,6 +569,24 @@ class BlockedSemanticsTest(TestCase):
         wi.refresh_from_db()
         self.assertEqual(wi.blocked_reason, "")
 
+    def test_blocked_reason_none_clears_to_storage_blank(self):
+        wi = create_work_item(
+            project=self.data["paper_xyz"],
+            actor=self.data["alex"],
+            type=WorkItem.Type.TASK,
+            title="Test",
+            blocked_reason="Waiting on review",
+        )
+
+        update_work_item(
+            work_item=wi,
+            actor=self.data["alex"],
+            blocked_reason=None,
+        )
+
+        wi.refresh_from_db()
+        self.assertEqual(wi.blocked_reason, "")
+
     def test_no_is_blocked_field(self):
         fields = [f.name for f in WorkItem._meta.get_fields()]
         self.assertNotIn("is_blocked", fields)

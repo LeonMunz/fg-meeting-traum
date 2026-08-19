@@ -395,7 +395,11 @@ def _apply_work_item_fields(
         work_item.due_date = due_date if due_date != "" else None
         update_fields.append("due_date")
     if blocked_reason is not _UNSET:
-        work_item.blocked_reason = blocked_reason
+        work_item.blocked_reason = (
+            ""
+            if blocked_reason is None
+            else blocked_reason
+        )
         update_fields.append("blocked_reason")
 
     # Status transition with completion handling
