@@ -1775,6 +1775,25 @@ export function ProjectDetailPage() {
       })
       .sort(compareAttentionItems)
 
+  const handleOpenWorkItem = (
+    item: DemoWorkItem,
+  ) => {
+    const workItemId =
+      Number(item.id)
+
+    if (
+      !Number.isInteger(workItemId) ||
+      workItemId <= 0
+    ) {
+      return
+    }
+
+    setWorkItemDrawerState({
+      mode: 'edit',
+      workItemId,
+    })
+  }
+
   const selectedDrawerWorkItem =
     workItemDrawerState?.mode === 'edit'
       ? apiWorkItems.find(
@@ -2000,6 +2019,7 @@ export function ProjectDetailPage() {
                   <OverviewWorkItemRow
                     key={item.id}
                     item={item}
+                    onOpen={handleOpenWorkItem}
                   />
                 ))}
               </div>
@@ -2038,6 +2058,7 @@ export function ProjectDetailPage() {
                       key={item.id}
                       item={item}
                       attentionKind={kind}
+                      onOpen={handleOpenWorkItem}
                     />
                   ),
                 )}
@@ -2084,6 +2105,7 @@ export function ProjectDetailPage() {
                 mode: 'create',
               })
             }
+            onOpen={handleOpenWorkItem}
             preferencesKey={
               user
                 ? `fg-workspace:project-work-items:v1:${user.id}:${project.id}`
@@ -2787,9 +2809,11 @@ export function ProjectDetailPage() {
 function OverviewWorkItemRow({
   item,
   attentionKind = null,
+  onOpen,
 }: {
   item: DemoWorkItem
   attentionKind?: AttentionKind | null
+  onOpen: (item: DemoWorkItem) => void
 }) {
   const status =
     workItemStatusDisplay[item.status]
@@ -2799,6 +2823,19 @@ function OverviewWorkItemRow({
 
   return (
     <div
+      role="button"
+      tabIndex={0}
+      aria-label={`Open ${item.title}`}
+      onClick={() => onOpen(item)}
+      onKeyDown={(event) => {
+        if (
+          event.key === 'Enter' ||
+          event.key === ' '
+        ) {
+          event.preventDefault()
+          onOpen(item)
+        }
+      }}
       data-work-item-id={item.id}
       data-attention-kind={
         attentionKind ?? undefined
@@ -2875,12 +2912,14 @@ function ProjectWorkItemsPanel({
   eligibleAssignees,
   readOnly,
   onCreate,
+  onOpen,
   preferencesKey,
 }: {
   items: DemoWorkItem[]
   eligibleAssignees: ProjectMember[]
   readOnly: boolean
   onCreate: () => void
+  onOpen: (item: DemoWorkItem) => void
   preferencesKey: string | null
 }) {
   const [view, setView] = useState<WorkItemsView>('board')
@@ -3162,7 +3201,10 @@ function ProjectWorkItemsPanel({
                   : 'text-on-surface-variant hover:text-on-surface',
               ].join(' ')}
             >
-              <span className="material-symbols-outlined text-[17px]">
+              <span
+                aria-hidden="true"
+                className="material-symbols-outlined text-[17px]"
+              >
                 view_kanban
               </span>
               Board
@@ -3178,7 +3220,10 @@ function ProjectWorkItemsPanel({
                   : 'text-on-surface-variant hover:text-on-surface',
               ].join(' ')}
             >
-              <span className="material-symbols-outlined text-[17px]">
+              <span
+                aria-hidden="true"
+                className="material-symbols-outlined text-[17px]"
+              >
                 view_list
               </span>
               List
@@ -3351,6 +3396,7 @@ function ProjectWorkItemsPanel({
                       <WorkItemBoardCard
                         key={item.id}
                         item={item}
+                        onOpen={onOpen}
                       />
                     ))
                   ) : (
@@ -3367,7 +3413,10 @@ function ProjectWorkItemsPanel({
           </div>
         </div>
       ) : (
-        <WorkItemsList items={filteredItems} />
+        <WorkItemsList
+          items={filteredItems}
+          onOpen={onOpen}
+        />
       )}
     </section>
   )
@@ -3430,13 +3479,29 @@ function getWorkItemDueDisplay(item: DemoWorkItem) {
 
 function WorkItemBoardCard({
   item,
+  onOpen,
 }: {
   item: DemoWorkItem
+  onOpen: (item: DemoWorkItem) => void
 }) {
   const due = getWorkItemDueDisplay(item)
 
   return (
-    <article className="rounded-lg border border-outline-variant/60 bg-surface-container-lowest px-3.5 py-3 transition hover:bg-surface-container-low/45">
+    <article
+      role="button"
+      tabIndex={0}
+      aria-label={`Open ${item.title}`}
+      onClick={() => onOpen(item)}
+      onKeyDown={(event) => {
+        if (
+          event.key === 'Enter' ||
+          event.key === ' '
+        ) {
+          event.preventDefault()
+          onOpen(item)
+        }
+      }}
+      className="rounded-lg border border-outline-variant/60 bg-surface-container-lowest px-3.5 py-3 transition hover:bg-surface-container-low/45">
       <div className="flex items-start gap-2">
         <span
           title={workItemTypeLabels[item.type]}
@@ -3524,8 +3589,10 @@ function WorkItemAssignees({
 
 function WorkItemsList({
   items,
+  onOpen,
 }: {
   items: DemoWorkItem[]
+  onOpen: (item: DemoWorkItem) => void
 }) {
   const gridColumns =
     'grid-cols-[minmax(360px,560px)_130px_180px_110px]'
@@ -3564,6 +3631,19 @@ function WorkItemsList({
             return (
               <div
                 key={item.id}
+                role="button"
+                tabIndex={0}
+                aria-label={`Open ${item.title}`}
+                onClick={() => onOpen(item)}
+                onKeyDown={(event) => {
+                  if (
+                    event.key === 'Enter' ||
+                    event.key === ' '
+                  ) {
+                    event.preventDefault()
+                    onOpen(item)
+                  }
+                }}
                 className={[
                   'grid h-[54px] items-center px-6 transition-colors hover:bg-surface-container-low/45',
                   gridColumns,

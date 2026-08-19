@@ -610,19 +610,19 @@ export function WorkItemDrawer({
                                 option.value,
                               )
                             }
-                            className="sr-only"
+                            className="absolute inset-0 cursor-pointer appearance-none focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-primary disabled:cursor-default"
                           />
 
                           <span
                             aria-hidden="true"
-                            className="material-symbols-outlined text-[16px]"
+                            className="pointer-events-none material-symbols-outlined text-[16px]"
                           >
                             {
                               option.icon
                             }
                           </span>
 
-                          <span className="truncate">
+                          <span className="pointer-events-none truncate">
                             {
                               option.label
                             }
