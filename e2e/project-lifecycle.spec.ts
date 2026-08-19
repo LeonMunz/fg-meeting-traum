@@ -67,7 +67,7 @@ async function openVisibleProject(
     .click()
 
   await expect(page).toHaveURL(
-    /\/projects\/\d+$/,
+    /\/projects\/\d+\/work-items$/,
   )
 
   await expect(
@@ -83,10 +83,10 @@ async function openSettings(
   page: Page,
 ) {
   await page
-    .getByRole('button', {
-      name: 'Settings',
-      exact: true,
-    })
+    .getByRole('link', {
+        name: 'Settings',
+        exact: true,
+      })
     .click()
 
   await expect(
@@ -393,7 +393,7 @@ test(
     )
 
     await page
-      .getByRole('button', {
+      .getByRole('link', {
         name: /Work Items/,
       })
       .click()
@@ -513,7 +513,7 @@ test(
     ).toBeVisible()
 
     await page
-      .getByRole('button', {
+      .getByRole('link', {
         name: /Work Items/,
       })
       .click()

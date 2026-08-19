@@ -67,7 +67,7 @@ async function openProject(
     .click()
 
   await expect(page).toHaveURL(
-    /\/projects\/\d+$/,
+    /\/projects\/\d+\/work-items$/,
   )
 
   await expect(
@@ -143,7 +143,7 @@ test(
     )
 
     await page
-      .getByRole('button', {
+      .getByRole('link', {
         name: 'Settings',
         exact: true,
       })

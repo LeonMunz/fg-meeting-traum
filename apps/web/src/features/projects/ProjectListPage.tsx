@@ -488,7 +488,7 @@ export function ProjectListPage() {
                     tabIndex={0}
                     onClick={() =>
                       navigate(
-                        `/projects/${project.id}`,
+                        `/projects/${project.id}/work-items`,
                       )
                     }
                     onKeyDown={(event) => {
@@ -498,7 +498,7 @@ export function ProjectListPage() {
                       ) {
                         event.preventDefault()
                         navigate(
-                          `/projects/${project.id}`,
+                          `/projects/${project.id}/work-items`,
                         )
                       }
                     }}

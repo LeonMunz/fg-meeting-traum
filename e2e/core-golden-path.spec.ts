@@ -81,7 +81,7 @@ test(
     // --------------------------------------------------------
 
     await page
-      .getByRole('button', {
+      .getByRole('link', {
         name: /Members/,
       })
       .click()
@@ -140,7 +140,7 @@ test(
     // --------------------------------------------------------
 
     await page
-      .getByRole('button', {
+      .getByRole('link', {
         name: /Work Items/,
       })
       .click()
@@ -207,7 +207,7 @@ test(
     await page.reload()
 
     await page
-      .getByRole('button', {
+      .getByRole('link', {
         name: /Work Items/,
       })
       .click()
@@ -290,7 +290,7 @@ test(
     )
 
     await page
-      .getByRole('button', {
+      .getByRole('link', {
         name: /Work Items/,
       })
       .click()

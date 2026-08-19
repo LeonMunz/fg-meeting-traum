@@ -393,7 +393,7 @@ export function MyWorkPage() {
                   type="button"
                   onClick={() =>
                     navigate(
-                      `/projects/${item.projectId}`,
+                      `/projects/${item.projectId}/work-items`,
                     )
                   }
                   className="min-w-0 text-left"
@@ -439,7 +439,7 @@ export function MyWorkPage() {
                   type="button"
                   onClick={() =>
                     navigate(
-                      `/projects/${item.projectId}`,
+                      `/projects/${item.projectId}/work-items`,
                     )
                   }
                   className="min-w-0 text-left"

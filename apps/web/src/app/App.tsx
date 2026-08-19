@@ -124,10 +124,37 @@ function AppRoutes() {
                   element={<ProjectListPage />}
                 />
 
-                <Route
-                  path="/projects/:projectId"
-                  element={<ProjectDetailPage />}
-                />
+                <Route path="/projects/:projectId">
+                  <Route
+                    index
+                    element={
+                      <Navigate
+                        to="work-items"
+                        replace
+                      />
+                    }
+                  />
+
+                  <Route
+                    path="work-items"
+                    element={<ProjectDetailPage />}
+                  />
+
+                  <Route
+                    path="overview"
+                    element={<ProjectDetailPage />}
+                  />
+
+                  <Route
+                    path="members"
+                    element={<ProjectDetailPage />}
+                  />
+
+                  <Route
+                    path="settings"
+                    element={<ProjectDetailPage />}
+                  />
+                </Route>
 
                 <Route
                   path="/goals"

@@ -373,7 +373,7 @@ test(
     // --------------------------------------------------------
 
     await page
-      .getByRole('button', {
+      .getByRole('link', {
         name: /Members/,
       })
       .click()

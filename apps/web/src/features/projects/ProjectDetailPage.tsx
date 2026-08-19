@@ -47,7 +47,11 @@ import { useSession } from '../../api/useSession'
 
 type ProjectStatus = 'active' | 'paused' | 'completed'
 type ProjectRole = 'owner' | 'member' | 'viewer'
-type ProjectTab = 'overview' | 'work-items' | 'members' | 'data' | 'settings'
+type ProjectTab =
+  | 'work-items'
+  | 'overview'
+  | 'members'
+  | 'settings'
 
 type DemoWorkItemStatus = 'todo' | 'in_progress' | 'review' | 'done'
 type DemoWorkItemType = 'epic' | 'milestone' | 'deliverable' | 'task'
@@ -346,9 +350,9 @@ function saveWorkItemFilterPreferences(
 }
 
 const statusLabel: Record<ProjectStatus, string> = {
-  active: 'Active project',
-  paused: 'Paused project',
-  completed: 'Completed project',
+  active: 'Active',
+  paused: 'Paused',
+  completed: 'Completed',
 }
 
 const statusDotClass: Record<ProjectStatus, string> = {
@@ -375,11 +379,13 @@ const roleClass: Record<ProjectRole, string> = {
   viewer: 'bg-surface-container-high text-on-surface-variant',
 }
 
-const tabs: Array<{ id: ProjectTab; label: string }> = [
-  { id: 'overview', label: 'Overview' },
+const tabs: Array<{
+  id: ProjectTab
+  label: string
+}> = [
   { id: 'work-items', label: 'Work Items' },
+  { id: 'overview', label: 'Overview' },
   { id: 'members', label: 'Members' },
-  { id: 'data', label: 'Data' },
   { id: 'settings', label: 'Settings' },
 ]
 
@@ -591,7 +597,31 @@ export function ProjectDetailPage() {
   const location = useLocation()
   const navigate = useNavigate()
   const { user } = useSession()
-  const [activeTab, setActiveTab] = useState<ProjectTab>('overview')
+  const activeTab = useMemo<ProjectTab>(() => {
+    const segment =
+      location.pathname
+        .split('/')
+        .filter(Boolean)
+        .at(-1)
+
+    if (
+      segment === 'overview' ||
+      segment === 'members' ||
+      segment === 'settings'
+    ) {
+      return segment
+    }
+
+    return 'work-items'
+  }, [location.pathname])
+
+  const navigateToTab = (tab: ProjectTab) => {
+    if (!projectId) {
+      return
+    }
+
+    navigate(`/projects/${projectId}/${tab}`)
+  }
 
   const [project, setProject] = useState<ProjectDetail | null>(null)
 
@@ -1822,7 +1852,7 @@ export function ProjectDetailPage() {
   return (
     <div className="w-full px-6 py-8 lg:px-8 lg:py-10 xl:px-10">
       <Link
-        to="/projects"
+        to={`/projects?group=${project.researchGroupId}`}
         className="inline-flex items-center gap-1.5 text-sm font-medium text-on-surface-variant transition hover:text-primary"
       >
         <span
@@ -1888,53 +1918,15 @@ export function ProjectDetailPage() {
           </div>
         </div>
 
-        {isArchived && (
-          <div className="mt-6 flex items-start gap-3 rounded-xl border border-outline-variant bg-surface-container-low px-4 py-3.5">
-            <span className="material-symbols-outlined mt-0.5 text-[19px] text-on-surface-variant">
-              archive
-            </span>
-
-            <div>
-              <div className="text-sm font-medium text-on-surface">
-                Archived project
-              </div>
-
-              <p className="mt-0.5 text-xs leading-5 text-on-surface-variant">
-                This project is kept for reference and is read-only.
-                {canManageProjectLifecycle
-                  ? ' Restore it from Settings to continue working.'
-                  : ''}
-              </p>
-            </div>
-          </div>
-        )}
-
-        {isViewer && !isArchived && (
-          <div className="mt-6 flex items-start gap-3 rounded-xl border border-outline-variant bg-surface-container-low px-4 py-3.5">
-            <span className="material-symbols-outlined mt-0.5 text-[19px] text-on-surface-variant">
-              visibility
-            </span>
-
-            <div>
-              <div className="text-sm font-medium text-on-surface">
-                Viewer access
-              </div>
-              <p className="mt-0.5 text-xs leading-5 text-on-surface-variant">
-                You can inspect this project, but editing actions are read-only.
-              </p>
-            </div>
-          </div>
-        )}
-
         <nav className="mt-8 flex gap-7 overflow-x-auto border-b border-outline-variant">
           {tabs.map((tab) => {
             const selected = activeTab === tab.id
 
             return (
-              <button
+              <Link
                 key={tab.id}
-                type="button"
-                onClick={() => setActiveTab(tab.id)}
+                to={`/projects/${project.id}/${tab.id}`}
+                aria-current={selected ? 'page' : undefined}
                 className={[
                   'relative shrink-0 pb-3 text-sm font-medium transition',
                   selected
@@ -1945,13 +1937,55 @@ export function ProjectDetailPage() {
                 {tab.label}
 
                 {selected && (
-                  <span className="absolute inset-x-0 bottom-0 h-0.5 bg-primary" />
+                  <span
+                    aria-hidden="true"
+                    className="absolute inset-x-0 bottom-0 h-0.5 bg-primary"
+                  />
                 )}
-              </button>
+              </Link>
             )
           })}
         </nav>
       </header>
+
+      {isArchived && (
+        <div className="mt-6 flex items-start gap-3 rounded-xl border border-outline-variant bg-surface-container-low px-4 py-3.5">
+          <span className="material-symbols-outlined mt-0.5 text-[19px] text-on-surface-variant">
+            archive
+          </span>
+
+          <div>
+            <div className="text-sm font-medium text-on-surface">
+              Archived project
+            </div>
+
+            <p className="mt-0.5 text-xs leading-5 text-on-surface-variant">
+              This project is kept for reference and is read-only.
+              {canManageProjectLifecycle
+                ? ' Restore it from Settings to continue working.'
+                : ''}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {isViewer && !isArchived && (
+        <div className="mt-6 flex items-start gap-3 rounded-xl border border-outline-variant bg-surface-container-low px-4 py-3.5">
+          <span className="material-symbols-outlined mt-0.5 text-[19px] text-on-surface-variant">
+            visibility
+          </span>
+
+          <div>
+            <div className="text-sm font-medium text-on-surface">
+              Viewer access
+            </div>
+            <p className="mt-0.5 text-xs leading-5 text-on-surface-variant">
+              You can inspect this project, but editing actions are read-only.
+            </p>
+          </div>
+        </div>
+      )}
+
 
       {activeTab === 'overview' && (
         <div className="mt-7 grid gap-10 lg:grid-cols-[minmax(0,1fr)_300px] xl:grid-cols-[minmax(0,1fr)_320px]">
@@ -1967,7 +2001,7 @@ export function ProjectDetailPage() {
                   !forceEmptyDescription && (
                     <button
                       type="button"
-                      onClick={() => setActiveTab('settings')}
+                      onClick={() => navigateToTab('settings')}
                       className="text-xs font-medium text-on-surface-variant transition hover:text-primary"
                     >
                       Edit
@@ -2002,7 +2036,7 @@ export function ProjectDetailPage() {
                   {canEditProjectSettings && (
                     <button
                       type="button"
-                      onClick={() => setActiveTab('settings')}
+                      onClick={() => navigateToTab('settings')}
                       className="shrink-0 text-xs font-medium text-primary transition hover:opacity-75"
                     >
                       Add description
@@ -2026,7 +2060,7 @@ export function ProjectDetailPage() {
 
                 <button
                   type="button"
-                  onClick={() => setActiveTab('work-items')}
+                  onClick={() => navigateToTab('work-items')}
                   className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-on-surface-variant transition hover:text-primary"
                 >
                   View all
@@ -2535,39 +2569,6 @@ export function ProjectDetailPage() {
             }
           />
         )}
-
-      {activeTab === 'data' && (
-        <section className="mt-6 overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest shadow-sm">
-          <div className="border-b border-outline-variant px-6 py-5">
-            <h2 className="font-semibold text-on-surface">
-              Data
-            </h2>
-
-            <p className="mt-0.5 text-xs text-on-surface-variant">
-              Research data connected to this project.
-            </p>
-          </div>
-
-          <div className="flex min-h-44 items-center justify-center px-6 py-10">
-            <div className="flex max-w-lg items-start gap-3">
-              <span className="material-symbols-outlined mt-0.5 text-[20px] text-on-surface-variant">
-                storage
-              </span>
-
-              <div>
-                <p className="text-sm font-medium text-on-surface">
-                  No data source connected yet
-                </p>
-
-                <p className="mt-1 text-xs leading-5 text-on-surface-variant">
-                  Project data from services such as OneDrive or Sciebo
-                  will be connected here later.
-                </p>
-              </div>
-            </div>
-          </div>
-        </section>
-      )}
 
       {activeTab === 'settings' && (
         <section className="mt-6 overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest shadow-sm">

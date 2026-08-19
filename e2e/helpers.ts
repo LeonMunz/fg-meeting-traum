@@ -73,6 +73,10 @@ export async function openProject(
   await expect(projectLink).toBeVisible()
   await projectLink.click()
 
+  await expect(page).toHaveURL(
+    /\/projects\/\d+\/work-items$/,
+  )
+
   await expect(
     page.getByText(
       projectName,

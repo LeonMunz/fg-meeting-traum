@@ -268,7 +268,7 @@ test(
     await robotProject.click()
 
     await expect(page).toHaveURL(
-      /\/projects\/\d+$/,
+      /\/projects\/\d+\/work-items$/,
     )
 
     const robotProjectPath =

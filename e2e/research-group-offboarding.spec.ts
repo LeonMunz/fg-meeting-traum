@@ -232,9 +232,9 @@ async function addLauraToProject(
   page: Page,
 ) {
   await page
-    .getByRole('button', {
-      name: /Members/,
-    })
+    .getByRole('link', {
+        name: /Members/,
+      })
     .click()
 
   await page
@@ -285,9 +285,9 @@ async function createTaskAssignedToLaura(
   title: string,
 ) {
   await page
-    .getByRole('button', {
-      name: /Work Items/,
-    })
+    .getByRole('link', {
+        name: /Work Items/,
+      })
     .click()
 
   await page
@@ -352,7 +352,7 @@ function getProjectId(
     new URL(page.url())
       .pathname
       .match(
-        /^\/projects\/(\d+)$/,
+        /^\/projects\/(\d+)\/work-items$/,
       )
 
   expect(match).not.toBeNull()

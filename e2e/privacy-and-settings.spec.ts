@@ -57,9 +57,9 @@ async function addChris(
   page: Page,
 ) {
   await page
-    .getByRole('button', {
-      name: /Members/,
-    })
+    .getByRole('link', {
+        name: /Members/,
+      })
     .click()
 
   await page
@@ -127,7 +127,7 @@ test(
 
     const match =
       projectPath.match(
-        /^\/projects\/(\d+)$/,
+        /^\/projects\/(\d+)\/work-items$/,
       )
 
     expect(match).not.toBeNull()
@@ -198,8 +198,9 @@ test(
     // --------------------------------------------------------
 
     await page
-      .getByRole('button', {
-        name: /Settings/,
+      .getByRole('link', {
+        name: 'Settings',
+        exact: true,
       })
       .click()
 
@@ -253,8 +254,9 @@ test(
     await page.reload()
 
     await page
-      .getByRole('button', {
-        name: /Settings/,
+      .getByRole('link', {
+        name: 'Settings',
+        exact: true,
       })
       .click()
 
@@ -288,8 +290,9 @@ test(
     )
 
     await page
-      .getByRole('button', {
-        name: /Settings/,
+      .getByRole('link', {
+        name: 'Settings',
+        exact: true,
       })
       .click()
 

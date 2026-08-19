@@ -75,9 +75,9 @@ async function addChris(
   page: Page,
 ) {
   await page
-    .getByRole('button', {
-      name: /Members/,
-    })
+    .getByRole('link', {
+        name: /Members/,
+      })
     .click()
 
   await page
@@ -128,9 +128,9 @@ async function createTaskAssignedToChris(
   title: string,
 ) {
   await page
-    .getByRole('button', {
-      name: /Work Items/,
-    })
+    .getByRole('link', {
+        name: /Work Items/,
+      })
     .click()
 
   await page
@@ -194,7 +194,7 @@ function getProjectId(
   const match =
     new URL(page.url())
       .pathname
-      .match(/^\/projects\/(\d+)$/)
+      .match(/^\/projects\/(\d+)\/work-items$/)
 
   expect(match).not.toBeNull()
 
@@ -313,7 +313,7 @@ test(
     // --------------------------------------------------------
 
     await page
-      .getByRole('button', {
+      .getByRole('link', {
         name: /Members/,
       })
       .click()
@@ -405,7 +405,7 @@ test(
     await page.reload()
 
     await page
-      .getByRole('button', {
+      .getByRole('link', {
         name: /Work Items/,
       })
       .click()
@@ -505,7 +505,7 @@ test(
     // --------------------------------------------------------
 
     await page
-      .getByRole('button', {
+      .getByRole('link', {
         name: /Members/,
       })
       .click()
@@ -563,7 +563,7 @@ test(
     await page.reload()
 
     await page
-      .getByRole('button', {
+      .getByRole('link', {
         name: /Work Items/,
       })
       .click()
