@@ -55,19 +55,6 @@ type ProjectTab =
 type DemoWorkItemStatus = 'todo' | 'in_progress' | 'review' | 'done'
 type DemoWorkItemType = 'epic' | 'milestone' | 'deliverable' | 'task'
 
-type WorkItemFocus =
-  | 'due-3-days'
-  | 'due-week'
-  | 'overdue'
-  | 'blocked'
-  | 'mine'
-  | 'recently-completed'
-  | 'all-open'
-  | 'custom'
-
-type CustomWorkItemStatus = 'all' | DemoWorkItemStatus
-type CustomWorkItemType = 'all' | DemoWorkItemType
-
 type WorkItemsView = 'board' | 'list'
 type WorkItemsTypeFilter = 'all' | DemoWorkItemType
 
@@ -117,67 +104,6 @@ type ProjectDetail = {
   updatedLabel: string
 }
 
-
-const demoActivities: Record<
-  string,
-  Array<{
-    id: string
-    title: string
-    meta: string
-    icon: string
-  }>
-> = {
-  'quantum-materials': [
-    {
-      id: 'activity-1',
-      title: 'Project details updated',
-      meta: 'Today · Alex Dev',
-      icon: 'edit_note',
-    },
-    {
-      id: 'activity-2',
-      title: 'Laura joined as viewer',
-      meta: 'Yesterday · Alex Dev',
-      icon: 'person_add',
-    },
-    {
-      id: 'activity-3',
-      title: 'Project activated',
-      meta: 'Aug 12 · Alex Dev',
-      icon: 'flag',
-    },
-  ],
-  'ai-engineering': [
-    {
-      id: 'activity-1',
-      title: 'Project details updated',
-      meta: 'Yesterday · Chris Dev',
-      icon: 'edit_note',
-    },
-    {
-      id: 'activity-2',
-      title: 'Maria joined the project',
-      meta: 'Aug 11 · Chris Dev',
-      icon: 'person_add',
-    },
-  ],
-  'grant-proposal': [
-    {
-      id: 'activity-1',
-      title: 'Project paused',
-      meta: 'Aug 8 · Maria Dev',
-      icon: 'pause_circle',
-    },
-  ],
-  'cluster-upgrade': [
-    {
-      id: 'activity-1',
-      title: 'Project completed',
-      meta: 'Jul 29 · Laura Dev',
-      icon: 'check_circle',
-    },
-  ],
-}
 
 const workItemStatusLabels: Record<DemoWorkItemStatus, string> = {
   todo: 'To do',
@@ -238,115 +164,6 @@ const workItemTypeOptions: Array<{
     icon: 'check_box_outline_blank',
   },
 ]
-
-type WorkItemFilterPreferences = {
-  focus: WorkItemFocus
-  customDueDays: number
-  customStatus: CustomWorkItemStatus
-  customType: CustomWorkItemType
-  customAssignee: 'all' | 'me'
-}
-
-const defaultWorkItemFilterPreferences: WorkItemFilterPreferences = {
-  focus: 'due-3-days',
-  customDueDays: 3,
-  customStatus: 'all',
-  customType: 'all',
-  customAssignee: 'all',
-}
-
-function isWorkItemFocus(value: unknown): value is WorkItemFocus {
-  return (
-    typeof value === 'string' &&
-    [
-      'due-3-days',
-      'due-week',
-      'overdue',
-      'blocked',
-      'mine',
-      'recently-completed',
-      'all-open',
-      'custom',
-    ].includes(value)
-  )
-}
-
-function isCustomWorkItemStatus(
-  value: unknown,
-): value is CustomWorkItemStatus {
-  return (
-    value === 'all' ||
-    value === 'todo' ||
-    value === 'in_progress' ||
-    value === 'review' ||
-    value === 'done'
-  )
-}
-
-function isCustomWorkItemType(
-  value: unknown,
-): value is CustomWorkItemType {
-  return (
-    value === 'all' ||
-    value === 'epic' ||
-    value === 'milestone' ||
-    value === 'deliverable' ||
-    value === 'task'
-  )
-}
-
-function loadWorkItemFilterPreferences(
-  storageKey: string,
-): WorkItemFilterPreferences {
-  try {
-    const raw = window.localStorage.getItem(storageKey)
-
-    if (!raw) {
-      return { ...defaultWorkItemFilterPreferences }
-    }
-
-    const parsed = JSON.parse(raw) as Partial<WorkItemFilterPreferences>
-
-    return {
-      focus: isWorkItemFocus(parsed.focus)
-        ? parsed.focus
-        : defaultWorkItemFilterPreferences.focus,
-
-      customDueDays:
-        typeof parsed.customDueDays === 'number' &&
-        Number.isFinite(parsed.customDueDays)
-          ? Math.min(90, Math.max(1, parsed.customDueDays))
-          : defaultWorkItemFilterPreferences.customDueDays,
-
-      customStatus: isCustomWorkItemStatus(parsed.customStatus)
-        ? parsed.customStatus
-        : defaultWorkItemFilterPreferences.customStatus,
-
-      customType: isCustomWorkItemType(parsed.customType)
-        ? parsed.customType
-        : defaultWorkItemFilterPreferences.customType,
-
-      customAssignee:
-        parsed.customAssignee === 'me' ? 'me' : 'all',
-    }
-  } catch {
-    return { ...defaultWorkItemFilterPreferences }
-  }
-}
-
-function saveWorkItemFilterPreferences(
-  storageKey: string,
-  preferences: WorkItemFilterPreferences,
-) {
-  try {
-    window.localStorage.setItem(
-      storageKey,
-      JSON.stringify(preferences),
-    )
-  } catch {
-    // A blocked or unavailable localStorage must not break the page.
-  }
-}
 
 const statusLabel: Record<ProjectStatus, string> = {
   active: 'Active',
@@ -674,68 +491,6 @@ export function ProjectDetailPage() {
     useState<string | null>(null)
   const [createWorkItemDialogOpen, setCreateWorkItemDialogOpen] =
     useState(false)
-  const [workItemFocus, setWorkItemFocus] =
-    useState<WorkItemFocus>('due-3-days')
-  const [customDueDays, setCustomDueDays] = useState(3)
-  const [customStatus, setCustomStatus] =
-    useState<CustomWorkItemStatus>('all')
-  const [customType, setCustomType] =
-    useState<CustomWorkItemType>('all')
-  const [customAssignee, setCustomAssignee] =
-    useState<'all' | 'me'>('all')
-
-  const [loadedFilterPreferencesKey, setLoadedFilterPreferencesKey] =
-    useState<string | null>(null)
-
-  const filterPreferencesKey =
-    user && projectId
-      ? `fg-workspace:project-overview-work-items:v1:${user.id}:${projectId}`
-      : null
-
-  useEffect(() => {
-    if (!filterPreferencesKey) {
-      setLoadedFilterPreferencesKey(null)
-      return
-    }
-
-    const preferences =
-      loadWorkItemFilterPreferences(filterPreferencesKey)
-
-    setWorkItemFocus(preferences.focus)
-    setCustomDueDays(preferences.customDueDays)
-    setCustomStatus(preferences.customStatus)
-    setCustomType(preferences.customType)
-    setCustomAssignee(preferences.customAssignee)
-
-    setLoadedFilterPreferencesKey(filterPreferencesKey)
-  }, [filterPreferencesKey])
-
-  useEffect(() => {
-    if (
-      !filterPreferencesKey ||
-      loadedFilterPreferencesKey !== filterPreferencesKey
-    ) {
-      return
-    }
-
-    saveWorkItemFilterPreferences(filterPreferencesKey, {
-      focus: workItemFocus,
-      customDueDays,
-      customStatus,
-      customType,
-      customAssignee,
-    })
-  }, [
-    filterPreferencesKey,
-    loadedFilterPreferencesKey,
-    workItemFocus,
-    customDueDays,
-    customStatus,
-    customType,
-    customAssignee,
-  ])
-
-
   useEffect(() => {
     if (!projectId) {
       setProject(null)
@@ -933,7 +688,6 @@ export function ProjectDetailPage() {
   const isPreviewLoading = previewState === 'loading'
   const isPreviewError = previewState === 'error'
   const forceEmptyDescription = previewState === 'empty-description'
-  const forceEmptyActivity = previewState === 'empty-activity'
   const forceEmptyWorkItems = previewState === 'empty-work-items'
 
   const clearPreviewState = () => {
@@ -1767,84 +1521,9 @@ export function ProjectDetailPage() {
     }
   }
 
-  const projectActivities = forceEmptyActivity
-    ? []
-    : demoActivities[project.id] ?? []
-
   const projectWorkItems = forceEmptyWorkItems
     ? []
     : workItems
-
-  const currentUserMemberId =
-    user ? String(user.id) : null
-
-
-  const focusedWorkItems = projectWorkItems.filter((item) => {
-    switch (workItemFocus) {
-      case 'due-3-days':
-        return (
-          item.status !== 'done' &&
-          item.dueInDays != null &&
-          item.dueInDays >= 0 &&
-          item.dueInDays <= 3
-        )
-
-      case 'due-week':
-        return (
-          item.status !== 'done' &&
-          item.dueInDays != null &&
-          item.dueInDays >= 0 &&
-          item.dueInDays <= 7
-        )
-
-      case 'overdue':
-        return (
-          item.status !== 'done' &&
-          item.dueInDays != null &&
-          item.dueInDays < 0
-        )
-
-      case 'blocked':
-        return item.status !== 'done' && Boolean(item.blockedReason)
-
-      case 'mine':
-        return (
-          item.status !== 'done' &&
-          currentUserMemberId != null &&
-          item.assignees.some(
-            (assignee) => assignee.id === currentUserMemberId,
-          )
-        )
-
-      case 'recently-completed':
-        return item.status === 'done'
-
-      case 'all-open':
-        return item.status !== 'done'
-
-      case 'custom': {
-        const dueMatches =
-          item.dueInDays != null &&
-          item.dueInDays >= 0 &&
-          item.dueInDays <= customDueDays
-
-        const statusMatches =
-          customStatus === 'all' || item.status === customStatus
-
-        const typeMatches =
-          customType === 'all' || item.type === customType
-
-        const assigneeMatches =
-          customAssignee === 'all' ||
-          (currentUserMemberId != null &&
-            item.assignees.some(
-              (assignee) => assignee.id === currentUserMemberId,
-            ))
-
-        return dueMatches && statusMatches && typeMatches && assigneeMatches
-      }
-    }
-  })
 
   return (
     <div className="w-full px-6 py-8 lg:px-8 lg:py-10 xl:px-10">
@@ -1985,336 +1664,55 @@ export function ProjectDetailPage() {
 
 
       {activeTab === 'overview' && (
-        <div className="mt-7 grid gap-10 lg:grid-cols-[minmax(0,1fr)_300px] xl:grid-cols-[minmax(0,1fr)_320px]">
-          <div className="min-w-0 space-y-10">
-            <section>
-              <div className="flex min-h-8 items-center justify-between border-b border-outline-variant/50 pb-3">
-                <h2 className="text-sm font-semibold text-on-surface">
-                  Description
-                </h2>
+        <section className="mt-7 max-w-4xl">
+          <div className="flex min-h-8 items-center justify-between border-b border-outline-variant/50 pb-3">
+            <h2 className="text-sm font-semibold text-on-surface">
+              About
+            </h2>
 
-                {canEditProjectSettings &&
-                  projectDescription.trim().length > 0 &&
-                  !forceEmptyDescription && (
-                    <button
-                      type="button"
-                      onClick={() => navigateToTab('settings')}
-                      className="text-xs font-medium text-on-surface-variant transition hover:text-primary"
-                    >
-                      Edit
-                    </button>
-                  )}
-              </div>
-
-              {projectDescription.trim().length > 0 &&
-              !forceEmptyDescription ? (
-                <p className="max-w-3xl pt-4 text-sm leading-6 text-on-surface">
-                  {projectDescription}
-                </p>
-              ) : (
-                <div className="flex min-h-28 items-center justify-between gap-6 py-5">
-                  <div className="flex items-start gap-3">
-                    <span className="material-symbols-outlined mt-0.5 text-[17px] text-on-surface-variant">
-                      notes
-                    </span>
-
-                    <div>
-                      <p className="text-sm font-medium text-on-surface">
-                        No description yet
-                      </p>
-
-                      <p className="mt-1 max-w-lg text-xs leading-5 text-on-surface-variant">
-                        Add context so project members can quickly understand
-                        the purpose of this project.
-                      </p>
-                    </div>
-                  </div>
-
-                  {canEditProjectSettings && (
-                    <button
-                      type="button"
-                      onClick={() => navigateToTab('settings')}
-                      className="shrink-0 text-xs font-medium text-primary transition hover:opacity-75"
-                    >
-                      Add description
-                    </button>
-                  )}
-                </div>
-              )}
-            </section>
-
-            <section>
-              <div className="flex flex-col gap-3 border-b border-outline-variant/50 pb-3 sm:flex-row sm:items-end sm:justify-between">
-                <div>
-                  <h2 className="text-sm font-semibold text-on-surface">
-                    Work items
-                  </h2>
-
-                  <p className="mt-1 text-xs text-on-surface-variant">
-                    Project work that currently needs attention.
-                  </p>
-                </div>
-
+            {canEditProjectSettings &&
+              projectDescription.trim().length > 0 &&
+              !forceEmptyDescription && (
                 <button
                   type="button"
-                  onClick={() => navigateToTab('work-items')}
-                  className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-on-surface-variant transition hover:text-primary"
+                  onClick={() => navigateToTab('settings')}
+                  className="text-xs font-medium text-on-surface-variant transition hover:text-primary"
                 >
-                  View all
-
-                  <span className="material-symbols-outlined text-[15px]">
-                    arrow_forward
-                  </span>
+                  Edit
                 </button>
-              </div>
-
-              <div className="py-3">
-                <div className="flex flex-wrap items-center gap-3">
-                  <label className="flex items-center gap-2">
-                    <span className="text-xs font-normal text-on-surface-variant">
-                      Focus
-                    </span>
-
-                    <select
-                      value={workItemFocus}
-                      onChange={(event) =>
-                        setWorkItemFocus(event.target.value as WorkItemFocus)
-                      }
-                      className="h-8 rounded-lg border border-outline-variant bg-surface-container-lowest px-2.5 text-xs font-normal text-on-surface outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15"
-                    >
-                      <option value="due-3-days">Due next 3 days</option>
-                      <option value="due-week">Due this week</option>
-                      <option value="overdue">Overdue</option>
-                      <option value="blocked">Blocked</option>
-                      <option value="mine">My open work</option>
-                      <option value="recently-completed">
-                        Recently completed
-                      </option>
-                      <option value="all-open">All open</option>
-                      <option value="custom">Custom filter…</option>
-                    </select>
-                  </label>
-
-                  {workItemFocus !== 'custom' && (
-                    <button
-                      type="button"
-                      onClick={() => setWorkItemFocus('custom')}
-                      className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2 text-xs font-normal text-on-surface-variant transition hover:bg-surface-container-low hover:text-on-surface"
-                    >
-                      <span className="material-symbols-outlined text-[15px]">
-                        tune
-                      </span>
-                      Customize
-                    </button>
-                  )}
-
-                  <span className="ml-auto text-xs font-normal text-on-surface-variant">
-                    {focusedWorkItems.length}{' '}
-                    {focusedWorkItems.length === 1 ? 'item' : 'items'}
-                  </span>
-                </div>
-
-                {workItemFocus === 'custom' && (
-                  <div className="mt-3 grid gap-3 border-t border-outline-variant/35 pt-3 sm:grid-cols-2 xl:grid-cols-4">
-                    <label>
-                      <span className="mb-1 block text-xs font-normal text-on-surface-variant">
-                        Due within
-                      </span>
-
-                      <div className="flex h-8 items-center rounded-lg border border-outline-variant bg-surface-container-lowest">
-                        <input
-                          type="number"
-                          min={1}
-                          max={90}
-                          value={customDueDays}
-                          onChange={(event) =>
-                            setCustomDueDays(
-                              Math.max(1, Number(event.target.value) || 1),
-                            )
-                          }
-                          className="min-w-0 flex-1 bg-transparent px-2.5 text-xs outline-none"
-                        />
-
-                        <span className="pr-2.5 text-xs text-on-surface-variant">
-                          days
-                        </span>
-                      </div>
-                    </label>
-
-                    <label>
-                      <span className="mb-1 block text-xs font-normal text-on-surface-variant">
-                        Status
-                      </span>
-
-                      <select
-                        value={customStatus}
-                        onChange={(event) =>
-                          setCustomStatus(
-                            event.target.value as CustomWorkItemStatus,
-                          )
-                        }
-                        className="h-8 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-2.5 text-xs outline-none focus:border-primary"
-                      >
-                        <option value="all">Any status</option>
-
-                        {workItemStatusOptions.map((status) => (
-                          <option
-                            key={status.value}
-                            value={status.value}
-                          >
-                            {status.label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-
-                    <label>
-                      <span className="mb-1 block text-xs font-normal text-on-surface-variant">
-                        Type
-                      </span>
-
-                      <select
-                        value={customType}
-                        onChange={(event) =>
-                          setCustomType(
-                            event.target.value as CustomWorkItemType,
-                          )
-                        }
-                        className="h-8 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-2.5 text-xs outline-none focus:border-primary"
-                      >
-                        <option value="all">Any type</option>
-
-                        {workItemTypeOptions.map((type) => (
-                          <option
-                            key={type.value}
-                            value={type.value}
-                          >
-                            {type.label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-
-                    <label>
-                      <span className="mb-1 block text-xs font-normal text-on-surface-variant">
-                        Assignee
-                      </span>
-
-                      <select
-                        value={customAssignee}
-                        onChange={(event) =>
-                          setCustomAssignee(
-                            event.target.value as 'all' | 'me',
-                          )
-                        }
-                        className="h-8 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-2.5 text-xs outline-none focus:border-primary"
-                      >
-                        <option value="all">Anyone</option>
-                        <option value="me">Me</option>
-                      </select>
-                    </label>
-                  </div>
-                )}
-              </div>
-
-              {projectWorkItems.length === 0 ? (
-                <div className="flex min-h-36 items-center justify-center border-t border-outline-variant/35 py-8">
-                  <div className="flex items-start gap-3">
-                    <span className="material-symbols-outlined mt-0.5 text-[18px] text-on-surface-variant">
-                      checklist
-                    </span>
-
-                    <div>
-                      <p className="text-sm font-medium text-on-surface">
-                        No work items yet
-                      </p>
-
-                      <p className="mt-1 max-w-md text-xs leading-5 text-on-surface-variant">
-                        Work created for this project will appear here.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              ) : focusedWorkItems.length > 0 ? (
-                <div className="border-t border-outline-variant/35">
-                  <WorkItemsList items={focusedWorkItems.slice(0, 5)} />
-                </div>
-              ) : (
-                <div className="flex min-h-28 items-center justify-center border-t border-outline-variant/35 py-7">
-                  <div className="flex items-start gap-3">
-                    <span className="material-symbols-outlined mt-0.5 text-[18px] text-on-surface-variant">
-                      filter_alt_off
-                    </span>
-
-                    <div>
-                      <p className="text-sm font-medium text-on-surface">
-                        No work items match this focus
-                      </p>
-
-                      <p className="mt-1 text-xs text-on-surface-variant">
-                        Choose another preset or customize the filter.
-                      </p>
-                    </div>
-                  </div>
-                </div>
               )}
-            </section>
           </div>
 
-          <aside className="min-w-0">
-            <div className="flex min-h-8 items-center border-b border-outline-variant/50 pb-3">
-              <h2 className="text-sm font-semibold text-on-surface">
-                Latest activity
-              </h2>
-            </div>
-
-            {projectActivities.length > 0 ? (
+          {projectDescription.trim().length > 0 &&
+          !forceEmptyDescription ? (
+            <p className="max-w-3xl pt-4 text-sm leading-6 text-on-surface">
+              {projectDescription}
+            </p>
+          ) : (
+            <div className="flex min-h-28 items-center justify-between gap-6 py-5">
               <div>
-                {projectActivities.map((activity, index) => (
-                  <div
-                    key={activity.id}
-                    className={[
-                      'flex min-h-[48px] items-center gap-2.5 py-2.5',
-                      index > 0
-                        ? 'border-t border-outline-variant/25'
-                        : '',
-                    ].join(' ')}
-                  >
-                    <span className="material-symbols-outlined w-5 shrink-0 text-[15px] text-on-surface-variant">
-                      {activity.icon}
-                    </span>
+                <p className="text-sm font-medium text-on-surface">
+                  No description yet.
+                </p>
 
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-xs font-medium text-on-surface">
-                        {activity.title}
-                      </div>
-
-                      <div className="mt-0.5 truncate text-[11px] font-normal text-on-surface-variant">
-                        {activity.meta}
-                      </div>
-                    </div>
-                  </div>
-                ))}
+                <p className="mt-1 max-w-lg text-xs leading-5 text-on-surface-variant">
+                  Add context so project members can quickly understand
+                  the purpose of this project.
+                </p>
               </div>
-            ) : (
-              <div className="flex min-h-28 items-start gap-2.5 py-5">
-                <span className="material-symbols-outlined mt-0.5 text-[16px] text-on-surface-variant">
-                  history
-                </span>
 
-                <div>
-                  <p className="text-xs font-medium text-on-surface">
-                    No activity yet
-                  </p>
-
-                  <p className="mt-1 text-[11px] leading-5 text-on-surface-variant">
-                    Recent project changes will appear here.
-                  </p>
-                </div>
-              </div>
-            )}
-          </aside>
-        </div>
+              {canEditProjectSettings && (
+                <button
+                  type="button"
+                  onClick={() => navigateToTab('settings')}
+                  className="shrink-0 text-xs font-medium text-primary transition hover:opacity-75"
+                >
+                  Add description
+                </button>
+              )}
+            </div>
+          )}
+        </section>
       )}
 
       {activeTab === 'work-items' &&
