@@ -1820,8 +1820,17 @@ export function ProjectDetailPage() {
       return
     }
 
+    // The Work Item inspector has partial autosave (a serialized PATCH
+    // queue, per-field commit-on-blur) so it is safe to redirect it at
+    // a different Work Item without losing in-flight edits: the field
+    // that was being edited already commits on blur — which fires
+    // synchronously before this click handler runs — so its patch is
+    // queued before we swap `workItemId` below. Clicking the Work Item
+    // that is already open is a no-op; clicking any other Work Item
+    // switches the same non-modal inspector to it in place.
     if (
-      workItemDrawerState?.mode === 'edit'
+      workItemDrawerState?.mode === 'edit' &&
+      workItemDrawerState.workItemId === workItemId
     ) {
       return
     }
