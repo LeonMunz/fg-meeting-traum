@@ -55,6 +55,11 @@ type ProjectTab =
 type DemoWorkItemStatus = 'todo' | 'in_progress' | 'review' | 'done'
 type DemoWorkItemType = 'epic' | 'milestone' | 'deliverable' | 'task'
 
+type AttentionKind =
+  | 'blocked'
+  | 'overdue'
+  | 'unassigned'
+
 type WorkItemsView = 'board' | 'list'
 type WorkItemsTypeFilter = 'all' | DemoWorkItemType
 
@@ -82,6 +87,11 @@ type DemoWorkItem = {
   dueLabel: string | null
   blockedReason: string | null
   parentId: string | null
+}
+
+type OverviewAttentionItem = {
+  item: DemoWorkItem
+  kind: AttentionKind
 }
 
 type ProjectMember = {
@@ -325,6 +335,121 @@ function getWorkItemDueFields(
     dueInDays,
     dueLabel,
   }
+}
+
+function compareWorkItemIds(
+  left: DemoWorkItem,
+  right: DemoWorkItem,
+) {
+  const leftId = Number(left.id)
+  const rightId = Number(right.id)
+
+  if (
+    Number.isFinite(leftId) &&
+    Number.isFinite(rightId) &&
+    leftId !== rightId
+  ) {
+    return leftId - rightId
+  }
+
+  return left.id.localeCompare(right.id)
+}
+
+function compareMilestoneWorkItems(
+  left: DemoWorkItem,
+  right: DemoWorkItem,
+) {
+  const leftDone = left.status === 'done'
+  const rightDone = right.status === 'done'
+
+  if (leftDone !== rightDone) {
+    return leftDone ? 1 : -1
+  }
+
+  if (
+    left.dueInDays == null &&
+    right.dueInDays != null
+  ) {
+    return 1
+  }
+
+  if (
+    left.dueInDays != null &&
+    right.dueInDays == null
+  ) {
+    return -1
+  }
+
+  if (
+    left.dueInDays != null &&
+    right.dueInDays != null &&
+    left.dueInDays !== right.dueInDays
+  ) {
+    return left.dueInDays - right.dueInDays
+  }
+
+  return compareWorkItemIds(left, right)
+}
+
+function getAttentionKind(
+  item: DemoWorkItem,
+): AttentionKind | null {
+  if (item.status === 'done') {
+    return null
+  }
+
+  if (item.blockedReason !== null) {
+    return 'blocked'
+  }
+
+  if (
+    item.dueInDays != null &&
+    item.dueInDays < 0
+  ) {
+    return 'overdue'
+  }
+
+  if (item.assignees.length === 0) {
+    return 'unassigned'
+  }
+
+  return null
+}
+
+const attentionPriority: Record<
+  AttentionKind,
+  number
+> = {
+  blocked: 0,
+  overdue: 1,
+  unassigned: 2,
+}
+
+const attentionLabel: Record<
+  AttentionKind,
+  string
+> = {
+  blocked: 'Blocked',
+  overdue: 'Overdue',
+  unassigned: 'Unassigned',
+}
+
+function compareAttentionItems(
+  left: OverviewAttentionItem,
+  right: OverviewAttentionItem,
+) {
+  const priorityDifference =
+    attentionPriority[left.kind] -
+    attentionPriority[right.kind]
+
+  if (priorityDifference !== 0) {
+    return priorityDifference
+  }
+
+  return compareWorkItemIds(
+    left.item,
+    right.item,
+  )
 }
 
 function mapApiWorkItem(
@@ -1525,6 +1650,25 @@ export function ProjectDetailPage() {
     ? []
     : workItems
 
+  const milestoneWorkItems =
+    projectWorkItems
+      .filter(
+        (item) => item.type === 'milestone',
+      )
+      .slice()
+      .sort(compareMilestoneWorkItems)
+
+  const attentionWorkItems =
+    projectWorkItems
+      .flatMap((item) => {
+        const kind = getAttentionKind(item)
+
+        return kind
+          ? [{ item, kind }]
+          : []
+      })
+      .sort(compareAttentionItems)
+
   return (
     <div className="w-full px-6 py-8 lg:px-8 lg:py-10 xl:px-10">
       <Link
@@ -1664,55 +1808,132 @@ export function ProjectDetailPage() {
 
 
       {activeTab === 'overview' && (
-        <section className="mt-7 max-w-4xl">
-          <div className="flex min-h-8 items-center justify-between border-b border-outline-variant/50 pb-3">
-            <h2 className="text-sm font-semibold text-on-surface">
-              About
-            </h2>
+        <div className="mt-7 max-w-4xl space-y-10">
+          <section>
+            <div className="flex min-h-8 items-center justify-between border-b border-outline-variant/50 pb-3">
+              <h2 className="text-sm font-semibold text-on-surface">
+                About
+              </h2>
 
-            {canEditProjectSettings &&
-              projectDescription.trim().length > 0 &&
-              !forceEmptyDescription && (
-                <button
-                  type="button"
-                  onClick={() => navigateToTab('settings')}
-                  className="text-xs font-medium text-on-surface-variant transition hover:text-primary"
-                >
-                  Edit
-                </button>
-              )}
-          </div>
-
-          {projectDescription.trim().length > 0 &&
-          !forceEmptyDescription ? (
-            <p className="max-w-3xl pt-4 text-sm leading-6 text-on-surface">
-              {projectDescription}
-            </p>
-          ) : (
-            <div className="flex min-h-28 items-center justify-between gap-6 py-5">
-              <div>
-                <p className="text-sm font-medium text-on-surface">
-                  No description yet.
-                </p>
-
-                <p className="mt-1 max-w-lg text-xs leading-5 text-on-surface-variant">
-                  Add context so project members can quickly understand
-                  the purpose of this project.
-                </p>
-              </div>
-
-              {canEditProjectSettings && (
-                <button
-                  type="button"
-                  onClick={() => navigateToTab('settings')}
-                  className="shrink-0 text-xs font-medium text-primary transition hover:opacity-75"
-                >
-                  Add description
-                </button>
-              )}
+              {canEditProjectSettings &&
+                projectDescription.trim().length > 0 &&
+                !forceEmptyDescription && (
+                  <button
+                    type="button"
+                    onClick={() => navigateToTab('settings')}
+                    className="text-xs font-medium text-on-surface-variant transition hover:text-primary"
+                  >
+                    Edit
+                  </button>
+                )}
             </div>
-          )}
-        </section>
+
+            {projectDescription.trim().length > 0 &&
+            !forceEmptyDescription ? (
+              <p className="max-w-3xl pt-4 text-sm leading-6 text-on-surface">
+                {projectDescription}
+              </p>
+            ) : (
+              <div className="flex min-h-28 items-center justify-between gap-6 py-5">
+                <div>
+                  <p className="text-sm font-medium text-on-surface">
+                    No description yet.
+                  </p>
+
+                  <p className="mt-1 max-w-lg text-xs leading-5 text-on-surface-variant">
+                    Add context so project members can quickly understand
+                    the purpose of this project.
+                  </p>
+                </div>
+
+                {canEditProjectSettings && (
+                  <button
+                    type="button"
+                    onClick={() => navigateToTab('settings')}
+                    className="shrink-0 text-xs font-medium text-primary transition hover:opacity-75"
+                  >
+                    Add description
+                  </button>
+                )}
+              </div>
+            )}
+          </section>
+
+          <section
+            aria-labelledby="overview-milestones-heading"
+          >
+            <div className="border-b border-outline-variant/50 pb-3">
+              <h2
+                id="overview-milestones-heading"
+                className="text-sm font-semibold text-on-surface"
+              >
+                Milestones
+              </h2>
+            </div>
+
+            {workItemsLoading ? (
+              <p className="py-5 text-sm text-on-surface-variant">
+                Loading milestones…
+              </p>
+            ) : workItemsError ? (
+              <p className="py-5 text-sm text-on-surface-variant">
+                Project work could not be loaded.
+              </p>
+            ) : milestoneWorkItems.length > 0 ? (
+              <div className="divide-y divide-outline-variant/30">
+                {milestoneWorkItems.map((item) => (
+                  <OverviewWorkItemRow
+                    key={item.id}
+                    item={item}
+                  />
+                ))}
+              </div>
+            ) : (
+              <p className="py-5 text-sm text-on-surface-variant">
+                No milestones yet.
+              </p>
+            )}
+          </section>
+
+          <section
+            aria-labelledby="overview-attention-heading"
+          >
+            <div className="border-b border-outline-variant/50 pb-3">
+              <h2
+                id="overview-attention-heading"
+                className="text-sm font-semibold text-on-surface"
+              >
+                Needs Attention
+              </h2>
+            </div>
+
+            {workItemsLoading ? (
+              <p className="py-5 text-sm text-on-surface-variant">
+                Checking project work…
+              </p>
+            ) : workItemsError ? (
+              <p className="py-5 text-sm text-on-surface-variant">
+                Project work could not be loaded.
+              </p>
+            ) : attentionWorkItems.length > 0 ? (
+              <div className="divide-y divide-outline-variant/30">
+                {attentionWorkItems.map(
+                  ({ item, kind }) => (
+                    <OverviewWorkItemRow
+                      key={item.id}
+                      item={item}
+                      attentionKind={kind}
+                    />
+                  ),
+                )}
+              </div>
+            ) : (
+              <p className="py-5 text-sm text-on-surface-variant">
+                Nothing needs attention right now.
+              </p>
+            )}
+          </section>
+        </div>
       )}
 
       {activeTab === 'work-items' &&
@@ -2427,6 +2648,92 @@ export function ProjectDetailPage() {
         onClose={() => setCreateWorkItemDialogOpen(false)}
         onCreate={handleCreateWorkItem}
       />
+    </div>
+  )
+}
+
+function OverviewWorkItemRow({
+  item,
+  attentionKind = null,
+}: {
+  item: DemoWorkItem
+  attentionKind?: AttentionKind | null
+}) {
+  const status =
+    workItemStatusDisplay[item.status]
+
+  const due =
+    getWorkItemDueDisplay(item)
+
+  return (
+    <div
+      data-work-item-id={item.id}
+      data-attention-kind={
+        attentionKind ?? undefined
+      }
+      className="grid gap-3 py-3.5 sm:grid-cols-[minmax(0,1fr)_130px_180px_110px] sm:items-center"
+    >
+      <div className="min-w-0">
+        {attentionKind && (
+          <div
+            className={[
+              'mb-1 text-[10px] font-semibold uppercase tracking-[0.1em]',
+              attentionKind === 'unassigned'
+                ? 'text-on-surface-variant'
+                : 'text-error',
+            ].join(' ')}
+          >
+            {attentionLabel[attentionKind]}
+          </div>
+        )}
+
+        <div className="flex min-w-0 items-center gap-2">
+          <span
+            title={workItemTypeLabels[item.type]}
+            aria-label={workItemTypeLabels[item.type]}
+            className="material-symbols-outlined shrink-0 text-[15px] text-on-surface-variant/80"
+          >
+            {workItemTypeIcons[item.type]}
+          </span>
+
+          <span className="truncate text-sm font-semibold text-on-surface">
+            {item.title}
+          </span>
+        </div>
+      </div>
+
+      <div
+        className={[
+          'flex items-center gap-2 text-xs font-normal',
+          status.className,
+        ].join(' ')}
+      >
+        <span
+          aria-hidden="true"
+          className="inline-flex w-4 shrink-0 justify-center text-[15px] leading-none"
+        >
+          {status.glyph}
+        </span>
+
+        <span className="text-on-surface-variant">
+          {workItemStatusLabels[item.status]}
+        </span>
+      </div>
+
+      <WorkItemAssignees
+        assignees={item.assignees}
+      />
+
+      <span
+        className={[
+          'text-xs',
+          due.attention
+            ? 'font-medium text-error'
+            : 'text-on-surface-variant',
+        ].join(' ')}
+      >
+        {due.label}
+      </span>
     </div>
   )
 }
