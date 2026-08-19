@@ -7,9 +7,12 @@ ResearchGroupMembership represents current group access.
 ProjectMembership remains an independent Project-level security boundary.
 """
 
-from typing import Optional
+from dataclasses import dataclass
+from typing import Iterable, Optional
 
 from django.db import transaction
+
+from audit_history.services import record_audit_event
 
 from projects.models import ProjectMembership
 
@@ -243,3 +246,256 @@ def remove_research_group_membership(
             )
 
         membership.delete()
+
+
+@dataclass(frozen=True)
+class ResearchGroupProjectOffboardingResolution:
+    project_id: int
+    assignment_resolution: Optional[str] = None
+    assignment_replacement_user: object = None
+    ownership_resolution: Optional[str] = None
+    ownership_replacement_user: object = None
+
+
+@dataclass(frozen=True)
+class ResearchGroupOffboardingResult:
+    removed_project_membership_count: int
+    affected_work_item_count: int
+    transferred_assignment_count: int
+    unassigned_assignment_count: int
+    ownership_transfer_count: int
+    archived_project_count: int
+
+
+def offboard_research_group_member(
+    *,
+    membership: ResearchGroupMembership,
+    actor,
+    project_resolutions: Optional[
+        Iterable[
+            ResearchGroupProjectOffboardingResolution
+        ]
+    ] = None,
+) -> ResearchGroupOffboardingResult:
+    """Atomically remove one user from a Research Group.
+
+    Current access and responsibility are removed while authored
+    entities and immutable AuditEvents remain historical facts.
+
+    The exceptional Project authority used here exists only for the
+    explicit Research Group offboarding workflow. Normal Project
+    permissions remain unchanged.
+    """
+
+    from projects.offboarding import (
+        resolve_project_membership_for_research_group_offboarding,
+    )
+    from projects.services import ProjectDomainError
+
+    resolutions = list(
+        project_resolutions or []
+    )
+
+    resolution_by_project_id = {}
+
+    for resolution in resolutions:
+        if not isinstance(
+            resolution,
+            ResearchGroupProjectOffboardingResolution,
+        ):
+            raise ResearchGroupDomainError(
+                "Invalid Project offboarding resolution."
+            )
+
+        if (
+            resolution.project_id
+            in resolution_by_project_id
+        ):
+            raise ResearchGroupDomainError(
+                "Each Project may only have one "
+                "offboarding resolution."
+            )
+
+        resolution_by_project_id[
+            resolution.project_id
+        ] = resolution
+
+    with transaction.atomic():
+        research_group = (
+            ResearchGroup.objects
+            .select_for_update()
+            .get(
+                pk=membership.research_group_id
+            )
+        )
+
+        membership = (
+            ResearchGroupMembership.objects
+            .select_for_update()
+            .select_related("user")
+            .get(
+                pk=membership.pk,
+                research_group=research_group,
+            )
+        )
+
+        _require_group_admin(
+            research_group=research_group,
+            actor=actor,
+        )
+
+        target_user = membership.user
+
+        project_memberships = list(
+            ProjectMembership.objects
+            .filter(
+                project__research_group=research_group,
+                user=target_user,
+            )
+            .select_related("project")
+            .order_by(
+                "project_id",
+                "pk",
+            )
+        )
+
+        current_project_ids = {
+            item.project_id
+            for item in project_memberships
+        }
+
+        unknown_project_ids = (
+            set(resolution_by_project_id)
+            - current_project_ids
+        )
+
+        if unknown_project_ids:
+            raise ResearchGroupDomainError(
+                "Offboarding resolution references "
+                "a Project the target user does not belong to."
+            )
+
+        affected_work_item_count = 0
+        transferred_assignment_count = 0
+        unassigned_assignment_count = 0
+        ownership_transfer_count = 0
+        archived_project_count = 0
+
+        for project_membership in project_memberships:
+            resolution = (
+                resolution_by_project_id.get(
+                    project_membership.project_id
+                )
+            )
+
+            try:
+                result = (
+                    resolve_project_membership_for_research_group_offboarding(
+                        membership=project_membership,
+                        actor=actor,
+                        assignment_resolution=(
+                            resolution.assignment_resolution
+                            if resolution is not None
+                            else None
+                        ),
+                        assignment_replacement_user=(
+                            resolution.assignment_replacement_user
+                            if resolution is not None
+                            else None
+                        ),
+                        ownership_resolution=(
+                            resolution.ownership_resolution
+                            if resolution is not None
+                            else None
+                        ),
+                        ownership_replacement_user=(
+                            resolution.ownership_replacement_user
+                            if resolution is not None
+                            else None
+                        ),
+                    )
+                )
+            except ProjectDomainError as exc:
+                raise ResearchGroupDomainError(
+                    exc.message
+                ) from exc
+
+            affected_work_item_count += (
+                result.affected_work_item_count
+            )
+
+            transferred_assignment_count += (
+                result.transferred_assignment_count
+            )
+
+            unassigned_assignment_count += (
+                result.unassigned_assignment_count
+            )
+
+            ownership_transfer_count += (
+                result.ownership_transfer_count
+            )
+
+            archived_project_count += (
+                result.archived_project_count
+            )
+
+        # Keep the existing low-level RG guard as the final gate.
+        # Any final-admin or remaining dependency failure rolls
+        # back all Project mutations through the outer transaction.
+        remove_research_group_membership(
+            membership=membership,
+            actor=actor,
+        )
+
+        result = ResearchGroupOffboardingResult(
+            removed_project_membership_count=(
+                len(project_memberships)
+            ),
+            affected_work_item_count=(
+                affected_work_item_count
+            ),
+            transferred_assignment_count=(
+                transferred_assignment_count
+            ),
+            unassigned_assignment_count=(
+                unassigned_assignment_count
+            ),
+            ownership_transfer_count=(
+                ownership_transfer_count
+            ),
+            archived_project_count=(
+                archived_project_count
+            ),
+        )
+
+        record_audit_event(
+            research_group=research_group,
+            actor=actor,
+            event_type=(
+                "research_group.member_offboarded"
+            ),
+            subject_user=target_user,
+            data={
+                "removedProjectMembershipCount": (
+                    result.removed_project_membership_count
+                ),
+                "affectedWorkItemCount": (
+                    result.affected_work_item_count
+                ),
+                "transferredAssignmentCount": (
+                    result.transferred_assignment_count
+                ),
+                "unassignedAssignmentCount": (
+                    result.unassigned_assignment_count
+                ),
+                "ownershipTransferCount": (
+                    result.ownership_transfer_count
+                ),
+                "archivedProjectCount": (
+                    result.archived_project_count
+                ),
+            },
+        )
+
+        return result
