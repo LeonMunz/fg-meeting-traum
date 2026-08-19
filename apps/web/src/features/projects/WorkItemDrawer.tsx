@@ -10,6 +10,7 @@ import type {
 } from 'react'
 
 import { ApiError } from '../../api/client'
+import { RichMarkdownEditor } from '../../components/editor/RichMarkdownEditor'
 import type {
   ApiUpdateWorkItemInput,
   ApiWorkItem,
@@ -1692,12 +1693,6 @@ function WorkItemInspector({
     descriptionEditing,
     setDescriptionEditing,
   ] = useState(false)
-  const [
-    descriptionDraft,
-    setDescriptionDraft,
-  ] = useState('')
-  const descriptionCancelledRef =
-    useRef(false)
 
   const [
     blockedReasonEditing,
@@ -2402,13 +2397,15 @@ function WorkItemInspector({
       return
     }
 
-    setDescriptionDraft(item.description)
     setDescriptionEditing(true)
   }
 
-  async function commitDescriptionEdit() {
-    const trimmed =
-      descriptionDraft.trim()
+  // Takes the committed Markdown directly from RichMarkdownEditor's
+  // onCommit (fired on blur) rather than reading it back out of React
+  // state — the editor owns its own live document between renders, so
+  // there is no local descriptionDraft state to go stale or race.
+  async function commitDescriptionEdit(markdown: string) {
+    const trimmed = markdown.trim()
 
     if (trimmed === item.description.trim()) {
       setDescriptionEditing(false)
@@ -2759,37 +2756,19 @@ function WorkItemInspector({
               </span>
 
               {descriptionEditing ? (
-                <textarea
+                <RichMarkdownEditor
+                  value={item.description}
                   autoFocus
-                  rows={5}
-                  value={descriptionDraft}
-                  onChange={(event) =>
-                    setDescriptionDraft(
-                      event.target.value,
-                    )
-                  }
-                  onKeyDown={(event) => {
-                    if (
-                      event.key === 'Escape'
-                    ) {
-                      event.preventDefault()
-                      descriptionCancelledRef.current = true
-                      setDescriptionEditing(false)
-                    }
-                  }}
-                  onBlur={() => {
-                    if (
-                      descriptionCancelledRef.current
-                    ) {
-                      descriptionCancelledRef.current = false
-                      return
-                    }
-
-                    void commitDescriptionEdit()
-                  }}
-                  aria-label="Work item description"
+                  variant="full"
+                  ariaLabel="Work item description"
                   placeholder="Add context, expected outcome, or relevant notes…"
-                  className="min-h-[128px] w-full resize-y rounded-lg border border-primary bg-surface-container-lowest px-3.5 py-3 text-sm leading-6 text-on-surface outline-none focus:ring-2 focus:ring-primary/15"
+                  onCommit={(markdown) =>
+                    void commitDescriptionEdit(markdown)
+                  }
+                  onEscape={() =>
+                    setDescriptionEditing(false)
+                  }
+                  className="-mx-3.5 rounded-lg border border-primary bg-surface-container-lowest px-3.5 py-2.5 focus-within:ring-2 focus-within:ring-primary/15"
                 />
               ) : (
                 <div
@@ -2803,9 +2782,21 @@ function WorkItemInspector({
                       ? undefined
                       : 0
                   }
-                  onClick={
-                    startDescriptionEdit
-                  }
+                  onClick={(event) => {
+                    // A click that landed on a link inside the rendered
+                    // Description (read mode still renders real <a>
+                    // tags — see RichMarkdownEditor) should navigate,
+                    // not also enter edit mode.
+                    if (
+                      (
+                        event.target as HTMLElement
+                      ).closest('a')
+                    ) {
+                      return
+                    }
+
+                    startDescriptionEdit()
+                  }}
                   onKeyDown={(event) => {
                     if (readOnly) {
                       return
@@ -2820,17 +2811,27 @@ function WorkItemInspector({
                     }
                   }}
                   className={[
-                    '-mx-3.5 min-h-[44px] whitespace-pre-wrap rounded-lg px-3.5 py-2.5 text-sm leading-6',
+                    '-mx-3.5 min-h-[44px] rounded-lg px-3.5 py-2.5',
                     item.description
-                      ? 'text-on-surface'
-                      : 'text-on-surface-variant/70',
+                      ? ''
+                      : 'text-sm leading-6 text-on-surface-variant/70',
                     readOnly
                       ? ''
-                      : 'cursor-text transition hover:bg-surface-container-low',
+                      : 'transition hover:bg-surface-container-low',
                   ].join(' ')}
                 >
-                  {item.description ||
-                    'Add description…'}
+                  {item.description ? (
+                    <RichMarkdownEditor
+                      value={item.description}
+                      readOnly
+                      variant="full"
+                      className={
+                        readOnly ? '' : 'cursor-text'
+                      }
+                    />
+                  ) : (
+                    'Add a description…'
+                  )}
                 </div>
               )}
             </div>

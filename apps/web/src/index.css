@@ -74,3 +74,165 @@ select {
 button {
   cursor: pointer;
 }
+
+/* ── Markdown / Rich Text editor (Work Item Description) ───────────
+ * Deliberate, dense typography for the 520px inspector — not a generic
+ * prose/typography plugin. Scoped to `.fg-prose` (applied to Tiptap's
+ * ProseMirror root via editorProps.attributes.class in
+ * RichMarkdownEditor.tsx) so it never leaks into unrelated content, and
+ * written by hand so ProseMirror's own default styling never shows
+ * through unstyled.
+ */
+
+.fg-prose {
+  outline: none;
+  font-size: 0.875rem;
+  line-height: 1.5rem;
+  color: var(--color-on-surface);
+}
+
+.fg-prose > * + * {
+  margin-top: 0.6em;
+}
+
+.fg-prose p {
+  margin: 0;
+}
+
+.fg-prose h2,
+.fg-prose h3 {
+  font-weight: 600;
+  color: var(--color-on-surface);
+  line-height: 1.3;
+}
+
+.fg-prose h2 {
+  font-size: 1.0625rem;
+  margin-top: 1.1em;
+}
+
+.fg-prose h3 {
+  font-size: 0.9375rem;
+  margin-top: 1em;
+}
+
+.fg-prose h2:first-child,
+.fg-prose h3:first-child {
+  margin-top: 0;
+}
+
+.fg-prose ul,
+.fg-prose ol {
+  margin: 0;
+  padding-left: 1.35em;
+}
+
+.fg-prose ul {
+  list-style: disc;
+}
+
+.fg-prose ol {
+  list-style: decimal;
+}
+
+.fg-prose li {
+  margin-top: 0.2em;
+}
+
+.fg-prose li p {
+  margin: 0;
+}
+
+.fg-prose ul[data-type='taskList'] {
+  list-style: none;
+  padding-left: 0;
+}
+
+.fg-prose ul[data-type='taskList'] li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5em;
+}
+
+.fg-prose ul[data-type='taskList'] li > label {
+  margin-top: 0.2em;
+  user-select: none;
+}
+
+.fg-prose ul[data-type='taskList'] li > div {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.fg-prose ul[data-type='taskList'] input[type='checkbox'] {
+  accent-color: var(--color-primary);
+  cursor: pointer;
+}
+
+.fg-prose ul[data-type='taskList'] li[data-checked='true'] > div {
+  color: var(--color-on-surface-variant);
+  text-decoration: line-through;
+  text-decoration-color: var(--color-outline-variant);
+}
+
+.fg-prose blockquote {
+  margin: 0;
+  padding-left: 0.85em;
+  border-left: 3px solid var(--color-outline-variant);
+  color: var(--color-on-surface-variant);
+}
+
+.fg-prose code {
+  font-family: var(--font-mono);
+  font-size: 0.8125em;
+  background: var(--color-surface-container-high);
+  border-radius: 0.3em;
+  padding: 0.15em 0.4em;
+}
+
+.fg-prose pre {
+  margin: 0;
+  padding: 0.75em 0.9em;
+  border-radius: 0.5em;
+  background: var(--color-surface-container-high);
+  overflow-x: auto;
+}
+
+.fg-prose pre code {
+  background: none;
+  padding: 0;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--color-on-surface);
+}
+
+.fg-prose a {
+  color: var(--color-primary);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--color-primary) 40%, transparent);
+  text-underline-offset: 2px;
+}
+
+.fg-prose a:hover {
+  text-decoration-color: var(--color-primary);
+}
+
+.fg-prose hr {
+  margin: 0.4em 0;
+  border: none;
+  border-top: 1px solid var(--color-outline-variant);
+}
+
+.fg-prose strong {
+  font-weight: 600;
+}
+
+.fg-prose p.is-editor-empty:first-child::before,
+.fg-prose .is-empty::before {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  color: var(--color-on-surface-variant);
+  opacity: 0.65;
+  pointer-events: none;
+}

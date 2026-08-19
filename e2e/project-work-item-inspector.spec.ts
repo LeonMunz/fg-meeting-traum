@@ -699,7 +699,7 @@ test(
 
     await inspector
       .getByRole('button', {
-        name: 'Add description…',
+        name: 'Add a description…',
       })
       .click()
 
@@ -1970,5 +1970,292 @@ test(
         exact: true,
       }),
     ).toBeVisible()
+  },
+)
+
+const RICH_PROJECT_NAME =
+  'E2E Inspector Rich Description Project'
+const RICH_TASK_A_TITLE =
+  'E2E Inspector Rich Description Task A'
+const RICH_TASK_B_TITLE =
+  'E2E Inspector Rich Description Task B'
+const RICH_TASK_PLAIN_TITLE =
+  'E2E Inspector Rich Description Plain Task'
+const PLAIN_DESCRIPTION =
+  'Just a plain sentence, no Markdown at all.'
+
+test(
+  'Work Item inspector: Description is a Markdown/Rich-Text editor — ' +
+    'plain text renders normally, typed Markdown becomes formatted ' +
+    'content (never raw syntax), edits are safely queued across a ' +
+    'Work Item switch, persist through reload, and the Bubble toolbar ' +
+    'applies Bold to a selection',
+  async ({ page }) => {
+    await login(page, 'alex')
+    await openProjects(page)
+    await createHistoryTestProject(page, RICH_PROJECT_NAME)
+
+    // --------------------------------------------------------
+    // 1. A pre-existing plain-text Description (created the same way
+    //    any legacy/plain Work Item description would be) renders as
+    //    an ordinary paragraph, not specially interpreted.
+    // --------------------------------------------------------
+
+    await page
+      .getByRole('button', { name: /New work item/ })
+      .click()
+
+    const createDialog = page.getByRole('dialog', {
+      name: 'New work item',
+    })
+
+    await createDialog
+      .getByLabel('Title')
+      .fill(RICH_TASK_PLAIN_TITLE)
+    await createDialog
+      .getByLabel('Description', { exact: false })
+      .fill(PLAIN_DESCRIPTION)
+
+    await createDialog
+      .getByRole('button', { name: /Create work item/ })
+      .click()
+    await expect(createDialog).not.toBeVisible()
+
+    const inspector = page.getByRole('region', {
+      name: 'Work item',
+      exact: true,
+    })
+
+    await page
+      .getByRole('button', {
+        name: `Open ${RICH_TASK_PLAIN_TITLE}`,
+      })
+      .click()
+    await expect(inspector).toBeVisible()
+    await expect(
+      inspector.getByText(PLAIN_DESCRIPTION, {
+        exact: true,
+      }),
+    ).toBeVisible()
+
+    await page
+      .getByRole('button', { name: 'Close work item' })
+      .click()
+    await expect(inspector).not.toBeVisible()
+
+    // --------------------------------------------------------
+    // Create the two Work Items used for the rest of this test.
+    // --------------------------------------------------------
+
+    await createHistoryTestWorkItem(page, RICH_TASK_A_TITLE)
+    await createHistoryTestWorkItem(page, RICH_TASK_B_TITLE)
+
+    const boardCardA = page.getByRole('button', {
+      name: `Open ${RICH_TASK_A_TITLE}`,
+    })
+    const boardCardB = page.getByRole('button', {
+      name: `Open ${RICH_TASK_B_TITLE}`,
+    })
+
+    // --------------------------------------------------------
+    // 2. Empty state is the lightweight click target, and clicking it
+    //    activates the rich editor in place (no separate form).
+    // --------------------------------------------------------
+
+    await boardCardA.click()
+    await expect(inspector).toBeVisible()
+
+    await inspector
+      .getByRole('button', { name: 'Add a description…' })
+      .click()
+
+    const descriptionEditor = inspector.getByLabel(
+      'Work item description',
+    )
+    await expect(descriptionEditor).toBeVisible()
+    await expect(descriptionEditor).toBeFocused()
+
+    const bottomToolbar = inspector.getByRole('toolbar', {
+      name: 'Formatting',
+    })
+    await expect(bottomToolbar).toBeVisible()
+    await expect(
+      inspector.getByText('Markdown supported', {
+        exact: true,
+      }),
+    ).toBeVisible()
+
+    // --------------------------------------------------------
+    // 3. Type Markdown-supported content: a Heading 2 (via the
+    //    toolbar, to avoid depending on Enter's exact node-splitting
+    //    behavior), then **bold** and `inline code` typed as literal
+    //    Markdown input — proving the editor's own input rules turn
+    //    typed syntax into formatting live, not just on parse.
+    // --------------------------------------------------------
+
+    await page.keyboard.type('Expected outcome')
+
+    const heading2Button = bottomToolbar.getByRole('button', {
+      name: 'Heading 2',
+      exact: true,
+    })
+    await heading2Button.click()
+    await expect(heading2Button).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+
+    await page.keyboard.press('End')
+    await page.keyboard.press('Enter')
+
+    // Pressing Enter at the end of a heading may or may not carry the
+    // heading forward, depending on the schema default — normalize to
+    // a plain paragraph either way before continuing.
+    if (
+      (await heading2Button.getAttribute('aria-pressed')) ===
+      'true'
+    ) {
+      await heading2Button.click()
+    }
+
+    await page.keyboard.type('Some ')
+    await page.keyboard.type('**bold**')
+    await page.keyboard.type(' text and a list:')
+    await page.keyboard.press('Enter')
+    await page.keyboard.press('Enter')
+
+    await bottomToolbar
+      .getByRole('button', {
+        name: 'Bullet list',
+        exact: true,
+      })
+      .click()
+    await page.keyboard.type('first item')
+    await page.keyboard.press('Enter')
+    await page.keyboard.type('second item with ')
+    await page.keyboard.type('`inline code`')
+    await page.keyboard.type(' here')
+
+    // --------------------------------------------------------
+    // 7 & 8. Select the bold word — the Bubble toolbar appears near
+    //    the selection — and toggle Bold off and back on through it,
+    //    proving the toolbar drives the same live formatting.
+    // --------------------------------------------------------
+
+    await inspector
+      .getByText('bold', { exact: true })
+      .dblclick()
+
+    const bubbleToolbar = inspector.getByRole('toolbar', {
+      name: 'Selection formatting',
+    })
+    await expect(bubbleToolbar).toBeVisible()
+
+    const bubbleBoldButton = bubbleToolbar.getByRole(
+      'button',
+      { name: 'Bold', exact: true },
+    )
+    await expect(bubbleBoldButton).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+    await bubbleBoldButton.click()
+    await expect(bubbleBoldButton).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    )
+    await bubbleBoldButton.click()
+    await expect(bubbleBoldButton).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+
+    // --------------------------------------------------------
+    // 4. Switch to Work Item B without blurring first — A's edit is
+    //    safely committed/queued, exactly like the plain-text fields.
+    // --------------------------------------------------------
+
+    await boardCardB.click()
+    await expect(inspector).toBeVisible()
+    await expect(
+      inspector.getByRole('button', {
+        name: RICH_TASK_B_TITLE,
+        exact: true,
+      }),
+    ).toBeVisible()
+
+    // --------------------------------------------------------
+    // 5. Reopen A — content renders as formatted rich content, never
+    //    raw Markdown syntax.
+    // --------------------------------------------------------
+
+    await boardCardA.click()
+    await expect(inspector).toBeVisible()
+
+    await expect(
+      inspector.getByRole('heading', {
+        name: 'Expected outcome',
+        level: 2,
+      }),
+    ).toBeVisible()
+    await expect(
+      inspector.locator('strong', { hasText: 'bold' }),
+    ).toBeVisible()
+    await expect(
+      inspector.locator('li', { hasText: 'first item' }),
+    ).toBeVisible()
+    await expect(
+      inspector.locator('code', {
+        hasText: 'inline code',
+      }),
+    ).toBeVisible()
+
+    const inspectorText = await inspector.innerText()
+    expect(inspectorText).not.toContain('##')
+    expect(inspectorText).not.toContain('**')
+    expect(inspectorText).not.toContain('`inline code`')
+
+    // --------------------------------------------------------
+    // 9. The existing Description history event still fires — no new/
+    //    different history contract, and the body itself is never
+    //    stored in the event.
+    // --------------------------------------------------------
+
+    const activityList = inspector.getByRole('list')
+    await expect(
+      activityList.getByText('Alex Dev changed the description', {
+        exact: true,
+      }),
+    ).toBeVisible()
+
+    // --------------------------------------------------------
+    // 6. Reload — persisted Markdown renders identically.
+    // --------------------------------------------------------
+
+    await page.reload()
+    await boardCardA.click()
+    await expect(inspector).toBeVisible()
+
+    await expect(
+      inspector.getByRole('heading', {
+        name: 'Expected outcome',
+        level: 2,
+      }),
+    ).toBeVisible()
+    await expect(
+      inspector.locator('strong', { hasText: 'bold' }),
+    ).toBeVisible()
+    await expect(
+      inspector.locator('li', { hasText: 'first item' }),
+    ).toBeVisible()
+    await expect(
+      inspector.locator('code', {
+        hasText: 'inline code',
+      }),
+    ).toBeVisible()
+
+    const reloadedText = await inspector.innerText()
+    expect(reloadedText).not.toContain('##')
+    expect(reloadedText).not.toContain('**')
   },
 )
