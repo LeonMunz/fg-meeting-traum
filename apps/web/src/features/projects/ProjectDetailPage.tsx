@@ -50,7 +50,6 @@ type ProjectRole = 'owner' | 'member' | 'viewer'
 type ProjectTab =
   | 'work-items'
   | 'overview'
-  | 'members'
   | 'settings'
 
 type DemoWorkItemStatus = 'todo' | 'in_progress' | 'review' | 'done'
@@ -385,7 +384,6 @@ const tabs: Array<{
 }> = [
   { id: 'work-items', label: 'Work Items' },
   { id: 'overview', label: 'Overview' },
-  { id: 'members', label: 'Members' },
   { id: 'settings', label: 'Settings' },
 ]
 
@@ -606,7 +604,6 @@ export function ProjectDetailPage() {
 
     if (
       segment === 'overview' ||
-      segment === 'members' ||
       segment === 'settings'
     ) {
       return segment
@@ -2320,217 +2317,6 @@ export function ProjectDetailPage() {
         </div>
       )}
 
-      {activeTab === 'members' && (
-        <section className="mt-6 overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest shadow-sm">
-          <div className="flex flex-col gap-4 border-b border-outline-variant px-6 py-5 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <div className="flex items-center gap-2">
-                <h2 className="font-semibold text-on-surface">
-                  Project members
-                </h2>
-
-                <span className="inline-flex min-w-6 items-center justify-center rounded-full bg-surface-container-high px-2 py-0.5 text-[11px] font-semibold text-on-surface-variant">
-                  {members.length}
-                </span>
-              </div>
-
-              <p className="mt-0.5 text-xs text-on-surface-variant">
-                People with access to this project and their current role.
-              </p>
-            </div>
-
-            {canManageMembers ? (
-              <button
-                type="button"
-                onClick={() => setAddMemberDialogOpen(true)}
-                className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-primary px-3.5 text-sm font-semibold text-white shadow-sm transition hover:bg-primary/90"
-              >
-                <span className="material-symbols-outlined text-[18px]">
-                  person_add
-                </span>
-                Add member
-              </button>
-            ) : (
-              <span className="inline-flex items-center gap-1.5 text-xs font-medium text-on-surface-variant">
-                <span className="material-symbols-outlined text-[17px]">
-                  lock
-                </span>
-                Membership management unavailable
-              </span>
-            )}
-          </div>
-
-          {membersError && (
-            <div
-              role="alert"
-              className="border-b border-error/20 bg-error-container/35 px-6 py-3 text-sm text-error"
-            >
-              {membersError}
-            </div>
-          )}
-
-          {membersLoading && (
-            <div className="flex items-center gap-2 border-b border-outline-variant px-6 py-3 text-sm text-on-surface-variant">
-              <span className="material-symbols-outlined animate-spin text-[18px]">
-                refresh
-              </span>
-              Loading project members…
-            </div>
-          )}
-
-          <div className="hidden border-b border-outline-variant bg-surface-container-low px-6 py-2.5 sm:grid sm:grid-cols-[minmax(0,1fr)_190px_52px]">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-on-surface-variant">
-              Member
-            </div>
-
-            <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-on-surface-variant">
-              Role
-            </div>
-
-            <div className="text-right text-[10px] font-semibold uppercase tracking-[0.12em] text-on-surface-variant">
-              Actions
-            </div>
-          </div>
-
-          <div className="divide-y divide-outline-variant">
-            {sortedMembers.map((member) => {
-              const isOwner = member.role === 'owner'
-              const isLastOwner = isOwner && ownerCount <= 1
-
-              return (
-                <div
-                  key={member.id}
-                  className="grid gap-4 px-6 py-4 sm:grid-cols-[minmax(0,1fr)_190px_52px] sm:items-center"
-                >
-                  <div className="flex min-w-0 items-center gap-3">
-                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-surface-container-high text-[11px] font-semibold text-on-surface">
-                      {member.initials}
-                    </div>
-
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="truncate text-sm font-medium text-on-surface">
-                          {member.name}
-                        </span>
-
-                      </div>
-
-                      <div className="truncate text-xs text-on-surface-variant">
-                        @{member.username}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span
-                        title={roleLabel[member.role]}
-                        className={[
-                          'material-symbols-outlined shrink-0 text-[19px]',
-                          member.role === 'owner'
-                            ? 'text-primary'
-                            : member.role === 'member'
-                              ? 'text-emerald-600'
-                              : 'text-on-surface-variant',
-                        ].join(' ')}
-                      >
-                        {roleIcon[member.role]}
-                      </span>
-
-                      {canManageMembers ? (
-                        <select
-                          value={member.role}
-                          onChange={(event) =>
-                            handleMemberRoleChange(
-                              member.id,
-                              event.target.value as AddableProjectRole,
-                            )
-                          }
-                          aria-label={`Role for ${member.name}`}
-                          title={
-                            isLastOwner
-                              ? 'Add another owner before changing the last owner.'
-                              : undefined
-                          }
-                          className="h-9 min-w-32 rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm font-medium text-on-surface outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15"
-                        >
-                          <option value="owner">
-                            Owner
-                          </option>
-
-                          <option
-                            value="member"
-                            disabled={isLastOwner}
-                          >
-                            Member
-                          </option>
-
-                          <option
-                            value="viewer"
-                            disabled={isLastOwner}
-                          >
-                            Viewer
-                          </option>
-                        </select>
-                      ) : (
-                        <span
-                          className={[
-                            'inline-flex rounded-full px-2.5 py-1 text-xs font-medium',
-                            roleClass[member.role],
-                          ].join(' ')}
-                        >
-                          {roleLabel[member.role]}
-                        </span>
-                      )}
-                    </div>
-
-                    {isLastOwner && canManageMembers && (
-                      <p className="mt-1 text-[10px] text-on-surface-variant">
-                        Last owner
-                      </p>
-                    )}
-                  </div>
-
-                  <div className="flex justify-end">
-                    {canManageMembers && (
-                      <button
-                        type="button"
-                        disabled={isLastOwner}
-                        onClick={() =>
-                          handleRequestRemoveMember(member)
-                        }
-                        title={
-                          isLastOwner
-                            ? 'Add another owner before removing the last owner.'
-                            : `Remove ${member.name} from this project`
-                        }
-                        className="h-8 rounded-lg px-2.5 text-xs font-medium text-on-surface-variant transition hover:bg-error-container hover:text-error disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent disabled:hover:text-on-surface-variant"
-                      >
-                        Remove
-                      </button>
-                    )}
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-
-          {!canManageMembers && (
-            <div className="flex items-start gap-3 border-t border-outline-variant bg-surface-container-low/55 px-6 py-4">
-              <span className="material-symbols-outlined mt-0.5 text-[18px] text-on-surface-variant">
-                info
-              </span>
-
-              <p className="text-xs leading-5 text-on-surface-variant">
-                {isArchived
-                  ? 'Archived projects are read-only. Restore this project before changing members or roles.'
-                  : 'Only the project owner can add or remove members and change project roles.'}
-              </p>
-            </div>
-          )}
-        </section>
-      )}
-
       {activeTab === 'work-items' &&
         workItemsError && (
           <div
@@ -2780,6 +2566,224 @@ export function ProjectDetailPage() {
                 </label>
               </div>
             </fieldset>
+
+            <div className="border-t border-outline-variant pt-6">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-medium text-on-surface">
+                      Access
+                    </h3>
+
+                    <span className="inline-flex min-w-6 items-center justify-center rounded-full bg-surface-container-high px-2 py-0.5 text-[11px] font-semibold text-on-surface-variant">
+                      {members.length}
+                    </span>
+                  </div>
+
+                  <p className="mt-1 text-xs leading-5 text-on-surface-variant">
+                    People with access to this project and their current role.
+                  </p>
+                </div>
+
+                {canManageMembers ? (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setAddMemberDialogOpen(true)
+                    }
+                    className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-lg bg-primary px-3.5 text-sm font-semibold text-white shadow-sm transition hover:bg-primary/90"
+                  >
+                    <span className="material-symbols-outlined text-[18px]">
+                      person_add
+                    </span>
+                    Add member
+                  </button>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 text-xs font-medium text-on-surface-variant">
+                    <span className="material-symbols-outlined text-[17px]">
+                      lock
+                    </span>
+                    Membership management unavailable
+                  </span>
+                )}
+              </div>
+
+              {membersError && (
+                <div
+                  role="alert"
+                  className="mt-4 rounded-lg border border-error/20 bg-error-container/35 px-4 py-3 text-sm text-error"
+                >
+                  {membersError}
+                </div>
+              )}
+
+              {membersLoading && (
+                <div className="mt-4 flex items-center gap-2 rounded-lg border border-outline-variant bg-surface-container-low px-4 py-3 text-sm text-on-surface-variant">
+                  <span className="material-symbols-outlined animate-spin text-[18px]">
+                    refresh
+                  </span>
+                  Loading project members…
+                </div>
+              )}
+
+              {!membersLoading && (
+                <div className="mt-4 overflow-hidden rounded-lg border border-outline-variant">
+                  <div className="hidden border-b border-outline-variant bg-surface-container-low px-4 py-2.5 sm:grid sm:grid-cols-[minmax(0,1fr)_190px_52px]">
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-on-surface-variant">
+                      Member
+                    </div>
+
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-on-surface-variant">
+                      Role
+                    </div>
+
+                    <div className="text-right text-[10px] font-semibold uppercase tracking-[0.12em] text-on-surface-variant">
+                      Actions
+                    </div>
+                  </div>
+
+                  <div className="divide-y divide-outline-variant">
+                    {sortedMembers.map((member) => {
+                      const isMemberOwner =
+                        member.role === 'owner'
+                      const isLastOwner =
+                        isMemberOwner &&
+                        ownerCount <= 1
+
+                      return (
+                        <div
+                          key={member.id}
+                          className="grid gap-4 px-4 py-4 sm:grid-cols-[minmax(0,1fr)_190px_52px] sm:items-center"
+                        >
+                          <div className="flex min-w-0 items-center gap-3">
+                            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-surface-container-high text-[11px] font-semibold text-on-surface">
+                              {member.initials}
+                            </div>
+
+                            <div className="min-w-0">
+                              <span className="block truncate text-sm font-medium text-on-surface">
+                                {member.name}
+                              </span>
+
+                              <div className="truncate text-xs text-on-surface-variant">
+                                @{member.username}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span
+                                title={roleLabel[member.role]}
+                                className={[
+                                  'material-symbols-outlined shrink-0 text-[19px]',
+                                  member.role === 'owner'
+                                    ? 'text-primary'
+                                    : member.role === 'member'
+                                      ? 'text-emerald-600'
+                                      : 'text-on-surface-variant',
+                                ].join(' ')}
+                              >
+                                {roleIcon[member.role]}
+                              </span>
+
+                              {canManageMembers ? (
+                                <select
+                                  value={member.role}
+                                  onChange={(event) =>
+                                    handleMemberRoleChange(
+                                      member.id,
+                                      event.target.value as AddableProjectRole,
+                                    )
+                                  }
+                                  aria-label={`Role for ${member.name}`}
+                                  title={
+                                    isLastOwner
+                                      ? 'Add another owner before changing the last owner.'
+                                      : undefined
+                                  }
+                                  className="h-9 min-w-32 rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm font-medium text-on-surface outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15"
+                                >
+                                  <option value="owner">
+                                    Owner
+                                  </option>
+
+                                  <option
+                                    value="member"
+                                    disabled={isLastOwner}
+                                  >
+                                    Member
+                                  </option>
+
+                                  <option
+                                    value="viewer"
+                                    disabled={isLastOwner}
+                                  >
+                                    Viewer
+                                  </option>
+                                </select>
+                              ) : (
+                                <span
+                                  className={[
+                                    'inline-flex rounded-full px-2.5 py-1 text-xs font-medium',
+                                    roleClass[member.role],
+                                  ].join(' ')}
+                                >
+                                  {roleLabel[member.role]}
+                                </span>
+                              )}
+                            </div>
+
+                            {isLastOwner &&
+                              canManageMembers && (
+                                <p className="mt-1 text-[10px] text-on-surface-variant">
+                                  Last owner
+                                </p>
+                              )}
+                          </div>
+
+                          <div className="flex justify-end">
+                            {canManageMembers && (
+                              <button
+                                type="button"
+                                disabled={isLastOwner}
+                                onClick={() =>
+                                  handleRequestRemoveMember(
+                                    member,
+                                  )
+                                }
+                                title={
+                                  isLastOwner
+                                    ? 'Add another owner before removing the last owner.'
+                                    : `Remove ${member.name} from this project`
+                                }
+                                className="h-8 rounded-lg px-2.5 text-xs font-medium text-on-surface-variant transition hover:bg-error-container hover:text-error disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent disabled:hover:text-on-surface-variant"
+                              >
+                                Remove
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+
+                  {!canManageMembers && (
+                    <div className="flex items-start gap-3 border-t border-outline-variant bg-surface-container-low/55 px-4 py-4">
+                      <span className="material-symbols-outlined mt-0.5 text-[18px] text-on-surface-variant">
+                        info
+                      </span>
+
+                      <p className="text-xs leading-5 text-on-surface-variant">
+                        {isArchived
+                          ? 'Archived projects are read-only. Restore this project before changing members or roles.'
+                          : 'Only the project owner can add or remove members and change project roles.'}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
 
             {canManageProjectLifecycle && (
               <div className="border-t border-outline-variant pt-6">

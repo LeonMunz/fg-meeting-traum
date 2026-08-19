@@ -76,7 +76,8 @@ async function addChris(
 ) {
   await page
     .getByRole('link', {
-        name: /Members/,
+        name: 'Settings',
+        exact: true,
       })
     .click()
 
@@ -314,7 +315,8 @@ test(
 
     await page
       .getByRole('link', {
-        name: /Members/,
+        name: 'Settings',
+        exact: true,
       })
       .click()
 
@@ -506,7 +508,8 @@ test(
 
     await page
       .getByRole('link', {
-        name: /Members/,
+        name: 'Settings',
+        exact: true,
       })
       .click()
 

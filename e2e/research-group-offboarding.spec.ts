@@ -233,7 +233,8 @@ async function addLauraToProject(
 ) {
   await page
     .getByRole('link', {
-        name: /Members/,
+        name: 'Settings',
+        exact: true,
       })
     .click()
 
