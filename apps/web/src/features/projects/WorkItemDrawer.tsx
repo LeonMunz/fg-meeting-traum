@@ -1066,6 +1066,17 @@ function WorkItemInspector({
   const blockedReasonCancelledRef =
     useRef(false)
 
+  // A Work Item must never be canonically blocked without a non-empty
+  // reason (blockedReason === null means unblocked; there is no
+  // separate blocked boolean in the API). Activating the Blocked
+  // switch therefore only enters this local "pending block" state —
+  // it reveals the reason editor but does not PATCH — until a valid
+  // reason is committed. If it's abandoned (empty reason, Escape, or
+  // switching to another Work Item with nothing typed) the item stays
+  // canonically unblocked and nothing is sent to the API.
+  const [pendingBlock, setPendingBlock] =
+    useState(false)
+
   const [
     assigneePickerOpen,
     setAssigneePickerOpen,
@@ -1079,6 +1090,7 @@ function WorkItemInspector({
     setTitleEditing(false)
     setDescriptionEditing(false)
     setBlockedReasonEditing(false)
+    setPendingBlock(false)
     setAssigneePickerOpen(false)
     setAssigneeQuery('')
     setSaveStatus('idle')
@@ -1126,6 +1138,7 @@ function WorkItemInspector({
       if (blockedReasonEditing) {
         event.preventDefault()
         setBlockedReasonEditing(false)
+        setPendingBlock(false)
         return
       }
 
@@ -1226,6 +1239,12 @@ function WorkItemInspector({
 
   const isBlocked =
     item.blockedReason !== null
+
+  // What the Blocked switch/reason editor show: canonically blocked,
+  // OR a not-yet-persisted pending block (reason editor open, item
+  // still unblocked until that reason is committed).
+  const displayBlocked =
+    isBlocked || pendingBlock
 
   function patchField(
     patch: ApiUpdateWorkItemInput,
@@ -1370,7 +1389,17 @@ function WorkItemInspector({
     const current =
       item.blockedReason ?? ''
 
-    if (!trimmed || trimmed === current) {
+    if (!trimmed) {
+      // Empty/whitespace-only reason: never PATCH, never mark the
+      // item as blocked — revert (or stay at) Blocked: No. This also
+      // covers clearing an existing reason to empty, which reverts
+      // to the last-saved reason rather than creating blockedReason: "".
+      setBlockedReasonEditing(false)
+      setPendingBlock(false)
+      return
+    }
+
+    if (trimmed === current) {
       setBlockedReasonEditing(false)
       return
     }
@@ -1379,8 +1408,13 @@ function WorkItemInspector({
       blockedReason: trimmed,
     })
 
+    // Only a successful PATCH makes the item canonically blocked —
+    // on failure, keep the draft and editing state so the save error
+    // is visible and the user can retry (see patchField's own
+    // saveStatus/saveError handling).
     if (success) {
       setBlockedReasonEditing(false)
+      setPendingBlock(false)
     }
   }
 
@@ -1394,6 +1428,15 @@ function WorkItemInspector({
     if (nextBlocked) {
       setBlockedReasonDraft('')
       setBlockedReasonEditing(true)
+      setPendingBlock(true)
+      return
+    }
+
+    // Turning off a not-yet-persisted pending block just cancels it
+    // locally — there is nothing blocked to PATCH away yet.
+    if (pendingBlock) {
+      setBlockedReasonEditing(false)
+      setPendingBlock(false)
       return
     }
 
@@ -2010,18 +2053,18 @@ function WorkItemInspector({
                       type="button"
                       role="switch"
                       aria-checked={
-                        isBlocked
+                        displayBlocked
                       }
                       aria-label="Blocked"
                       disabled={readOnly}
                       onClick={() =>
                         handleBlockedToggle(
-                          !isBlocked,
+                          !displayBlocked,
                         )
                       }
                       className={[
                         'relative h-6 w-11 shrink-0 rounded-full transition',
-                        isBlocked
+                        displayBlocked
                           ? 'bg-primary'
                           : 'bg-surface-container-high',
                         readOnly
@@ -2032,7 +2075,7 @@ function WorkItemInspector({
                       <span
                         className={[
                           'absolute top-0.5 h-5 w-5 rounded-full bg-surface-container-lowest shadow transition',
-                          isBlocked
+                          displayBlocked
                             ? 'left-[22px]'
                             : 'left-0.5',
                         ].join(' ')}
@@ -2040,13 +2083,13 @@ function WorkItemInspector({
                     </button>
 
                     <span className="text-sm text-on-surface">
-                      {isBlocked
+                      {displayBlocked
                         ? 'Yes'
                         : 'No'}
                     </span>
                   </div>
 
-                  {isBlocked &&
+                  {displayBlocked &&
                     (blockedReasonEditing ? (
                       <textarea
                         autoFocus
@@ -2072,6 +2115,9 @@ function WorkItemInspector({
                             setBlockedReasonEditing(
                               false,
                             )
+                            setPendingBlock(
+                              false,
+                            )
                           }
                         }}
                         onBlur={() => {
@@ -2085,7 +2131,7 @@ function WorkItemInspector({
                           void commitBlockedReasonEdit()
                         }}
                         aria-label="Blocked reason"
-                        placeholder="What is preventing progress?"
+                        placeholder="Why is this work item blocked?"
                         className="mt-2 w-full resize-y rounded-lg border border-primary bg-surface-container-lowest px-3 py-2 text-sm leading-6 text-on-surface outline-none focus:ring-2 focus:ring-primary/15"
                       />
                     ) : (

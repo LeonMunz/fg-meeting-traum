@@ -742,3 +742,277 @@ test(
     ).toBeVisible()
   },
 )
+
+const BLOCKED_PROJECT_NAME =
+  'E2E Inspector Blocked Project'
+const BLOCKED_TASK_A_TITLE =
+  'E2E Inspector Blocked Task A'
+const BLOCKED_TASK_B_TITLE =
+  'E2E Inspector Blocked Task B'
+const BLOCKED_REASON =
+  'Waiting for ethics approval'
+
+test(
+  'Work Item inspector: Blocked cannot be activated without a ' +
+    'non-empty reason',
+  async ({ page }) => {
+    await login(page, 'alex')
+    await openProjects(page)
+
+    await page
+      .getByRole('button', {
+        name: /New project/,
+      })
+      .click()
+
+    const createProjectDialog =
+      page.getByRole('dialog', {
+        name: 'Create project',
+      })
+
+    await createProjectDialog
+      .getByLabel('Project name')
+      .fill(BLOCKED_PROJECT_NAME)
+
+    await createProjectDialog
+      .getByRole('button', {
+        name: /Create project/,
+      })
+      .click()
+
+    await expect(
+      page.getByText(
+        BLOCKED_PROJECT_NAME,
+        { exact: true },
+      ),
+    ).toBeVisible()
+
+    await openProject(
+      page,
+      BLOCKED_PROJECT_NAME,
+    )
+
+    for (const title of [
+      BLOCKED_TASK_A_TITLE,
+      BLOCKED_TASK_B_TITLE,
+    ]) {
+      await page
+        .getByRole('button', {
+          name: /New work item/,
+        })
+        .click()
+
+      const createDialog = page.getByRole(
+        'dialog',
+        { name: 'New work item' },
+      )
+
+      await createDialog
+        .getByLabel('Title')
+        .fill(title)
+
+      await createDialog
+        .getByRole('button', {
+          name: /Create work item/,
+        })
+        .click()
+
+      await expect(
+        createDialog,
+      ).not.toBeVisible()
+    }
+
+    const inspector = page.getByRole(
+      'region',
+      { name: 'Work item', exact: true },
+    )
+
+    const boardCardA = page.getByRole(
+      'button',
+      {
+        name: `Open ${BLOCKED_TASK_A_TITLE}`,
+      },
+    )
+    const boardCardB = page.getByRole(
+      'button',
+      {
+        name: `Open ${BLOCKED_TASK_B_TITLE}`,
+      },
+    )
+
+    const blockedSwitch = inspector.getByRole(
+      'switch',
+      { name: 'Blocked', exact: true },
+    )
+    const reasonInput = inspector.getByLabel(
+      'Blocked reason',
+      { exact: true },
+    )
+
+    // --------------------------------------------------------
+    // 1 & 2. Open an unblocked Work Item.
+    // --------------------------------------------------------
+
+    await boardCardA.click()
+    await expect(inspector).toBeVisible()
+    await expect(
+      blockedSwitch,
+    ).toHaveAttribute(
+      'aria-checked',
+      'false',
+    )
+
+    // --------------------------------------------------------
+    // 3. Activating Blocked reveals the reason editor beneath
+    //    it, focused immediately, without an immediate PATCH.
+    // --------------------------------------------------------
+
+    await blockedSwitch.click()
+    await expect(
+      blockedSwitch,
+    ).toHaveAttribute(
+      'aria-checked',
+      'true',
+    )
+    await expect(
+      reasonInput,
+    ).toBeVisible()
+    await expect(
+      reasonInput,
+    ).toBeFocused()
+    await expect(
+      reasonInput,
+    ).toHaveAttribute(
+      'placeholder',
+      'Why is this work item blocked?',
+    )
+
+    // --------------------------------------------------------
+    // 4. Leaving it empty must not block the item.
+    // --------------------------------------------------------
+
+    await reasonInput.press('Tab')
+    await expect(
+      blockedSwitch,
+    ).toHaveAttribute(
+      'aria-checked',
+      'false',
+    )
+    await expect(
+      reasonInput,
+    ).toHaveCount(0)
+
+    // Confirm the server was never told this Work Item is blocked.
+    await page.reload()
+    await boardCardA.click()
+    await expect(inspector).toBeVisible()
+    await expect(
+      blockedSwitch,
+    ).toHaveAttribute(
+      'aria-checked',
+      'false',
+    )
+
+    // A whitespace-only reason must not block the item either.
+    await blockedSwitch.click()
+    await expect(
+      reasonInput,
+    ).toBeFocused()
+    await reasonInput.fill('   ')
+    await reasonInput.press('Tab')
+    await expect(
+      blockedSwitch,
+    ).toHaveAttribute(
+      'aria-checked',
+      'false',
+    )
+    await expect(
+      reasonInput,
+    ).toHaveCount(0)
+
+    // --------------------------------------------------------
+    // 5 & 6. Activate again, enter a valid reason, then switch
+    //    to B without blurring first — the click's own focus
+    //    change must blur (and queue) the reason PATCH before
+    //    the inspector swaps to B.
+    // --------------------------------------------------------
+
+    await blockedSwitch.click()
+    await expect(
+      reasonInput,
+    ).toBeFocused()
+    await reasonInput.fill(BLOCKED_REASON)
+
+    await boardCardB.click()
+
+    // --------------------------------------------------------
+    // 7. The reason persisted; A becomes blocked.
+    // --------------------------------------------------------
+
+    await expect(inspector).toBeVisible()
+    await expect(
+      inspector.getByRole('button', {
+        name: BLOCKED_TASK_B_TITLE,
+        exact: true,
+      }),
+    ).toBeVisible()
+
+    // --------------------------------------------------------
+    // 8. Reopen A and confirm the reason is visible.
+    // --------------------------------------------------------
+
+    await boardCardA.click()
+    await expect(inspector).toBeVisible()
+    await expect(
+      blockedSwitch,
+    ).toHaveAttribute(
+      'aria-checked',
+      'true',
+    )
+    await expect(
+      inspector.getByText(
+        BLOCKED_REASON,
+        { exact: true },
+      ),
+    ).toBeVisible()
+
+    // --------------------------------------------------------
+    // 9 & 10. Yes -> No immediately PATCHes blockedReason: null
+    //    and the reason disappears.
+    // --------------------------------------------------------
+
+    await blockedSwitch.click()
+    await expect(
+      blockedSwitch,
+    ).toHaveAttribute(
+      'aria-checked',
+      'false',
+    )
+    await expect(
+      inspector.getByText(
+        BLOCKED_REASON,
+        { exact: true },
+      ),
+    ).toHaveCount(0)
+
+    // --------------------------------------------------------
+    // 11. Reload/reopen confirms it remains unblocked.
+    // --------------------------------------------------------
+
+    await page.reload()
+    await boardCardA.click()
+    await expect(inspector).toBeVisible()
+    await expect(
+      blockedSwitch,
+    ).toHaveAttribute(
+      'aria-checked',
+      'false',
+    )
+    await expect(
+      inspector.getByText(
+        BLOCKED_REASON,
+        { exact: true },
+      ),
+    ).toHaveCount(0)
+  },
+)
