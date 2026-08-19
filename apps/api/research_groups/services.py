@@ -249,6 +249,212 @@ def remove_research_group_membership(
 
 
 @dataclass(frozen=True)
+class ResearchGroupOffboardingCandidate:
+    user: object
+    project_role: str
+
+
+@dataclass(frozen=True)
+class ResearchGroupProjectOffboardingPreview:
+    project_id: int
+    name: str
+    status: str
+    archived_at: object
+    membership_role: str
+    assignment_count: int
+    final_owner: bool
+    requires_ownership_resolution: bool
+    ownership_candidates: tuple
+    assignment_candidates: tuple
+
+
+@dataclass(frozen=True)
+class ResearchGroupMemberOffboardingPreview:
+    membership_id: int
+    user: object
+    research_group_role: str
+    final_research_group_admin: bool
+    projects: tuple
+
+
+def get_research_group_member_offboarding_preview(
+    *,
+    membership: ResearchGroupMembership,
+    actor,
+) -> ResearchGroupMemberOffboardingPreview:
+    """Return the current dependencies for one RG member.
+
+    This operation is read-only. It exposes only the Project information
+    required for the explicit offboarding workflow.
+
+    The executing offboarding operation never trusts this preview and
+    revalidates the complete state transactionally.
+    """
+
+    from work_items.models import WorkItemAssignee
+
+    research_group = (
+        ResearchGroup.objects.get(
+            pk=membership.research_group_id
+        )
+    )
+
+    _require_group_admin(
+        research_group=research_group,
+        actor=actor,
+    )
+
+    membership = (
+        ResearchGroupMembership.objects
+        .select_related(
+            "user",
+            "research_group",
+        )
+        .get(
+            pk=membership.pk,
+            research_group=research_group,
+        )
+    )
+
+    target_user = membership.user
+
+    other_admin_exists = (
+        ResearchGroupMembership.objects
+        .filter(
+            research_group=research_group,
+            role=ResearchGroupMembership.Role.ADMIN,
+        )
+        .exclude(pk=membership.pk)
+        .exists()
+    )
+
+    final_research_group_admin = (
+        membership.role
+        == ResearchGroupMembership.Role.ADMIN
+        and not other_admin_exists
+    )
+
+    project_memberships = list(
+        ProjectMembership.objects
+        .filter(
+            project__research_group=research_group,
+            user=target_user,
+        )
+        .select_related("project")
+        .order_by(
+            "project_id",
+            "pk",
+        )
+    )
+
+    project_previews = []
+
+    for project_membership in project_memberships:
+        project = project_membership.project
+
+        other_owner_exists = (
+            ProjectMembership.objects
+            .filter(
+                project=project,
+                role=ProjectMembership.Role.OWNER,
+            )
+            .exclude(pk=project_membership.pk)
+            .exists()
+        )
+
+        final_owner = (
+            project_membership.role
+            == ProjectMembership.Role.OWNER
+            and not other_owner_exists
+        )
+
+        requires_ownership_resolution = (
+            final_owner
+            and project.status
+            == project.Status.ACTIVE
+            and project.archived_at is None
+        )
+
+        assignment_count = (
+            WorkItemAssignee.objects
+            .filter(
+                work_item__project=project,
+                user=target_user,
+            )
+            .count()
+        )
+
+        candidate_memberships = list(
+            ProjectMembership.objects
+            .filter(
+                project=project,
+                user__research_group_memberships__research_group=(
+                    research_group
+                ),
+            )
+            .exclude(user=target_user)
+            .select_related("user")
+            .order_by(
+                "user__username",
+                "user_id",
+            )
+            .distinct()
+        )
+
+        ownership_candidates = tuple(
+            ResearchGroupOffboardingCandidate(
+                user=candidate.user,
+                project_role=candidate.role,
+            )
+            for candidate in candidate_memberships
+        )
+
+        assignment_candidates = tuple(
+            ResearchGroupOffboardingCandidate(
+                user=candidate.user,
+                project_role=candidate.role,
+            )
+            for candidate in candidate_memberships
+            if candidate.role
+            in {
+                ProjectMembership.Role.OWNER,
+                ProjectMembership.Role.MEMBER,
+            }
+        )
+
+        project_previews.append(
+            ResearchGroupProjectOffboardingPreview(
+                project_id=project.pk,
+                name=project.name,
+                status=project.status,
+                archived_at=project.archived_at,
+                membership_role=project_membership.role,
+                assignment_count=assignment_count,
+                final_owner=final_owner,
+                requires_ownership_resolution=(
+                    requires_ownership_resolution
+                ),
+                ownership_candidates=(
+                    ownership_candidates
+                ),
+                assignment_candidates=(
+                    assignment_candidates
+                ),
+            )
+        )
+
+    return ResearchGroupMemberOffboardingPreview(
+        membership_id=membership.pk,
+        user=target_user,
+        research_group_role=membership.role,
+        final_research_group_admin=(
+            final_research_group_admin
+        ),
+        projects=tuple(project_previews),
+    )
+
+
+@dataclass(frozen=True)
 class ResearchGroupProjectOffboardingResolution:
     project_id: int
     assignment_resolution: Optional[str] = None
