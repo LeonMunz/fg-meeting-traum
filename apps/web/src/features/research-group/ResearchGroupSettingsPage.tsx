@@ -17,6 +17,7 @@ import type {
   ApiResearchGroupMembership,
 } from '../../api/types'
 import { AddResearchGroupMemberDialog } from './AddResearchGroupMemberDialog'
+import { RemoveResearchGroupMemberDialog } from './RemoveResearchGroupMemberDialog'
 import { useResearchGroup } from './useResearchGroup'
 import { useSyncResearchGroupContext } from './useSyncResearchGroupContext'
 
@@ -129,6 +130,13 @@ export function ResearchGroupSettingsPage() {
     addMemberOpen,
     setAddMemberOpen,
   ] = useState(false)
+
+  const [
+    memberToRemove,
+    setMemberToRemove,
+  ] = useState<
+    ApiResearchGroupMembership | null
+  >(null)
 
   const loadSettings =
     useCallback(async () => {
@@ -518,6 +526,24 @@ export function ResearchGroupSettingsPage() {
                         Admin
                       </option>
                     </select>
+
+                    <button
+                      type="button"
+                      disabled={
+                        updatingMembershipId ===
+                        membership.id
+                      }
+                      onClick={() => {
+                        setError(null)
+                        setMemberToRemove(
+                          membership,
+                        )
+                      }}
+                      aria-label={`Remove ${getMemberName(membership)}`}
+                      className="inline-flex h-9 items-center justify-center rounded-lg px-3 text-sm font-medium text-error transition hover:bg-error/5 disabled:opacity-45"
+                    >
+                      Remove
+                    </button>
                   </div>
                 ),
               )}
@@ -533,6 +559,23 @@ export function ResearchGroupSettingsPage() {
             setAddMemberOpen(false)
           }
           onAdded={async () => {
+            await reloadResearchGroups()
+            await loadSettings()
+          }}
+        />
+      )}
+
+      {groupId != null && (
+        <RemoveResearchGroupMemberDialog
+          open={
+            memberToRemove != null
+          }
+          researchGroupId={groupId}
+          membership={memberToRemove}
+          onClose={() =>
+            setMemberToRemove(null)
+          }
+          onRemoved={async () => {
             await reloadResearchGroups()
             await loadSettings()
           }}

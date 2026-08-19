@@ -21,6 +21,7 @@ from research_groups.views import (
     ResearchGroupListView,
     ResearchGroupMemberCandidateListView,
     ResearchGroupMembershipDetailView,
+    ResearchGroupMembershipOffboardingView,
     ResearchGroupMembershipListView,
 )
 
@@ -67,6 +68,7 @@ urlpatterns = [
     path('api/research-groups/<int:group_id>/member-candidates/', ResearchGroupMemberCandidateListView.as_view(), name='research-group-member-candidates'),
     path('api/research-groups/<int:group_id>/memberships/', ResearchGroupMembershipListView.as_view(), name='research-group-memberships-list'),
     path('api/research-groups/<int:group_id>/memberships/<int:membership_id>/', ResearchGroupMembershipDetailView.as_view(), name='research-group-membership-detail'),
+    path('api/research-groups/<int:group_id>/memberships/<int:membership_id>/offboarding/', ResearchGroupMembershipOffboardingView.as_view(), name='research-group-membership-offboarding'),
     path('api/research-groups/<int:group_id>/projects/', ResearchGroupProjectListView.as_view(), name='research-group-projects-list'),
     path('api/projects/<int:project_id>/', ProjectDetailView.as_view(), name='project-detail'),
     path('api/projects/<int:project_id>/archive/', ProjectArchiveView.as_view(), name='project-archive'),
