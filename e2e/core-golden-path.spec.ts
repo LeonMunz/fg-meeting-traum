@@ -165,6 +165,13 @@ test(
       .getByLabel('Title')
       .fill(TASK_TITLE)
 
+    await workItemDialog
+      .getByRole('button', {
+        name: 'Add assignee…',
+        exact: true,
+      })
+      .click()
+
     const assigneeGroup =
       workItemDialog.getByRole(
         'group',

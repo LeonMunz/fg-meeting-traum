@@ -308,6 +308,13 @@ async function createTaskAssignedToLaura(
     .getByLabel('Title')
     .fill(title)
 
+  await dialog
+    .getByRole('button', {
+      name: 'Add assignee…',
+      exact: true,
+    })
+    .click()
+
   const assignees =
     dialog.getByRole(
       'group',

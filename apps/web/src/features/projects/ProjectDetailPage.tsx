@@ -20,7 +20,10 @@ import {
   ProjectLifecycleDialog,
   type ProjectLifecycleAction,
 } from './ProjectLifecycleDialog'
-import { CreateWorkItemDialog } from './CreateWorkItemDialog'
+import {
+  WorkItemDrawer,
+  type WorkItemFormInput,
+} from './WorkItemDrawer'
 import { ApiError } from '../../api/client'
 import {
   addProjectMembership,
@@ -42,11 +45,21 @@ import type {
 import {
   createWorkItem,
   listProjectWorkItems,
+  updateWorkItem,
 } from '../../api/work-items'
 import { useSession } from '../../api/useSession'
 
 type ProjectStatus = 'active' | 'paused' | 'completed'
 type ProjectRole = 'owner' | 'member' | 'viewer'
+type WorkItemDrawerState =
+  | {
+      mode: 'create'
+    }
+  | {
+      mode: 'edit'
+      workItemId: number
+    }
+
 type ProjectTab =
   | 'work-items'
   | 'overview'
@@ -614,8 +627,12 @@ export function ProjectDetailPage() {
     useState(false)
   const [workItemsError, setWorkItemsError] =
     useState<string | null>(null)
-  const [createWorkItemDialogOpen, setCreateWorkItemDialogOpen] =
-    useState(false)
+  const [
+    workItemDrawerState,
+    setWorkItemDrawerState,
+  ] = useState<WorkItemDrawerState | null>(
+    null,
+  )
   useEffect(() => {
     if (!projectId) {
       setProject(null)
@@ -791,7 +808,7 @@ export function ProjectDetailPage() {
     setAddMemberDialogOpen(false)
     setMemberToRemove(null)
     setAssignmentResolutionAction(null)
-    setCreateWorkItemDialogOpen(false)
+    setWorkItemDrawerState(null)
     setLifecycleAction(null)
     setLifecycleError(null)
 
@@ -1567,15 +1584,9 @@ export function ProjectDetailPage() {
     }
   }
 
-  const handleCreateWorkItem = async (input: {
-    title: string
-    type: DemoWorkItemType
-    status: DemoWorkItemStatus
-    assigneeIds: string[]
-    parentId: string | null
-    dueDate: string | null
-    blockedReason: string | null
-  }) => {
+  const handleCreateWorkItem = async (
+    input: WorkItemFormInput,
+  ) => {
     if (isReadOnly) {
       throw new Error(
         isArchived
@@ -1620,6 +1631,8 @@ export function ProjectDetailPage() {
         numericProjectId,
         {
           title: input.title.trim(),
+          description:
+            input.description.trim(),
           type: input.type,
           status: input.status,
           assigneeIds,
@@ -1646,6 +1659,99 @@ export function ProjectDetailPage() {
     }
   }
 
+  const handleUpdateWorkItem = async (
+    workItemId: number,
+    input: WorkItemFormInput,
+  ) => {
+    if (isReadOnly) {
+      throw new Error(
+        isArchived
+          ? 'Archived Projects are read-only. Restore the Project first.'
+          : 'A viewer cannot edit Work Items.',
+      )
+    }
+
+    const assigneeIds =
+      input.assigneeIds.map(
+        (id) => Number(id),
+      )
+
+    if (
+      !Number.isInteger(
+        workItemId,
+      ) ||
+      assigneeIds.some(
+        (id) =>
+          !Number.isInteger(id),
+      )
+    ) {
+      throw new Error(
+        'Invalid Work Item or assignee ID.',
+      )
+    }
+
+    let parentId:
+      | number
+      | null = null
+
+    if (input.parentId != null) {
+      parentId =
+        Number(input.parentId)
+
+      if (
+        !Number.isInteger(parentId)
+      ) {
+        throw new Error(
+          'Invalid parent Work Item ID.',
+        )
+      }
+    }
+
+    setWorkItemsError(null)
+
+    try {
+      const updated =
+        await updateWorkItem(
+          workItemId,
+          {
+            title:
+              input.title.trim(),
+            description:
+              input.description.trim(),
+            type: input.type,
+            status: input.status,
+            assigneeIds,
+            parentId,
+            dueDate:
+              input.dueDate,
+            blockedReason:
+              input.blockedReason,
+          },
+        )
+
+      setApiWorkItems(
+        (current) =>
+          current.map(
+            (item) =>
+              item.id ===
+              updated.id
+                ? updated
+                : item,
+          ),
+      )
+    } catch (error) {
+      const message =
+        getWorkItemErrorMessage(
+          error,
+          'Work item could not be updated.',
+        )
+
+      setWorkItemsError(message)
+
+      throw new Error(message)
+    }
+  }
+
   const projectWorkItems = forceEmptyWorkItems
     ? []
     : workItems
@@ -1668,6 +1774,15 @@ export function ProjectDetailPage() {
           : []
       })
       .sort(compareAttentionItems)
+
+  const selectedDrawerWorkItem =
+    workItemDrawerState?.mode === 'edit'
+      ? apiWorkItems.find(
+          (item) =>
+            item.id ===
+            workItemDrawerState.workItemId,
+        ) ?? null
+      : null
 
   return (
     <div className="w-full px-6 py-8 lg:px-8 lg:py-10 xl:px-10">
@@ -1965,7 +2080,9 @@ export function ProjectDetailPage() {
             )}
             readOnly={isReadOnly}
             onCreate={() =>
-              setCreateWorkItemDialogOpen(true)
+              setWorkItemDrawerState({
+                mode: 'create',
+              })
             }
             preferencesKey={
               user
@@ -2631,22 +2748,37 @@ export function ProjectDetailPage() {
         onConfirm={handleConfirmRemoveMember}
       />
 
-      <CreateWorkItemDialog
-        open={createWorkItemDialogOpen}
+      <WorkItemDrawer
+        open={workItemDrawerState != null}
+        mode={
+          workItemDrawerState?.mode ??
+          'create'
+        }
+        projectName={project.name}
+        item={selectedDrawerWorkItem}
+        readOnly={isReadOnly}
         assignees={sortedMembers
-          .filter((member) => member.role !== 'viewer')
+          .filter(
+            (member) =>
+              member.role !== 'viewer',
+          )
           .map((member) => ({
             id: member.id,
             name: member.name,
             initials: member.initials,
           }))}
-        parentItems={projectWorkItems.map((item) => ({
-          id: item.id,
-          title: item.title,
-          type: item.type,
-        }))}
-        onClose={() => setCreateWorkItemDialogOpen(false)}
+        parentItems={projectWorkItems.map(
+          (item) => ({
+            id: item.id,
+            title: item.title,
+            type: item.type,
+          }),
+        )}
+        onClose={() =>
+          setWorkItemDrawerState(null)
+        }
         onCreate={handleCreateWorkItem}
+        onUpdate={handleUpdateWorkItem}
       />
     </div>
   )
