@@ -1788,6 +1788,12 @@ export function ProjectDetailPage() {
       return
     }
 
+    if (
+      workItemDrawerState?.mode === 'edit'
+    ) {
+      return
+    }
+
     setWorkItemDrawerState({
       mode: 'edit',
       workItemId,
@@ -1803,8 +1809,25 @@ export function ProjectDetailPage() {
         ) ?? null
       : null
 
+  const selectedWorkItemId =
+    workItemDrawerState?.mode === 'edit'
+      ? String(
+          workItemDrawerState.workItemId,
+        )
+      : null
+
+  const workItemInspectorOpen =
+    workItemDrawerState?.mode === 'edit'
+
   return (
-    <div className="w-full px-6 py-8 lg:px-8 lg:py-10 xl:px-10">
+    <div
+      className={[
+        'w-full px-6 py-8 lg:px-8 lg:py-10 xl:px-10',
+        workItemInspectorOpen
+          ? 'xl:pr-[552px]'
+          : '',
+      ].join(' ')}
+    >
       <Link
         to={`/projects?group=${project.researchGroupId}`}
         className="inline-flex items-center gap-1.5 text-sm font-medium text-on-surface-variant transition hover:text-primary"
@@ -2019,6 +2042,10 @@ export function ProjectDetailPage() {
                   <OverviewWorkItemRow
                     key={item.id}
                     item={item}
+                    selected={
+                      selectedWorkItemId ===
+                      item.id
+                    }
                     onOpen={handleOpenWorkItem}
                   />
                 ))}
@@ -2058,6 +2085,10 @@ export function ProjectDetailPage() {
                       key={item.id}
                       item={item}
                       attentionKind={kind}
+                      selected={
+                        selectedWorkItemId ===
+                        item.id
+                      }
                       onOpen={handleOpenWorkItem}
                     />
                   ),
@@ -2106,6 +2137,9 @@ export function ProjectDetailPage() {
               })
             }
             onOpen={handleOpenWorkItem}
+            selectedWorkItemId={
+              selectedWorkItemId
+            }
             preferencesKey={
               user
                 ? `fg-workspace:project-work-items:v1:${user.id}:${project.id}`
@@ -2809,10 +2843,12 @@ export function ProjectDetailPage() {
 function OverviewWorkItemRow({
   item,
   attentionKind = null,
+  selected,
   onOpen,
 }: {
   item: DemoWorkItem
   attentionKind?: AttentionKind | null
+  selected: boolean
   onOpen: (item: DemoWorkItem) => void
 }) {
   const status =
@@ -2840,7 +2876,17 @@ function OverviewWorkItemRow({
       data-attention-kind={
         attentionKind ?? undefined
       }
-      className="grid gap-3 py-3.5 sm:grid-cols-[minmax(0,1fr)_130px_180px_110px] sm:items-center"
+      data-selected={
+        selected
+          ? 'true'
+          : undefined
+      }
+      className={[
+        'grid gap-3 py-3.5 sm:grid-cols-[minmax(0,1fr)_130px_180px_110px] sm:items-center',
+        selected
+          ? 'outline outline-1 -outline-offset-1 outline-primary/55 bg-primary/5'
+          : '',
+      ].join(' ')}
     >
       <div className="min-w-0">
         {attentionKind && (
@@ -2913,6 +2959,7 @@ function ProjectWorkItemsPanel({
   readOnly,
   onCreate,
   onOpen,
+  selectedWorkItemId,
   preferencesKey,
 }: {
   items: DemoWorkItem[]
@@ -2920,6 +2967,7 @@ function ProjectWorkItemsPanel({
   readOnly: boolean
   onCreate: () => void
   onOpen: (item: DemoWorkItem) => void
+  selectedWorkItemId: string | null
   preferencesKey: string | null
 }) {
   const [view, setView] = useState<WorkItemsView>('board')
@@ -3396,6 +3444,10 @@ function ProjectWorkItemsPanel({
                       <WorkItemBoardCard
                         key={item.id}
                         item={item}
+                        selected={
+                          selectedWorkItemId ===
+                          item.id
+                        }
                         onOpen={onOpen}
                       />
                     ))
@@ -3415,6 +3467,9 @@ function ProjectWorkItemsPanel({
       ) : (
         <WorkItemsList
           items={filteredItems}
+          selectedWorkItemId={
+            selectedWorkItemId
+          }
           onOpen={onOpen}
         />
       )}
@@ -3479,9 +3534,11 @@ function getWorkItemDueDisplay(item: DemoWorkItem) {
 
 function WorkItemBoardCard({
   item,
+  selected,
   onOpen,
 }: {
   item: DemoWorkItem
+  selected: boolean
   onOpen: (item: DemoWorkItem) => void
 }) {
   const due = getWorkItemDueDisplay(item)
@@ -3501,7 +3558,18 @@ function WorkItemBoardCard({
           onOpen(item)
         }
       }}
-      className="rounded-lg border border-outline-variant/60 bg-surface-container-lowest px-3.5 py-3 transition hover:bg-surface-container-low/45">
+      data-selected={
+        selected
+          ? 'true'
+          : undefined
+      }
+      className={[
+        'rounded-lg border border-outline-variant/60 bg-surface-container-lowest px-3.5 py-3 transition hover:bg-surface-container-low/45',
+        selected
+          ? 'outline outline-2 -outline-offset-2 outline-primary/55 bg-primary/5 shadow-sm'
+          : '',
+      ].join(' ')}
+    >
       <div className="flex items-start gap-2">
         <span
           title={workItemTypeLabels[item.type]}
@@ -3589,9 +3657,11 @@ function WorkItemAssignees({
 
 function WorkItemsList({
   items,
+  selectedWorkItemId,
   onOpen,
 }: {
   items: DemoWorkItem[]
+  selectedWorkItemId: string | null
   onOpen: (item: DemoWorkItem) => void
 }) {
   const gridColumns =
@@ -3647,6 +3717,10 @@ function WorkItemsList({
                 className={[
                   'grid h-[54px] items-center px-6 transition-colors hover:bg-surface-container-low/45',
                   gridColumns,
+                  selectedWorkItemId ===
+                  item.id
+                    ? 'outline outline-1 -outline-offset-1 outline-primary/55 bg-primary/5'
+                    : '',
                   index > 0
                     ? 'border-t border-outline-variant/25'
                     : '',

@@ -451,9 +451,14 @@ export function WorkItemDrawer({
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-black/30"
+      className={
+        mode === 'create'
+          ? 'fixed inset-0 z-50 bg-black/30'
+          : 'fixed inset-y-0 right-0 z-40 w-full sm:w-[520px]'
+      }
       onMouseDown={(event) => {
         if (
+          mode === 'create' &&
           event.target ===
             event.currentTarget &&
           !submitting
@@ -463,10 +468,23 @@ export function WorkItemDrawer({
       }}
     >
       <div
-        role="dialog"
-        aria-modal="true"
+        role={
+          mode === 'create'
+            ? 'dialog'
+            : 'region'
+        }
+        aria-modal={
+          mode === 'create'
+            ? true
+            : undefined
+        }
         aria-labelledby="work-item-drawer-title"
-        className="ml-auto flex h-full w-full max-w-[660px] flex-col border-l border-outline-variant bg-surface-container-lowest shadow-2xl"
+        className={[
+          'flex h-full w-full flex-col border-l border-outline-variant bg-surface-container-lowest shadow-2xl',
+          mode === 'create'
+            ? 'ml-auto max-w-[660px]'
+            : '',
+        ].join(' ')}
       >
         <form
           ref={formRef}
