@@ -171,6 +171,53 @@ export interface ApiUpdateWorkItemInput {
   blockedReason?: string | null
 }
 
+/* ── Work Item History ────────────────────────────────────────── */
+
+export type ApiWorkItemHistoryEventType =
+  | 'work_item.created'
+  | 'work_item.updated'
+
+export interface ApiWorkItemHistoryActor {
+  id: number
+  username: string
+  firstName: string
+  lastName: string
+}
+
+export interface ApiWorkItemHistoryFromTo<T> {
+  from: T
+  to: T
+}
+
+export interface ApiWorkItemHistoryParentRef {
+  id: number
+  title: string | null
+}
+
+export interface ApiWorkItemHistoryChanges {
+  title?: ApiWorkItemHistoryFromTo<string>
+  description?: { changed: true }
+  type?: ApiWorkItemHistoryFromTo<ApiWorkItemType>
+  status?: ApiWorkItemHistoryFromTo<ApiWorkItemStatus>
+  dueDate?: ApiWorkItemHistoryFromTo<string | null>
+  blockedReason?: ApiWorkItemHistoryFromTo<string | null>
+  parent?: ApiWorkItemHistoryFromTo<
+    ApiWorkItemHistoryParentRef | null
+  >
+  assignees?: {
+    added: ApiWorkItemHistoryActor[]
+    removed: ApiWorkItemHistoryActor[]
+  }
+}
+
+export interface ApiWorkItemHistoryEvent {
+  id: number
+  eventType: ApiWorkItemHistoryEventType
+  actor: ApiWorkItemHistoryActor | null
+  changes: ApiWorkItemHistoryChanges
+  createdAt: string
+}
+
 /* ── Meeting ───────────────────────────────────────────────────── */
 
 export type ApiMeetingStatus =

@@ -9,12 +9,17 @@ import type {
   ReactNode,
 } from 'react'
 
+import { ApiError } from '../../api/client'
 import type {
   ApiUpdateWorkItemInput,
   ApiWorkItem,
+  ApiWorkItemHistoryActor,
+  ApiWorkItemHistoryChanges,
+  ApiWorkItemHistoryEvent,
   ApiWorkItemStatus,
   ApiWorkItemType,
 } from '../../api/types'
+import { listWorkItemHistory } from '../../api/work-items'
 
 export type WorkItemFormInput = {
   title: string
@@ -105,6 +110,526 @@ const statusOptions: Array<{
     label: 'Done',
   },
 ]
+
+/* ── History presentation helpers ─────────────────────────────────
+ * Map the typed backend history contract (see api/types.ts) to
+ * compact, readable timeline rows. Never render raw JSON — every
+ * field of `changes` a UI can encounter is translated to plain text
+ * here, and only fields actually present in the response are used.
+ */
+
+function getStatusLabel(value: ApiWorkItemStatus): string {
+  return (
+    statusOptions.find((option) => option.value === value)
+      ?.label ?? value
+  )
+}
+
+function getTypeLabel(value: ApiWorkItemType): string {
+  return (
+    typeOptions.find((option) => option.value === value)
+      ?.label ?? value
+  )
+}
+
+// Mirrors ProjectDetailPage's getPersonName display-name convention
+// (firstName + lastName, falling back to username).
+function getActorDisplayName(
+  actor: ApiWorkItemHistoryActor | null,
+): string {
+  if (!actor) {
+    // Neutral system representation — never fabricate a user.
+    return 'Someone'
+  }
+
+  const fullName = `${actor.firstName} ${actor.lastName}`.trim()
+  return fullName || actor.username
+}
+
+function formatHistoryShortDate(isoDate: string): string {
+  const [year, month, day] = isoDate
+    .split('-')
+    .map(Number)
+
+  if (
+    !Number.isInteger(year) ||
+    !Number.isInteger(month) ||
+    !Number.isInteger(day)
+  ) {
+    return isoDate
+  }
+
+  return new Intl.DateTimeFormat('en', {
+    month: 'short',
+    day: 'numeric',
+  }).format(new Date(year, month - 1, day))
+}
+
+function formatHistoryRelativeTime(
+  isoDateTime: string,
+): string {
+  const date = new Date(isoDateTime)
+
+  if (Number.isNaN(date.getTime())) {
+    return ''
+  }
+
+  const diffMs = Date.now() - date.getTime()
+  const diffMinutes = Math.round(diffMs / 60_000)
+
+  if (diffMinutes < 1) {
+    return 'Just now'
+  }
+
+  if (diffMinutes < 60) {
+    return `${diffMinutes} min ago`
+  }
+
+  const diffHours = Math.round(diffMinutes / 60)
+
+  if (diffHours < 24) {
+    return `${diffHours} h ago`
+  }
+
+  const day = new Date(
+    date.getFullYear(),
+    date.getMonth(),
+    date.getDate(),
+  )
+  const now = new Date()
+  const today = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate(),
+  )
+  const diffDays = Math.round(
+    (today.getTime() - day.getTime()) / 86_400_000,
+  )
+
+  if (diffDays === 1) {
+    return 'Yesterday'
+  }
+
+  return new Intl.DateTimeFormat('en', {
+    month: 'short',
+    day: 'numeric',
+  }).format(date)
+}
+
+function formatHistoryAbsoluteTime(
+  isoDateTime: string,
+): string {
+  const date = new Date(isoDateTime)
+
+  if (Number.isNaN(date.getTime())) {
+    return isoDateTime
+  }
+
+  return new Intl.DateTimeFormat('en', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(date)
+}
+
+function summarizeAssignees(
+  added: ApiWorkItemHistoryActor[],
+  removed: ApiWorkItemHistoryActor[],
+): string {
+  const parts: string[] = []
+
+  if (added.length > 0) {
+    parts.push(
+      `+ ${added
+        .map((actor) => getActorDisplayName(actor))
+        .join(', ')}`,
+    )
+  }
+
+  if (removed.length > 0) {
+    parts.push(
+      `− ${removed
+        .map((actor) => getActorDisplayName(actor))
+        .join(', ')}`,
+    )
+  }
+
+  return parts.join('   ')
+}
+
+function summarizeParentRef(
+  ref: { id: number; title: string | null } | null,
+): string {
+  if (!ref) {
+    return 'None'
+  }
+
+  return ref.title ?? `Work Item #${ref.id}`
+}
+
+// Fixed, stable ordering for multi-field updates — never depends on
+// object key insertion order from the API response.
+const HISTORY_CHANGE_FIELD_ORDER = [
+  'title',
+  'description',
+  'type',
+  'status',
+  'dueDate',
+  'blockedReason',
+  'parent',
+  'assignees',
+] as const
+
+type HistoryChangeField =
+  (typeof HISTORY_CHANGE_FIELD_ORDER)[number]
+
+function getChangedHistoryFields(
+  changes: ApiWorkItemHistoryChanges,
+): HistoryChangeField[] {
+  return HISTORY_CHANGE_FIELD_ORDER.filter(
+    (field) => changes[field] !== undefined,
+  )
+}
+
+// Compact "Label   value summary" line used when a single event
+// changed MULTIPLE fields at once (see HISTORY_CHANGE_FIELD_ORDER).
+function describeHistoryFieldCompact(
+  field: HistoryChangeField,
+  changes: ApiWorkItemHistoryChanges,
+): { label: string; text: string } {
+  switch (field) {
+    case 'title': {
+      const change = changes.title
+      return {
+        label: 'Title',
+        text: `${change?.from ?? ''} → ${change?.to ?? ''}`,
+      }
+    }
+    case 'description':
+      return { label: 'Description', text: 'Changed' }
+    case 'type': {
+      const change = changes.type
+      return {
+        label: 'Type',
+        text: change
+          ? `${getTypeLabel(change.from)} → ${getTypeLabel(change.to)}`
+          : '',
+      }
+    }
+    case 'status': {
+      const change = changes.status
+      return {
+        label: 'Status',
+        text: change
+          ? `${getStatusLabel(change.from)} → ${getStatusLabel(change.to)}`
+          : '',
+      }
+    }
+    case 'dueDate': {
+      const change = changes.dueDate
+      const from = change?.from
+        ? formatHistoryShortDate(change.from)
+        : 'None'
+      const to = change?.to
+        ? formatHistoryShortDate(change.to)
+        : 'None'
+      return { label: 'Due date', text: `${from} → ${to}` }
+    }
+    case 'blockedReason': {
+      const change = changes.blockedReason
+      if (!change || change.from == null) {
+        return { label: 'Blocked', text: 'Marked blocked' }
+      }
+      if (change.to == null) {
+        return { label: 'Blocked', text: 'Unblocked' }
+      }
+      return { label: 'Blocked', text: 'Reason changed' }
+    }
+    case 'parent': {
+      const change = changes.parent
+      return {
+        label: 'Parent',
+        text: change
+          ? `${summarizeParentRef(change.from)} → ${summarizeParentRef(change.to)}`
+          : '',
+      }
+    }
+    case 'assignees': {
+      const change = changes.assignees
+      return {
+        label: 'Assignees',
+        text: change
+          ? summarizeAssignees(change.added, change.removed)
+          : '',
+      }
+    }
+  }
+}
+
+type HistoryRowDescription = {
+  primary: string
+  // Secondary line(s) below the primary sentence — no label prefix
+  // for a single-field event (natural wording), labeled for a
+  // multi-field event (compact aligned list).
+  lines: Array<{ label: string | null; text: string }>
+}
+
+function describeSingleHistoryField(
+  actorName: string,
+  field: HistoryChangeField,
+  changes: ApiWorkItemHistoryChanges,
+): HistoryRowDescription {
+  switch (field) {
+    case 'title': {
+      const change = changes.title
+      return {
+        primary: `${actorName} renamed this work item`,
+        lines: change
+          ? [
+              {
+                label: null,
+                text: `${change.from} → ${change.to}`,
+              },
+            ]
+          : [],
+      }
+    }
+    case 'description':
+      return {
+        primary: `${actorName} changed the description`,
+        lines: [],
+      }
+    case 'type': {
+      const change = changes.type
+      return {
+        primary: `${actorName} changed type`,
+        lines: change
+          ? [
+              {
+                label: null,
+                text: `${getTypeLabel(change.from)} → ${getTypeLabel(change.to)}`,
+              },
+            ]
+          : [],
+      }
+    }
+    case 'status': {
+      const change = changes.status
+      return {
+        primary: `${actorName} changed status`,
+        lines: change
+          ? [
+              {
+                label: null,
+                text: `${getStatusLabel(change.from)} → ${getStatusLabel(change.to)}`,
+              },
+            ]
+          : [],
+      }
+    }
+    case 'dueDate': {
+      const change = changes.dueDate
+
+      if (!change || (change.from == null && change.to == null)) {
+        return {
+          primary: `${actorName} changed due date`,
+          lines: [],
+        }
+      }
+
+      if (change.from == null) {
+        return {
+          primary: `${actorName} set due date`,
+          lines: [
+            {
+              label: null,
+              text: formatHistoryShortDate(change.to as string),
+            },
+          ],
+        }
+      }
+
+      if (change.to == null) {
+        return {
+          primary: `${actorName} removed due date`,
+          lines: [],
+        }
+      }
+
+      return {
+        primary: `${actorName} changed due date`,
+        lines: [
+          {
+            label: null,
+            text: `${formatHistoryShortDate(change.from)} → ${formatHistoryShortDate(change.to)}`,
+          },
+        ],
+      }
+    }
+    case 'blockedReason': {
+      const change = changes.blockedReason
+
+      if (!change || (change.from == null && change.to == null)) {
+        return {
+          primary: `${actorName} changed the blocked reason`,
+          lines: [],
+        }
+      }
+
+      if (change.from == null) {
+        return {
+          primary: `${actorName} marked this work item as blocked`,
+          lines: change.to
+            ? [{ label: null, text: change.to }]
+            : [],
+        }
+      }
+
+      if (change.to == null) {
+        return {
+          primary: `${actorName} unblocked this work item`,
+          lines: [],
+        }
+      }
+
+      return {
+        primary: `${actorName} changed the blocked reason`,
+        lines: [{ label: null, text: change.to }],
+      }
+    }
+    case 'parent': {
+      const change = changes.parent
+
+      if (!change || (change.from == null && change.to == null)) {
+        return {
+          primary: `${actorName} changed parent`,
+          lines: [],
+        }
+      }
+
+      if (change.from == null) {
+        return {
+          primary: `${actorName} added parent`,
+          lines: [
+            {
+              label: null,
+              text: summarizeParentRef(change.to),
+            },
+          ],
+        }
+      }
+
+      if (change.to == null) {
+        return {
+          primary: `${actorName} removed parent`,
+          lines: [
+            {
+              label: null,
+              text: summarizeParentRef(change.from),
+            },
+          ],
+        }
+      }
+
+      return {
+        primary: `${actorName} changed parent`,
+        lines: [
+          {
+            label: null,
+            text: `${summarizeParentRef(change.from)} → ${summarizeParentRef(change.to)}`,
+          },
+        ],
+      }
+    }
+    case 'assignees': {
+      const change = changes.assignees
+      const added = change?.added ?? []
+      const removed = change?.removed ?? []
+
+      if (added.length === 1 && removed.length === 0) {
+        return {
+          primary: `${getActorDisplayName(added[0])} was assigned`,
+          lines: [],
+        }
+      }
+
+      if (removed.length === 1 && added.length === 0) {
+        return {
+          primary: `${getActorDisplayName(removed[0])} was unassigned`,
+          lines: [],
+        }
+      }
+
+      return {
+        primary: `${actorName} changed assignees`,
+        lines: [
+          {
+            label: null,
+            text: summarizeAssignees(added, removed),
+          },
+        ],
+      }
+    }
+  }
+}
+
+function describeWorkItemHistoryEvent(
+  event: ApiWorkItemHistoryEvent,
+): HistoryRowDescription {
+  const actorName = getActorDisplayName(event.actor)
+
+  if (event.eventType === 'work_item.created') {
+    return {
+      primary: `${actorName} created this work item`,
+      lines: [],
+    }
+  }
+
+  const changedFields = getChangedHistoryFields(
+    event.changes,
+  )
+
+  if (changedFields.length === 0) {
+    // Defensive only — the backend never emits an empty update event.
+    return {
+      primary: `${actorName} updated this work item`,
+      lines: [],
+    }
+  }
+
+  if (changedFields.length === 1) {
+    return describeSingleHistoryField(
+      actorName,
+      changedFields[0],
+      event.changes,
+    )
+  }
+
+  return {
+    primary: `${actorName} updated this work item`,
+    lines: changedFields.map((field) =>
+      describeHistoryFieldCompact(field, event.changes),
+    ),
+  }
+}
+
+function getWorkItemHistoryErrorMessage(
+  error: unknown,
+): string {
+  if (
+    error instanceof ApiError &&
+    error.detail &&
+    typeof error.detail === 'object' &&
+    'error' in error.detail
+  ) {
+    const detail = error.detail as { error?: unknown }
+
+    if (typeof detail.error === 'string') {
+      return detail.error
+    }
+  }
+
+  return 'History could not be loaded.'
+}
 
 export function WorkItemDrawer({
   open,
@@ -1108,6 +1633,71 @@ function WorkItemInspector({
     [],
   )
 
+  // ── History ──────────────────────────────────────────────────
+  //
+  // Read-only, fetched independently from apiWorkItems — history is
+  // not part of the canonical Work Item shape, so it never becomes a
+  // second canonical Work Item state.
+  const [historyStatus, setHistoryStatus] = useState<
+    'loading' | 'ready' | 'error'
+  >('loading')
+  const [historyEvents, setHistoryEvents] = useState<
+    ApiWorkItemHistoryEvent[]
+  >([])
+  const [historyError, setHistoryError] = useState<
+    string | null
+  >(null)
+
+  // Always holds the CURRENTLY displayed Work Item id, updated
+  // synchronously every render (not via an effect) so async callbacks
+  // (patch settlement) can tell whether the item they were queued for
+  // is still the one on screen.
+  const currentItemIdRef = useRef(item.id)
+  currentItemIdRef.current = item.id
+
+  // Monotonically increasing token: only the response matching the
+  // most recently issued request is ever applied. This is what makes
+  // switching Work Items race-safe — a late response for a Work Item
+  // that is no longer selected is simply discarded, never rendered.
+  const historyRequestIdRef = useRef(0)
+
+  function fetchHistory(workItemId: number) {
+    const requestId = ++historyRequestIdRef.current
+
+    // Clear immediately so a stale item's events are never shown
+    // while the new item's history is in flight.
+    setHistoryStatus('loading')
+    setHistoryEvents([])
+    setHistoryError(null)
+
+    listWorkItemHistory(workItemId)
+      .then((events) => {
+        if (historyRequestIdRef.current !== requestId) {
+          return
+        }
+
+        setHistoryEvents(events)
+        setHistoryStatus('ready')
+      })
+      .catch((error) => {
+        if (historyRequestIdRef.current !== requestId) {
+          return
+        }
+
+        setHistoryEvents([])
+        setHistoryStatus('error')
+        setHistoryError(
+          getWorkItemHistoryErrorMessage(error),
+        )
+      })
+  }
+
+  useEffect(() => {
+    // Re-fetch whenever the selected Work Item changes — history is
+    // fetched for the selected Work Item only, never the whole Project.
+    fetchHistory(item.id)
+  }, [item.id])
+
   useEffect(() => {
     const handleKeyDown = (
       event: KeyboardEvent,
@@ -1275,7 +1865,9 @@ function WorkItemInspector({
 
           // Only flash "Saved" once nothing else is queued behind
           // this request — otherwise the next queued patch is about
-          // to flip the indicator back to "Saving…" anyway.
+          // to flip the indicator back to "Saving…" anyway. Refresh
+          // History on the same condition: once per drained batch of
+          // serialized patches, not once per individual PATCH.
           if (
             queuedPatchCountRef.current ===
             0
@@ -1285,6 +1877,17 @@ function WorkItemInspector({
               setTimeout(() => {
                 setSaveStatus('idle')
               }, 1600)
+
+            // Only refresh if this Work Item is still the one on
+            // screen — if the inspector has since switched to
+            // another Work Item, that switch already fetched its
+            // own History, and this settling patch must not touch it.
+            if (
+              currentItemIdRef.current ===
+              workItemId
+            ) {
+              fetchHistory(workItemId)
+            }
           }
 
           return true
@@ -2182,6 +2785,131 @@ function WorkItemInspector({
                     ))}
                 </div>
               </PropertyRow>
+            </div>
+
+            <div className="border-t border-outline-variant pt-5">
+              <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-on-surface-variant">
+                History
+              </h3>
+
+              {historyStatus === 'loading' && (
+                <p className="text-xs text-on-surface-variant/70">
+                  Loading history…
+                </p>
+              )}
+
+              {historyStatus === 'error' && (
+                <div
+                  role="alert"
+                  className="flex items-center gap-2.5 text-xs text-on-surface-variant"
+                >
+                  <span className="text-error">
+                    {historyError ??
+                      'History could not be loaded.'}
+                  </span>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      fetchHistory(item.id)
+                    }
+                    className="font-medium text-primary underline-offset-2 hover:underline"
+                  >
+                    Retry
+                  </button>
+                </div>
+              )}
+
+              {historyStatus === 'ready' &&
+                historyEvents.length === 0 && (
+                  <p className="text-xs text-on-surface-variant/70">
+                    No history yet.
+                  </p>
+                )}
+
+              {historyStatus === 'ready' &&
+                historyEvents.length > 0 && (
+                  <ul className="flex flex-col">
+                    {historyEvents.map(
+                      (event, index) => {
+                        const description =
+                          describeWorkItemHistoryEvent(
+                            event,
+                          )
+                        const isLast =
+                          index ===
+                          historyEvents.length - 1
+
+                        return (
+                          <li
+                            key={event.id}
+                            className="flex gap-2.5"
+                          >
+                            <div className="flex flex-col items-center">
+                              <span
+                                aria-hidden="true"
+                                className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-on-surface-variant/60"
+                              />
+
+                              {!isLast && (
+                                <span
+                                  aria-hidden="true"
+                                  className="mt-1 w-px flex-1 bg-outline-variant/50"
+                                />
+                              )}
+                            </div>
+
+                            <div
+                              className={[
+                                'min-w-0 flex-1',
+                                isLast ? 'pb-0.5' : 'pb-3.5',
+                              ].join(' ')}
+                            >
+                              <p className="truncate text-sm text-on-surface">
+                                {description.primary}
+                              </p>
+
+                              {description.lines.map(
+                                (line, lineIndex) =>
+                                  line.label ? (
+                                    <div
+                                      key={lineIndex}
+                                      className="mt-0.5 flex gap-2 text-xs text-on-surface-variant"
+                                    >
+                                      <span className="w-16 shrink-0 text-on-surface-variant/60">
+                                        {line.label}
+                                      </span>
+                                      <span className="min-w-0 truncate">
+                                        {line.text}
+                                      </span>
+                                    </div>
+                                  ) : (
+                                    <p
+                                      key={lineIndex}
+                                      className="mt-0.5 truncate text-xs text-on-surface-variant"
+                                    >
+                                      {line.text}
+                                    </p>
+                                  ),
+                              )}
+
+                              <p
+                                title={formatHistoryAbsoluteTime(
+                                  event.createdAt,
+                                )}
+                                className="mt-1 text-[11px] text-on-surface-variant/60"
+                              >
+                                {formatHistoryRelativeTime(
+                                  event.createdAt,
+                                )}
+                              </p>
+                            </div>
+                          </li>
+                        )
+                      },
+                    )}
+                  </ul>
+                )}
             </div>
           </div>
         </div>

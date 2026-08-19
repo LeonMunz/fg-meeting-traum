@@ -1016,3 +1016,284 @@ test(
     ).toHaveCount(0)
   },
 )
+
+const HISTORY_PROJECT_NAME =
+  'E2E Inspector History Project'
+const HISTORY_TASK_A_TITLE =
+  'E2E Inspector History Task A'
+const HISTORY_TASK_B_TITLE =
+  'E2E Inspector History Task B'
+const HISTORY_BLOCKED_REASON =
+  'Waiting for data collection'
+
+async function createHistoryTestProject(
+  page: import('@playwright/test').Page,
+  projectName: string,
+) {
+  await page
+    .getByRole('button', { name: /New project/ })
+    .click()
+
+  const createProjectDialog = page.getByRole(
+    'dialog',
+    { name: 'Create project' },
+  )
+
+  await createProjectDialog
+    .getByLabel('Project name')
+    .fill(projectName)
+
+  await createProjectDialog
+    .getByRole('button', {
+      name: /Create project/,
+    })
+    .click()
+
+  await expect(
+    page.getByText(projectName, { exact: true }),
+  ).toBeVisible()
+
+  await openProject(page, projectName)
+}
+
+async function createHistoryTestWorkItem(
+  page: import('@playwright/test').Page,
+  title: string,
+) {
+  const responsePromise = page.waitForResponse(
+    (response) =>
+      response.url().includes('/work-items/') &&
+      response.request().method() === 'POST',
+  )
+
+  await page
+    .getByRole('button', { name: /New work item/ })
+    .click()
+
+  const createDialog = page.getByRole('dialog', {
+    name: 'New work item',
+  })
+
+  await createDialog
+    .getByLabel('Title')
+    .fill(title)
+
+  await createDialog
+    .getByRole('button', {
+      name: /Create work item/,
+    })
+    .click()
+
+  await expect(createDialog).not.toBeVisible()
+
+  const response = await responsePromise
+  const body = await response.json()
+  return body.id as number
+}
+
+test(
+  'Work Item inspector: History renders a readable timeline, ' +
+    'updates live after edits, and stays race-safe across switches',
+  async ({ page }) => {
+    await login(page, 'alex')
+    await openProjects(page)
+    await createHistoryTestProject(
+      page,
+      HISTORY_PROJECT_NAME,
+    )
+
+    const taskAId = await createHistoryTestWorkItem(
+      page,
+      HISTORY_TASK_A_TITLE,
+    )
+    await createHistoryTestWorkItem(
+      page,
+      HISTORY_TASK_B_TITLE,
+    )
+
+    const inspector = page.getByRole('region', {
+      name: 'Work item',
+      exact: true,
+    })
+    const historyHeading = inspector.getByRole(
+      'heading',
+      { name: 'History', exact: true },
+    )
+    // Scope timeline-text assertions to the History list itself —
+    // "Blocked reason" wording can otherwise also match the
+    // Properties section's own reason readout.
+    const historyList = inspector.getByRole('list')
+
+    const boardCardA = page.getByRole('button', {
+      name: `Open ${HISTORY_TASK_A_TITLE}`,
+    })
+    const boardCardB = page.getByRole('button', {
+      name: `Open ${HISTORY_TASK_B_TITLE}`,
+    })
+
+    // --------------------------------------------------------
+    // 1 & 2 & 3. Open A — History appears at the bottom with the
+    // created event visible.
+    // --------------------------------------------------------
+
+    await boardCardA.click()
+    await expect(inspector).toBeVisible()
+    await expect(historyHeading).toBeVisible()
+
+    await expect(
+      historyList.getByText(
+        `Alex Dev created this work item`,
+      ),
+    ).toBeVisible()
+
+    // --------------------------------------------------------
+    // 4 & 5. Change status through the inspector — a corresponding
+    // history event appears without closing the inspector.
+    // --------------------------------------------------------
+
+    const statusSelect = inspector.getByLabel(
+      'Status',
+      { exact: true },
+    )
+    await statusSelect.selectOption('in_progress')
+
+    await expect(
+      historyList.getByText('Alex Dev changed status'),
+    ).toBeVisible()
+    await expect(
+      historyList.getByText('To do → In progress'),
+    ).toBeVisible()
+
+    // --------------------------------------------------------
+    // 6. A blocked-reason change creates an understandable entry.
+    // --------------------------------------------------------
+
+    await inspector
+      .getByRole('switch', {
+        name: 'Blocked',
+        exact: true,
+      })
+      .click()
+
+    const reasonInput = inspector.getByLabel(
+      'Blocked reason',
+      { exact: true },
+    )
+    await reasonInput.fill(HISTORY_BLOCKED_REASON)
+    await reasonInput.press('Tab')
+
+    await expect(
+      historyList.getByText(
+        'Alex Dev marked this work item as blocked',
+      ),
+    ).toBeVisible()
+    await expect(
+      historyList.getByText(HISTORY_BLOCKED_REASON, {
+        exact: true,
+      }),
+    ).toBeVisible()
+
+    // --------------------------------------------------------
+    // 10. No raw JSON anywhere in the History section.
+    // --------------------------------------------------------
+
+    const historyText = await inspector.innerText()
+    expect(historyText).not.toContain('"changes"')
+    expect(historyText).not.toContain('"eventType"')
+    expect(historyText).not.toContain('{"from"')
+
+    // --------------------------------------------------------
+    // 7 & 8. Switch from A to B — B's History replaces A's.
+    // --------------------------------------------------------
+
+    await boardCardB.click()
+    await expect(inspector).toBeVisible()
+
+    await expect(
+      historyList.getByText(
+        'Alex Dev created this work item',
+      ),
+    ).toBeVisible()
+    await expect(
+      historyList.getByText('Alex Dev changed status'),
+    ).toHaveCount(0)
+    await expect(
+      historyList.getByText(HISTORY_BLOCKED_REASON, {
+        exact: true,
+      }),
+    ).toHaveCount(0)
+
+    // --------------------------------------------------------
+    // 9. Switch back to A — the correct (A) history returns.
+    // --------------------------------------------------------
+
+    await boardCardA.click()
+    await expect(inspector).toBeVisible()
+    await expect(
+      historyList.getByText('Alex Dev changed status'),
+    ).toBeVisible()
+    await expect(
+      historyList.getByText(HISTORY_BLOCKED_REASON, {
+        exact: true,
+      }),
+    ).toBeVisible()
+
+    // --------------------------------------------------------
+    // Race regression: delay A's next History response, switch to
+    // B while that fetch is still in flight, and confirm the late
+    // A response never overwrites B's History once it finally
+    // arrives.
+    // --------------------------------------------------------
+
+    // Leave A first so the next click on A starts a brand new fetch
+    // (clicking an already-open Work Item is a no-op).
+    await boardCardB.click()
+    await expect(inspector).toBeVisible()
+    await expect(
+      historyList.getByText(
+        'Alex Dev created this work item',
+      ),
+    ).toBeVisible()
+
+    await page.route(
+      `**/api/work-items/${taskAId}/history/`,
+      async (route) => {
+        const response = await route.fetch()
+        await new Promise((resolve) =>
+          setTimeout(resolve, 1200),
+        )
+        await route.fulfill({ response })
+      },
+    )
+
+    // Switch to A — its History fetch is now in flight (delayed) —
+    // then immediately switch back to B before it resolves.
+    await boardCardA.click()
+    await boardCardB.click()
+
+    await expect(inspector).toBeVisible()
+    await expect(
+      historyList.getByText(
+        'Alex Dev created this work item',
+      ),
+    ).toBeVisible()
+
+    // Give the delayed A response time to actually land.
+    await page.waitForTimeout(1500)
+
+    // B's History must still be showing — never clobbered by the
+    // stale, late-arriving A response.
+    await expect(
+      historyList.getByText('Alex Dev changed status'),
+    ).toHaveCount(0)
+    await expect(
+      historyList.getByText(HISTORY_BLOCKED_REASON, {
+        exact: true,
+      }),
+    ).toHaveCount(0)
+
+    await page.unroute(
+      `**/api/work-items/${taskAId}/history/`,
+    )
+  },
+)

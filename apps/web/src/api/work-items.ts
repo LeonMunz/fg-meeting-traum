@@ -9,6 +9,7 @@ import type {
   ApiPersonalWorkItem,
   ApiUpdateWorkItemInput,
   ApiWorkItem,
+  ApiWorkItemHistoryEvent,
 } from './types'
 
 export async function listProjectWorkItems(
@@ -44,6 +45,14 @@ export async function updateWorkItem(
   return apiPatch<ApiWorkItem>(
     `/api/work-items/${workItemId}/`,
     input,
+  )
+}
+
+export async function listWorkItemHistory(
+  workItemId: number,
+): Promise<ApiWorkItemHistoryEvent[]> {
+  return apiGet<ApiWorkItemHistoryEvent[]>(
+    `/api/work-items/${workItemId}/history/`,
   )
 }
 
