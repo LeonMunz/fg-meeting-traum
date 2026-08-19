@@ -40,6 +40,7 @@ import {
 import type {
   ApiProjectMembership,
   ApiResearchGroupMember,
+  ApiUpdateWorkItemInput,
   ApiWorkItem,
 } from '../../api/types'
 import {
@@ -1659,9 +1660,9 @@ export function ProjectDetailPage() {
     }
   }
 
-  const handleUpdateWorkItem = async (
+  const handlePatchWorkItem = async (
     workItemId: number,
-    input: WorkItemFormInput,
+    patch: ApiUpdateWorkItemInput,
   ) => {
     if (isReadOnly) {
       throw new Error(
@@ -1671,16 +1672,11 @@ export function ProjectDetailPage() {
       )
     }
 
-    const assigneeIds =
-      input.assigneeIds.map(
-        (id) => Number(id),
-      )
-
     if (
       !Number.isInteger(
         workItemId,
       ) ||
-      assigneeIds.some(
+      patch.assigneeIds?.some(
         (id) =>
           !Number.isInteger(id),
       )
@@ -1690,21 +1686,15 @@ export function ProjectDetailPage() {
       )
     }
 
-    let parentId:
-      | number
-      | null = null
-
-    if (input.parentId != null) {
-      parentId =
-        Number(input.parentId)
-
-      if (
-        !Number.isInteger(parentId)
-      ) {
-        throw new Error(
-          'Invalid parent Work Item ID.',
-        )
-      }
+    if (
+      patch.parentId != null &&
+      !Number.isInteger(
+        patch.parentId,
+      )
+    ) {
+      throw new Error(
+        'Invalid parent Work Item ID.',
+      )
     }
 
     setWorkItemsError(null)
@@ -1713,20 +1703,7 @@ export function ProjectDetailPage() {
       const updated =
         await updateWorkItem(
           workItemId,
-          {
-            title:
-              input.title.trim(),
-            description:
-              input.description.trim(),
-            type: input.type,
-            status: input.status,
-            assigneeIds,
-            parentId,
-            dueDate:
-              input.dueDate,
-            blockedReason:
-              input.blockedReason,
-          },
+          patch,
         )
 
       setApiWorkItems(
@@ -2834,7 +2811,7 @@ export function ProjectDetailPage() {
           setWorkItemDrawerState(null)
         }
         onCreate={handleCreateWorkItem}
-        onUpdate={handleUpdateWorkItem}
+        onPatch={handlePatchWorkItem}
       />
     </div>
   )
