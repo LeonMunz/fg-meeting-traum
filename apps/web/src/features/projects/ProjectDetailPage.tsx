@@ -1,4 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react'
 import {
   Link,
   useLocation,
@@ -20,10 +26,7 @@ import {
   ProjectLifecycleDialog,
   type ProjectLifecycleAction,
 } from './ProjectLifecycleDialog'
-import {
-  WorkItemDrawer,
-  type WorkItemFormInput,
-} from './WorkItemDrawer'
+import type { WorkItemFormInput } from './WorkItemDrawer'
 import { ApiError } from '../../api/client'
 import {
   addProjectMembership,
@@ -49,6 +52,48 @@ import {
   updateWorkItem,
 } from '../../api/work-items'
 import { useSession } from '../../api/useSession'
+
+// Lazy: WorkItemDrawer pulls in RichMarkdownEditor -> Tiptap/ProseMirror,
+// by far the heaviest dependency graph in this feature. Nothing here
+// needs it until a Work Item is actually opened or created, so it's kept
+// out of the initial Project page bundle and fetched on first use.
+const WorkItemDrawer = lazy(() =>
+  import('./WorkItemDrawer').then((module) => ({
+    default: module.WorkItemDrawer,
+  })),
+)
+
+// Quiet placeholder shown only for the brief window while the
+// WorkItemDrawer chunk loads on first open. Mirrors just enough of the
+// real shell (footprint + the `data-work-item-inspector-boundary`
+// marker used by the outside-click-close effect below) that:
+//  - edit mode doesn't cause a layout jump in the right-side inspector
+//    rail, and
+//  - a click landing on the fallback isn't misread as an "outside"
+//    click and doesn't immediately close the inspector once the real
+//    drawer mounts.
+// No spinner, no skeleton content — it only ever exists for one chunk
+// fetch, typically imperceptible on a warm cache.
+function WorkItemDrawerFallback({
+  mode,
+}: {
+  mode: 'create' | 'edit'
+}) {
+  if (mode === 'edit') {
+    return (
+      <div
+        data-work-item-inspector-boundary="true"
+        className="fixed inset-y-0 right-0 z-40 w-full border-l border-outline-variant bg-surface-container-lowest shadow-2xl sm:w-[520px]"
+      />
+    )
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/30">
+      <div className="ml-auto h-full w-full max-w-[660px] border-l border-outline-variant bg-surface-container-lowest shadow-2xl" />
+    </div>
+  )
+}
 
 type ProjectStatus = 'active' | 'paused' | 'completed'
 type ProjectRole = 'owner' | 'member' | 'viewer'
@@ -2952,39 +2997,53 @@ export function ProjectDetailPage() {
         onConfirm={handleConfirmRemoveMember}
       />
 
-      <WorkItemDrawer
-        open={workItemDrawerState != null}
-        mode={
-          workItemDrawerState?.mode ??
-          'create'
-        }
-        projectName={project.name}
-        item={selectedDrawerWorkItem}
-        readOnly={isReadOnly}
-        currentUserId={user ? user.id : null}
-        assignees={sortedMembers
-          .filter(
-            (member) =>
-              member.role !== 'viewer',
-          )
-          .map((member) => ({
-            id: member.id,
-            name: member.name,
-            initials: member.initials,
-          }))}
-        parentItems={projectWorkItems.map(
-          (item) => ({
-            id: item.id,
-            title: item.title,
-            type: item.type,
-          }),
-        )}
-        onClose={() =>
-          setWorkItemDrawerState(null)
-        }
-        onCreate={handleCreateWorkItem}
-        onPatch={handlePatchWorkItem}
-      />
+      {workItemDrawerState != null && (
+        // Rendering the lazy WorkItemDrawer only while a drawer state
+        // actually exists (rather than always rendering it with
+        // `open={false}`) is what keeps its chunk — and the whole
+        // RichMarkdownEditor/Tiptap graph behind it — from being
+        // fetched on initial page load. React.lazy triggers its
+        // import() as soon as the component is mounted, regardless of
+        // any `open` prop, so the gate has to live here.
+        <Suspense
+          fallback={
+            <WorkItemDrawerFallback
+              mode={workItemDrawerState.mode}
+            />
+          }
+        >
+          <WorkItemDrawer
+            open={true}
+            mode={workItemDrawerState.mode}
+            projectName={project.name}
+            item={selectedDrawerWorkItem}
+            readOnly={isReadOnly}
+            currentUserId={user ? user.id : null}
+            assignees={sortedMembers
+              .filter(
+                (member) =>
+                  member.role !== 'viewer',
+              )
+              .map((member) => ({
+                id: member.id,
+                name: member.name,
+                initials: member.initials,
+              }))}
+            parentItems={projectWorkItems.map(
+              (item) => ({
+                id: item.id,
+                title: item.title,
+                type: item.type,
+              }),
+            )}
+            onClose={() =>
+              setWorkItemDrawerState(null)
+            }
+            onCreate={handleCreateWorkItem}
+            onPatch={handlePatchWorkItem}
+          />
+        </Suspense>
+      )}
     </div>
   )
 }

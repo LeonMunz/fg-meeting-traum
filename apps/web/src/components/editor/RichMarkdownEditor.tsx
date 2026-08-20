@@ -229,7 +229,14 @@ export function RichMarkdownEditor({
   useEditorState({
     editor,
     selector: ({ editor: currentEditor }) => {
-      if (!currentEditor) {
+      // `isDestroyed` (not just a null check) matters here: this
+      // selector can still fire — via `useSyncExternalStore` — for one
+      // last transaction dispatched during teardown, after `destroy()`
+      // has already nulled the editor's internal `schema` but before
+      // React has unsubscribed this hook. Without this guard that
+      // final call reads `.schema.nodes` off a destroyed editor and
+      // throws.
+      if (!currentEditor || currentEditor.isDestroyed) {
         return null
       }
 

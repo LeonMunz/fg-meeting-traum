@@ -247,6 +247,15 @@ export function safeIsActive(
   name: string,
   attributes?: Record<string, unknown>,
 ): boolean {
+  // A destroyed editor's `schema` is nulled out by Tiptap itself
+  // (Editor#destroy) even though the `Editor` object reference can
+  // still be around briefly (e.g. one last reactive callback firing
+  // during teardown) — guard against that here too, not just at the
+  // call sites.
+  if (editor.isDestroyed) {
+    return false
+  }
+
   const inSchema =
     name in editor.schema.nodes || name in editor.schema.marks
 

@@ -850,6 +850,18 @@ test(
       { exact: true },
     )
 
+    // BLOCKED_REASON also ends up quoted verbatim inside a permanent
+    // "marked this work item as blocked" Activity entry once History has
+    // (re)fetched — a `getByText(BLOCKED_REASON)` scoped only to
+    // `inspector` would ambiguously match both that entry and the Blocked
+    // field's own read-mode display. Scope to the field's own text,
+    // excluding anything under the `aria-label="Activity"` list.
+    const blockedReasonDisplay = inspector.locator(
+      'xpath=.//p[normalize-space(text())=' +
+        JSON.stringify(BLOCKED_REASON) +
+        ' and not(ancestor::*[@aria-label="Activity"])]',
+    )
+
     // --------------------------------------------------------
     // 1 & 2. Open an unblocked Work Item.
     // --------------------------------------------------------
@@ -975,10 +987,7 @@ test(
       'true',
     )
     await expect(
-      inspector.getByText(
-        BLOCKED_REASON,
-        { exact: true },
-      ),
+      blockedReasonDisplay,
     ).toBeVisible()
 
     // --------------------------------------------------------
@@ -994,10 +1003,7 @@ test(
       'false',
     )
     await expect(
-      inspector.getByText(
-        BLOCKED_REASON,
-        { exact: true },
-      ),
+      blockedReasonDisplay,
     ).toHaveCount(0)
 
     // --------------------------------------------------------
@@ -1014,10 +1020,7 @@ test(
       'false',
     )
     await expect(
-      inspector.getByText(
-        BLOCKED_REASON,
-        { exact: true },
-      ),
+      blockedReasonDisplay,
     ).toHaveCount(0)
   },
 )
