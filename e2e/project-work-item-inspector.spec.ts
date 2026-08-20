@@ -881,10 +881,14 @@ test(
     await expect(
       reasonInput,
     ).toBeFocused()
+    // The compact editor's placeholder isn't a native `placeholder`
+    // attribute (it's a contenteditable, not a textarea) — Tiptap's
+    // Placeholder extension renders it via `data-placeholder` +
+    // CSS `::before` on the empty paragraph (see index.css).
     await expect(
-      reasonInput,
+      reasonInput.locator('p'),
     ).toHaveAttribute(
-      'placeholder',
+      'data-placeholder',
       'Why is this work item blocked?',
     )
 
@@ -919,7 +923,7 @@ test(
     await expect(
       reasonInput,
     ).toBeFocused()
-    await reasonInput.fill('   ')
+    await page.keyboard.type('   ')
     await reasonInput.press('Tab')
     await expect(
       blockedSwitch,
@@ -942,7 +946,7 @@ test(
     await expect(
       reasonInput,
     ).toBeFocused()
-    await reasonInput.fill(BLOCKED_REASON)
+    await page.keyboard.type(BLOCKED_REASON)
 
     await boardCardB.click()
 
@@ -1015,6 +1019,331 @@ test(
         { exact: true },
       ),
     ).toHaveCount(0)
+  },
+)
+
+const BLOCKED_RICH_PROJECT_NAME =
+  'E2E Inspector Blocked Rich Project'
+const BLOCKED_RICH_TASK_A_TITLE =
+  'E2E Inspector Blocked Rich Task A'
+const BLOCKED_RICH_TASK_B_TITLE =
+  'E2E Inspector Blocked Rich Task B'
+
+test(
+  'Work Item inspector: Blocked reason is a compact Markdown/Rich-Text ' +
+    'editor — typed Markdown becomes formatted content, commits on ' +
+    'blur/switch, persists through reload, editing an existing reason ' +
+    'applies Bold through the BubbleMenu, and Esc cancels a pending ' +
+    'block / restores the canonical reason without closing the inspector',
+  async ({ page }) => {
+    await login(page, 'alex')
+    await openProjects(page)
+    await createHistoryTestProject(
+      page,
+      BLOCKED_RICH_PROJECT_NAME,
+    )
+
+    await createHistoryTestWorkItem(
+      page,
+      BLOCKED_RICH_TASK_A_TITLE,
+    )
+    await createHistoryTestWorkItem(
+      page,
+      BLOCKED_RICH_TASK_B_TITLE,
+    )
+
+    const inspector = page.getByRole('region', {
+      name: 'Work item',
+      exact: true,
+    })
+
+    const boardCardA = page.getByRole('button', {
+      name: `Open ${BLOCKED_RICH_TASK_A_TITLE}`,
+    })
+    const boardCardB = page.getByRole('button', {
+      name: `Open ${BLOCKED_RICH_TASK_B_TITLE}`,
+    })
+
+    const blockedSwitch = inspector.getByRole('switch', {
+      name: 'Blocked',
+      exact: true,
+    })
+    const reasonEditor = inspector.getByLabel('Blocked reason', {
+      exact: true,
+    })
+
+    // --------------------------------------------------------
+    // 1-3. Open an unblocked Work Item, activate Blocked — the
+    //    compact rich editor appears, focused, with its own
+    //    (smaller) Formatting toolbar.
+    // --------------------------------------------------------
+
+    await boardCardA.click()
+    await expect(inspector).toBeVisible()
+    await expect(blockedSwitch).toHaveAttribute(
+      'aria-checked',
+      'false',
+    )
+
+    await blockedSwitch.click()
+    await expect(reasonEditor).toBeVisible()
+    await expect(reasonEditor).toBeFocused()
+
+    const reasonToolbar = inspector.getByRole('toolbar', {
+      name: 'Formatting',
+    })
+    await expect(reasonToolbar).toBeVisible()
+
+    for (const label of [
+      'Bold',
+      'Italic',
+      'Inline code',
+      'Link',
+      'Bullet list',
+      'Numbered list',
+    ]) {
+      await expect(
+        reasonToolbar.getByRole('button', {
+          name: label,
+          exact: true,
+        }),
+      ).toBeVisible()
+    }
+    for (const label of [
+      'Checklist',
+      'Quote',
+      'Heading 2',
+      'Heading 3',
+    ]) {
+      await expect(
+        reasonToolbar.getByRole('button', {
+          name: label,
+          exact: true,
+        }),
+      ).toHaveCount(0)
+    }
+
+    // --------------------------------------------------------
+    // 4. Enter Markdown containing bold, a bullet list, and
+    //    inline code.
+    // --------------------------------------------------------
+
+    await page.keyboard.type('Waiting for ')
+    await page.keyboard.type('**reviewer feedback**')
+    await page.keyboard.type(' on the draft:')
+    await page.keyboard.press('Enter')
+    await page.keyboard.press('Enter')
+
+    await reasonToolbar
+      .getByRole('button', {
+        name: 'Bullet list',
+        exact: true,
+      })
+      .click()
+    await page.keyboard.type('Reviewer 1')
+    await page.keyboard.press('Enter')
+    await page.keyboard.type('Reviewer 2 via ')
+    await page.keyboard.type('`review.md`')
+
+    // --------------------------------------------------------
+    // 5 & 6. Switch to B without blurring first — the click's own
+    //    focus change must blur (and queue/commit) the reason
+    //    PATCH before the inspector swaps.
+    // --------------------------------------------------------
+
+    await boardCardB.click()
+    await expect(inspector).toBeVisible()
+    await expect(
+      inspector.getByRole('button', {
+        name: BLOCKED_RICH_TASK_B_TITLE,
+        exact: true,
+      }),
+    ).toBeVisible()
+
+    // --------------------------------------------------------
+    // 7 & 8. Reopen A — Blocked = Yes, reason renders formatted,
+    //    never as raw Markdown syntax.
+    // --------------------------------------------------------
+
+    await boardCardA.click()
+    await expect(inspector).toBeVisible()
+    await expect(blockedSwitch).toHaveAttribute(
+      'aria-checked',
+      'true',
+    )
+
+    await expect(
+      inspector.locator('strong', {
+        hasText: 'reviewer feedback',
+      }),
+    ).toBeVisible()
+    await expect(
+      inspector.locator('li', {
+        hasText: /^Reviewer 1$/,
+      }),
+    ).toBeVisible()
+    await expect(
+      inspector.locator('code', {
+        hasText: 'review.md',
+      }),
+    ).toBeVisible()
+
+    const postedText = await inspector.innerText()
+    expect(postedText).not.toContain('**')
+    expect(postedText).not.toContain('`review.md`')
+
+    // --------------------------------------------------------
+    // 9. Reload and confirm persistence.
+    // --------------------------------------------------------
+
+    await page.reload()
+    await boardCardA.click()
+    await expect(inspector).toBeVisible()
+    await expect(blockedSwitch).toHaveAttribute(
+      'aria-checked',
+      'true',
+    )
+    await expect(
+      inspector.locator('strong', {
+        hasText: 'reviewer feedback',
+      }),
+    ).toBeVisible()
+    await expect(
+      inspector.locator('li', {
+        hasText: /^Reviewer 1$/,
+      }),
+    ).toBeVisible()
+    await expect(
+      inspector.locator('code', {
+        hasText: 'review.md',
+      }),
+    ).toBeVisible()
+
+    // --------------------------------------------------------
+    // 10 & 11. Click the existing reason to edit it, select all,
+    //    and apply Bold through the BubbleMenu — reusing the exact
+    //    same BubbleMenu Description/Comments use.
+    // --------------------------------------------------------
+
+    await inspector
+      .getByRole('button', { name: /Waiting for/ })
+      .click()
+    await expect(reasonEditor).toBeVisible()
+    await expect(reasonEditor).toBeFocused()
+    await expect(reasonEditor).toContainText('Waiting for')
+
+    await page.keyboard.press('ControlOrMeta+a')
+
+    const bubbleToolbar = inspector.getByRole('toolbar', {
+      name: 'Selection formatting',
+    })
+    await expect(bubbleToolbar).toBeVisible()
+
+    const bubbleBoldButton = bubbleToolbar.getByRole('button', {
+      name: 'Bold',
+      exact: true,
+    })
+    await bubbleBoldButton.click()
+    await expect(bubbleBoldButton).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+
+    // --------------------------------------------------------
+    // 12 & 13. Save via blur (switching away), reopen, and
+    //    confirm the additional formatting persisted.
+    // --------------------------------------------------------
+
+    await boardCardB.click()
+    await expect(inspector).toBeVisible()
+
+    await boardCardA.click()
+    await expect(inspector).toBeVisible()
+    await expect(blockedSwitch).toHaveAttribute(
+      'aria-checked',
+      'true',
+    )
+    await expect(
+      inspector.locator('strong', {
+        hasText: 'Waiting for',
+      }),
+    ).toBeVisible()
+
+    // --------------------------------------------------------
+    // 18. Esc during a new pending block cancels it — no PATCH,
+    //    Blocked reverts to No, and the inspector stays open.
+    // --------------------------------------------------------
+
+    await boardCardB.click()
+    await expect(inspector).toBeVisible()
+    await expect(blockedSwitch).toHaveAttribute(
+      'aria-checked',
+      'false',
+    )
+
+    await blockedSwitch.click()
+    await expect(reasonEditor).toBeVisible()
+    await page.keyboard.type(
+      'Just started typing a reason',
+    )
+    await page.keyboard.press('Escape')
+
+    await expect(inspector).toBeVisible()
+    await expect(blockedSwitch).toHaveAttribute(
+      'aria-checked',
+      'false',
+    )
+    await expect(reasonEditor).toHaveCount(0)
+
+    // Confirm nothing was actually sent to the server.
+    await page.reload()
+    await boardCardB.click()
+    await expect(inspector).toBeVisible()
+    await expect(blockedSwitch).toHaveAttribute(
+      'aria-checked',
+      'false',
+    )
+
+    // --------------------------------------------------------
+    // 19. Esc while editing an EXISTING blocked reason restores
+    //    the canonical Markdown and keeps the item blocked — the
+    //    inspector stays open throughout.
+    // --------------------------------------------------------
+
+    await boardCardA.click()
+    await expect(inspector).toBeVisible()
+    await expect(blockedSwitch).toHaveAttribute(
+      'aria-checked',
+      'true',
+    )
+
+    await inspector
+      .getByRole('button', { name: /Waiting for/ })
+      .click()
+    await expect(reasonEditor).toBeVisible()
+
+    await page.keyboard.press('ControlOrMeta+a')
+    await page.keyboard.type(
+      'Trying to overwrite the saved reason',
+    )
+    await page.keyboard.press('Escape')
+
+    await expect(inspector).toBeVisible()
+    await expect(blockedSwitch).toHaveAttribute(
+      'aria-checked',
+      'true',
+    )
+    await expect(reasonEditor).toHaveCount(0)
+    await expect(
+      inspector.getByText(
+        'Trying to overwrite the saved reason',
+      ),
+    ).toHaveCount(0)
+    await expect(
+      inspector.locator('strong', {
+        hasText: 'Waiting for',
+      }),
+    ).toBeVisible()
   },
 )
 
@@ -1183,7 +1512,8 @@ test(
       'Blocked reason',
       { exact: true },
     )
-    await reasonInput.fill(HISTORY_BLOCKED_REASON)
+    await expect(reasonInput).toBeFocused()
+    await page.keyboard.type(HISTORY_BLOCKED_REASON)
     await reasonInput.press('Tab')
 
     await expect(

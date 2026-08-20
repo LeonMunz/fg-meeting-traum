@@ -187,6 +187,52 @@ function jsonContentHasText(node: JSONContent): boolean {
 }
 
 /**
+ * Flattens Markdown to a single-line, syntax-free approximation of its
+ * text — for a quiet, truncatable summary line (e.g. a History/Activity
+ * entry) that needs to read naturally, never for rendered content (use
+ * `RichMarkdownEditor readOnly` for that). Reuses the same parse step as
+ * the rest of this module rather than a hand-rolled Markdown-syntax
+ * stripper, so it stays correct for every node type in either variant's
+ * schema without drifting from what the editor itself understands.
+ */
+export function markdownToPlainText(
+  markdown: string,
+  variant: MarkdownEditorVariant = 'full',
+): string {
+  if (markdown.trim() === '') {
+    return ''
+  }
+
+  const manager = new MarkdownManager({
+    extensions: createMarkdownExtensions({ variant }),
+  })
+
+  const textRuns: string[] = []
+  collectJsonContentText(manager.parse(markdown), textRuns)
+
+  // Sibling text runs already carry their own inner spacing (marks
+  // split adjacent text but never eat the spaces around them) — joining
+  // with an extra space and collapsing runs is what keeps separate
+  // blocks (paragraphs, list items) from getting mashed together
+  // without overcounting whitespace that was already there.
+  return textRuns.join(' ').replace(/\s+/g, ' ').trim()
+}
+
+function collectJsonContentText(
+  node: JSONContent,
+  out: string[],
+): void {
+  if (typeof node.text === 'string') {
+    out.push(node.text)
+    return
+  }
+
+  for (const child of node.content ?? []) {
+    collectJsonContentText(child, out)
+  }
+}
+
+/**
  * `editor.isActive(name, …)` throws ("There is no node/mark type named
  * …") when `name` isn't registered in the current schema at all — which
  * is exactly the case for e.g. `blockquote`/`heading`/`taskList` under

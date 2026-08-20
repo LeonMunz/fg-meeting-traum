@@ -11,7 +11,10 @@ import type {
 
 import { ApiError } from '../../api/client'
 import { RichMarkdownEditor } from '../../components/editor/RichMarkdownEditor'
-import { isMarkdownContentEmpty } from '../../components/editor/markdownExtensions'
+import {
+  isMarkdownContentEmpty,
+  markdownToPlainText,
+} from '../../components/editor/markdownExtensions'
 import type {
   ApiUpdateWorkItemInput,
   ApiWorkItem,
@@ -488,8 +491,20 @@ function describeSingleHistoryField(
       if (change.from == null) {
         return {
           primary: `${actorName} marked this work item as blocked`,
+          // The stored reason is canonical Markdown (see
+          // markdownExtensions.ts) — this quiet History line is plain
+          // text, not rendered content, so it reads the reason
+          // naturally instead of showing raw "**"/"- " syntax.
           lines: change.to
-            ? [{ label: null, text: change.to }]
+            ? [
+                {
+                  label: null,
+                  text: markdownToPlainText(
+                    change.to,
+                    'compact',
+                  ),
+                },
+              ]
             : [],
         }
       }
@@ -503,7 +518,12 @@ function describeSingleHistoryField(
 
       return {
         primary: `${actorName} changed the blocked reason`,
-        lines: [{ label: null, text: change.to }],
+        lines: [
+          {
+            label: null,
+            text: markdownToPlainText(change.to, 'compact'),
+          },
+        ],
       }
     }
     case 'parent': {
@@ -1699,12 +1719,15 @@ function WorkItemInspector({
     blockedReasonEditing,
     setBlockedReasonEditing,
   ] = useState(false)
-  const [
-    blockedReasonDraft,
-    setBlockedReasonDraft,
-  ] = useState('')
-  const blockedReasonCancelledRef =
-    useRef(false)
+
+  // No local draft state, mirroring Description — the editable
+  // RichMarkdownEditor below always starts from `item.blockedReason ??
+  // ''` (canonical for an existing reason, empty for a fresh pending
+  // block) and reports its live Markdown via onChange/onCommit, so
+  // there is nothing here that can go stale or race (see
+  // commitBlockedReasonEdit). Escape-suppresses-the-following-blur is
+  // likewise handled internally by RichMarkdownEditor itself, so no
+  // local "was this cancelled" ref is needed either.
 
   // A Work Item must never be canonically blocked without a non-empty
   // reason (blockedReason === null means unblocked; there is no
@@ -2141,8 +2164,7 @@ function WorkItemInspector({
 
       if (blockedReasonEditing) {
         event.preventDefault()
-        setBlockedReasonEditing(false)
-        setPendingBlock(false)
+        cancelBlockedReasonEdit()
         return
       }
 
@@ -2436,23 +2458,35 @@ function WorkItemInspector({
       return
     }
 
-    setBlockedReasonDraft(
-      item.blockedReason ?? '',
-    )
     setBlockedReasonEditing(true)
   }
 
-  async function commitBlockedReasonEdit() {
-    const trimmed =
-      blockedReasonDraft.trim()
-    const current =
-      item.blockedReason ?? ''
+  // Esc during a pending new block AND Esc while editing an already-
+  // blocked item's reason both resolve to the same thing: leave edit
+  // mode, drop any not-yet-committed pending block. For an existing
+  // blocked item `pendingBlock` is already false, so this just exits
+  // to the read view, which always shows `item.blockedReason` — the
+  // canonical, still-blocked value — never the abandoned draft.
+  function cancelBlockedReasonEdit() {
+    setBlockedReasonEditing(false)
+    setPendingBlock(false)
+  }
 
-    if (!trimmed) {
-      // Empty/whitespace-only reason: never PATCH, never mark the
-      // item as blocked — revert (or stay at) Blocked: No. This also
-      // covers clearing an existing reason to empty, which reverts
-      // to the last-saved reason rather than creating blockedReason: "".
+  // Takes the committed Markdown directly from RichMarkdownEditor's
+  // onCommit (fired on blur), the same pattern commitDescriptionEdit
+  // uses — the editor owns its own live document between renders, so
+  // there is no local draft state to go stale or race.
+  async function commitBlockedReasonEdit(markdown: string) {
+    const trimmed = markdown.trim()
+    const current = item.blockedReason ?? ''
+
+    // Use the same "has meaningful content" check Comments use —
+    // `.trim()` alone would let visually-empty Markdown (e.g. an empty
+    // bullet item) through. Never PATCH, never mark the item as
+    // blocked — revert (or stay at) Blocked: No. This also covers
+    // clearing an existing reason to empty, which reverts to the
+    // last-saved reason rather than creating blockedReason: "".
+    if (isMarkdownContentEmpty(trimmed, 'compact')) {
       setBlockedReasonEditing(false)
       setPendingBlock(false)
       return
@@ -2468,9 +2502,10 @@ function WorkItemInspector({
     })
 
     // Only a successful PATCH makes the item canonically blocked —
-    // on failure, keep the draft and editing state so the save error
-    // is visible and the user can retry (see patchField's own
-    // saveStatus/saveError handling).
+    // on failure, keep the editing state so the save error is visible
+    // and the user can retry (see patchField's own saveStatus/
+    // saveError handling); the canonical reason (still unset or still
+    // the old value) remains what read mode would show.
     if (success) {
       setBlockedReasonEditing(false)
       setPendingBlock(false)
@@ -2485,7 +2520,6 @@ function WorkItemInspector({
     }
 
     if (nextBlocked) {
-      setBlockedReasonDraft('')
       setBlockedReasonEditing(true)
       setPendingBlock(true)
       return
@@ -2494,8 +2528,7 @@ function WorkItemInspector({
     // Turning off a not-yet-persisted pending block just cancels it
     // locally — there is nothing blocked to PATCH away yet.
     if (pendingBlock) {
-      setBlockedReasonEditing(false)
-      setPendingBlock(false)
+      cancelBlockedReasonEdit()
       return
     }
 
@@ -3162,48 +3195,27 @@ function WorkItemInspector({
 
                   {displayBlocked &&
                     (blockedReasonEditing ? (
-                      <textarea
-                        autoFocus
-                        rows={2}
+                      <RichMarkdownEditor
+                        // Empty for a fresh pending block (item.blockedReason
+                        // is still null), canonical Markdown when editing an
+                        // already-blocked item — see startBlockedReasonEdit /
+                        // handleBlockedToggle.
                         value={
-                          blockedReasonDraft
+                          item.blockedReason ?? ''
                         }
-                        onChange={(event) =>
-                          setBlockedReasonDraft(
-                            event.target
-                              .value,
+                        autoFocus
+                        variant="compact"
+                        ariaLabel="Blocked reason"
+                        placeholder="Why is this work item blocked?"
+                        onCommit={(markdown) =>
+                          void commitBlockedReasonEdit(
+                            markdown,
                           )
                         }
-                        onKeyDown={(
-                          event,
-                        ) => {
-                          if (
-                            event.key ===
-                            'Escape'
-                          ) {
-                            event.preventDefault()
-                            blockedReasonCancelledRef.current = true
-                            setBlockedReasonEditing(
-                              false,
-                            )
-                            setPendingBlock(
-                              false,
-                            )
-                          }
-                        }}
-                        onBlur={() => {
-                          if (
-                            blockedReasonCancelledRef.current
-                          ) {
-                            blockedReasonCancelledRef.current = false
-                            return
-                          }
-
-                          void commitBlockedReasonEdit()
-                        }}
-                        aria-label="Blocked reason"
-                        placeholder="Why is this work item blocked?"
-                        className="mt-2 w-full resize-y rounded-lg border border-primary bg-surface-container-lowest px-3 py-2 text-sm leading-6 text-on-surface outline-none focus:ring-2 focus:ring-primary/15"
+                        onEscape={
+                          cancelBlockedReasonEdit
+                        }
+                        className="-mx-3 mt-2 rounded-lg border border-primary bg-surface-container-lowest px-3 py-2 focus-within:ring-2 focus-within:ring-primary/15"
                       />
                     ) : (
                       <div
@@ -3217,9 +3229,21 @@ function WorkItemInspector({
                             ? undefined
                             : 0
                         }
-                        onClick={
-                          startBlockedReasonEdit
-                        }
+                        onClick={(event) => {
+                          // A click on a link inside the rendered reason
+                          // (read mode still renders real <a> tags — see
+                          // RichMarkdownEditor) should navigate, not also
+                          // enter edit mode.
+                          if (
+                            (
+                              event.target as HTMLElement
+                            ).closest('a')
+                          ) {
+                            return
+                          }
+
+                          startBlockedReasonEdit()
+                        }}
                         onKeyDown={(
                           event,
                         ) => {
@@ -3238,17 +3262,31 @@ function WorkItemInspector({
                           }
                         }}
                         className={[
-                          '-mx-3 mt-2 whitespace-pre-wrap rounded-lg px-3 py-2 text-sm leading-6',
+                          '-mx-3 mt-2 rounded-lg px-3 py-2',
                           item.blockedReason
-                            ? 'text-on-surface'
-                            : 'text-on-surface-variant/70',
+                            ? ''
+                            : 'text-sm leading-6 text-on-surface-variant/70',
                           readOnly
                             ? ''
-                            : 'cursor-text transition hover:bg-surface-container-low',
+                            : 'transition hover:bg-surface-container-low',
                         ].join(' ')}
                       >
-                        {item.blockedReason ||
-                          'Add a reason…'}
+                        {item.blockedReason ? (
+                          <RichMarkdownEditor
+                            value={
+                              item.blockedReason
+                            }
+                            readOnly
+                            variant="compact"
+                            className={
+                              readOnly
+                                ? ''
+                                : 'cursor-text'
+                            }
+                          />
+                        ) : (
+                          'Add a reason…'
+                        )}
                       </div>
                     ))}
                 </div>

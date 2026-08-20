@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   isMarkdownContentEmpty,
+  markdownToPlainText,
   roundtripMarkdown,
 } from './markdownExtensions'
 
@@ -317,5 +318,58 @@ describe('isMarkdownContentEmpty', () => {
     expect(
       isMarkdownContentEmpty('- Check references', 'compact'),
     ).toBe(false)
+  })
+})
+
+// Used for the quiet, plain-text History/Activity summary line for a
+// blockedReason change — never for rendered content.
+describe('markdownToPlainText', () => {
+  it('returns a plain sentence unchanged', () => {
+    expect(
+      markdownToPlainText(
+        'Waiting for reviewer feedback.',
+        'compact',
+      ),
+    ).toBe('Waiting for reviewer feedback.')
+  })
+
+  it('strips bold/italic/inline-code syntax, keeping the text', () => {
+    const out = markdownToPlainText(
+      'Waiting for **reviewer feedback** on `the draft`.',
+      'compact',
+    )
+
+    expect(out).not.toContain('**')
+    expect(out).not.toContain('`')
+    expect(out).toContain('reviewer feedback')
+    expect(out).toContain('the draft')
+  })
+
+  it('strips link syntax, keeping the link text', () => {
+    const out = markdownToPlainText(
+      'See [the ticket](https://example.com/1) for context.',
+      'compact',
+    )
+
+    expect(out).not.toContain('[')
+    expect(out).not.toContain('](')
+    expect(out).toContain('the ticket')
+  })
+
+  it('flattens a bullet list into readable text, not raw markers', () => {
+    const out = markdownToPlainText(
+      'Waiting for **reviewer feedback**.\n\n- Reviewer 1\n- Reviewer 2',
+      'compact',
+    )
+
+    expect(out).not.toContain('**')
+    expect(out).not.toContain('- ')
+    expect(out).toContain('reviewer feedback')
+    expect(out).toContain('Reviewer 1')
+    expect(out).toContain('Reviewer 2')
+  })
+
+  it('returns an empty string for empty Markdown', () => {
+    expect(markdownToPlainText('', 'compact')).toBe('')
   })
 })
