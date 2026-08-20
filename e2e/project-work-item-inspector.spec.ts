@@ -1126,7 +1126,7 @@ test(
     // Scope timeline-text assertions to the Activity feed itself —
     // "Blocked reason" wording can otherwise also match the
     // Properties section's own reason readout.
-    const historyList = inspector.getByRole('list')
+    const historyList = inspector.getByRole('list', { name: 'Activity' })
 
     const boardCardA = page.getByRole('button', {
       name: `Open ${HISTORY_TASK_A_TITLE}`,
@@ -1306,13 +1306,13 @@ const COMMENT_PROJECT_NAME =
   'E2E Inspector Comment Project'
 const COMMENT_TASK_A_TITLE =
   'E2E Inspector Comment Task A'
-const COMMENT_BODY_A =
-  'Can we confirm the final references before marking this done?'
 
 test(
-  'Work Item inspector: Activity comment composer expands, posts ' +
-    'via Cmd/Ctrl+Enter without closing the inspector, and reads ' +
-    'as visually distinct from System History',
+  'Work Item inspector: Activity comment composer is a compact ' +
+    'Markdown/Rich-Text editor — typed Markdown becomes formatted ' +
+    'content, posts via Cmd/Ctrl+Enter without closing the inspector, ' +
+    'persists through reload, and reads as visually distinct from ' +
+    'System History',
   async ({ page }) => {
     await login(page, 'alex')
     await openProjects(page)
@@ -1333,7 +1333,7 @@ test(
       'heading',
       { name: 'Activity', exact: true },
     )
-    const activityList = inspector.getByRole('list')
+    const activityList = inspector.getByRole('list', { name: 'Activity' })
 
     await page
       .getByRole('button', {
@@ -1354,15 +1354,17 @@ test(
     )
     await expect(idleComposer).toBeVisible()
 
-    const textarea = inspector.getByLabel(
+    const composerEditor = inspector.getByLabel(
       'Comment',
       { exact: true },
     )
-    await expect(textarea).toHaveCount(0)
+    await expect(composerEditor).toHaveCount(0)
 
-    // Clicking it expands into a textarea with Cancel / Comment.
+    // Clicking it expands into a compact RichMarkdownEditor with
+    // Cancel / Comment, autofocused.
     await idleComposer.click()
-    await expect(textarea).toBeVisible()
+    await expect(composerEditor).toBeVisible()
+    await expect(composerEditor).toBeFocused()
     await expect(
       inspector.getByRole('button', {
         name: 'Cancel',
@@ -1378,29 +1380,117 @@ test(
     await expect(postButton).toBeDisabled()
 
     // --------------------------------------------------------
-    // 4 & 5. Cmd/Ctrl+Enter posts without clicking the button,
-    //    and the comment appears without closing the inspector.
+    // 2. The compact toolbar only shows the smaller Comment subset
+    //    (Bold/Italic/Inline code/Link/Bullet/Numbered list) — never
+    //    the Description toolbar's headings/quote/checklist.
     // --------------------------------------------------------
 
-    await textarea.fill(COMMENT_BODY_A)
-    await expect(postButton).toBeEnabled()
-    await textarea.press('ControlOrMeta+Enter')
-
-    await expect(inspector).toBeVisible()
+    const composerToolbar = inspector.getByRole('toolbar', {
+      name: 'Formatting',
+    })
+    await expect(composerToolbar).toBeVisible()
     await expect(
-      activityList.getByText(COMMENT_BODY_A, {
+      inspector.getByText('Markdown supported', {
         exact: true,
       }),
     ).toBeVisible()
 
-    // Composer collapses back to idle after a successful post.
+    for (const label of [
+      'Bold',
+      'Italic',
+      'Inline code',
+      'Link',
+      'Bullet list',
+      'Numbered list',
+    ]) {
+      await expect(
+        composerToolbar.getByRole('button', {
+          name: label,
+          exact: true,
+        }),
+      ).toBeVisible()
+    }
+    for (const label of [
+      'Checklist',
+      'Quote',
+      'Heading 2',
+      'Heading 3',
+    ]) {
+      await expect(
+        composerToolbar.getByRole('button', {
+          name: label,
+          exact: true,
+        }),
+      ).toHaveCount(0)
+    }
+
+    // --------------------------------------------------------
+    // 3. Type Markdown-supported content — **bold** and
+    //    `inline code` typed as literal Markdown input (proving the
+    //    compact editor's own input rules turn typed syntax into
+    //    formatting live), plus a bullet list via the toolbar.
+    // --------------------------------------------------------
+
+    await page.keyboard.type('We should ')
+    await page.keyboard.type('**verify this**')
+    await page.keyboard.type(' before merging.')
+    await page.keyboard.press('Enter')
+    await page.keyboard.press('Enter')
+
+    await composerToolbar
+      .getByRole('button', {
+        name: 'Bullet list',
+        exact: true,
+      })
+      .click()
+    await page.keyboard.type('Check references')
+    await page.keyboard.press('Enter')
+    await page.keyboard.type('Check figures with ')
+    await page.keyboard.type('`refs.bib`')
+
+    // --------------------------------------------------------
+    // 4 & 5. Cmd/Ctrl+Enter posts without clicking the button,
+    //    and the comment appears without closing the inspector —
+    //    rendered as formatted content, never raw Markdown syntax.
+    // --------------------------------------------------------
+
+    await expect(postButton).toBeEnabled()
+    await page.keyboard.press('ControlOrMeta+Enter')
+
+    await expect(inspector).toBeVisible()
+    await expect(
+      activityList.locator('strong', {
+        hasText: 'verify this',
+      }),
+    ).toBeVisible()
+    await expect(
+      activityList.locator('li', {
+        hasText: /^Check references$/,
+      }),
+    ).toBeVisible()
+    await expect(
+      activityList.locator('code', {
+        hasText: 'refs.bib',
+      }),
+    ).toBeVisible()
+
+    const postedText = await activityList.innerText()
+    expect(postedText).not.toContain('**')
+    expect(postedText).not.toContain('`refs.bib`')
+
+    // Composer collapses back to idle after a successful post — and
+    // with it, its toolbar (no toolbar left anywhere: the posted
+    // comment renders read-only).
     await expect(idleComposer).toBeVisible()
-    await expect(textarea).toHaveCount(0)
+    await expect(composerEditor).toHaveCount(0)
+    await expect(
+      inspector.getByRole('toolbar', { name: 'Formatting' }),
+    ).toHaveCount(0)
 
     // --------------------------------------------------------
     // 2 & 6. The System History "created" entry still renders,
     //    in its own quiet/system voice, alongside — but visually
-    //    distinct from — the human comment's own body text.
+    //    distinct from — the human comment's own formatted body.
     // --------------------------------------------------------
 
     await expect(
@@ -1413,11 +1503,38 @@ test(
         exact: true,
       }),
     ).toBeVisible()
+
+    // --------------------------------------------------------
+    // Reload/reopen — the formatted Comment still renders correctly.
+    // --------------------------------------------------------
+
+    await page.reload()
+    await page
+      .getByRole('button', {
+        name: `Open ${COMMENT_TASK_A_TITLE}`,
+      })
+      .click()
+    await expect(inspector).toBeVisible()
+
     await expect(
-      activityList.getByText(COMMENT_BODY_A, {
-        exact: true,
+      activityList.locator('strong', {
+        hasText: 'verify this',
       }),
     ).toBeVisible()
+    await expect(
+      activityList.locator('li', {
+        hasText: /^Check references$/,
+      }),
+    ).toBeVisible()
+    await expect(
+      activityList.locator('code', {
+        hasText: 'refs.bib',
+      }),
+    ).toBeVisible()
+
+    const reloadedText = await activityList.innerText()
+    expect(reloadedText).not.toContain('**')
+    expect(reloadedText).not.toContain('`refs.bib`')
   },
 )
 
@@ -1427,15 +1544,17 @@ const DRAFT_TASK_A_TITLE =
   'E2E Inspector Draft Task A'
 const DRAFT_TASK_B_TITLE =
   'E2E Inspector Draft Task B'
-const DRAFT_TEXT_A =
-  'Draft only meant for Task A — never sent yet.'
+const DRAFT_PREFIX_A = 'Draft only meant for Task A — '
+const DRAFT_BOLD_A = 'never sent yet'
 const POSTED_COMMENT_A =
   'Posted comment that belongs to Task A only.'
 
 test(
-  'Work Item inspector: comment drafts survive Work Item ' +
-    'switching, never leak across items, and Activity stays ' +
-    'race-safe across switches',
+  'Work Item inspector: comment drafts (including Markdown ' +
+    'formatting) survive Work Item switching, never leak across ' +
+    'items, Esc collapses without discarding a draft, explicit ' +
+    'Cancel discards it, and Activity stays race-safe across ' +
+    'switches',
   async ({ page }) => {
     await login(page, 'alex')
     await openProjects(page)
@@ -1457,7 +1576,7 @@ test(
       name: 'Work item',
       exact: true,
     })
-    const activityList = inspector.getByRole('list')
+    const activityList = inspector.getByRole('list', { name: 'Activity' })
 
     const boardCardA = page.getByRole('button', {
       name: `Open ${DRAFT_TASK_A_TITLE}`,
@@ -1470,19 +1589,41 @@ test(
       'button',
       { name: 'Add a comment…' },
     )
-    const textarea = inspector.getByLabel(
+    const composerEditor = inspector.getByLabel(
       'Comment',
       { exact: true },
     )
+    const postButton = inspector.getByRole('button', {
+      name: 'Comment',
+      exact: true,
+    })
+
+    async function expectDraftRestored() {
+      await expect(composerEditor).toBeVisible()
+      await expect(
+        composerEditor.locator('strong', {
+          hasText: DRAFT_BOLD_A,
+        }),
+      ).toBeVisible()
+      await expect(composerEditor).toContainText(
+        DRAFT_PREFIX_A.trim(),
+      )
+      const text = await composerEditor.innerText()
+      expect(text).not.toContain('**')
+    }
 
     // --------------------------------------------------------
-    // 7. Open A, type an unsent draft — do not send it.
+    // 7. Open A, type an unsent Markdown draft — do not send it.
     // --------------------------------------------------------
 
     await boardCardA.click()
     await expect(inspector).toBeVisible()
     await idleComposer.click()
-    await textarea.fill(DRAFT_TEXT_A)
+    await expect(composerEditor).toBeFocused()
+    await page.keyboard.type(DRAFT_PREFIX_A)
+    await page.keyboard.type(`**${DRAFT_BOLD_A}**`)
+    await page.keyboard.type('.')
+    await expectDraftRestored()
 
     // --------------------------------------------------------
     // 8 & 11. Switch to B without sending — B starts with a
@@ -1492,37 +1633,61 @@ test(
     await boardCardB.click()
     await expect(inspector).toBeVisible()
     await expect(idleComposer).toBeVisible()
-    await expect(textarea).toHaveCount(0)
+    await expect(composerEditor).toHaveCount(0)
     await expect(
-      activityList.getByText(DRAFT_TEXT_A),
+      activityList.getByText(DRAFT_BOLD_A),
     ).toHaveCount(0)
 
     // --------------------------------------------------------
     // 9. Returning to A restores the composer, expanded, with
-    //    the exact unsent draft text still in it — and it was
-    //    genuinely never sent to the server.
+    //    the exact unsent Markdown draft still formatted in it —
+    //    and it was genuinely never sent to the server.
     // --------------------------------------------------------
 
     await boardCardA.click()
     await expect(inspector).toBeVisible()
-    await expect(textarea).toBeVisible()
-    await expect(textarea).toHaveValue(DRAFT_TEXT_A)
+    await expectDraftRestored()
     await expect(
-      activityList.getByText(DRAFT_TEXT_A),
+      activityList.getByText(DRAFT_BOLD_A),
     ).toHaveCount(0)
+
+    // --------------------------------------------------------
+    // 10. Esc collapses the composer but explicitly KEEPS the
+    //    draft — reopening shows the exact same formatted draft.
+    // --------------------------------------------------------
+
+    await page.keyboard.press('Escape')
+    await expect(idleComposer).toBeVisible()
+    await expect(composerEditor).toHaveCount(0)
+
+    await idleComposer.click()
+    await expectDraftRestored()
+
+    // --------------------------------------------------------
+    // 11. Explicit Cancel discards the draft — reopening the
+    //    composer starts empty again.
+    // --------------------------------------------------------
+
+    await inspector
+      .getByRole('button', { name: 'Cancel', exact: true })
+      .click()
+    await expect(idleComposer).toBeVisible()
+    await expect(composerEditor).toHaveCount(0)
+
+    await idleComposer.click()
+    await expect(composerEditor).toBeVisible()
+    await expect(
+      composerEditor.locator('strong'),
+    ).toHaveCount(0)
+    await expect(postButton).toBeDisabled()
 
     // --------------------------------------------------------
     // Now actually post A's comment, then confirm it never
     // leaks onto B's Activity feed (11, continued).
     // --------------------------------------------------------
 
-    await textarea.fill(POSTED_COMMENT_A)
-    await inspector
-      .getByRole('button', {
-        name: 'Comment',
-        exact: true,
-      })
-      .click()
+    await page.keyboard.type(POSTED_COMMENT_A)
+    await postButton.click()
 
     await expect(
       activityList.getByText(POSTED_COMMENT_A, {
@@ -1597,6 +1762,159 @@ test(
     await page.unroute(
       `**/api/work-items/${taskAId}/history/`,
     )
+  },
+)
+
+const EDIT_PROJECT_NAME =
+  'E2E Inspector Comment Edit Project'
+const EDIT_TASK_TITLE =
+  'E2E Inspector Comment Edit Task'
+const EDIT_COMMENT_ORIGINAL =
+  'Initial note before formatting.'
+
+test(
+  'Work Item inspector: editing own Markdown comment applies ' +
+    'Bold through the BubbleMenu, Save persists it through reload, ' +
+    'and the existing delete flow still works',
+  async ({ page }) => {
+    await login(page, 'alex')
+    await openProjects(page)
+    await createHistoryTestProject(page, EDIT_PROJECT_NAME)
+    await createHistoryTestWorkItem(page, EDIT_TASK_TITLE)
+
+    const inspector = page.getByRole('region', {
+      name: 'Work item',
+      exact: true,
+    })
+    const activityList = inspector.getByRole('list', { name: 'Activity' })
+
+    await page
+      .getByRole('button', {
+        name: `Open ${EDIT_TASK_TITLE}`,
+      })
+      .click()
+    await expect(inspector).toBeVisible()
+
+    // --------------------------------------------------------
+    // Post a plain-text comment to edit — same composer flow
+    // already covered elsewhere.
+    // --------------------------------------------------------
+
+    await inspector
+      .getByRole('button', { name: 'Add a comment…' })
+      .click()
+    await page.keyboard.type(EDIT_COMMENT_ORIGINAL)
+    await page.keyboard.press('ControlOrMeta+Enter')
+
+    const commentRow = inspector
+      .locator('li')
+      .filter({ hasText: EDIT_COMMENT_ORIGINAL })
+    await expect(commentRow).toBeVisible()
+
+    // --------------------------------------------------------
+    // 12. Edit own Markdown comment — the edit surface is the same
+    //    compact RichMarkdownEditor, starting from the comment's
+    //    canonical Markdown body.
+    // --------------------------------------------------------
+
+    await commentRow.hover()
+    await commentRow
+      .getByRole('button', { name: 'Comment actions' })
+      .click()
+    await inspector
+      .getByRole('button', { name: 'Edit', exact: true })
+      .click()
+
+    const editEditor = inspector.getByLabel('Edit comment', {
+      exact: true,
+    })
+    await expect(editEditor).toBeVisible()
+    await expect(editEditor).toBeFocused()
+    await expect(editEditor).toContainText(
+      EDIT_COMMENT_ORIGINAL,
+    )
+
+    // --------------------------------------------------------
+    // 13. Apply Bold through the BubbleMenu on the selected text —
+    //    reusing the exact same BubbleMenu Description uses.
+    // --------------------------------------------------------
+
+    await page.keyboard.press('ControlOrMeta+a')
+
+    const bubbleToolbar = inspector.getByRole('toolbar', {
+      name: 'Selection formatting',
+    })
+    await expect(bubbleToolbar).toBeVisible()
+
+    const bubbleBoldButton = bubbleToolbar.getByRole('button', {
+      name: 'Bold',
+      exact: true,
+    })
+    await bubbleBoldButton.click()
+    await expect(bubbleBoldButton).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+
+    // --------------------------------------------------------
+    // 14. Save — the edit surface closes and the comment renders
+    //    formatted, not raw Markdown syntax.
+    // --------------------------------------------------------
+
+    await inspector
+      .getByRole('button', { name: 'Save', exact: true })
+      .click()
+    await expect(editEditor).toHaveCount(0)
+
+    await expect(
+      commentRow.locator('strong', {
+        hasText: EDIT_COMMENT_ORIGINAL,
+      }),
+    ).toBeVisible()
+    const editedText = await commentRow.innerText()
+    expect(editedText).not.toContain('**')
+
+    // --------------------------------------------------------
+    // 15. Reload and verify the formatting persisted.
+    // --------------------------------------------------------
+
+    await page.reload()
+    await page
+      .getByRole('button', { name: `Open ${EDIT_TASK_TITLE}` })
+      .click()
+    await expect(inspector).toBeVisible()
+
+    const reloadedCommentRow = inspector
+      .locator('li')
+      .filter({ hasText: EDIT_COMMENT_ORIGINAL })
+    await expect(
+      reloadedCommentRow.locator('strong', {
+        hasText: EDIT_COMMENT_ORIGINAL,
+      }),
+    ).toBeVisible()
+
+    // --------------------------------------------------------
+    // 16. The existing delete flow still works.
+    // --------------------------------------------------------
+
+    await reloadedCommentRow.hover()
+    await reloadedCommentRow
+      .getByRole('button', { name: 'Comment actions' })
+      .click()
+    await inspector
+      .getByRole('button', { name: 'Delete', exact: true })
+      .click()
+
+    await expect(
+      inspector.getByText('Delete this comment?'),
+    ).toBeVisible()
+    await inspector
+      .getByRole('button', { name: 'Delete', exact: true })
+      .click()
+
+    await expect(
+      activityList.getByText(EDIT_COMMENT_ORIGINAL),
+    ).toHaveCount(0)
   },
 )
 
@@ -2221,7 +2539,7 @@ test(
     //    stored in the event.
     // --------------------------------------------------------
 
-    const activityList = inspector.getByRole('list')
+    const activityList = inspector.getByRole('list', { name: 'Activity' })
     await expect(
       activityList.getByText('Alex Dev changed the description', {
         exact: true,

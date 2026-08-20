@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
-import { roundtripMarkdown } from './markdownExtensions'
+import {
+  isMarkdownContentEmpty,
+  roundtripMarkdown,
+} from './markdownExtensions'
 
 // Markdown is the CANONICAL persisted Work Item Description — these are
 // regression tests for the parse -> Tiptap document -> serialize round
@@ -148,5 +151,171 @@ describe('markdown round trip — existing plain-text descriptions', () => {
 
   it('does not throw on an empty description', () => {
     expect(() => roundtripMarkdown('')).not.toThrow()
+  })
+})
+
+// Comments (variant="compact") are a strictly SMALLER Markdown subset
+// than Description — see markdownExtensions.ts. These mirror the `full`
+// suite above for every construct compact is supposed to keep, then
+// separately prove the constructs it deliberately drops.
+
+describe('markdown round trip — compact (Comments) supported subset', () => {
+  it('preserves a plain sentence as a normal paragraph, unchanged', () => {
+    const plain = 'Can we confirm the final references before merging?'
+
+    expect(roundtripMarkdown(plain, 'compact')).toBe(plain)
+  })
+
+  it('preserves bold, italic, and inline code', () => {
+    const out = roundtripMarkdown(
+      'This is **bold**, this is *italic*, and this is `inline code`.',
+      'compact',
+    )
+
+    expect(out).toContain('**bold**')
+    expect(out).toContain('*italic*')
+    expect(out).toContain('`inline code`')
+  })
+
+  it('preserves links', () => {
+    const out = roundtripMarkdown(
+      'See the [project brief](https://example.com/brief) for context.',
+      'compact',
+    )
+
+    expect(out).toContain('[project brief](https://example.com/brief)')
+  })
+
+  it('preserves bullet lists', () => {
+    const out = roundtripMarkdown(
+      '- Check references\n- Check figures',
+      'compact',
+    )
+
+    expect(out).toContain('- Check references')
+    expect(out).toContain('- Check figures')
+  })
+
+  it('preserves numbered lists', () => {
+    const out = roundtripMarkdown(
+      '1. First step\n2. Second step',
+      'compact',
+    )
+
+    expect(out).toContain('1. First step')
+    expect(out).toContain('2. Second step')
+  })
+
+  it('round trips the canonical example from the product spec', () => {
+    const sample = [
+      'We should **verify this** before merging.',
+      '',
+      '- Check references',
+      '- Check figures',
+    ].join('\n')
+
+    const out = roundtripMarkdown(sample, 'compact')
+
+    expect(out).toContain('We should **verify this** before merging.')
+    expect(out).toContain('- Check references')
+    expect(out).toContain('- Check figures')
+  })
+
+  it('does not throw on an empty comment', () => {
+    expect(() => roundtripMarkdown('', 'compact')).not.toThrow()
+  })
+})
+
+describe('markdown round trip — compact (Comments) unsupported constructs', () => {
+  // Regression for the specific failure mode this schema had to be
+  // guarded against: a pre-existing plain-text Comment that happens to
+  // start with a literal "#"/"##" (e.g. someone's own "# TODO" marker,
+  // written before Comments were Markdown at all) must still load as
+  // ordinary text — never throw, never silently lose the words after the
+  // "#" — even though compact has no heading node at all to put it in.
+  // See compactFallbackExtensions in markdownExtensions.ts.
+  it('never throws on, and never produces, a heading — even from literal "#" text', () => {
+    expect(() =>
+      roundtripMarkdown('## Not a real heading, just habit', 'compact'),
+    ).not.toThrow()
+
+    const out = roundtripMarkdown(
+      '## Not a real heading, just habit',
+      'compact',
+    )
+
+    expect(out).not.toContain('##')
+    expect(out).toContain('Not a real heading, just habit')
+  })
+
+  it('never produces a heading for a heading-only comment', () => {
+    const out = roundtripMarkdown('# Just a heading only', 'compact')
+
+    expect(out).not.toContain('#')
+    expect(out).toContain('Just a heading only')
+  })
+
+  it('degrades a blockquote to a plain paragraph, keeping the text', () => {
+    const out = roundtripMarkdown(
+      '> Focus on papers after 2023.',
+      'compact',
+    )
+
+    expect(out).not.toContain('>')
+    expect(out).toContain('Focus on papers after 2023.')
+  })
+
+  it('does not throw on, and keeps the text of, a fenced code block', () => {
+    expect(() =>
+      roundtripMarkdown('```\nconst x = 1;\n```', 'compact'),
+    ).not.toThrow()
+
+    const out = roundtripMarkdown('```\nconst x = 1;\n```', 'compact')
+
+    expect(out).not.toContain('```')
+    expect(out).toContain('const x = 1;')
+  })
+
+  it('drops a horizontal rule without throwing', () => {
+    expect(() =>
+      roundtripMarkdown('Before.\n\n---\n\nAfter.', 'compact'),
+    ).not.toThrow()
+  })
+
+  it('strips strikethrough, keeping the text as plain text', () => {
+    const out = roundtripMarkdown('This is ~~struck~~ text.', 'compact')
+
+    expect(out).not.toContain('~~')
+    expect(out).toContain('struck')
+  })
+})
+
+describe('isMarkdownContentEmpty', () => {
+  it('treats an empty string as empty', () => {
+    expect(isMarkdownContentEmpty('', 'compact')).toBe(true)
+  })
+
+  it('treats whitespace-only Markdown as empty', () => {
+    expect(isMarkdownContentEmpty('   \n\n  ', 'compact')).toBe(true)
+  })
+
+  it('treats an empty bullet item as empty, despite non-empty Markdown text', () => {
+    // A bare "-" (no text after it) parses to a real bulletList
+    // containing one empty paragraph — non-empty as a raw string
+    // (`'-'.trim() !== ''`), but visually blank, which is exactly the
+    // gap a plain `.trim()` check would miss.
+    expect(isMarkdownContentEmpty('-', 'compact')).toBe(true)
+  })
+
+  it('treats real text content as non-empty', () => {
+    expect(isMarkdownContentEmpty('Looks good to me.', 'compact')).toBe(
+      false,
+    )
+  })
+
+  it('treats a bullet item with real text as non-empty', () => {
+    expect(
+      isMarkdownContentEmpty('- Check references', 'compact'),
+    ).toBe(false)
   })
 })

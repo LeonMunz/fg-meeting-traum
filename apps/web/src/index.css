@@ -95,6 +95,20 @@ button {
   margin-top: 0.6em;
 }
 
+/* Comments (variant="compact") are a short message, not a document —
+ * slightly tighter vertical rhythm than Description. Every node type
+ * this can't reach (headings, blockquote, hr, pre) is excluded from the
+ * schema itself (see markdownExtensions.ts), so no rule for them is
+ * needed here. */
+.fg-prose--compact > * + * {
+  margin-top: 0.45em;
+}
+
+.fg-prose--compact ul,
+.fg-prose--compact ol {
+  padding-left: 1.15em;
+}
+
 .fg-prose p {
   margin: 0;
 }

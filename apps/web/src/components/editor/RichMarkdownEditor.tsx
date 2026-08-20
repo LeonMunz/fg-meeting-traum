@@ -9,10 +9,14 @@ import {
   useEditorState,
 } from '@tiptap/react'
 
-import { createMarkdownExtensions } from './markdownExtensions'
+import { createMarkdownExtensions, safeIsActive } from './markdownExtensions'
+import type { MarkdownEditorVariant } from './markdownExtensions'
 import { EditorBottomToolbar, EditorBubbleToolbar } from './EditorToolbar'
 
-export type MarkdownEditorVariant = 'full' | 'compact'
+// Re-exported for callers that only need the variant type (the schema
+// itself — what each variant actually supports — lives in
+// markdownExtensions.ts, the single source of truth described there).
+export type { MarkdownEditorVariant } from './markdownExtensions'
 
 export type RichMarkdownEditorProps = {
   /** Canonical Markdown — the only shape this component's API ever
@@ -45,10 +49,12 @@ export type RichMarkdownEditorProps = {
  * same surface becomes an editor," not two different renderers, so
  * toggling `readOnly` is the only thing that changes between the two.
  *
- * Phase 1: wired up for Work Item Description (`variant="full"`) only.
- * `variant="compact"` is accepted so a future compact variant (Comments,
- * Blocked reason) can reuse this component without a new API — it is
- * not exercised yet, so it currently just suppresses the toolbar/menus.
+ * `variant="full"` backs the Work Item Description editor; `variant=
+ * "compact"` backs Work Item Comments (composer, edit-in-place, and the
+ * read-mode render of a posted comment's body). Both variants render the
+ * same bottom toolbar/BubbleMenu surfaces while editing — only the
+ * button set and the underlying Markdown schema (see
+ * markdownExtensions.ts) actually differ between them.
  */
 export function RichMarkdownEditor({
   value,
@@ -97,7 +103,7 @@ export function RichMarkdownEditor({
       content: value,
       // @tiptap/markdown's contentType flag — see markdownExtensions.ts.
       contentType: 'markdown',
-      extensions: createMarkdownExtensions({ placeholder }),
+      extensions: createMarkdownExtensions({ placeholder, variant }),
       editorProps: {
         attributes: {
           class: [
@@ -110,6 +116,20 @@ export function RichMarkdownEditor({
         },
         handleKeyDown: (view, event) => {
           if (event.key === 'Escape') {
+            // Returning `true` only tells ProseMirror's own keymap chain
+            // "handled" — the native event still bubbles to `document`,
+            // where WorkItemDrawer has its own Escape listener for
+            // whatever else might be open (title editing, the comment
+            // composer, etc.). Without stopPropagation, BOTH fire for
+            // the same keypress: harmless when they'd set the same
+            // state, but a real bug when the document-level listener's
+            // priority chain falls through past this editor's own state
+            // (already flipped by onEscape, just not yet re-rendered)
+            // to some *other* branch — e.g. closing the whole inspector.
+            // This editor owns Escape exclusively once it's the
+            // focused target.
+            event.stopPropagation()
+
             if (linkPopoverOpenRef.current) {
               setLinkPopoverOpen(false)
               return true
@@ -220,12 +240,15 @@ export function RichMarkdownEditor({
         link: currentEditor.isActive('link'),
         bulletList: currentEditor.isActive('bulletList'),
         orderedList: currentEditor.isActive('orderedList'),
-        taskList: currentEditor.isActive('taskList'),
-        blockquote: currentEditor.isActive('blockquote'),
-        heading2: currentEditor.isActive('heading', {
+        // Not in the compact (Comments) schema — see safeIsActive in
+        // EditorToolbar.tsx for why these can't be a plain isActive
+        // call here.
+        taskList: safeIsActive(currentEditor, 'taskList'),
+        blockquote: safeIsActive(currentEditor, 'blockquote'),
+        heading2: safeIsActive(currentEditor, 'heading', {
           level: 2,
         }),
-        heading3: currentEditor.isActive('heading', {
+        heading3: safeIsActive(currentEditor, 'heading', {
           level: 3,
         }),
         canLink:
@@ -250,7 +273,7 @@ export function RichMarkdownEditor({
     <div className={className}>
       <EditorContent editor={editor} />
 
-      {!readOnly && variant === 'full' && (
+      {!readOnly && (
         <>
           <EditorBubbleToolbar
             editor={editor}
@@ -259,6 +282,7 @@ export function RichMarkdownEditor({
           <EditorBottomToolbar
             editor={editor}
             linkPopover={linkPopover}
+            variant={variant}
           />
         </>
       )}

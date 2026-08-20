@@ -11,6 +11,7 @@ import type {
 
 import { ApiError } from '../../api/client'
 import { RichMarkdownEditor } from '../../components/editor/RichMarkdownEditor'
+import { isMarkdownContentEmpty } from '../../components/editor/markdownExtensions'
 import type {
   ApiUpdateWorkItemInput,
   ApiWorkItem,
@@ -1951,7 +1952,13 @@ function WorkItemInspector({
     const workItemId = item.id
     const body = commentDraft.trim()
 
-    if (!body || commentSubmitStatus === 'submitting') {
+    // Markdown that trims to something non-empty can still serialize to
+    // visually blank content (e.g. an empty bullet item) — see
+    // isMarkdownContentEmpty.
+    if (
+      isMarkdownContentEmpty(body, 'compact') ||
+      commentSubmitStatus === 'submitting'
+    ) {
       return
     }
 
@@ -2015,7 +2022,10 @@ function WorkItemInspector({
     }
 
     const body = editingCommentBody.trim()
-    if (!body || commentEditStatus === 'saving') {
+    if (
+      isMarkdownContentEmpty(body, 'compact') ||
+      commentEditStatus === 'saving'
+    ) {
       return
     }
 
@@ -3271,36 +3281,37 @@ function WorkItemInspector({
                       Add a comment…
                     </button>
                   ) : (
-                    <div className="rounded-lg border border-outline-variant bg-surface-container-lowest p-2.5">
-                      <label
-                        htmlFor="work-item-comment-composer"
-                        className="sr-only"
-                      >
-                        Comment
-                      </label>
-
-                      <textarea
-                        id="work-item-comment-composer"
-                        autoFocus
-                        rows={3}
-                        value={commentDraft}
-                        onChange={(event) =>
-                          handleCommentDraftChange(
-                            event.target.value,
-                          )
+                    <div
+                      className="rounded-lg border border-outline-variant bg-surface-container-lowest p-2.5"
+                      onKeyDown={(event) => {
+                        // The editor's own contenteditable
+                        // handleKeyDown doesn't preventDefault Cmd/Ctrl
+                        // +Enter (it isn't a Markdown editing command),
+                        // so it bubbles here exactly like it used to
+                        // bubble from the plain textarea.
+                        if (
+                          (event.metaKey ||
+                            event.ctrlKey) &&
+                          event.key === 'Enter'
+                        ) {
+                          event.preventDefault()
+                          submitComment()
                         }
-                        onKeyDown={(event) => {
-                          if (
-                            (event.metaKey ||
-                              event.ctrlKey) &&
-                            event.key === 'Enter'
-                          ) {
-                            event.preventDefault()
-                            submitComment()
-                          }
-                        }}
+                      }}
+                    >
+                      <RichMarkdownEditor
+                        value={commentDraft}
+                        onChange={
+                          handleCommentDraftChange
+                        }
+                        onEscape={
+                          collapseCommentComposer
+                        }
+                        autoFocus
+                        variant="compact"
+                        ariaLabel="Comment"
                         placeholder="Add a comment…"
-                        className="min-h-[4.5rem] w-full resize-y border-0 bg-transparent text-sm text-on-surface outline-none placeholder:text-on-surface-variant/60"
+                        className="[&_.fg-prose]:min-h-[3.75rem]"
                       />
 
                       {commentSubmitError && (
@@ -3326,7 +3337,10 @@ function WorkItemInspector({
                         <button
                           type="button"
                           disabled={
-                            !commentDraft.trim() ||
+                            isMarkdownContentEmpty(
+                              commentDraft,
+                              'compact',
+                            ) ||
                             commentSubmitStatus ===
                               'submitting'
                           }
@@ -3404,7 +3418,15 @@ function WorkItemInspector({
                 )}
 
               {activityFeed.length > 0 && (
-                <ul className="flex flex-col">
+                // Explicit label: a Comment's own body can now contain
+                // a nested Markdown list, which also carries the
+                // implicit ARIA `list` role — without this, that inner
+                // list would be indistinguishable from the outer
+                // Activity feed itself to anything querying by role.
+                <ul
+                  aria-label="Activity"
+                  className="flex flex-col"
+                >
                   {activityFeed.map(
                     (entry, index) => {
                       const isLast =
@@ -3627,42 +3649,35 @@ function WorkItemInspector({
                             </div>
 
                             {isEditingThis ? (
-                              <div className="mt-1">
-                                <label
-                                  htmlFor={`work-item-comment-edit-${comment.id}`}
-                                  className="sr-only"
-                                >
-                                  Edit comment
-                                </label>
-                                <textarea
-                                  id={`work-item-comment-edit-${comment.id}`}
-                                  autoFocus
-                                  rows={3}
+                              <div
+                                className="mt-1 rounded-md border border-outline-variant bg-surface-container-lowest p-2"
+                                onKeyDown={(
+                                  event,
+                                ) => {
+                                  if (
+                                    (event.metaKey ||
+                                      event.ctrlKey) &&
+                                    event.key ===
+                                      'Enter'
+                                  ) {
+                                    event.preventDefault()
+                                    saveEditingComment()
+                                  }
+                                }}
+                              >
+                                <RichMarkdownEditor
                                   value={
                                     editingCommentBody
                                   }
-                                  onChange={(
-                                    event,
-                                  ) =>
-                                    setEditingCommentBody(
-                                      event.target
-                                        .value,
-                                    )
+                                  onChange={
+                                    setEditingCommentBody
                                   }
-                                  onKeyDown={(
-                                    event,
-                                  ) => {
-                                    if (
-                                      (event.metaKey ||
-                                        event.ctrlKey) &&
-                                      event.key ===
-                                        'Enter'
-                                    ) {
-                                      event.preventDefault()
-                                      saveEditingComment()
-                                    }
-                                  }}
-                                  className="w-full resize-y rounded-md border border-outline-variant bg-surface-container-lowest px-2.5 py-2 text-sm text-on-surface outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
+                                  onEscape={
+                                    cancelEditingComment
+                                  }
+                                  autoFocus
+                                  variant="compact"
+                                  ariaLabel="Edit comment"
                                 />
 
                                 {commentEditError && (
@@ -3689,7 +3704,10 @@ function WorkItemInspector({
                                   <button
                                     type="button"
                                     disabled={
-                                      !editingCommentBody.trim() ||
+                                      isMarkdownContentEmpty(
+                                        editingCommentBody,
+                                        'compact',
+                                      ) ||
                                       commentEditStatus ===
                                         'saving'
                                     }
@@ -3750,9 +3768,17 @@ function WorkItemInspector({
                                 </button>
                               </div>
                             ) : (
-                              <p className="mt-0.5 whitespace-pre-wrap break-words text-sm leading-6 text-on-surface">
-                                {comment.body}
-                              </p>
+                              // Same compact Markdown surface as the
+                              // composer/edit — readOnly means no
+                              // border, no toolbar, no contenteditable,
+                              // just the formatted body (see
+                              // RichMarkdownEditor).
+                              <RichMarkdownEditor
+                                value={comment.body}
+                                readOnly
+                                variant="compact"
+                                className="mt-0.5 break-words"
+                              />
                             )}
                           </div>
                         </li>

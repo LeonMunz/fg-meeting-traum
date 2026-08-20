@@ -1,6 +1,8 @@
 import type { Editor } from '@tiptap/core'
 import { BubbleMenu } from '@tiptap/react/menus'
 
+import type { MarkdownEditorVariant } from './markdownExtensions'
+import { safeIsActive } from './markdownExtensions'
 import { LinkPopover } from './LinkPopover'
 
 type ToolbarButtonProps = {
@@ -89,20 +91,21 @@ function useFormattingCommands(editor: Editor) {
       run: () => editor.chain().focus().toggleOrderedList().run(),
     },
     taskList: {
-      active: editor.isActive('taskList'),
+      // Not in the compact (Comments) schema — see safeIsActive.
+      active: safeIsActive(editor, 'taskList'),
       run: () => editor.chain().focus().toggleTaskList().run(),
     },
     blockquote: {
-      active: editor.isActive('blockquote'),
+      active: safeIsActive(editor, 'blockquote'),
       run: () => editor.chain().focus().toggleBlockquote().run(),
     },
     heading2: {
-      active: editor.isActive('heading', { level: 2 }),
+      active: safeIsActive(editor, 'heading', { level: 2 }),
       run: () =>
         editor.chain().focus().toggleHeading({ level: 2 }).run(),
     },
     heading3: {
-      active: editor.isActive('heading', { level: 3 }),
+      active: safeIsActive(editor, 'heading', { level: 3 }),
       run: () =>
         editor.chain().focus().toggleHeading({ level: 3 }).run(),
     },
@@ -116,22 +119,30 @@ type LinkPopoverControl = {
 }
 
 /**
- * Quiet, compact toolbar rendered at the bottom of the Description
- * editing surface — only while editing (see PHASE 1 SCOPE: "no
- * permanent Word-style toolbar"). Also hosts the "Markdown supported"
- * hint and the (single, shared) Link popover — see RichMarkdownEditor,
- * which lifts `linkPopover` state so the BubbleMenu's Link button and
- * Cmd/Ctrl+K open the same popover instance rendered here.
+ * Quiet, compact toolbar rendered at the bottom of the editing surface —
+ * only while editing (see PHASE 1 SCOPE: "no permanent Word-style
+ * toolbar"). Also hosts the "Markdown supported" hint and the (single,
+ * shared) Link popover — see RichMarkdownEditor, which lifts
+ * `linkPopover` state so the BubbleMenu's Link button and Cmd/Ctrl+K
+ * open the same popover instance rendered here.
+ *
+ * Shared by both variants — `variant="compact"` (Work Item Comments)
+ * hides Checklist/Quote/H2/H3, which is a deliberately smaller subset of
+ * the same commands `variant="full"` (Description) exposes, rather than
+ * a second toolbar implementation.
  */
 export function EditorBottomToolbar({
   editor,
   linkPopover,
+  variant = 'full',
 }: {
   editor: Editor
   linkPopover: LinkPopoverControl
+  variant?: MarkdownEditorVariant
 }) {
   const commands = useFormattingCommands(editor)
   const linkActive = editor.isActive('link')
+  const compact = variant === 'compact'
 
   return (
     <div className="relative mt-2 flex flex-wrap items-center gap-2 border-t border-outline-variant/70 pt-2">
@@ -191,36 +202,44 @@ export function EditorBottomToolbar({
           active={commands.orderedList.active}
           onClick={commands.orderedList.run}
         />
-        <ToolbarButton
-          label="Checklist"
-          icon="checklist"
-          active={commands.taskList.active}
-          onClick={commands.taskList.run}
-        />
 
-        <span
-          aria-hidden="true"
-          className="mx-1 h-4 w-px bg-outline-variant"
-        />
+        {/* Checklist/Quote/H2/H3 are outside the compact Markdown
+         * subset Comments support (see markdownExtensions.ts) — a
+         * comment should never be able to grow into a document. */}
+        {!compact && (
+          <>
+            <ToolbarButton
+              label="Checklist"
+              icon="checklist"
+              active={commands.taskList.active}
+              onClick={commands.taskList.run}
+            />
 
-        <ToolbarButton
-          label="Quote"
-          icon="format_quote"
-          active={commands.blockquote.active}
-          onClick={commands.blockquote.run}
-        />
-        <ToolbarButton
-          label="Heading 2"
-          text="H2"
-          active={commands.heading2.active}
-          onClick={commands.heading2.run}
-        />
-        <ToolbarButton
-          label="Heading 3"
-          text="H3"
-          active={commands.heading3.active}
-          onClick={commands.heading3.run}
-        />
+            <span
+              aria-hidden="true"
+              className="mx-1 h-4 w-px bg-outline-variant"
+            />
+
+            <ToolbarButton
+              label="Quote"
+              icon="format_quote"
+              active={commands.blockquote.active}
+              onClick={commands.blockquote.run}
+            />
+            <ToolbarButton
+              label="Heading 2"
+              text="H2"
+              active={commands.heading2.active}
+              onClick={commands.heading2.run}
+            />
+            <ToolbarButton
+              label="Heading 3"
+              text="H3"
+              active={commands.heading3.active}
+              onClick={commands.heading3.run}
+            />
+          </>
+        )}
       </div>
 
       {linkPopover.open && (
