@@ -62,14 +62,14 @@ class PersonalMyWorkApiTest(APITestCase):
         cls.work_a = create_work_item(
             project=cls.project_a,
             actor=cls.chris,
-            type="task",
+            type_definition_id=cls.project_a.type_definitions.get(name="Task").pk,
             title="Rewrite Introduction",
             assignee_ids=[cls.chris.pk],
         )
         cls.work_b = create_work_item(
             project=cls.project_b,
             actor=cls.chris,
-            type="task",
+            type_definition_id=cls.project_b.type_definitions.get(name="Task").pk,
             title="Analyze Robot Data",
             assignee_ids=[cls.chris.pk],
         )
@@ -77,7 +77,7 @@ class PersonalMyWorkApiTest(APITestCase):
         cls.unassigned = create_work_item(
             project=cls.project_a,
             actor=cls.chris,
-            type="task",
+            type_definition_id=cls.project_a.type_definitions.get(name="Task").pk,
             title="Unassigned Work",
         )
 

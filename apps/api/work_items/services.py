@@ -10,10 +10,16 @@ from django.db import transaction
 from django.db.models import QuerySet
 
 from audit_history.services import record_audit_event
-from projects.models import Project, ProjectMembership
+from projects.models import (
+    Project,
+    ProjectMembership,
+    WorkItemLabelDefinition,
+    WorkItemStatusDefinition,
+    WorkItemTypeDefinition,
+)
 from research_groups.models import ResearchGroupMembership
 
-from .models import WorkItem, WorkItemAssignee, WorkItemComment
+from .models import WorkItem, WorkItemAssignee, WorkItemComment, WorkItemLabel
 
 
 class WorkItemAuditEventType:
@@ -190,18 +196,83 @@ def _validate_parent_with_new_item(
         current = current.parent
 
 
+# ── Definition validation (same-project invariant) ──
+
+
+def _resolve_type_definition(project: Project, type_def_id: int) -> WorkItemTypeDefinition:
+    """Resolve a type definition ID, enforcing same-project invariant."""
+    try:
+        defn = WorkItemTypeDefinition.objects.get(pk=type_def_id)
+    except WorkItemTypeDefinition.DoesNotExist:
+        raise WorkItemDomainError("Type definition does not exist.")
+    if defn.project_id != project.pk:
+        raise WorkItemDomainError("Type definition must belong to the same Project.")
+    return defn
+
+
+def _resolve_status_definition(
+    project: Project, status_def_id: int
+) -> WorkItemStatusDefinition:
+    """Resolve a status definition ID, enforcing same-project invariant."""
+    try:
+        defn = WorkItemStatusDefinition.objects.get(pk=status_def_id)
+    except WorkItemStatusDefinition.DoesNotExist:
+        raise WorkItemDomainError("Status definition does not exist.")
+    if defn.project_id != project.pk:
+        raise WorkItemDomainError("Status definition must belong to the same Project.")
+    return defn
+
+
+def _resolve_label_definitions(
+    project: Project, label_def_ids: list[int]
+) -> list[WorkItemLabelDefinition]:
+    """Resolve label definition IDs, enforcing same-project invariant."""
+    if not label_def_ids:
+        return []
+    definitions = WorkItemLabelDefinition.objects.filter(
+        pk__in=label_def_ids, project=project
+    )
+    found_ids = {d.pk for d in definitions}
+    missing = set(label_def_ids) - found_ids
+    if missing:
+        raise WorkItemDomainError(
+            f"Label definition IDs not found or not in this Project: {sorted(missing)}"
+        )
+    return list(definitions)
+
+
 # ── Status / completion handling ──
 
 
-def _apply_status_completion(work_item: WorkItem, new_status: str) -> None:
-    """Apply completion semantics when status changes.
+def _resolve_default_status_definition(project: Project) -> WorkItemStatusDefinition:
+    """Resolve the Project's single active default status (category 'todo').
 
-    When status transitions to 'done', set completed_at if not already set.
-    When status transitions from 'done' to another status, clear completed_at.
-    If status is not done, completed_at must always be None.
-    If status is done, completed_at must always be set.
+    Every Project is guaranteed exactly one active default status by the
+    configuration invariants (see projects.configuration_services). Used
+    when a WorkItem is created without an explicit status_definition_id.
     """
-    if new_status == WorkItem.Status.DONE:
+    defn = WorkItemStatusDefinition.objects.filter(
+        project=project, active=True, is_default=True,
+    ).first()
+    if defn is None:
+        raise WorkItemDomainError(
+            "Project has no active default status definition."
+        )
+    return defn
+
+
+def _apply_status_completion(work_item: WorkItem, status_def: WorkItemStatusDefinition) -> None:
+    """Apply completion semantics based on status category.
+
+    When status category transitions to 'done', set completed_at if not
+    already set. When status category transitions from 'done' to another
+    category, clear completed_at.
+
+    Transition done→done preserves the existing completed_at timestamp.
+    """
+    is_done = status_def.category == WorkItemStatusDefinition.Category.DONE
+
+    if is_done:
         if work_item.completed_at is None:
             from django.utils import timezone
             work_item.completed_at = timezone.now()
@@ -228,8 +299,8 @@ def _snapshot_work_item_state(work_item: WorkItem) -> dict:
     return {
         "title": work_item.title,
         "description": work_item.description,
-        "type": work_item.type,
-        "status": work_item.status,
+        "type_definition_id": work_item.type_definition_id,
+        "status_definition_id": work_item.status_definition_id,
         "due_date": work_item.due_date,
         # Canonical semantics: "" means unblocked, same as null.
         "blocked_reason": work_item.blocked_reason or None,
@@ -278,6 +349,46 @@ def _summarize_parent(
     return {"id": parent.pk, "title": parent.title}
 
 
+def _summarize_type_definition(
+    project_id: int, type_definition_id: Optional[int],
+) -> Optional[dict]:
+    """Display-safe summary of a TypeDefinition for history."""
+    if type_definition_id is None:
+        return None
+
+    defn = (
+        WorkItemTypeDefinition.objects
+        .filter(pk=type_definition_id, project_id=project_id)
+        .only("id", "name")
+        .first()
+    )
+
+    if defn is None:
+        return {"id": type_definition_id, "name": None}
+
+    return {"id": defn.pk, "name": defn.name}
+
+
+def _summarize_status_definition(
+    project_id: int, status_definition_id: Optional[int],
+) -> Optional[dict]:
+    """Display-safe summary of a StatusDefinition for history."""
+    if status_definition_id is None:
+        return None
+
+    defn = (
+        WorkItemStatusDefinition.objects
+        .filter(pk=status_definition_id, project_id=project_id)
+        .only("id", "name")
+        .first()
+    )
+
+    if defn is None:
+        return {"id": status_definition_id, "name": None}
+
+    return {"id": defn.pk, "name": defn.name}
+
+
 def _diff_work_item_changes(
     *, project_id: int, before: dict, after: dict,
 ) -> dict:
@@ -298,16 +409,24 @@ def _diff_work_item_changes(
         # Never store description bodies — size/privacy.
         changes["description"] = {"changed": True}
 
-    if before["type"] != after["type"]:
-        changes["type"] = {
-            "from": before["type"],
-            "to": after["type"],
+    if before["type_definition_id"] != after["type_definition_id"]:
+        changes["typeDefinition"] = {
+            "from": _summarize_type_definition(
+                project_id, before["type_definition_id"],
+            ),
+            "to": _summarize_type_definition(
+                project_id, after["type_definition_id"],
+            ),
         }
 
-    if before["status"] != after["status"]:
-        changes["status"] = {
-            "from": before["status"],
-            "to": after["status"],
+    if before["status_definition_id"] != after["status_definition_id"]:
+        changes["statusDefinition"] = {
+            "from": _summarize_status_definition(
+                project_id, before["status_definition_id"],
+            ),
+            "to": _summarize_status_definition(
+                project_id, after["status_definition_id"],
+            ),
         }
 
     if before["due_date"] != after["due_date"]:
@@ -384,14 +503,15 @@ def create_work_item(
     *,
     project: Project,
     actor,
-    type: str,
+    type_definition_id: int,
     title: str,
     description: str = "",
-    status: Optional[str] = None,
+    status_definition_id: Optional[int] = None,
     assignee_ids: Optional[list[int]] = None,
     parent_id: Optional[int] = None,
     due_date: Optional[str] = None,
     blocked_reason: Optional[str] = None,
+    label_definition_ids: Optional[list[int]] = None,
 ) -> WorkItem:
     """Create a WorkItem atomically with assignees.
 
@@ -400,22 +520,14 @@ def create_work_item(
     All assignees must be eligible.
     Parent relationship must be valid.
 
+    type_definition_id is required. status_definition_id is optional —
+    when omitted, the Project's active default status is used.
+
     Uses transaction.atomic() with select_for_update() on the Project row
     to serialize writes against concurrent membership changes.
     """
-    # Validate type/status before locking
-    if type not in WorkItem.Type.values:
-        raise WorkItemDomainError(f"Invalid WorkItem type: {type}")
-
-    if status is not None and status not in WorkItem.Status.values:
-        raise WorkItemDomainError(f"Invalid WorkItem status: {status}")
-
-    # Determine completed_at based on initial status
-    initial_completed_at = None
-    final_status = status or WorkItem.Status.TODO
-    if final_status == WorkItem.Status.DONE:
-        from django.utils import timezone
-        initial_completed_at = timezone.now()
+    if not type_definition_id:
+        raise WorkItemDomainError("type_definition_id is required.")
 
     with transaction.atomic():
         # Lock the Project row to serialize against concurrent membership changes
@@ -432,12 +544,29 @@ def create_work_item(
         if assignee_ids:
             _validate_assignees(locked_project, assignee_ids)
 
+        # Resolve definition FKs under the lock
+        type_def = _resolve_type_definition(locked_project, type_definition_id)
+
+        if status_definition_id is not None:
+            status_def = _resolve_status_definition(locked_project, status_definition_id)
+        else:
+            status_def = _resolve_default_status_definition(locked_project)
+
+        initial_completed_at = None
+        if status_def.category == WorkItemStatusDefinition.Category.DONE:
+            from django.utils import timezone
+            initial_completed_at = timezone.now()
+
+        label_defs = []
+        if label_definition_ids:
+            label_defs = _resolve_label_definitions(locked_project, label_definition_ids)
+
         work_item = WorkItem.objects.create(
             project=locked_project,
-            type=type,
+            type_definition=type_def,
             title=title,
             description=description,
-            status=final_status,
+            status_definition=status_def,
             parent_id=parent_id,
             due_date=due_date,
             blocked_reason=blocked_reason or "",
@@ -459,6 +588,13 @@ def create_work_item(
                     user=User.objects.get(pk=user_id),
                 )
 
+        # Create labels
+        for label_def in label_defs:
+            WorkItemLabel.objects.create(
+                work_item=work_item,
+                label=label_def,
+            )
+
         # Recorded inside the same atomic block: if anything above
         # rolls back, no AuditEvent survives either.
         record_audit_event(
@@ -477,14 +613,15 @@ def update_work_item(
     *,
     work_item: WorkItem,
     actor,
-    type: Optional[str] = None,
     title: Optional[str] = None,
     description: Optional[str] = None,
-    status: Optional[str] = None,
     assignee_ids: Optional[list[int]] = None,
     parent_id: object = _UNSET,
     due_date: object = _UNSET,
     blocked_reason: object = _UNSET,
+    type_definition_id: Optional[int] = None,
+    status_definition_id: Optional[int] = None,
+    label_definition_ids: Optional[list[int]] = None,
 ) -> WorkItem:
     """Update a WorkItem atomically with assignee replacement and hierarchy.
 
@@ -500,13 +637,6 @@ def update_work_item(
     to serialize writes against concurrent membership changes.
     """
     project = work_item.project
-
-    # Validate type/status before locking (no DB needed)
-    if type is not None and type not in WorkItem.Type.values:
-        raise WorkItemDomainError(f"Invalid WorkItem type: {type}")
-
-    if status is not None and status not in WorkItem.Status.values:
-        raise WorkItemDomainError(f"Invalid WorkItem status: {status}")
 
     # Check if parent is being changed — requires hierarchy cycle validation
     parent_changing = (
@@ -538,14 +668,16 @@ def update_work_item(
 
         _apply_work_item_fields(
             work_item=work_item,
-            type=type,
+            project=locked_project,
             title=title,
             description=description,
-            status=status,
             assignee_ids=assignee_ids,
             parent_id=parent_id,
             due_date=due_date,
             blocked_reason=blocked_reason,
+            type_definition_id=type_definition_id,
+            status_definition_id=status_definition_id,
+            label_definition_ids=label_definition_ids,
         )
 
         work_item.refresh_from_db()
@@ -577,14 +709,16 @@ def update_work_item(
 def _apply_work_item_fields(
     *,
     work_item: WorkItem,
-    type: Optional[str] = None,
+    project: Project,
     title: Optional[str] = None,
     description: Optional[str] = None,
-    status: Optional[str] = None,
     assignee_ids: Optional[list[int]] = None,
     parent_id: object = _UNSET,
     due_date: object = _UNSET,
     blocked_reason: object = _UNSET,
+    type_definition_id: Optional[int] = None,
+    status_definition_id: Optional[int] = None,
+    label_definition_ids: Optional[list[int]] = None,
 ) -> None:
     """Apply field changes to a WorkItem and handle side effects.
 
@@ -593,9 +727,6 @@ def _apply_work_item_fields(
     """
     update_fields = []
 
-    if type is not None:
-        work_item.type = type
-        update_fields.append("type")
     if title is not None:
         work_item.title = title
         update_fields.append("title")
@@ -617,17 +748,29 @@ def _apply_work_item_fields(
         )
         update_fields.append("blocked_reason")
 
+    # Type definition FK
+    if type_definition_id is not None:
+        type_def = _resolve_type_definition(project, type_definition_id)
+        work_item.type_definition = type_def
+        update_fields.append("type_definition")
+
     # Status transition with completion handling
-    if status is not None:
-        work_item.status = status
-        update_fields.append("status")
-        _apply_status_completion(work_item, status)
+    if status_definition_id is not None:
+        status_def = _resolve_status_definition(project, status_definition_id)
+        work_item.status_definition = status_def
+        update_fields.append("status_definition")
+        _apply_status_completion(work_item, status_def)
         update_fields.append("completed_at")
     else:
         # Even when status is not being changed, ensure completed_at
         # is consistent with the current status. This prevents a client
         # from arbitrarily setting completed_at through admin or raw ORM.
-        if work_item.status == WorkItem.Status.DONE:
+        is_done = (
+            work_item.status_definition.category
+            == WorkItemStatusDefinition.Category.DONE
+        )
+
+        if is_done:
             if work_item.completed_at is None:
                 from django.utils import timezone
                 work_item.completed_at = timezone.now()
@@ -652,6 +795,17 @@ def _apply_work_item_fields(
             WorkItemAssignee.objects.create(
                 work_item=work_item,
                 user=User.objects.get(pk=user_id),
+            )
+
+    # Atomic label replacement
+    if label_definition_ids is not None:
+        label_defs = _resolve_label_definitions(project, label_definition_ids)
+        label_def_ids = {d.pk for d in label_defs}
+        work_item.label_relations.all().delete()
+        for label_def in label_defs:
+            WorkItemLabel.objects.create(
+                work_item=work_item,
+                label=label_def,
             )
 
 

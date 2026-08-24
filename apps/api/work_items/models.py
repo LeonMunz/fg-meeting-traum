@@ -1,41 +1,39 @@
 from django.conf import settings
 from django.db import models
 
-from projects.models import Project
+from projects.models import (
+    Project,
+    WorkItemLabelDefinition,
+    WorkItemStatusDefinition,
+    WorkItemTypeDefinition,
+)
 
 
 class WorkItem(models.Model):
     """A single Work Item belonging to exactly one Project.
 
     All actionable project work (Epics, Milestones, Deliverables, Tasks)
-    uses this single canonical model.
+    uses this single canonical model. The type and status are determined
+    by project-scoped definition ForeignKeys.
     """
-
-    class Type(models.TextChoices):
-        EPIC = "epic", "Epic"
-        MILESTONE = "milestone", "Milestone"
-        DELIVERABLE = "deliverable", "Deliverable"
-        TASK = "task", "Task"
-
-    class Status(models.TextChoices):
-        TODO = "todo", "To Do"
-        IN_PROGRESS = "in_progress", "In Progress"
-        REVIEW = "review", "Review"
-        DONE = "done", "Done"
 
     project = models.ForeignKey(
         Project,
         on_delete=models.CASCADE,
         related_name="work_items",
     )
-    type = models.CharField(max_length=16, choices=Type.choices)
+    type_definition = models.ForeignKey(
+        WorkItemTypeDefinition,
+        on_delete=models.RESTRICT,
+        related_name="work_items",
+    )
+    status_definition = models.ForeignKey(
+        WorkItemStatusDefinition,
+        on_delete=models.RESTRICT,
+        related_name="work_items",
+    )
     title = models.CharField(max_length=255)
     description = models.TextField(default="", blank=True)
-    status = models.CharField(
-        max_length=16,
-        choices=Status.choices,
-        default=Status.TODO,
-    )
     parent = models.ForeignKey(
         "self",
         on_delete=models.CASCADE,
@@ -60,7 +58,7 @@ class WorkItem(models.Model):
         verbose_name_plural = "work items"
 
     def __str__(self):
-        return f"[{self.type}] {self.title} ({self.project.name})"
+        return f"[{self.type_definition.name}] {self.title} ({self.project.name})"
 
 
 class WorkItemAssignee(models.Model):
@@ -95,7 +93,7 @@ class WorkItemAssignee(models.Model):
         ]
 
     def __str__(self):
-        return f"{self.user.username} → [{self.work_item.type}] {self.work_item.title}"
+        return f"{self.user.username} → [{self.work_item.type_definition.name}] {self.work_item.title}"
 
 
 class WorkItemComment(models.Model):
@@ -132,4 +130,38 @@ class WorkItemComment(models.Model):
         ordering = ["-created_at", "-id"]
 
     def __str__(self):
-        return f"Comment by {self.author.username} on [{self.work_item.type}] {self.work_item.title}"
+        return f"Comment by {self.author.username} on [{self.work_item.type_definition.name}] {self.work_item.title}"
+
+
+class WorkItemLabel(models.Model):
+    """Relational join between WorkItem and WorkItemLabelDefinition.
+
+    Constraint: UNIQUE(work_item_id, label_id).
+    Domain rule (enforced in application logic): label.project ==
+    work_item.project.
+    """
+
+    work_item = models.ForeignKey(
+        WorkItem,
+        on_delete=models.CASCADE,
+        related_name="label_relations",
+    )
+    label = models.ForeignKey(
+        WorkItemLabelDefinition,
+        on_delete=models.CASCADE,
+        related_name="work_item_relations",
+    )
+
+    class Meta:
+        db_table = "work_items_workitem_label"
+        verbose_name = "work item label"
+        verbose_name_plural = "work item labels"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["work_item", "label"],
+                name="%(app_label)s_%(class)s_unique_work_item_label",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.label.name} → [{self.work_item.type_definition.name}] {self.work_item.title}"

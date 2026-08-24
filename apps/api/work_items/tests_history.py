@@ -7,8 +7,8 @@ the implementation):
 
 - title:         {"from": <str>, "to": <str>}
 - description:   {"changed": True}                 (never stores bodies)
-- type:          {"from": <str>, "to": <str>}
-- status:        {"from": <str>, "to": <str>}
+- typeDefinition:   {"from": {"id": int, "name": str} | None, "to": {...} | None}
+- statusDefinition: {"from": {"id": int, "name": str} | None, "to": {...} | None}
 - dueDate:       {"from": <"YYYY-MM-DD" or None>, "to": <...>}
 - blockedReason: {"from": <str or None>, "to": <str or None>}
                  (None == unblocked, matching canonical semantics)
@@ -60,10 +60,11 @@ class WorkItemCreateHistoryTest(TestCase):
         alex = data["alex"]
         project = data["paper_xyz"]
 
+        task_type = project.type_definitions.get(name="Task")
         wi = create_work_item(
             project=project,
             actor=alex,
-            type=WorkItem.Type.TASK,
+            type_definition_id=task_type.pk,
             title="New Task",
         )
 
@@ -91,10 +92,15 @@ class WorkItemUpdateHistoryDiffTest(TestCase):
         self.alex = self.data["alex"]
         self.chris = self.data["chris"]
         self.project = self.data["paper_xyz"]
+        self.task_type = self.project.type_definitions.get(name="Task")
+        self.epic_type = self.project.type_definitions.get(name="Epic")
+        self.todo_status = self.project.status_definitions.get(name="Todo")
+        self.in_progress_status = self.project.status_definitions.get(name="In Progress")
+        self.review_status = self.project.status_definitions.get(name="Review")
         self.wi = create_work_item(
             project=self.project,
             actor=self.alex,
-            type=WorkItem.Type.TASK,
+            type_definition_id=self.task_type.pk,
             title="Original Title",
             description="Original body",
         )
@@ -108,7 +114,7 @@ class WorkItemUpdateHistoryDiffTest(TestCase):
         update_work_item(
             work_item=self.wi,
             actor=self.alex,
-            status=WorkItem.Status.IN_PROGRESS,
+            status_definition_id=self.in_progress_status.pk,
         )
 
         events = _events_for(self.wi)
@@ -121,9 +127,15 @@ class WorkItemUpdateHistoryDiffTest(TestCase):
             event.data,
             {
                 "changes": {
-                    "status": {
-                        "from": "todo",
-                        "to": "in_progress",
+                    "statusDefinition": {
+                        "from": {
+                            "id": self.todo_status.pk,
+                            "name": "Todo",
+                        },
+                        "to": {
+                            "id": self.in_progress_status.pk,
+                            "name": "In Progress",
+                        },
                     },
                 },
             },
@@ -134,7 +146,7 @@ class WorkItemUpdateHistoryDiffTest(TestCase):
             work_item=self.wi,
             actor=self.alex,
             title="Updated Title",
-            status=WorkItem.Status.REVIEW,
+            status_definition_id=self.review_status.pk,
             due_date="2026-08-21",
         )
 
@@ -144,15 +156,18 @@ class WorkItemUpdateHistoryDiffTest(TestCase):
         changes = events[-1].data["changes"]
         self.assertEqual(
             set(changes.keys()),
-            {"title", "status", "dueDate"},
+            {"title", "statusDefinition", "dueDate"},
         )
         self.assertEqual(
             changes["title"],
             {"from": "Original Title", "to": "Updated Title"},
         )
         self.assertEqual(
-            changes["status"],
-            {"from": "todo", "to": "review"},
+            changes["statusDefinition"],
+            {
+                "from": {"id": self.todo_status.pk, "name": "Todo"},
+                "to": {"id": self.review_status.pk, "name": "Review"},
+            },
         )
         self.assertEqual(
             changes["dueDate"],
@@ -168,7 +183,7 @@ class WorkItemUpdateHistoryDiffTest(TestCase):
             work_item=self.wi,
             actor=self.alex,
             title="Original Title",  # identical to current value
-            status=WorkItem.Status.TODO,  # identical to current value
+            status_definition_id=self.todo_status.pk,  # identical to current value
         )
 
         after_count = AuditEvent.objects.filter(
@@ -294,7 +309,7 @@ class WorkItemUpdateHistoryDiffTest(TestCase):
         parent = create_work_item(
             project=self.project,
             actor=self.alex,
-            type=WorkItem.Type.EPIC,
+            type_definition_id=self.epic_type.pk,
             title="Epic Parent",
         )
 
@@ -432,7 +447,7 @@ class WorkItemHistoryApiTest(_AuthMixin, APITestCase):
         wi_b = create_work_item(
             project=self.data["paper_xyz"],
             actor=self.data["alex"],
-            type=WorkItem.Type.TASK,
+            type_definition_id=self.data["task_type"].pk,
             title="Work Item B",
         )
         update_work_item(
@@ -493,10 +508,11 @@ class WorkItemHistoryAdminIsolationTest(_AuthMixin, APITestCase):
             creator=cls.data["maria"],
             name="Maria Private Project",
         )
+        cls.maria_task_type = cls.maria_project.type_definitions.get(name="Task")
         cls.maria_wi = create_work_item(
             project=cls.maria_project,
             actor=cls.data["maria"],
-            type=WorkItem.Type.TASK,
+            type_definition_id=cls.maria_task_type.pk,
             title="Maria Secret Task",
         )
 

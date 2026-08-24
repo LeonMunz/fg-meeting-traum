@@ -1,7 +1,5 @@
 from rest_framework import serializers
 
-from work_items.models import WorkItem
-
 from .models import Meeting, MeetingItem
 
 
@@ -151,8 +149,8 @@ class MeetingWorkItemCreateSerializer(serializers.Serializer):
     projectId = serializers.IntegerField(
         min_value=1,
     )
-    type = serializers.ChoiceField(
-        choices=WorkItem.Type.choices,
+    typeDefinitionId = serializers.IntegerField(
+        min_value=1,
     )
     title = serializers.CharField(
         max_length=255,
@@ -162,8 +160,8 @@ class MeetingWorkItemCreateSerializer(serializers.Serializer):
         required=False,
         allow_blank=True,
     )
-    status = serializers.ChoiceField(
-        choices=WorkItem.Status.choices,
+    statusDefinitionId = serializers.IntegerField(
+        min_value=1,
         required=False,
     )
     assigneeIds = serializers.ListField(
@@ -185,4 +183,10 @@ class MeetingWorkItemCreateSerializer(serializers.Serializer):
         required=False,
         allow_blank=True,
         allow_null=True,
+    )
+    labelDefinitionIds = serializers.ListField(
+        child=serializers.IntegerField(
+            min_value=1,
+        ),
+        required=False,
     )

@@ -105,6 +105,8 @@ class MeetingWorkItemLinkBase(TestCase):
             title="Rewrite Introduction",
         )
 
+        self.task_type = self.project.type_definitions.get(name="Task")
+
 
 class MeetingWorkItemLinkDomainTest(
     MeetingWorkItemLinkBase
@@ -114,7 +116,7 @@ class MeetingWorkItemLinkDomainTest(
             meeting_item=self.item,
             project=self.project,
             actor=self.alex,
-            type=WorkItem.Type.TASK,
+            type_definition_id=self.task_type.pk,
             title="Rewrite Introduction",
             assignee_ids=[self.chris.pk],
         )
@@ -163,7 +165,7 @@ class MeetingWorkItemLinkDomainTest(
                 meeting_item=self.item,
                 project=other_project,
                 actor=self.alex,
-                type=WorkItem.Type.TASK,
+                type_definition_id=self.task_type.pk,
                 title="Cross Group Task",
             )
 
@@ -185,7 +187,7 @@ class MeetingWorkItemLinkDomainTest(
                 meeting_item=self.item,
                 project=self.project,
                 actor=self.alex,
-                type=WorkItem.Type.TASK,
+                type_definition_id=self.task_type.pk,
                 title="Invalid Assignment",
                 assignee_ids=[self.laura.pk],
             )
@@ -227,7 +229,7 @@ class MeetingWorkItemLinkApiTest(
             ),
             payload or {
                 "projectId": self.project.pk,
-                "type": "task",
+                "typeDefinitionId": self.task_type.pk,
                 "title": "Rewrite Introduction",
                 "assigneeIds": [self.chris.pk],
             },
@@ -248,7 +250,7 @@ class MeetingWorkItemLinkApiTest(
             data["projectId"],
             self.project.pk,
         )
-        self.assertEqual(data["type"], "task")
+        self.assertEqual(data["typeDefinitionId"], self.task_type.pk)
         self.assertEqual(
             data["title"],
             "Rewrite Introduction",
@@ -336,7 +338,7 @@ class MeetingWorkItemLinkApiTest(
         response = self.post_work_item(
             payload={
                 "projectId": private_project.pk,
-                "type": "task",
+                "typeDefinitionId": self.task_type.pk,
                 "title": "Private Project Task",
             },
         )
@@ -367,7 +369,7 @@ class MeetingWorkItemLinkApiTest(
         response = self.post_work_item(
             payload={
                 "projectId": other_project.pk,
-                "type": "task",
+                "typeDefinitionId": self.task_type.pk,
                 "title": "Cross Group API Task",
             },
         )
@@ -381,7 +383,7 @@ class MeetingWorkItemLinkApiTest(
         response = self.post_work_item(
             payload={
                 "projectId": self.project.pk,
-                "type": "task",
+                "typeDefinitionId": self.task_type.pk,
                 "title": "Invalid API Assignment",
                 "assigneeIds": [self.laura.pk],
             },
@@ -419,7 +421,7 @@ class MeetingWorkItemLinkApiTest(
     def test_project_id_is_required(self):
         response = self.post_work_item(
             payload={
-                "type": "task",
+                "typeDefinitionId": self.task_type.pk,
                 "title": "Missing Project",
             },
         )
@@ -439,7 +441,7 @@ class MeetingWorkItemLinkApiTest(
             ),
             {
                 "projectId": self.project.pk,
-                "type": "task",
+                "typeDefinitionId": self.task_type.pk,
                 "title": "Anonymous Task",
             },
             format="json",
@@ -463,7 +465,7 @@ class MeetingWorkItemLinkApiTest(
 
         payload = {
             "projectId": self.project.pk,
-            "type": "task",
+            "typeDefinitionId": self.task_type.pk,
             "title": "CSRF Meeting Task",
         }
 

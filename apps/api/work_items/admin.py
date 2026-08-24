@@ -6,12 +6,12 @@ from .models import WorkItem, WorkItemAssignee, WorkItemComment
 @admin.register(WorkItem)
 class WorkItemAdmin(admin.ModelAdmin):
     """Read-only admin for WorkItem to prevent bypassing service-layer invariants."""
-    list_display = ("title", "type", "status", "project", "created_by", "created_at")
-    list_filter = ("type", "status", "project")
+    list_display = ("title", "type_definition", "status_definition", "project", "created_by", "created_at")
+    list_filter = ("type_definition", "status_definition", "project")
     search_fields = ("title",)
-    raw_id_fields = ("project", "parent", "created_by")
+    raw_id_fields = ("project", "parent", "created_by", "type_definition", "status_definition")
     readonly_fields = (
-        "id", "project", "type", "title", "description", "status",
+        "id", "project", "type_definition", "title", "description", "status_definition",
         "parent", "due_date", "blocked_reason", "completed_at",
         "created_at", "updated_at", "created_by",
     )

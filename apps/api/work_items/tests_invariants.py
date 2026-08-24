@@ -96,6 +96,7 @@ def _create_test_scenario():
         "laura": laura,
         "maria": maria,
         "paper_xyz": paper_xyz,
+        "task_type": paper_xyz.type_definitions.get(name="Task"),
     }
 
 
@@ -114,7 +115,7 @@ class StaleProjectMembershipTest(TransactionTestCase):
         self.wi = create_work_item(
             project=self.data["paper_xyz"],
             actor=self.data["alex"],
-            type=WorkItem.Type.TASK,
+            type_definition_id=self.data["task_type"].pk,
             title="Test Task",
         )
 
@@ -139,7 +140,7 @@ class StaleProjectMembershipTest(TransactionTestCase):
             create_work_item(
                 project=self.data["paper_xyz"],
                 actor=self.data["chris"],
-                type=WorkItem.Type.TASK,
+                type_definition_id=self.data["task_type"].pk,
                 title="Should Fail",
             )
 
@@ -160,7 +161,7 @@ class StaleProjectMembershipTest(TransactionTestCase):
             create_work_item(
                 project=self.data["paper_xyz"],
                 actor=self.data["alex"],
-                type=WorkItem.Type.TASK,
+                type_definition_id=self.data["task_type"].pk,
                 title="Should Fail",
             )
 
@@ -182,7 +183,7 @@ class StaleAssigneeMembershipTest(TransactionTestCase):
             create_work_item(
                 project=self.data["paper_xyz"],
                 actor=self.data["alex"],
-                type=WorkItem.Type.TASK,
+                type_definition_id=self.data["task_type"].pk,
                 title="Assign Stale",
                 assignee_ids=[self.data["chris"].pk],
             )
@@ -193,7 +194,7 @@ class StaleAssigneeMembershipTest(TransactionTestCase):
         wi = create_work_item(
             project=self.data["paper_xyz"],
             actor=self.data["alex"],
-            type=WorkItem.Type.TASK,
+            type_definition_id=self.data["task_type"].pk,
             title="Test",
         )
 
@@ -224,7 +225,7 @@ class StaleMembershipAPITest(_AuthMixin, APITestCase):
         cls.wi = create_work_item(
             project=cls.data["paper_xyz"],
             actor=cls.data["alex"],
-            type=WorkItem.Type.TASK,
+            type_definition_id=cls.data["task_type"].pk,
             title="Test Task",
         )
 
@@ -263,7 +264,7 @@ class StaleMembershipAPITest(_AuthMixin, APITestCase):
         csrf = self._get_csrf_token()
         response = self.client.post(
             f"/api/projects/{self.data['paper_xyz'].pk}/work-items/",
-            data={"type": "task", "title": "Should Fail"},
+            data={"typeDefinitionId": self.data["task_type"].pk, "title": "Should Fail"},
             content_type="application/json",
             HTTP_X_CSRFTOKEN=csrf,
         )

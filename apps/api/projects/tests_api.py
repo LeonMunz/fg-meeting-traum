@@ -598,13 +598,13 @@ class AssignmentProtectionAPITest(_AuthMixin, APITestCase):
     def setUpTestData(cls):
         cls.data = _setup_test_data()
         # Create a WorkItem assigned to Chris in Paper XYZ
-        from work_items.models import WorkItem
         from work_items.services import create_work_item
 
+        task_type = cls.data["paper_xyz"].type_definitions.get(name="Task")
         cls.data["assigned_work_item"] = create_work_item(
             project=cls.data["paper_xyz"],
             actor=cls.data["alex"],
-            type=WorkItem.Type.TASK,
+            type_definition_id=task_type.pk,
             title="API Test Task",
             assignee_ids=[cls.data["chris"].pk],
         )

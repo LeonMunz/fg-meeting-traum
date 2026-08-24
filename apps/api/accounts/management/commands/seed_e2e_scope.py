@@ -92,7 +92,7 @@ class Command(BaseCommand):
             work_item = create_work_item(
                 project=project,
                 actor=alex,
-                type="task",
+                type_definition_id=project.type_definitions.get(name="Task").pk,
                 title="E2E Analyze robot data",
                 assignee_ids=[alex.pk],
             )

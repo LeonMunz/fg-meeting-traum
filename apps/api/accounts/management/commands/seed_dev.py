@@ -21,7 +21,10 @@ from django.core.management.base import BaseCommand
 
 from research_groups.models import ResearchGroup, ResearchGroupMembership
 from projects.models import Project, ProjectMembership
-from projects.services import add_project_membership
+from projects.services import (
+    _create_default_work_item_configuration,
+    add_project_membership,
+)
 from work_items.models import WorkItem, WorkItemAssignee
 from work_items.services import create_work_item
 
@@ -144,6 +147,7 @@ class Command(BaseCommand):
             )
             if created:
                 memberships_created += 1
+            _create_default_work_item_configuration(paper_xyz)
         else:
             self.stdout.write(f"  Project exists: {paper_xyz.name}")
 
@@ -187,6 +191,7 @@ class Command(BaseCommand):
             )
             if created:
                 memberships_created += 1
+            _create_default_work_item_configuration(maria_project)
         else:
             self.stdout.write(f"  Project exists: {maria_project.name}")
 
@@ -208,6 +213,12 @@ class Command(BaseCommand):
         alex = User.objects.get(username="alex")
         chris = User.objects.get(username="chris")
 
+        epic_type = paper_xyz.type_definitions.get(name="Epic")
+        task_type = paper_xyz.type_definitions.get(name="Task")
+        milestone_type = paper_xyz.type_definitions.get(name="Milestone")
+        todo_status = paper_xyz.status_definitions.get(name="Todo")
+        in_progress_status = paper_xyz.status_definitions.get(name="In Progress")
+
         created = 0
 
         # ── Epic: Literature Review ──
@@ -215,8 +226,8 @@ class Command(BaseCommand):
             project=paper_xyz,
             title="Literature Review",
             defaults={
-                "type": WorkItem.Type.EPIC,
-                "status": WorkItem.Status.IN_PROGRESS,
+                "type_definition": epic_type,
+                "status_definition": in_progress_status,
                 "created_by": alex,
                 "description": "Survey and summarize related work.",
             },
@@ -230,8 +241,8 @@ class Command(BaseCommand):
             project=paper_xyz,
             title="Rewrite Introduction",
             defaults={
-                "type": WorkItem.Type.TASK,
-                "status": WorkItem.Status.TODO,
+                "type_definition": task_type,
+                "status_definition": todo_status,
                 "parent": epic,
                 "created_by": alex,
                 "description": "Update introduction with new context from literature review.",
@@ -251,8 +262,8 @@ class Command(BaseCommand):
             project=paper_xyz,
             title="First Draft Complete",
             defaults={
-                "type": WorkItem.Type.MILESTONE,
-                "status": WorkItem.Status.TODO,
+                "type_definition": milestone_type,
+                "status_definition": todo_status,
                 "created_by": alex,
                 "description": "All sections drafted and ready for internal review.",
                 "due_date": "2025-12-01",

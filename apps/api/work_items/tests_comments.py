@@ -253,7 +253,7 @@ class WorkItemCommentListCreateApiTest(_AuthMixin, APITestCase):
         wi_b = create_work_item(
             project=self.data["paper_xyz"],
             actor=self.data["alex"],
-            type=WorkItem.Type.TASK,
+            type_definition_id=self.data["task_type"].pk,
             title="Work Item B",
         )
         self._create(
@@ -441,10 +441,11 @@ class WorkItemCommentAdminIsolationTest(_AuthMixin, APITestCase):
     def setUpTestData(cls):
         cls.data = _setup_test_data()
         cls.maria_project = _create_maria_project(cls.data)
+        cls.maria_task_type = cls.maria_project.type_definitions.get(name="Task")
         cls.maria_work_item = create_work_item(
             project=cls.maria_project,
             actor=cls.data["maria"],
-            type=WorkItem.Type.TASK,
+            type_definition_id=cls.maria_task_type.pk,
             title="Maria's private task",
         )
         cls.maria_comment = create_work_item_comment(

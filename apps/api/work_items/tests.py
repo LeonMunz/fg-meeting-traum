@@ -1,7 +1,7 @@
 """Domain tests for WorkItem, WorkItemAssignee, and application services.
 
 Covers:
-- WorkItem model/choices
+- WorkItem model/definitions
 - WorkItemAssignee uniqueness
 - Assignee eligibility (owner/member eligible, viewer/non-member rejected)
 - Hierarchy validation (same-project, no self-parent, no cycles)
@@ -40,7 +40,8 @@ def _create_test_scenario():
     """Create the standard test scenario with users and project.
 
     Returns dict with group, alex (owner), chris (member), laura (viewer),
-    maria (no membership), paper_xyz project.
+    maria (no membership), paper_xyz project, and the project's default
+    Type/Status definitions.
     """
     group = ResearchGroup.objects.create(
         name="FG Test",
@@ -77,6 +78,12 @@ def _create_test_scenario():
         "laura": laura,
         "maria": maria,
         "paper_xyz": paper_xyz,
+        "epic_type": paper_xyz.type_definitions.get(name="Epic"),
+        "task_type": paper_xyz.type_definitions.get(name="Task"),
+        "todo_status": paper_xyz.status_definitions.get(name="Todo"),
+        "in_progress_status": paper_xyz.status_definitions.get(name="In Progress"),
+        "review_status": paper_xyz.status_definitions.get(name="Review"),
+        "done_status": paper_xyz.status_definitions.get(name="Done"),
     }
 
 
@@ -93,76 +100,90 @@ class WorkItemModelTest(TestCase):
             research_group=self.group, user=self.user,
             role=ResearchGroupMembership.Role.MEMBER,
         )
-        self.project = Project.objects.create(
-            name="Test Project", research_group=self.group, created_by=self.user,
+        self.project = create_project(
+            research_group=self.group, creator=self.user, name="Test Project",
         )
+        self.task_type = self.project.type_definitions.get(name="Task")
+        self.epic_type = self.project.type_definitions.get(name="Epic")
+        self.milestone_type = self.project.type_definitions.get(name="Milestone")
+        self.deliverable_type = self.project.type_definitions.get(name="Deliverable")
+        self.todo_status = self.project.status_definitions.get(name="Todo")
+        self.in_progress_status = self.project.status_definitions.get(name="In Progress")
+        self.review_status = self.project.status_definitions.get(name="Review")
+        self.done_status = self.project.status_definitions.get(name="Done")
 
     def test_work_item_belongs_to_project(self):
         wi = WorkItem.objects.create(
-            project=self.project, type=WorkItem.Type.TASK,
+            project=self.project, type_definition=self.task_type,
+            status_definition=self.todo_status,
             title="Test Task", created_by=self.user,
         )
         self.assertEqual(wi.project, self.project)
 
     def test_epic_type(self):
         wi = WorkItem.objects.create(
-            project=self.project, type=WorkItem.Type.EPIC,
+            project=self.project, type_definition=self.epic_type,
+            status_definition=self.todo_status,
             title="Epic", created_by=self.user,
         )
-        self.assertEqual(wi.type, "epic")
+        self.assertEqual(wi.type_definition, self.epic_type)
 
     def test_milestone_type(self):
         wi = WorkItem.objects.create(
-            project=self.project, type=WorkItem.Type.MILESTONE,
+            project=self.project, type_definition=self.milestone_type,
+            status_definition=self.todo_status,
             title="Milestone", created_by=self.user,
         )
-        self.assertEqual(wi.type, "milestone")
+        self.assertEqual(wi.type_definition, self.milestone_type)
 
     def test_deliverable_type(self):
         wi = WorkItem.objects.create(
-            project=self.project, type=WorkItem.Type.DELIVERABLE,
+            project=self.project, type_definition=self.deliverable_type,
+            status_definition=self.todo_status,
             title="Deliverable", created_by=self.user,
         )
-        self.assertEqual(wi.type, "deliverable")
+        self.assertEqual(wi.type_definition, self.deliverable_type)
 
     def test_task_type(self):
         wi = WorkItem.objects.create(
-            project=self.project, type=WorkItem.Type.TASK,
+            project=self.project, type_definition=self.task_type,
+            status_definition=self.todo_status,
             title="Task", created_by=self.user,
         )
-        self.assertEqual(wi.type, "task")
+        self.assertEqual(wi.type_definition, self.task_type)
 
     def test_todo_status(self):
         wi = WorkItem.objects.create(
-            project=self.project, type=WorkItem.Type.TASK,
-            title="Task", status=WorkItem.Status.TODO, created_by=self.user,
+            project=self.project, type_definition=self.task_type,
+            title="Task", status_definition=self.todo_status, created_by=self.user,
         )
-        self.assertEqual(wi.status, "todo")
+        self.assertEqual(wi.status_definition, self.todo_status)
 
     def test_in_progress_status(self):
         wi = WorkItem.objects.create(
-            project=self.project, type=WorkItem.Type.TASK,
-            title="Task", status=WorkItem.Status.IN_PROGRESS, created_by=self.user,
+            project=self.project, type_definition=self.task_type,
+            title="Task", status_definition=self.in_progress_status, created_by=self.user,
         )
-        self.assertEqual(wi.status, "in_progress")
+        self.assertEqual(wi.status_definition, self.in_progress_status)
 
     def test_review_status(self):
         wi = WorkItem.objects.create(
-            project=self.project, type=WorkItem.Type.TASK,
-            title="Task", status=WorkItem.Status.REVIEW, created_by=self.user,
+            project=self.project, type_definition=self.task_type,
+            title="Task", status_definition=self.review_status, created_by=self.user,
         )
-        self.assertEqual(wi.status, "review")
+        self.assertEqual(wi.status_definition, self.review_status)
 
     def test_done_status(self):
         wi = WorkItem.objects.create(
-            project=self.project, type=WorkItem.Type.TASK,
-            title="Task", status=WorkItem.Status.DONE, created_by=self.user,
+            project=self.project, type_definition=self.task_type,
+            title="Task", status_definition=self.done_status, created_by=self.user,
         )
-        self.assertEqual(wi.status, "done")
+        self.assertEqual(wi.status_definition, self.done_status)
 
     def test_due_date_is_date(self):
         wi = WorkItem.objects.create(
-            project=self.project, type=WorkItem.Type.TASK,
+            project=self.project, type_definition=self.task_type,
+            status_definition=self.todo_status,
             title="Task", created_by=self.user,
             due_date=date(2025, 12, 31),
         )
@@ -170,21 +191,24 @@ class WorkItemModelTest(TestCase):
 
     def test_parent_nullable(self):
         wi = WorkItem.objects.create(
-            project=self.project, type=WorkItem.Type.TASK,
+            project=self.project, type_definition=self.task_type,
+            status_definition=self.todo_status,
             title="Task", created_by=self.user,
         )
         self.assertIsNone(wi.parent)
 
     def test_completed_at_nullable(self):
         wi = WorkItem.objects.create(
-            project=self.project, type=WorkItem.Type.TASK,
+            project=self.project, type_definition=self.task_type,
+            status_definition=self.todo_status,
             title="Task", created_by=self.user,
         )
         self.assertIsNone(wi.completed_at)
 
     def test_blocked_reason_blank(self):
         wi = WorkItem.objects.create(
-            project=self.project, type=WorkItem.Type.TASK,
+            project=self.project, type_definition=self.task_type,
+            status_definition=self.todo_status,
             title="Task", created_by=self.user,
         )
         self.assertEqual(wi.blocked_reason, "")
@@ -198,7 +222,8 @@ class WorkItemAssigneeModelTest(TestCase):
 
     def test_create_assignee(self):
         wi = WorkItem.objects.create(
-            project=self.data["paper_xyz"], type=WorkItem.Type.TASK,
+            project=self.data["paper_xyz"], type_definition=self.data["task_type"],
+            status_definition=self.data["todo_status"],
             title="Test", created_by=self.data["alex"],
         )
         assignee = WorkItemAssignee.objects.create(
@@ -209,7 +234,8 @@ class WorkItemAssigneeModelTest(TestCase):
 
     def test_duplicate_assignee_rejected(self):
         wi = WorkItem.objects.create(
-            project=self.data["paper_xyz"], type=WorkItem.Type.TASK,
+            project=self.data["paper_xyz"], type_definition=self.data["task_type"],
+            status_definition=self.data["todo_status"],
             title="Test", created_by=self.data["alex"],
         )
         WorkItemAssignee.objects.create(work_item=wi, user=self.data["chris"])
@@ -218,7 +244,8 @@ class WorkItemAssigneeModelTest(TestCase):
 
     def test_multiple_eligible_assignees(self):
         wi = WorkItem.objects.create(
-            project=self.data["paper_xyz"], type=WorkItem.Type.TASK,
+            project=self.data["paper_xyz"], type_definition=self.data["task_type"],
+            status_definition=self.data["todo_status"],
             title="Test", created_by=self.data["alex"],
         )
         WorkItemAssignee.objects.create(work_item=wi, user=self.data["alex"])
@@ -262,7 +289,7 @@ class AssigneeEligibilityTest(TestCase):
             create_work_item(
                 project=self.data["paper_xyz"],
                 actor=self.data["alex"],
-                type=WorkItem.Type.TASK,
+                type_definition_id=self.data["task_type"].pk,
                 title="Test",
                 assignee_ids=[self.data["maria"].pk],
             )
@@ -272,7 +299,7 @@ class AssigneeEligibilityTest(TestCase):
             create_work_item(
                 project=self.data["paper_xyz"],
                 actor=self.data["alex"],
-                type=WorkItem.Type.TASK,
+                type_definition_id=self.data["task_type"].pk,
                 title="Test",
                 assignee_ids=[self.data["laura"].pk],
             )
@@ -291,13 +318,13 @@ class HierarchyValidationTest(TestCase):
         parent = create_work_item(
             project=self.data["paper_xyz"],
             actor=self.data["alex"],
-            type=WorkItem.Type.EPIC,
+            type_definition_id=self.data["epic_type"].pk,
             title="Epic",
         )
         child = create_work_item(
             project=self.data["paper_xyz"],
             actor=self.data["alex"],
-            type=WorkItem.Type.TASK,
+            type_definition_id=self.data["task_type"].pk,
             title="Child Task",
             parent_id=parent.pk,
         )
@@ -307,7 +334,7 @@ class HierarchyValidationTest(TestCase):
         wi = create_work_item(
             project=self.data["paper_xyz"],
             actor=self.data["alex"],
-            type=WorkItem.Type.TASK,
+            type_definition_id=self.data["task_type"].pk,
             title="Self Parent",
         )
         with self.assertRaises(WorkItemDomainError):
@@ -323,17 +350,18 @@ class HierarchyValidationTest(TestCase):
             creator=self.data["alex"],
             name="Other Project",
         )
+        other_task_type = other_project.type_definitions.get(name="Task")
         other_parent = create_work_item(
             project=other_project,
             actor=self.data["alex"],
-            type=WorkItem.Type.TASK,
+            type_definition_id=other_task_type.pk,
             title="Other Task",
         )
         with self.assertRaises(WorkItemDomainError):
             create_work_item(
                 project=self.data["paper_xyz"],
                 actor=self.data["alex"],
-                type=WorkItem.Type.TASK,
+                type_definition_id=self.data["task_type"].pk,
                 title="Bad Child",
                 parent_id=other_parent.pk,
             )
@@ -342,13 +370,13 @@ class HierarchyValidationTest(TestCase):
         a = create_work_item(
             project=self.data["paper_xyz"],
             actor=self.data["alex"],
-            type=WorkItem.Type.TASK,
+            type_definition_id=self.data["task_type"].pk,
             title="A",
         )
         b = create_work_item(
             project=self.data["paper_xyz"],
             actor=self.data["alex"],
-            type=WorkItem.Type.TASK,
+            type_definition_id=self.data["task_type"].pk,
             title="B",
             parent_id=a.pk,
         )
@@ -363,20 +391,20 @@ class HierarchyValidationTest(TestCase):
         a = create_work_item(
             project=self.data["paper_xyz"],
             actor=self.data["alex"],
-            type=WorkItem.Type.TASK,
+            type_definition_id=self.data["task_type"].pk,
             title="A",
         )
         b = create_work_item(
             project=self.data["paper_xyz"],
             actor=self.data["alex"],
-            type=WorkItem.Type.TASK,
+            type_definition_id=self.data["task_type"].pk,
             title="B",
             parent_id=a.pk,
         )
         c = create_work_item(
             project=self.data["paper_xyz"],
             actor=self.data["alex"],
-            type=WorkItem.Type.TASK,
+            type_definition_id=self.data["task_type"].pk,
             title="C",
             parent_id=b.pk,
         )
@@ -391,13 +419,13 @@ class HierarchyValidationTest(TestCase):
         parent = create_work_item(
             project=self.data["paper_xyz"],
             actor=self.data["alex"],
-            type=WorkItem.Type.EPIC,
+            type_definition_id=self.data["epic_type"].pk,
             title="Epic",
         )
         child = create_work_item(
             project=self.data["paper_xyz"],
             actor=self.data["alex"],
-            type=WorkItem.Type.TASK,
+            type_definition_id=self.data["task_type"].pk,
             title="Child",
             parent_id=parent.pk,
         )
@@ -413,13 +441,13 @@ class HierarchyValidationTest(TestCase):
         task_parent = create_work_item(
             project=self.data["paper_xyz"],
             actor=self.data["alex"],
-            type=WorkItem.Type.TASK,
+            type_definition_id=self.data["task_type"].pk,
             title="Parent Task",
         )
         task_child = create_work_item(
             project=self.data["paper_xyz"],
             actor=self.data["alex"],
-            type=WorkItem.Type.TASK,
+            type_definition_id=self.data["task_type"].pk,
             title="Child Task",
             parent_id=task_parent.pk,
         )
@@ -428,7 +456,7 @@ class HierarchyValidationTest(TestCase):
         epic_child = create_work_item(
             project=self.data["paper_xyz"],
             actor=self.data["alex"],
-            type=WorkItem.Type.EPIC,
+            type_definition_id=self.data["epic_type"].pk,
             title="Child Epic",
             parent_id=task_parent.pk,
         )
@@ -448,16 +476,16 @@ class CompletionSemanticsTest(TestCase):
         wi = create_work_item(
             project=self.data["paper_xyz"],
             actor=self.data["alex"],
-            type=WorkItem.Type.TASK,
+            type_definition_id=self.data["task_type"].pk,
             title="Test",
-            status=WorkItem.Status.TODO,
+            status_definition_id=self.data["todo_status"].pk,
         )
         self.assertIsNone(wi.completed_at)
 
         update_work_item(
             work_item=wi,
             actor=self.data["alex"],
-            status=WorkItem.Status.DONE,
+            status_definition_id=self.data["done_status"].pk,
         )
         wi.refresh_from_db()
         self.assertIsNotNone(wi.completed_at)
@@ -466,28 +494,28 @@ class CompletionSemanticsTest(TestCase):
         wi = create_work_item(
             project=self.data["paper_xyz"],
             actor=self.data["alex"],
-            type=WorkItem.Type.TASK,
+            type_definition_id=self.data["task_type"].pk,
             title="Test",
-            status=WorkItem.Status.DONE,
+            status_definition_id=self.data["done_status"].pk,
         )
         self.assertIsNotNone(wi.completed_at)
 
         update_work_item(
             work_item=wi,
             actor=self.data["alex"],
-            status=WorkItem.Status.REVIEW,
+            status_definition_id=self.data["review_status"].pk,
         )
         wi.refresh_from_db()
         self.assertIsNone(wi.completed_at)
-        self.assertEqual(wi.status, "review")
+        self.assertEqual(wi.status_definition, self.data["review_status"])
 
     def test_editing_done_item_without_reopening_preserves_completed_at(self):
         wi = create_work_item(
             project=self.data["paper_xyz"],
             actor=self.data["alex"],
-            type=WorkItem.Type.TASK,
+            type_definition_id=self.data["task_type"].pk,
             title="Test",
-            status=WorkItem.Status.DONE,
+            status_definition_id=self.data["done_status"].pk,
         )
         original_completed_at = wi.completed_at
         self.assertIsNotNone(original_completed_at)
@@ -505,9 +533,9 @@ class CompletionSemanticsTest(TestCase):
         wi = create_work_item(
             project=self.data["paper_xyz"],
             actor=self.data["alex"],
-            type=WorkItem.Type.TASK,
+            type_definition_id=self.data["task_type"].pk,
             title="Test",
-            status=WorkItem.Status.TODO,
+            status_definition_id=self.data["todo_status"].pk,
         )
         self.assertIsNone(wi.completed_at)
 
@@ -527,11 +555,21 @@ class CompletionSemanticsTest(TestCase):
         wi = create_work_item(
             project=self.data["paper_xyz"],
             actor=self.data["alex"],
-            type=WorkItem.Type.TASK,
+            type_definition_id=self.data["task_type"].pk,
             title="Done from start",
-            status=WorkItem.Status.DONE,
+            status_definition_id=self.data["done_status"].pk,
         )
         self.assertIsNotNone(wi.completed_at)
+
+    def test_create_without_status_uses_project_default(self):
+        wi = create_work_item(
+            project=self.data["paper_xyz"],
+            actor=self.data["alex"],
+            type_definition_id=self.data["task_type"].pk,
+            title="Default Status",
+        )
+        self.assertEqual(wi.status_definition, self.data["todo_status"])
+        self.assertIsNone(wi.completed_at)
 
 
 # ── Blocked Semantics Tests ──
@@ -547,7 +585,7 @@ class BlockedSemanticsTest(TestCase):
         wi = create_work_item(
             project=self.data["paper_xyz"],
             actor=self.data["alex"],
-            type=WorkItem.Type.TASK,
+            type_definition_id=self.data["task_type"].pk,
             title="Test",
             blocked_reason="Waiting on review",
         )
@@ -557,7 +595,7 @@ class BlockedSemanticsTest(TestCase):
         wi = create_work_item(
             project=self.data["paper_xyz"],
             actor=self.data["alex"],
-            type=WorkItem.Type.TASK,
+            type_definition_id=self.data["task_type"].pk,
             title="Test",
             blocked_reason="Waiting on review",
         )
@@ -573,7 +611,7 @@ class BlockedSemanticsTest(TestCase):
         wi = create_work_item(
             project=self.data["paper_xyz"],
             actor=self.data["alex"],
-            type=WorkItem.Type.TASK,
+            type_definition_id=self.data["task_type"].pk,
             title="Test",
             blocked_reason="Waiting on review",
         )
@@ -605,7 +643,7 @@ class ServiceCreateUpdateTest(TestCase):
         wi = create_work_item(
             project=self.data["paper_xyz"],
             actor=self.data["alex"],
-            type=WorkItem.Type.TASK,
+            type_definition_id=self.data["task_type"].pk,
             title="Test Task",
         )
         self.assertEqual(wi.title, "Test Task")
@@ -615,7 +653,7 @@ class ServiceCreateUpdateTest(TestCase):
         wi = create_work_item(
             project=self.data["paper_xyz"],
             actor=self.data["chris"],
-            type=WorkItem.Type.TASK,
+            type_definition_id=self.data["task_type"].pk,
             title="Chris Task",
         )
         self.assertEqual(wi.title, "Chris Task")
@@ -626,27 +664,51 @@ class ServiceCreateUpdateTest(TestCase):
             create_work_item(
                 project=self.data["paper_xyz"],
                 actor=self.data["laura"],
-                type=WorkItem.Type.TASK,
+                type_definition_id=self.data["task_type"].pk,
                 title="Viewer Task",
             )
 
-    def test_invalid_type_rejected(self):
+    def test_missing_type_definition_rejected(self):
         with self.assertRaises(WorkItemDomainError):
             create_work_item(
                 project=self.data["paper_xyz"],
                 actor=self.data["alex"],
-                type="invalid",
+                type_definition_id=None,
                 title="Bad Type",
             )
 
-    def test_invalid_status_rejected(self):
+    def test_invalid_type_definition_rejected(self):
         with self.assertRaises(WorkItemDomainError):
             create_work_item(
                 project=self.data["paper_xyz"],
                 actor=self.data["alex"],
-                type=WorkItem.Type.TASK,
+                type_definition_id=999999,
+                title="Bad Type",
+            )
+
+    def test_invalid_status_definition_rejected(self):
+        with self.assertRaises(WorkItemDomainError):
+            create_work_item(
+                project=self.data["paper_xyz"],
+                actor=self.data["alex"],
+                type_definition_id=self.data["task_type"].pk,
                 title="Bad Status",
-                status="blocked",
+                status_definition_id=999999,
+            )
+
+    def test_cross_project_type_definition_rejected(self):
+        other_project = create_project(
+            research_group=self.data["group"],
+            creator=self.data["alex"],
+            name="Other Project",
+        )
+        other_task_type = other_project.type_definitions.get(name="Task")
+        with self.assertRaises(WorkItemDomainError):
+            create_work_item(
+                project=self.data["paper_xyz"],
+                actor=self.data["alex"],
+                type_definition_id=other_task_type.pk,
+                title="Cross Project Type",
             )
 
     def test_atomic_rollback_on_invalid_assignee(self):
@@ -654,7 +716,7 @@ class ServiceCreateUpdateTest(TestCase):
             create_work_item(
                 project=self.data["paper_xyz"],
                 actor=self.data["alex"],
-                type=WorkItem.Type.TASK,
+                type_definition_id=self.data["task_type"].pk,
                 title="Should Not Exist",
                 assignee_ids=[self.data["chris"].pk, self.data["maria"].pk],
             )
@@ -666,7 +728,7 @@ class ServiceCreateUpdateTest(TestCase):
         wi = create_work_item(
             project=self.data["paper_xyz"],
             actor=self.data["alex"],
-            type=WorkItem.Type.TASK,
+            type_definition_id=self.data["task_type"].pk,
             title="Original",
         )
         update_work_item(
@@ -681,7 +743,7 @@ class ServiceCreateUpdateTest(TestCase):
         wi = create_work_item(
             project=self.data["paper_xyz"],
             actor=self.data["alex"],
-            type=WorkItem.Type.TASK,
+            type_definition_id=self.data["task_type"].pk,
             title="Test",
             assignee_ids=[self.data["alex"].pk],
         )
@@ -699,7 +761,7 @@ class ServiceCreateUpdateTest(TestCase):
         wi = create_work_item(
             project=self.data["paper_xyz"],
             actor=self.data["alex"],
-            type=WorkItem.Type.TASK,
+            type_definition_id=self.data["task_type"].pk,
             title="Test",
             assignee_ids=[self.data["alex"].pk],
         )
@@ -726,7 +788,7 @@ class ServiceCreateUpdateTest(TestCase):
         wi = create_work_item(
             project=self.data["paper_xyz"],
             actor=self.data["alex"],
-            type=WorkItem.Type.TASK,
+            type_definition_id=self.data["task_type"].pk,
             title="Multi Assign",
             assignee_ids=[self.data["alex"].pk, self.data["chris"].pk],
         )
@@ -740,7 +802,7 @@ class ServiceCreateUpdateTest(TestCase):
         wi = create_work_item(
             project=self.data["paper_xyz"],
             actor=self.data["alex"],
-            type=WorkItem.Type.TASK,
+            type_definition_id=self.data["task_type"].pk,
             title="Duplicate Test",
             assignee_ids=[self.data["alex"].pk, self.data["alex"].pk],
         )

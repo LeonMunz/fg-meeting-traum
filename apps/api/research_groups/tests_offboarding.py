@@ -125,7 +125,7 @@ class ResearchGroupOffboardingTest(TestCase):
         return create_work_item(
             project=project,
             actor=actor or self.admin,
-            type=WorkItem.Type.TASK,
+            type_definition_id=project.type_definitions.get(name="Task").pk,
             title=title,
             assignee_ids=[
                 user.pk
@@ -456,7 +456,7 @@ class ResearchGroupOffboardingTest(TestCase):
         task = create_work_item(
             project=project,
             actor=self.target,
-            type=WorkItem.Type.TASK,
+            type_definition_id=project.type_definitions.get(name="Task").pk,
             title="Historical Work",
         )
 

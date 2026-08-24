@@ -29,6 +29,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient, APITestCase
 
+from projects.models import Project
 from research_groups.models import ResearchGroup, ResearchGroupMembership
 
 User = get_user_model()
@@ -102,6 +103,13 @@ class CoreCheckpointIntegrationTest(APITestCase):
         self.client.get("/api/auth/csrf/")
         csrf_cookie = self.client.cookies.get("csrftoken")
         return csrf_cookie.value if csrf_cookie else ""
+
+    def _task_type_id(self, project_id):
+        """Resolve the default "Task" TypeDefinition id for a Project."""
+        return (
+            Project.objects.get(pk=project_id)
+            .type_definitions.get(name="Task").pk
+        )
 
     # ── STEP 1: Alex authenticates ──
 
@@ -212,7 +220,7 @@ class CoreCheckpointIntegrationTest(APITestCase):
         wi_resp = self.client.post(
             f"/api/projects/{project_id}/work-items/",
             data={
-                "type": "task",
+                "typeDefinitionId": self._task_type_id(project_id),
                 "title": "Rewrite Introduction",
                 "assigneeIds": [self.chris.pk],
             },
@@ -222,8 +230,14 @@ class CoreCheckpointIntegrationTest(APITestCase):
         self.assertEqual(wi_resp.status_code, 201)
         wi_data = wi_resp.json()
         self.assertEqual(wi_data["title"], "Rewrite Introduction")
-        self.assertEqual(wi_data["type"], "task")
-        self.assertEqual(wi_data["status"], "todo")
+        self.assertEqual(
+            wi_data["typeDefinitionId"], self._task_type_id(project_id),
+        )
+        self.assertEqual(
+            wi_data["statusDefinitionId"],
+            Project.objects.get(pk=project_id)
+            .status_definitions.get(name="Todo").pk,
+        )
         self.assertIn(self.chris.pk, wi_data["assigneeIds"])
         self.assertEqual(wi_data["projectId"], project_id)
 
@@ -253,7 +267,7 @@ class CoreCheckpointIntegrationTest(APITestCase):
         wi_resp = self.client.post(
             f"/api/projects/{project_id}/work-items/",
             data={
-                "type": "task",
+                "typeDefinitionId": self._task_type_id(project_id),
                 "title": "Rewrite Introduction",
                 "assigneeIds": [self.chris.pk],
             },
@@ -341,7 +355,7 @@ class CoreCheckpointIntegrationTest(APITestCase):
         wi_resp = self.client.post(
             f"/api/projects/{project_id}/work-items/",
             data={
-                "type": "task",
+                "typeDefinitionId": self._task_type_id(project_id),
                 "title": "Rewrite Introduction",
                 "assigneeIds": [self.chris.pk],
             },
@@ -421,7 +435,7 @@ class CoreCheckpointIntegrationTest(APITestCase):
         wi_resp = self.client.post(
             f"/api/projects/{project_id}/work-items/",
             data={
-                "type": "task",
+                "typeDefinitionId": self._task_type_id(project_id),
                 "title": "Rewrite Introduction",
                 "assigneeIds": [self.chris.pk],
             },

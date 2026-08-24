@@ -11,7 +11,12 @@ from work_items.services import (
     create_work_item,
 )
 
-from .models import Project, ProjectMembership
+from .models import (
+    Project,
+    ProjectMembership,
+    WorkItemStatusDefinition,
+    WorkItemTypeDefinition,
+)
 from .services import (
     ProjectDomainError,
     add_project_membership,
@@ -82,6 +87,15 @@ class ProjectLifecycleTest(TestCase):
             user=self.member,
             role=ProjectMembership.Role.MEMBER,
             added_by=self.owner,
+        )
+
+        WorkItemTypeDefinition.objects.create(
+            project=project, name="Task", order=0,
+        )
+        WorkItemStatusDefinition.objects.create(
+            project=project, name="Todo",
+            category=WorkItemStatusDefinition.Category.TODO,
+            order=0, is_default=True,
         )
 
         return project
@@ -280,7 +294,7 @@ class ProjectLifecycleTest(TestCase):
             create_work_item(
                 project=project,
                 actor=self.owner,
-                type="task",
+                type_definition_id=project.type_definitions.get(name="Task").pk,
                 title="Should not exist",
             )
 
@@ -323,7 +337,7 @@ class ProjectLifecycleTest(TestCase):
         create_work_item(
             project=project,
             actor=self.owner,
-            type="task",
+            type_definition_id=project.type_definitions.get(name="Task").pk,
             title="Historical work",
         )
 

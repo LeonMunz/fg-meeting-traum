@@ -44,10 +44,16 @@ def _setup():
         target_user=chris, role=ProjectMembership.Role.MEMBER,
     )
 
+    task_type = paper_xyz.type_definitions.get(name="Task")
+    todo_status = paper_xyz.status_definitions.get(name="Todo")
+    in_progress_status = paper_xyz.status_definitions.get(name="In Progress")
+    review_status = paper_xyz.status_definitions.get(name="Review")
+    done_status = paper_xyz.status_definitions.get(name="Done")
+
     wi = create_work_item(
         project=paper_xyz,
         actor=alex,
-        type=WorkItem.Type.TASK,
+        type_definition_id=task_type.pk,
         title="Rewrite Introduction",
         assignee_ids=[chris.pk],
     )
@@ -58,6 +64,11 @@ def _setup():
         "chris": chris,
         "paper_xyz": paper_xyz,
         "work_item": wi,
+        "task_type": task_type,
+        "todo_status": todo_status,
+        "in_progress_status": in_progress_status,
+        "review_status": review_status,
+        "done_status": done_status,
     }
 
 
@@ -122,7 +133,7 @@ class CanonicalConsistencyAPITest(_AuthMixin, APITestCase):
         # Update via canonical WorkItem PATCH
         self.client.patch(
             f"/api/work-items/{self.data['work_item'].pk}/",
-            data={"status": "in_progress"},
+            data={"statusDefinitionId": self.data["in_progress_status"].pk},
             content_type="application/json",
             HTTP_X_CSRFTOKEN=csrf,
         )
@@ -136,13 +147,13 @@ class CanonicalConsistencyAPITest(_AuthMixin, APITestCase):
 
         my_status = next(
             i for i in my_work if i["id"] == self.data["work_item"].pk
-        )["status"]
+        )["statusDefinitionId"]
         proj_status = next(
             i for i in project_wis if i["id"] == self.data["work_item"].pk
-        )["status"]
+        )["statusDefinitionId"]
 
-        self.assertEqual(my_status, "in_progress")
-        self.assertEqual(proj_status, "in_progress")
+        self.assertEqual(my_status, self.data["in_progress_status"].pk)
+        self.assertEqual(proj_status, self.data["in_progress_status"].pk)
 
     def test_status_in_progress_to_done(self):
         """Status change to done sets completedAt in both views."""
@@ -151,7 +162,7 @@ class CanonicalConsistencyAPITest(_AuthMixin, APITestCase):
 
         self.client.patch(
             f"/api/work-items/{self.data['work_item'].pk}/",
-            data={"status": "done"},
+            data={"statusDefinitionId": self.data["done_status"].pk},
             content_type="application/json",
             HTTP_X_CSRFTOKEN=csrf,
         )
@@ -170,8 +181,8 @@ class CanonicalConsistencyAPITest(_AuthMixin, APITestCase):
             i for i in project_wis if i["id"] == self.data["work_item"].pk
         )
 
-        self.assertEqual(my_wi["status"], "done")
-        self.assertEqual(proj_wi["status"], "done")
+        self.assertEqual(my_wi["statusDefinitionId"], self.data["done_status"].pk)
+        self.assertEqual(proj_wi["statusDefinitionId"], self.data["done_status"].pk)
         # Both must have the same completedAt
         self.assertIsNotNone(my_wi["completedAt"])
         self.assertIsNotNone(proj_wi["completedAt"])
@@ -185,7 +196,7 @@ class CanonicalConsistencyAPITest(_AuthMixin, APITestCase):
         # Set to done
         self.client.patch(
             f"/api/work-items/{self.data['work_item'].pk}/",
-            data={"status": "done"},
+            data={"statusDefinitionId": self.data["done_status"].pk},
             content_type="application/json",
             HTTP_X_CSRFTOKEN=csrf,
         )
@@ -193,7 +204,7 @@ class CanonicalConsistencyAPITest(_AuthMixin, APITestCase):
         # Reopen to review
         self.client.patch(
             f"/api/work-items/{self.data['work_item'].pk}/",
-            data={"status": "review"},
+            data={"statusDefinitionId": self.data["review_status"].pk},
             content_type="application/json",
             HTTP_X_CSRFTOKEN=csrf,
         )
@@ -212,8 +223,8 @@ class CanonicalConsistencyAPITest(_AuthMixin, APITestCase):
             i for i in project_wis if i["id"] == self.data["work_item"].pk
         )
 
-        self.assertEqual(my_wi["status"], "review")
-        self.assertEqual(proj_wi["status"], "review")
+        self.assertEqual(my_wi["statusDefinitionId"], self.data["review_status"].pk)
+        self.assertEqual(proj_wi["statusDefinitionId"], self.data["review_status"].pk)
         self.assertIsNone(my_wi["completedAt"])
         self.assertIsNone(proj_wi["completedAt"])
 

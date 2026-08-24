@@ -68,10 +68,8 @@ def serialize_work_item(work_item):
     return {
         "id": data["id"],
         "projectId": data["projectId"],
-        "type": data["type"],
         "title": data["title"],
         "description": data["description"],
-        "status": data["status"],
         "assigneeIds": data["assigneeIds"],
         "parentId": data["parentId"],
         "dueDate": data["dueDate"].isoformat()
@@ -82,6 +80,9 @@ def serialize_work_item(work_item):
         "createdAt": data["createdAt"],
         "updatedAt": data["updatedAt"],
         "createdById": data["createdById"],
+        "typeDefinitionId": data["typeDefinitionId"],
+        "statusDefinitionId": data["statusDefinitionId"],
+        "labelDefinitionIds": data["labelDefinitionIds"],
     }
 
 
@@ -134,14 +135,15 @@ class ProjectWorkItemListCreateView(APIView):
             )
 
         # Extract data from request — ignore projectId, createdById, completedAt
-        work_item_type = request.data.get("type")
         title = request.data.get("title", "").strip()
         description = request.data.get("description", "").strip()
-        status = request.data.get("status")
         assignee_ids = request.data.get("assigneeIds") or []
         parent_id = request.data.get("parentId")
         due_date = request.data.get("dueDate")
         blocked_reason = request.data.get("blockedReason") or ""
+        type_definition_id = request.data.get("typeDefinitionId")
+        status_definition_id = request.data.get("statusDefinitionId")
+        label_definition_ids = request.data.get("labelDefinitionIds") or []
 
         if not title:
             return Response(
@@ -149,9 +151,9 @@ class ProjectWorkItemListCreateView(APIView):
                 status=400,
             )
 
-        if not work_item_type:
+        if not type_definition_id:
             return Response(
-                {"error": "WorkItem type is required."},
+                {"error": "typeDefinitionId is required."},
                 status=400,
             )
 
@@ -159,14 +161,15 @@ class ProjectWorkItemListCreateView(APIView):
             wi = create_work_item(
                 project=project,
                 actor=request.user,
-                type=work_item_type,
+                type_definition_id=type_definition_id,
                 title=title,
                 description=description,
-                status=status,
+                status_definition_id=status_definition_id,
                 assignee_ids=assignee_ids,
                 parent_id=parent_id,
                 due_date=due_date,
                 blocked_reason=blocked_reason,
+                label_definition_ids=label_definition_ids,
             )
         except WorkItemDomainError as exc:
             return Response({"error": exc.message}, status=400)
@@ -261,13 +264,14 @@ class WorkItemDetailView(APIView):
         # Build kwargs for update — only include fields that are present
         update_kwargs = {"work_item": work_item, "actor": request.user}
         for field_name, param_name in [
-            ("type", "type"),
             ("title", "title"),
             ("description", "description"),
-            ("status", "status"),
             ("assigneeIds", "assignee_ids"),
             ("dueDate", "due_date"),
             ("blockedReason", "blocked_reason"),
+            ("typeDefinitionId", "type_definition_id"),
+            ("statusDefinitionId", "status_definition_id"),
+            ("labelDefinitionIds", "label_definition_ids"),
         ]:
             if field_name in request.data:
                 update_kwargs[param_name] = request.data[field_name]

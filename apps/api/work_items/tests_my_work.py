@@ -93,11 +93,12 @@ class MyWorkDomainTest(TestCase):
 
     def setUp(self):
         self.data = _create_standard_data()
+        self.task_type = self.data["paper_xyz"].type_definitions.get(name="Task")
         # Create "Rewrite Introduction" assigned to Chris
         self.work_item = create_work_item(
             project=self.data["paper_xyz"],
             actor=self.data["alex"],
-            type=WorkItem.Type.TASK,
+            type_definition_id=self.task_type.pk,
             title="Rewrite Introduction",
             assignee_ids=[self.data["chris"].pk],
         )
@@ -142,7 +143,7 @@ class MyWorkDomainTest(TestCase):
         )
         self.assertEqual(len(work_items), 1)
         self.assertEqual(work_items[0].project_id, self.data["paper_xyz"].pk)
-        self.assertEqual(work_items[0].status, WorkItem.Status.TODO)
+        self.assertEqual(work_items[0].status_definition.category, "todo")
         # Assignee IDs include Chris
         self.assertEqual(
             list(work_items[0].assignee_relations.values_list(
@@ -179,7 +180,7 @@ class MyWorkDomainTest(TestCase):
         unassigned_wi = create_work_item(
             project=self.data["paper_xyz"],
             actor=self.data["alex"],
-            type=WorkItem.Type.TASK,
+            type_definition_id=self.task_type.pk,
             title="Unassigned Task",
         )
         # Alex can see it through Project but not in My Work
@@ -202,9 +203,10 @@ class MyWorkDomainTest(TestCase):
             target_user=self.data["chris"],
             role=ProjectMembership.Role.MEMBER,
         )
+        b_task_type = project_b.type_definitions.get(name="Task")
         wi_b = create_work_item(
             project=project_b, actor=self.data["alex"],
-            type=WorkItem.Type.TASK, title="Task B",
+            type_definition_id=b_task_type.pk, title="Task B",
             assignee_ids=[self.data["chris"].pk],
         )
 
@@ -232,10 +234,11 @@ class MyWorkDomainTest(TestCase):
             creator=self.data["chris"],
             name="Project in B",
         )
+        b_task_type = project_b.type_definitions.get(name="Task")
         create_work_item(
             project=project_b,
             actor=self.data["chris"],
-            type=WorkItem.Type.TASK,
+            type_definition_id=b_task_type.pk,
             title="Task in B",
             assignee_ids=[self.data["chris"].pk],
         )
@@ -260,10 +263,11 @@ class MyWorkStaleAssignmentDefense(TestCase):
 
     def setUp(self):
         self.data = _create_standard_data()
+        self.task_type = self.data["paper_xyz"].type_definitions.get(name="Task")
         self.work_item = create_work_item(
             project=self.data["paper_xyz"],
             actor=self.data["alex"],
-            type=WorkItem.Type.TASK,
+            type_definition_id=self.task_type.pk,
             title="Stale Test Task",
             assignee_ids=[self.data["chris"].pk],
         )
@@ -372,10 +376,11 @@ class MyWorkAPITest(_MyWorkAuthMixin, APITestCase):
     @classmethod
     def setUpTestData(cls):
         cls.data = _create_standard_data()
+        cls.task_type = cls.data["paper_xyz"].type_definitions.get(name="Task")
         cls.data["work_item"] = create_work_item(
             project=cls.data["paper_xyz"],
             actor=cls.data["alex"],
-            type=WorkItem.Type.TASK,
+            type_definition_id=cls.task_type.pk,
             title="Rewrite Introduction",
             assignee_ids=[cls.data["chris"].pk],
         )
@@ -400,17 +405,18 @@ class MyWorkAPITest(_MyWorkAuthMixin, APITestCase):
         data = response.json()[0]
         # Check all expected fields
         expected_fields = [
-            "id", "projectId", "type", "title", "description",
-            "status", "assigneeIds", "parentId", "dueDate",
+            "id", "projectId", "typeDefinitionId", "title", "description",
+            "statusDefinitionId", "assigneeIds", "parentId", "dueDate",
             "blockedReason", "completedAt", "createdAt",
             "updatedAt", "createdById",
         ]
         for field in expected_fields:
             self.assertIn(field, data, f"Missing field: {field}")
 
-        self.assertEqual(data["type"], "task")
+        todo_status = self.data["paper_xyz"].status_definitions.get(name="Todo")
+        self.assertEqual(data["typeDefinitionId"], self.task_type.pk)
         self.assertEqual(data["title"], "Rewrite Introduction")
-        self.assertEqual(data["status"], "todo")
+        self.assertEqual(data["statusDefinitionId"], todo_status.pk)
         self.assertEqual(data["projectId"], self.data["paper_xyz"].pk)
         self.assertIn(self.data["chris"].pk, data["assigneeIds"])
 
@@ -516,10 +522,11 @@ class MyWorkAPITest(_MyWorkAuthMixin, APITestCase):
             creator=self.data["chris"],
             name="Project in B",
         )
+        b_task_type = project_b.type_definitions.get(name="Task")
         wi_b = create_work_item(
             project=project_b,
             actor=self.data["chris"],
-            type=WorkItem.Type.TASK,
+            type_definition_id=b_task_type.pk,
             title="Task in B",
             assignee_ids=[self.data["chris"].pk],
         )

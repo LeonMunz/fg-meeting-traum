@@ -712,7 +712,7 @@ class ProjectMembershipAdminTest(TestCase):
 # ── Assignment lifecycle protection tests ──
 
 from work_items.models import WorkItem, WorkItemAssignee
-from work_items.services import create_work_item
+from work_items.services import WorkItemDomainError, create_work_item
 
 
 class AssignmentLifecycleProtectionTest(TestCase):
@@ -765,7 +765,8 @@ class AssignmentLifecycleProtectionTest(TestCase):
         """Create a WorkItem in Paper XYZ assigned to the given user."""
         return create_work_item(
             project=self.project, actor=self.alex,
-            type=WorkItem.Type.TASK, title="Test Task",
+            type_definition_id=self.project.type_definitions.get(name="Task").pk,
+            title="Test Task",
             assignee_ids=[assignee.pk],
         )
 
@@ -980,7 +981,8 @@ class AssignmentLifecycleProtectionTest(TestCase):
         self._create_assigned_work_item(self.chris)
         create_work_item(
             project=self.project, actor=self.alex,
-            type=WorkItem.Type.TASK, title="Test Task 2",
+            type_definition_id=self.project.type_definitions.get(name="Task").pk,
+            title="Test Task 2",
             assignee_ids=[self.chris.pk],
         )
 
@@ -1003,7 +1005,8 @@ class AssignmentLifecycleProtectionTest(TestCase):
         )
         create_work_item(
             project=project_b, actor=self.chris,
-            type=WorkItem.Type.TASK, title="Task in B",
+            type_definition_id=project_b.type_definitions.get(name="Task").pk,
+            title="Task in B",
             assignee_ids=[self.chris.pk],
         )
 
@@ -1021,3 +1024,551 @@ class AssignmentLifecycleProtectionTest(TestCase):
                 project=self.project, user=self.chris
             ).exists()
         )
+
+
+# ── Configuration service tests ──
+
+from projects.configuration_services import (
+    ConfigurationError,
+    create_label_definition,
+    create_status_definition,
+    create_type_definition,
+    reorder_label_definitions,
+    reorder_status_definitions,
+    reorder_type_definitions,
+    update_label_definition,
+    update_status_definition,
+    update_type_definition,
+)
+from projects.models import (
+    WorkItemLabelDefinition,
+    WorkItemStatusDefinition,
+    WorkItemTypeDefinition,
+)
+
+
+class _ConfigSetupMixin:
+    """Create standard test users + project with default configuration."""
+
+    def setUp(self):
+        self.alex = User.objects.create_user(
+            username="alex", password="Pass1!",
+        )
+        self.chris = User.objects.create_user(
+            username="chris", password="Pass1!",
+        )
+        self.laura = User.objects.create_user(
+            username="laura", password="Pass1!",
+        )
+        self.group = ResearchGroup.objects.create(
+            name="FG Config", created_by=self.alex,
+        )
+        ResearchGroupMembership.objects.create(
+            research_group=self.group, user=self.alex,
+            role=ResearchGroupMembership.Role.ADMIN,
+        )
+        ResearchGroupMembership.objects.create(
+            research_group=self.group, user=self.chris,
+            role=ResearchGroupMembership.Role.MEMBER,
+        )
+        ResearchGroupMembership.objects.create(
+            research_group=self.group, user=self.laura,
+            role=ResearchGroupMembership.Role.MEMBER,
+        )
+        self.project = create_project(
+            research_group=self.group,
+            creator=self.alex,
+            name="Config Project",
+        )
+
+
+class ConfigurationServiceTest(_ConfigSetupMixin, TestCase):
+    """Test configuration_services CRUD operations directly."""
+
+    # ── Type CRUD ──
+
+    def test_create_type_owner(self):
+        t = create_type_definition(self.project, self.alex, "Bug")
+        self.assertEqual(t.name, "Bug")
+        self.assertEqual(t.project, self.project)
+        self.assertTrue(t.active)
+
+    def test_create_type_member_gets_error(self):
+        with self.assertRaises(ConfigurationError):
+            create_type_definition(self.project, self.chris, "Bug")
+
+    def test_create_type_viewer_gets_error(self):
+        with self.assertRaises(ConfigurationError):
+            create_type_definition(self.project, self.laura, "Bug")
+
+    def test_create_type_blank_name_rejected(self):
+        with self.assertRaises(ConfigurationError):
+            create_type_definition(self.project, self.alex, "  ")
+
+    def test_create_type_empty_string_rejected(self):
+        with self.assertRaises(ConfigurationError):
+            create_type_definition(self.project, self.alex, "")
+
+    def test_create_type_case_insensitive_unique(self):
+        create_type_definition(self.project, self.alex, "Custom Type")
+        with self.assertRaises(ConfigurationError) as ctx:
+            create_type_definition(self.project, self.alex, "custom type")
+        self.assertIn("already exists", ctx.exception.message)
+
+    def test_create_type_case_insensitive_unique_mixed(self):
+        create_type_definition(self.project, self.alex, "MixedCase")
+        with self.assertRaises(ConfigurationError):
+            create_type_definition(self.project, self.alex, "mIxEdCaSe")
+
+    def test_create_type_auto_order(self):
+        t1 = create_type_definition(self.project, self.alex, "A")
+        t2 = create_type_definition(self.project, self.alex, "B")
+        self.assertLess(t1.order, t2.order)
+
+    def test_create_type_explicit_order(self):
+        t = create_type_definition(self.project, self.alex, "Z", order=42)
+        self.assertEqual(t.order, 42)
+
+    def test_update_type_owner_rename(self):
+        t = create_type_definition(self.project, self.alex, "Old")
+        update_type_definition(t, self.alex, name="New")
+        t.refresh_from_db()
+        self.assertEqual(t.name, "New")
+
+    def test_update_type_non_owner_rejected(self):
+        t = create_type_definition(self.project, self.alex, "Bug")
+        with self.assertRaises(ConfigurationError):
+            update_type_definition(t, self.chris, name="Task")
+
+    def test_update_type_blank_name_rejected(self):
+        t = create_type_definition(self.project, self.alex, "Bug")
+        with self.assertRaises(ConfigurationError):
+            update_type_definition(t, self.alex, name="")
+
+    def test_update_type_case_insensitive_unique(self):
+        create_type_definition(self.project, self.alex, "Existing Type")
+        t = create_type_definition(self.project, self.alex, "Bug")
+        with self.assertRaises(ConfigurationError):
+            update_type_definition(t, self.alex, name="EXISTING TYPE")
+
+    def test_update_type_deactivate_final_active_rejected(self):
+        t = create_type_definition(self.project, self.alex, "OnlyOne")
+        for d in (
+            WorkItemTypeDefinition.objects
+            .filter(project=self.project, active=True)
+            .exclude(pk=t.pk)
+        ):
+            update_type_definition(d, self.alex, active=False)
+
+        with self.assertRaises(ConfigurationError) as ctx:
+            update_type_definition(t, self.alex, active=False)
+        self.assertIn("final active", ctx.exception.message)
+
+    def test_update_type_deactivate_order(self):
+        t = create_type_definition(self.project, self.alex, "Second")
+        update_type_definition(t, self.alex, order=100)
+        t.refresh_from_db()
+        self.assertEqual(t.order, 100)
+
+    # ── Status CRUD ──
+
+    def test_create_status_owner(self):
+        s = create_status_definition(
+            self.project, self.alex, "Blocked", "todo",
+        )
+        self.assertEqual(s.name, "Blocked")
+        self.assertEqual(s.category, "todo")
+
+    def test_create_status_member_gets_error(self):
+        with self.assertRaises(ConfigurationError):
+            create_status_definition(
+                self.project, self.chris, "Blocked", "todo",
+            )
+
+    def test_create_status_invalid_category(self):
+        with self.assertRaises(ConfigurationError):
+            create_status_definition(
+                self.project, self.alex, "Blocked", "invalid_category",
+            )
+
+    def test_create_status_blank_name_rejected(self):
+        with self.assertRaises(ConfigurationError):
+            create_status_definition(
+                self.project, self.alex, "  ", "todo",
+            )
+
+    def test_create_status_case_insensitive_unique(self):
+        create_status_definition(
+            self.project, self.alex, "Custom Status", "in_progress",
+        )
+        with self.assertRaises(ConfigurationError):
+            create_status_definition(
+                self.project, self.alex, "custom status", "in_progress",
+            )
+
+    def test_create_status_default_must_be_todo(self):
+        with self.assertRaises(ConfigurationError):
+            create_status_definition(
+                self.project, self.alex, "Done Default", "done",
+                is_default=True,
+            )
+
+    def test_create_status_default_clears_existing(self):
+        existing_default = WorkItemStatusDefinition.objects.get(
+            project=self.project, is_default=True, active=True,
+        )
+        create_status_definition(
+            self.project, self.alex, "New Todo", "todo",
+            is_default=True,
+        )
+        existing_default.refresh_from_db()
+        self.assertFalse(existing_default.is_default)
+
+    def test_update_status_owner_rename(self):
+        s = create_status_definition(
+            self.project, self.alex, "Old Status", "review",
+        )
+        update_status_definition(s, self.alex, name="New Status")
+        s.refresh_from_db()
+        self.assertEqual(s.name, "New Status")
+
+    def test_update_status_non_owner_rejected(self):
+        s = create_status_definition(
+            self.project, self.alex, "Blocked", "todo",
+        )
+        with self.assertRaises(ConfigurationError):
+            update_status_definition(s, self.chris, name="Frozen")
+
+    def test_update_status_category_immutable_when_referenced(self):
+        # Create a WorkItem referencing this status
+        default_status = WorkItemStatusDefinition.objects.get(
+            project=self.project, is_default=True, active=True,
+        )
+        wi = WorkItem.objects.create(
+            project=self.project,
+            title="Test WI",
+            type_definition=self.project.type_definitions.get(name="Task"),
+            status_definition=default_status,
+            created_by=self.alex,
+        )
+        s = create_status_definition(
+            self.project, self.alex, "Custom Status", "todo",
+        )
+        # Assign the work item to our status
+        wi.status_definition = s
+        wi.save(update_fields=["status_definition"])
+        # Now try to change category
+        with self.assertRaises(ConfigurationError) as ctx:
+            update_status_definition(s, self.alex, category="done")
+        self.assertIn("referenced by WorkItems", ctx.exception.message)
+
+    def test_update_status_set_default_non_todo_rejected(self):
+        s = create_status_definition(
+            self.project, self.alex, "Done Status", "done",
+        )
+        with self.assertRaises(ConfigurationError):
+            update_status_definition(s, self.alex, is_default=True)
+
+    def test_update_status_deactivate_current_default_rejected(self):
+        default_status = WorkItemStatusDefinition.objects.get(
+            project=self.project, is_default=True, active=True,
+        )
+        with self.assertRaises(ConfigurationError) as ctx:
+            update_status_definition(default_status, self.alex, active=False)
+        self.assertIn("current default", ctx.exception.message)
+
+    def test_update_status_case_insensitive_unique(self):
+        create_status_definition(
+            self.project, self.alex, "Custom", "in_progress",
+        )
+        s = create_status_definition(
+            self.project, self.alex, "Another", "review",
+        )
+        with self.assertRaises(ConfigurationError):
+            update_status_definition(s, self.alex, name="CUSTOM")
+
+    # ── Label CRUD ──
+
+    def test_create_label_owner(self):
+        l = create_label_definition(self.project, self.alex, "Frontend")
+        self.assertEqual(l.name, "Frontend")
+
+    def test_create_label_member_gets_error(self):
+        with self.assertRaises(ConfigurationError):
+            create_label_definition(self.project, self.chris, "Backend")
+
+    def test_create_label_blank_name_rejected(self):
+        with self.assertRaises(ConfigurationError):
+            create_label_definition(self.project, self.alex, "")
+
+    def test_create_label_case_insensitive_unique(self):
+        create_label_definition(self.project, self.alex, "Bug")
+        with self.assertRaises(ConfigurationError):
+            create_label_definition(self.project, self.alex, "bug")
+
+    def test_update_label_owner_rename(self):
+        l = create_label_definition(self.project, self.alex, "OldLabel")
+        update_label_definition(l, self.alex, name="NewLabel")
+        l.refresh_from_db()
+        self.assertEqual(l.name, "NewLabel")
+
+    def test_update_label_non_owner_rejected(self):
+        l = create_label_definition(self.project, self.alex, "Label")
+        with self.assertRaises(ConfigurationError):
+            update_label_definition(l, self.chris, name="Hacked")
+
+    def test_update_label_deactivate(self):
+        l = create_label_definition(self.project, self.alex, "Label")
+        update_label_definition(l, self.alex, active=False)
+        l.refresh_from_db()
+        self.assertFalse(l.active)
+
+    def test_update_label_reactivate(self):
+        l = create_label_definition(self.project, self.alex, "Label")
+        update_label_definition(l, self.alex, active=False)
+        update_label_definition(l, self.alex, active=True)
+        l.refresh_from_db()
+        self.assertTrue(l.active)
+
+    def test_update_label_blank_name_rejected(self):
+        l = create_label_definition(self.project, self.alex, "Label")
+        with self.assertRaises(ConfigurationError):
+            update_label_definition(l, self.alex, name="   ")
+
+    # ── Reorder operations ──
+
+    def test_reorder_types(self):
+        t1 = create_type_definition(self.project, self.alex, "A", order=0)
+        t2 = create_type_definition(self.project, self.alex, "B", order=1)
+        t3 = create_type_definition(self.project, self.alex, "C", order=2)
+        reorder_type_definitions(
+            self.project, self.alex,
+            [(t1.pk, 2), (t2.pk, 0), (t3.pk, 1)],
+        )
+        self.assertEqual(
+            dict(WorkItemTypeDefinition.objects.filter(
+                project=self.project,
+                pk__in=[t1.pk, t2.pk, t3.pk],
+            ).values_list("name", "order")),
+            {"A": 2, "B": 0, "C": 1},
+        )
+
+    def test_reorder_types_non_owner_rejected(self):
+        with self.assertRaises(ConfigurationError):
+            reorder_type_definitions(self.project, self.chris, [])
+
+    def test_reorder_statuses(self):
+        s1 = create_status_definition(
+            self.project, self.alex, "S1", "todo", order=0,
+        )
+        s2 = create_status_definition(
+            self.project, self.alex, "S2", "in_progress", order=1,
+        )
+        reorder_status_definitions(
+            self.project, self.alex,
+            [(s1.pk, 1), (s2.pk, 0)],
+        )
+        self.assertEqual(
+            dict(WorkItemStatusDefinition.objects.filter(
+                project=self.project,
+                pk__in=[s1.pk, s2.pk],
+            ).values_list("name", "order")),
+            {"S1": 1, "S2": 0},
+        )
+
+    def test_reorder_labels(self):
+        l1 = create_label_definition(self.project, self.alex, "L1", order=0)
+        l2 = create_label_definition(self.project, self.alex, "L2", order=1)
+        reorder_label_definitions(
+            self.project, self.alex,
+            [(l1.pk, 1), (l2.pk, 0)],
+        )
+        self.assertEqual(
+            dict(WorkItemLabelDefinition.objects.filter(project=self.project)
+                 .values_list("name", "order")),
+            {"L1": 1, "L2": 0},
+        )
+
+    # ── Inactive definitions still reserve names ──
+
+    def test_inactive_type_reserves_name(self):
+        t = create_type_definition(self.project, self.alex, "Reserved")
+        update_type_definition(t, self.alex, active=False)
+        with self.assertRaises(ConfigurationError):
+            create_type_definition(self.project, self.alex, "reserved")
+
+    def test_inactive_status_reserves_name(self):
+        s = create_status_definition(
+            self.project, self.alex, "Reserved", "review",
+        )
+        update_status_definition(s, self.alex, active=False)
+        with self.assertRaises(ConfigurationError):
+            create_status_definition(
+                self.project, self.alex, "RESERVED", "todo",
+            )
+
+    def test_inactive_label_reserves_name(self):
+        l = create_label_definition(self.project, self.alex, "Reserved")
+        update_label_definition(l, self.alex, active=False)
+        with self.assertRaises(ConfigurationError):
+            create_label_definition(self.project, self.alex, "RESERVED")
+
+
+class ConfigurationServiceLockingTest(_ConfigSetupMixin, TestCase):
+    """Verify configuration services use select_for_update()."""
+
+    def test_create_type_uses_atomic_and_lock(self):
+        import inspect
+        source = inspect.getsource(create_type_definition)
+        self.assertIn("transaction.atomic", source)
+        self.assertIn("select_for_update", source)
+
+    def test_create_status_uses_atomic_and_lock(self):
+        import inspect
+        source = inspect.getsource(create_status_definition)
+        self.assertIn("transaction.atomic", source)
+        self.assertIn("select_for_update", source)
+
+    def test_create_label_uses_atomic_and_lock(self):
+        import inspect
+        source = inspect.getsource(create_label_definition)
+        self.assertIn("transaction.atomic", source)
+        self.assertIn("select_for_update", source)
+
+    def test_update_type_uses_atomic_and_lock(self):
+        import inspect
+        source = inspect.getsource(update_type_definition)
+        self.assertIn("transaction.atomic", source)
+        self.assertIn("select_for_update", source)
+
+    def test_update_status_uses_atomic_and_lock(self):
+        import inspect
+        source = inspect.getsource(update_status_definition)
+        self.assertIn("transaction.atomic", source)
+        self.assertIn("select_for_update", source)
+
+    def test_update_label_uses_atomic_and_lock(self):
+        import inspect
+        source = inspect.getsource(update_label_definition)
+        self.assertIn("transaction.atomic", source)
+        self.assertIn("select_for_update", source)
+
+    def test_reorder_types_uses_atomic_and_lock(self):
+        import inspect
+        source = inspect.getsource(reorder_type_definitions)
+        self.assertIn("transaction.atomic", source)
+        self.assertIn("select_for_update", source)
+
+
+class SameProjectInvariantTest(_ConfigSetupMixin, TestCase):
+    """Test that WorkItem definitions must belong to the same Project."""
+
+    def setUp(self):
+        super().setUp()
+        # Second project for cross-project tests
+        self.project_b = create_project(
+            research_group=self.group,
+            creator=self.chris,
+            name="Project B",
+        )
+
+    def test_workitem_type_def_wrong_project(self):
+        t = create_type_definition(self.project_b, self.chris, "Bug")
+        with self.assertRaises(WorkItemDomainError):
+            create_work_item(
+                project=self.project,
+                actor=self.alex,
+                title="Cross Project",
+                type_definition_id=t.pk,
+            )
+
+    def test_workitem_status_def_wrong_project(self):
+        s = create_status_definition(
+            self.project_b, self.chris, "Blocked", "todo",
+        )
+        with self.assertRaises(WorkItemDomainError):
+            create_work_item(
+                project=self.project,
+                actor=self.alex,
+                type_definition_id=self.project.type_definitions.get(name="Task").pk,
+                title="Cross Project",
+                status_definition_id=s.pk,
+            )
+
+    def test_workitem_label_def_wrong_project(self):
+        l = create_label_definition(self.project_b, self.chris, "Backend")
+        with self.assertRaises(WorkItemDomainError):
+            create_work_item(
+                project=self.project,
+                actor=self.alex,
+                type_definition_id=self.project.type_definitions.get(name="Task").pk,
+                title="Cross Project",
+                label_definition_ids=[l.pk],
+            )
+
+    def test_workitem_type_def_correct_project(self):
+        t = create_type_definition(self.project, self.alex, "Feature")
+        wi = create_work_item(
+            project=self.project,
+            actor=self.alex,
+            title="Correct Project",
+            type_definition_id=t.pk,
+        )
+        self.assertEqual(wi.type_definition, t)
+
+    def test_workitem_status_def_correct_project(self):
+        s = create_status_definition(
+            self.project, self.alex, "Custom Status", "in_progress",
+        )
+        wi = create_work_item(
+            project=self.project,
+            actor=self.alex,
+            type_definition_id=self.project.type_definitions.get(name="Task").pk,
+            title="Correct Project",
+            status_definition_id=s.pk,
+        )
+        self.assertEqual(wi.status_definition, s)
+
+    def test_workitem_label_def_correct_project(self):
+        l = create_label_definition(self.project, self.alex, "Frontend")
+        wi = create_work_item(
+            project=self.project,
+            actor=self.alex,
+            type_definition_id=self.project.type_definitions.get(name="Task").pk,
+            title="Correct Project",
+            label_definition_ids=[l.pk],
+        )
+        self.assertEqual(wi.label_relations.count(), 1)
+        self.assertEqual(wi.label_relations.first().label, l)
+
+    def test_update_workitem_type_def_wrong_project(self):
+        t = create_type_definition(self.project_b, self.chris, "Bug")
+        wi = create_work_item(
+            project=self.project,
+            actor=self.alex,
+            type_definition_id=self.project.type_definitions.get(name="Task").pk,
+            title="Update Cross",
+        )
+        from work_items.services import update_work_item
+        with self.assertRaises(WorkItemDomainError):
+            update_work_item(
+                work_item=wi,
+                actor=self.alex,
+                type_definition_id=t.pk,
+            )
+
+    def test_update_workitem_label_wrong_project(self):
+        l = create_label_definition(self.project_b, self.chris, "Backend")
+        wi = create_work_item(
+            project=self.project,
+            actor=self.alex,
+            type_definition_id=self.project.type_definitions.get(name="Task").pk,
+            title="Update Cross",
+        )
+        from work_items.services import update_work_item
+        with self.assertRaises(WorkItemDomainError):
+            update_work_item(
+                work_item=wi,
+                actor=self.alex,
+                label_definition_ids=[l.pk],
+            )

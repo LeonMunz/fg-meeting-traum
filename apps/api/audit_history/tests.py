@@ -3,7 +3,11 @@ from django.contrib.auth import get_user_model
 from django.db.models.deletion import RestrictedError
 from django.test import TestCase
 
-from projects.models import Project
+from projects.models import (
+    Project,
+    WorkItemStatusDefinition,
+    WorkItemTypeDefinition,
+)
 from research_groups.models import ResearchGroup
 from work_items.models import WorkItem
 
@@ -42,9 +46,21 @@ class AuditHistoryTest(TestCase):
             created_by=cls.actor,
         )
 
+        cls.task_type = WorkItemTypeDefinition.objects.create(
+            project=cls.project,
+            name="Task",
+        )
+        cls.todo_status = WorkItemStatusDefinition.objects.create(
+            project=cls.project,
+            name="Todo",
+            category=WorkItemStatusDefinition.Category.TODO,
+            is_default=True,
+        )
+
         cls.work_item = WorkItem.objects.create(
             project=cls.project,
-            type=WorkItem.Type.TASK,
+            type_definition=cls.task_type,
+            status_definition=cls.todo_status,
             title="Audit Task",
             created_by=cls.actor,
         )
@@ -66,9 +82,21 @@ class AuditHistoryTest(TestCase):
             created_by=cls.other_actor,
         )
 
+        cls.other_task_type = WorkItemTypeDefinition.objects.create(
+            project=cls.other_project,
+            name="Task",
+        )
+        cls.other_todo_status = WorkItemStatusDefinition.objects.create(
+            project=cls.other_project,
+            name="Todo",
+            category=WorkItemStatusDefinition.Category.TODO,
+            is_default=True,
+        )
+
         cls.other_work_item = WorkItem.objects.create(
             project=cls.other_project,
-            type=WorkItem.Type.TASK,
+            type_definition=cls.other_task_type,
+            status_definition=cls.other_todo_status,
             title="Other Task",
             created_by=cls.other_actor,
         )

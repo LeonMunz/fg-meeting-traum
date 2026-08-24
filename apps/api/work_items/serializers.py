@@ -4,7 +4,7 @@ from .models import WorkItem, WorkItemAssignee, WorkItemComment
 
 
 class WorkItemSerializer(serializers.ModelSerializer):
-    """Serialize a WorkItem with assignee IDs and parent ID."""
+    """Serialize a WorkItem with assignee IDs, definition IDs, and label IDs."""
 
     projectId = serializers.PrimaryKeyRelatedField(
         source="project", read_only=True,
@@ -31,16 +31,21 @@ class WorkItemSerializer(serializers.ModelSerializer):
     createdById = serializers.PrimaryKeyRelatedField(
         source="created_by", read_only=True,
     )
+    typeDefinitionId = serializers.PrimaryKeyRelatedField(
+        source="type_definition", read_only=True,
+    )
+    statusDefinitionId = serializers.PrimaryKeyRelatedField(
+        source="status_definition", read_only=True,
+    )
+    labelDefinitionIds = serializers.SerializerMethodField()
 
     class Meta:
         model = WorkItem
         fields = (
             "id",
             "projectId",
-            "type",
             "title",
             "description",
-            "status",
             "assigneeIds",
             "parentId",
             "dueDate",
@@ -49,12 +54,20 @@ class WorkItemSerializer(serializers.ModelSerializer):
             "createdAt",
             "updatedAt",
             "createdById",
+            "typeDefinitionId",
+            "statusDefinitionId",
+            "labelDefinitionIds",
         )
         read_only_fields = fields
 
     def get_assigneeIds(self, obj):
         return list(
             obj.assignee_relations.values_list("user__pk", flat=True)
+        )
+
+    def get_labelDefinitionIds(self, obj):
+        return list(
+            obj.label_relations.values_list("label__pk", flat=True)
         )
 
 

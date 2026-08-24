@@ -191,7 +191,7 @@ class ResearchGroupOffboardingApiTest(
         return create_work_item(
             project=project,
             actor=actor or self.admin,
-            type=WorkItem.Type.TASK,
+            type_definition_id=project.type_definitions.get(name="Task").pk,
             title=title,
             assignee_ids=[
                 user.pk

@@ -14,7 +14,13 @@ from django.utils import timezone
 from audit_history.services import record_audit_event
 from research_groups.models import ResearchGroup, ResearchGroupMembership
 
-from .models import Project, ProjectMembership
+from .models import (
+    Project,
+    ProjectMembership,
+    WorkItemLabelDefinition,
+    WorkItemStatusDefinition,
+    WorkItemTypeDefinition,
+)
 
 
 ASSIGNMENT_RESOLUTION_UNASSIGN = "unassign"
@@ -83,8 +89,35 @@ def create_project(
             role=ProjectMembership.Role.OWNER,
             added_by=creator,
         )
+        _create_default_work_item_configuration(project)
 
     return project
+
+
+def _create_default_work_item_configuration(project: Project) -> None:
+    """Create default WorkItem Types, Statuses for a new Project."""
+    type_names = ["Epic", "Milestone", "Deliverable", "Task"]
+    for idx, tname in enumerate(type_names):
+        WorkItemTypeDefinition.objects.create(
+            project=project,
+            name=tname,
+            order=idx,
+        )
+
+    status_defs = [
+        ("Todo", WorkItemStatusDefinition.Category.TODO, 0, True),
+        ("In Progress", WorkItemStatusDefinition.Category.IN_PROGRESS, 1, False),
+        ("Review", WorkItemStatusDefinition.Category.REVIEW, 2, False),
+        ("Done", WorkItemStatusDefinition.Category.DONE, 3, False),
+    ]
+    for name, category, order, is_default in status_defs:
+        WorkItemStatusDefinition.objects.create(
+            project=project,
+            name=name,
+            category=category,
+            order=order,
+            is_default=is_default,
+        )
 
 
 def add_project_membership(

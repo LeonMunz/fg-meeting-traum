@@ -6,7 +6,13 @@ from rest_framework.views import APIView
 
 from research_groups.models import ResearchGroup, ResearchGroupMembership
 
-from .models import Project, ProjectMembership
+from .models import (
+    Project,
+    ProjectMembership,
+    WorkItemLabelDefinition,
+    WorkItemStatusDefinition,
+    WorkItemTypeDefinition,
+)
 from .serializers import ProjectSerializer
 from .services import (
     ProjectDomainError,
@@ -19,6 +25,18 @@ from .services import (
     remove_membership,
     restore_project,
     update_project,
+)
+from .configuration_services import (
+    ConfigurationError,
+    create_label_definition,
+    create_status_definition,
+    create_type_definition,
+    reorder_label_definitions,
+    reorder_status_definitions,
+    reorder_type_definitions,
+    update_label_definition,
+    update_status_definition,
+    update_type_definition,
 )
 
 
@@ -722,3 +740,357 @@ class ResearchGroupMembersView(APIView):
             })
 
         return Response(data)
+
+
+# ── Serialization helpers for configuration ──
+
+
+def _serialize_type_definition(defn):
+    return {
+        "id": defn.pk,
+        "name": defn.name,
+        "order": defn.order,
+        "active": defn.active,
+        "createdAt": defn.created_at.isoformat(),
+        "updatedAt": defn.updated_at.isoformat(),
+    }
+
+
+def _serialize_status_definition(defn):
+    return {
+        "id": defn.pk,
+        "name": defn.name,
+        "category": defn.category,
+        "order": defn.order,
+        "active": defn.active,
+        "isDefault": defn.is_default,
+        "createdAt": defn.created_at.isoformat(),
+        "updatedAt": defn.updated_at.isoformat(),
+    }
+
+
+def _serialize_label_definition(defn):
+    return {
+        "id": defn.pk,
+        "name": defn.name,
+        "order": defn.order,
+        "active": defn.active,
+        "createdAt": defn.created_at.isoformat(),
+        "updatedAt": defn.updated_at.isoformat(),
+    }
+
+
+# ── Configuration Read API (GATE 7) ──
+
+
+class ProjectWorkItemConfigurationView(APIView):
+    """GET /api/projects/{project_id}/work-item-configuration/
+
+    Returns the Project's WorkItem Types, Statuses, Labels.
+    Allowed: owner, member, viewer.
+    404 for inaccessible projects.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, project_id):
+        result = _require_project_access(request, project_id)
+        if result is None:
+            return Response(
+                {"error": "Project not found"},
+                status=404,
+            )
+
+        types = WorkItemTypeDefinition.objects.filter(
+            project_id=project_id,
+        ).order_by("order", "id")
+
+        statuses = WorkItemStatusDefinition.objects.filter(
+            project_id=project_id,
+        ).order_by("order", "id")
+
+        labels = WorkItemLabelDefinition.objects.filter(
+            project_id=project_id,
+        ).order_by("order", "id")
+
+        return Response({
+            "types": [_serialize_type_definition(t) for t in types],
+            "statuses": [_serialize_status_definition(s) for s in statuses],
+            "labels": [_serialize_label_definition(l) for l in labels],
+        })
+
+
+# ── Configuration Write API (GATE 8) ──
+
+
+class ProjectWorkItemTypesView(APIView):
+    """POST /api/projects/{project_id}/work-item-configuration/types/
+
+    Create a new TypeDefinition. Owner only.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, project_id):
+        result = _require_project_access(request, project_id)
+        if result is None:
+            return Response(
+                {"error": "Project not found"},
+                status=404,
+            )
+        project, membership = result
+
+        if membership.role != ProjectMembership.Role.OWNER:
+            return Response(
+                {"error": "Only a Project owner can modify configuration."},
+                status=403,
+            )
+
+        name = request.data.get("name", "").strip()
+        order = request.data.get("order")
+
+        try:
+            defn = create_type_definition(
+                project=project, actor=request.user, name=name, order=order
+            )
+        except ConfigurationError as exc:
+            return Response({"error": exc.message}, status=400)
+
+        return Response(_serialize_type_definition(defn), status=201)
+
+
+class ProjectWorkItemTypeDetailView(APIView):
+    """PATCH /api/projects/{project_id}/work-item-configuration/types/{definition_id}/
+
+    Update a TypeDefinition. Owner only.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, project_id, definition_id):
+        result = _require_project_access(request, project_id)
+        if result is None:
+            return Response(
+                {"error": "Project not found"},
+                status=404,
+            )
+        project, membership = result
+
+        if membership.role != ProjectMembership.Role.OWNER:
+            return Response(
+                {"error": "Only a Project owner can modify configuration."},
+                status=403,
+            )
+
+        try:
+            defn = WorkItemTypeDefinition.objects.get(
+                pk=definition_id, project=project
+            )
+        except WorkItemTypeDefinition.DoesNotExist:
+            return Response(
+                {"error": "Type definition not found."},
+                status=404,
+            )
+
+        name = request.data.get("name")
+        order = request.data.get("order")
+        active = request.data.get("active")
+
+        try:
+            update_type_definition(
+                defn, request.user, name=name, order=order, active=active
+            )
+        except ConfigurationError as exc:
+            return Response({"error": exc.message}, status=400)
+
+        defn.refresh_from_db()
+        return Response(_serialize_type_definition(defn))
+
+
+class ProjectWorkItemStatusesView(APIView):
+    """POST /api/projects/{project_id}/work-item-configuration/statuses/
+
+    Create a new StatusDefinition. Owner only.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, project_id):
+        result = _require_project_access(request, project_id)
+        if result is None:
+            return Response(
+                {"error": "Project not found"},
+                status=404,
+            )
+        project, membership = result
+
+        if membership.role != ProjectMembership.Role.OWNER:
+            return Response(
+                {"error": "Only a Project owner can modify configuration."},
+                status=403,
+            )
+
+        name = request.data.get("name", "").strip()
+        category = request.data.get("category")
+        is_default = request.data.get("isDefault", False)
+        order = request.data.get("order")
+
+        if not category or category not in WorkItemStatusDefinition.Category.values:
+            return Response(
+                {"error": f"category is required. Valid values: {WorkItemStatusDefinition.Category.values}"},
+                status=400,
+            )
+
+        try:
+            defn = create_status_definition(
+                project=project,
+                actor=request.user,
+                name=name,
+                category=category,
+                is_default=is_default,
+                order=order,
+            )
+        except ConfigurationError as exc:
+            return Response({"error": exc.message}, status=400)
+
+        return Response(_serialize_status_definition(defn), status=201)
+
+
+class ProjectWorkItemStatusDetailView(APIView):
+    """PATCH /api/projects/{project_id}/work-item-configuration/statuses/{definition_id}/
+
+    Update a StatusDefinition. Owner only.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, project_id, definition_id):
+        result = _require_project_access(request, project_id)
+        if result is None:
+            return Response(
+                {"error": "Project not found"},
+                status=404,
+            )
+        project, membership = result
+
+        if membership.role != ProjectMembership.Role.OWNER:
+            return Response(
+                {"error": "Only a Project owner can modify configuration."},
+                status=403,
+            )
+
+        try:
+            defn = WorkItemStatusDefinition.objects.get(
+                pk=definition_id, project=project
+            )
+        except WorkItemStatusDefinition.DoesNotExist:
+            return Response(
+                {"error": "Status definition not found."},
+                status=404,
+            )
+
+        name = request.data.get("name")
+        order = request.data.get("order")
+        active = request.data.get("active")
+        category = request.data.get("category")
+        is_default = request.data.get("isDefault")
+
+        try:
+            update_status_definition(
+                defn,
+                request.user,
+                name=name,
+                order=order,
+                active=active,
+                category=category,
+                is_default=is_default,
+            )
+        except ConfigurationError as exc:
+            return Response({"error": exc.message}, status=400)
+
+        defn.refresh_from_db()
+        return Response(_serialize_status_definition(defn))
+
+
+class ProjectWorkItemLabelsView(APIView):
+    """POST /api/projects/{project_id}/work-item-configuration/labels/
+
+    Create a new LabelDefinition. Owner only.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, project_id):
+        result = _require_project_access(request, project_id)
+        if result is None:
+            return Response(
+                {"error": "Project not found"},
+                status=404,
+            )
+        project, membership = result
+
+        if membership.role != ProjectMembership.Role.OWNER:
+            return Response(
+                {"error": "Only a Project owner can modify configuration."},
+                status=403,
+            )
+
+        name = request.data.get("name", "").strip()
+        order = request.data.get("order")
+
+        try:
+            defn = create_label_definition(
+                project=project, actor=request.user, name=name, order=order
+            )
+        except ConfigurationError as exc:
+            return Response({"error": exc.message}, status=400)
+
+        return Response(_serialize_label_definition(defn), status=201)
+
+
+class ProjectWorkItemLabelDetailView(APIView):
+    """PATCH /api/projects/{project_id}/work-item-configuration/labels/{definition_id}/
+
+    Update a LabelDefinition. Owner only.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, project_id, definition_id):
+        result = _require_project_access(request, project_id)
+        if result is None:
+            return Response(
+                {"error": "Project not found"},
+                status=404,
+            )
+        project, membership = result
+
+        if membership.role != ProjectMembership.Role.OWNER:
+            return Response(
+                {"error": "Only a Project owner can modify configuration."},
+                status=403,
+            )
+
+        try:
+            defn = WorkItemLabelDefinition.objects.get(
+                pk=definition_id, project=project
+            )
+        except WorkItemLabelDefinition.DoesNotExist:
+            return Response(
+                {"error": "Label definition not found."},
+                status=404,
+            )
+
+        name = request.data.get("name")
+        order = request.data.get("order")
+        active = request.data.get("active")
+
+        try:
+            update_label_definition(
+                defn, request.user, name=name, order=order, active=active
+            )
+        except ConfigurationError as exc:
+            return Response({"error": exc.message}, status=400)
+
+        defn.refresh_from_db()
+        return Response(_serialize_label_definition(defn))

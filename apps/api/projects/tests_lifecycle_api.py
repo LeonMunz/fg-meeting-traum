@@ -273,7 +273,7 @@ class ProjectLifecycleApiTest(
         create_work_item(
             project=self.project,
             actor=self.data["alex"],
-            type=WorkItem.Type.TASK,
+            type_definition_id=self.project.type_definitions.get(name="Task").pk,
             title="Historical work",
         )
 

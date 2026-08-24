@@ -253,14 +253,15 @@ def create_work_item_from_meeting_item(
     meeting_item,
     project,
     actor,
-    type,
+    type_definition_id,
     title,
     description="",
-    status=None,
+    status_definition_id=None,
     assignee_ids=None,
     parent_id=None,
     due_date=None,
     blocked_reason=None,
+    label_definition_ids=None,
 ):
     """Create a canonical WorkItem from a MeetingItem.
 
@@ -287,14 +288,15 @@ def create_work_item_from_meeting_item(
         work_item = create_work_item(
             project=project,
             actor=actor,
-            type=type,
+            type_definition_id=type_definition_id,
             title=title,
             description=description,
-            status=status,
+            status_definition_id=status_definition_id,
             assignee_ids=assignee_ids,
             parent_id=parent_id,
             due_date=due_date,
             blocked_reason=blocked_reason,
+            label_definition_ids=label_definition_ids,
         )
     except WorkItemDomainError as exc:
         raise MeetingDomainError(

@@ -6,7 +6,12 @@ from django.test import TestCase, TransactionTestCase
 from io import StringIO
 
 from research_groups.models import ResearchGroup, ResearchGroupMembership
-from projects.models import Project, ProjectMembership
+from projects.models import (
+    Project,
+    ProjectMembership,
+    WorkItemStatusDefinition,
+    WorkItemTypeDefinition,
+)
 from work_items.models import WorkItem, WorkItemAssignee
 
 User = get_user_model()
@@ -50,8 +55,8 @@ class SeedDevIdempotencyTest(TransactionTestCase):
         epic = WorkItem.objects.get(
             project=paper_xyz, title="Literature Review",
         )
-        self.assertEqual(epic.type, "epic")
-        self.assertEqual(epic.status, "in_progress")
+        self.assertEqual(epic.type_definition.name, "Epic")
+        self.assertEqual(epic.status_definition.name, "In Progress")
         self.assertEqual(epic.created_by, alex)
         self.assertIsNone(epic.parent)
 
@@ -59,8 +64,8 @@ class SeedDevIdempotencyTest(TransactionTestCase):
         task = WorkItem.objects.get(
             project=paper_xyz, title="Rewrite Introduction",
         )
-        self.assertEqual(task.type, "task")
-        self.assertEqual(task.status, "todo")
+        self.assertEqual(task.type_definition.name, "Task")
+        self.assertEqual(task.status_definition.name, "Todo")
         self.assertEqual(task.parent, epic)
         self.assertEqual(task.created_by, alex)
         # Assigned to Chris
@@ -71,8 +76,8 @@ class SeedDevIdempotencyTest(TransactionTestCase):
         milestone = WorkItem.objects.get(
             project=paper_xyz, title="First Draft Complete",
         )
-        self.assertEqual(milestone.type, "milestone")
-        self.assertEqual(milestone.status, "todo")
+        self.assertEqual(milestone.type_definition.name, "Milestone")
+        self.assertEqual(milestone.status_definition.name, "Todo")
         self.assertEqual(milestone.created_by, alex)
         self.assertIsNotNone(milestone.due_date)
         # Assigned to Alex
@@ -100,9 +105,18 @@ class SeedDevIdempotencyTest(TransactionTestCase):
             research_group=group,
             created_by=user,
         )
+        task_type = WorkItemTypeDefinition.objects.create(
+            project=project, name="Task", order=0,
+        )
+        todo_status = WorkItemStatusDefinition.objects.create(
+            project=project, name="Todo",
+            category=WorkItemStatusDefinition.Category.TODO,
+            order=0, is_default=True,
+        )
         wi = WorkItem.objects.create(
             project=project,
-            type="task",
+            type_definition=task_type,
+            status_definition=todo_status,
             title="Pre-existing Task",
             created_by=user,
         )

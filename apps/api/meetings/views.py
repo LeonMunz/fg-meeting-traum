@@ -603,13 +603,13 @@ class MeetingItemWorkItemCreateView(APIView):
                 meeting_item=item,
                 project=membership.project,
                 actor=request.user,
-                type=data["type"],
+                type_definition_id=data["typeDefinitionId"],
                 title=data["title"],
                 description=data.get(
                     "description",
                     "",
                 ),
-                status=data.get("status"),
+                status_definition_id=data.get("statusDefinitionId"),
                 assignee_ids=data.get(
                     "assigneeIds",
                     [],
@@ -618,6 +618,10 @@ class MeetingItemWorkItemCreateView(APIView):
                 due_date=data.get("dueDate"),
                 blocked_reason=data.get(
                     "blockedReason",
+                ),
+                label_definition_ids=data.get(
+                    "labelDefinitionIds",
+                    [],
                 ),
             )
         except MeetingDomainError as exc:

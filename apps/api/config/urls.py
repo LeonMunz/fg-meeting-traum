@@ -13,6 +13,13 @@ from projects.views import (
     ProjectMembershipDetailView,
     ProjectMembershipListView,
     ProjectRestoreView,
+    ProjectWorkItemConfigurationView,
+    ProjectWorkItemLabelDetailView,
+    ProjectWorkItemLabelsView,
+    ProjectWorkItemStatusDetailView,
+    ProjectWorkItemStatusesView,
+    ProjectWorkItemTypeDetailView,
+    ProjectWorkItemTypesView,
     ResearchGroupMembersView,
     ResearchGroupProjectListView,
 )
@@ -88,6 +95,15 @@ urlpatterns = [
     # My Work — authorized projection over assigned WorkItems
     path('api/me/work-items/', PersonalMyWorkView.as_view(), name='personal-my-work'),
     path('api/research-groups/<int:group_id>/my-work/', MyWorkView.as_view(), name='research-group-my-work'),
+
+    # Work Item Configuration
+    path('api/projects/<int:project_id>/work-item-configuration/', csrf_protect_view(ProjectWorkItemConfigurationView), name='project-work-item-config'),
+    path('api/projects/<int:project_id>/work-item-configuration/types/', csrf_protect_view(ProjectWorkItemTypesView), name='project-work-item-types'),
+    path('api/projects/<int:project_id>/work-item-configuration/types/<int:definition_id>/', csrf_protect_view(ProjectWorkItemTypeDetailView), name='project-work-item-type-detail'),
+    path('api/projects/<int:project_id>/work-item-configuration/statuses/', csrf_protect_view(ProjectWorkItemStatusesView), name='project-work-item-statuses'),
+    path('api/projects/<int:project_id>/work-item-configuration/statuses/<int:definition_id>/', csrf_protect_view(ProjectWorkItemStatusDetailView), name='project-work-item-status-detail'),
+    path('api/projects/<int:project_id>/work-item-configuration/labels/', csrf_protect_view(ProjectWorkItemLabelsView), name='project-work-item-labels'),
+    path('api/projects/<int:project_id>/work-item-configuration/labels/<int:definition_id>/', csrf_protect_view(ProjectWorkItemLabelDetailView), name='project-work-item-label-detail'),
 
     # Meetings
     path('api/research-groups/<int:group_id>/meetings/', ResearchGroupMeetingListCreateView.as_view(), name='research-group-meetings-list'),

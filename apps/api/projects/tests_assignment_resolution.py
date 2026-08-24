@@ -104,7 +104,7 @@ class ProjectAssignmentResolutionTest(TestCase):
         return create_work_item(
             project=self.project,
             actor=self.alex,
-            type=WorkItem.Type.TASK,
+            type_definition_id=self.project.type_definitions.get(name="Task").pk,
             title=title,
             assignee_ids=[
                 user.pk
