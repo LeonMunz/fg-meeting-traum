@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coding-agent-supervisor.local/schemas/worker-result.schema.json",
+  "title": "V1 worker result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "status", "summary"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "status": {"enum": ["COMPLETE", "BLOCKED"]},
+    "summary": {"type": "string", "minLength": 1, "pattern": "\\S"},
+    "blocker_kind": {"type": ["string", "null"]},
+    "blocker": {"type": ["string", "null"]},
+    "claimed_changed_files": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "claimed_checks": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    }
+  }
+}

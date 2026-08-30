@@ -1,0 +1,62 @@
+schema_version: 1
+runtime_inputs:
+  - package.json
+  - package-lock.json
+  - .npmrc
+  - pyproject.toml
+  - uv.lock
+  - uv.toml
+  - .python-version
+runtime_input_selectors:
+  - apps/*/package.json
+  - apps/*/pyproject.toml
+  - apps/*/uv.lock
+  - apps/*/uv.toml
+  - apps/*/.python-version
+ephemeral_paths:
+  - node_modules
+  - apps/web/node_modules
+  - apps/web/dist
+  - apps/api/.venv
+  - playwright-report
+  - test-results
+prepare:
+  - name: npm-install
+    argv: [npm, ci, --offline, --cache, /opt/npm-cache, --no-audit, --no-fund]
+    cwd: .
+    timeout_seconds: 60
+    env: {}
+    failure_disposition: terminal
+  - name: uv-cache-reset
+    argv: [rm, -rf, /tmp/uv-cache]
+    cwd: .
+    timeout_seconds: 30
+    env: {}
+    failure_disposition: terminal
+  - name: uv-cache-create
+    argv: [mkdir, -p, /tmp/uv-cache]
+    cwd: .
+    timeout_seconds: 10
+    env: {}
+    failure_disposition: terminal
+  - name: uv-cache-seed
+    argv: [cp, -R, --no-preserve=mode,ownership, /opt/uv-cache/., /tmp/uv-cache]
+    cwd: .
+    timeout_seconds: 30
+    env: {}
+    failure_disposition: terminal
+  - name: uv-install
+    argv: [uv, sync, --locked, --offline]
+    cwd: apps/api
+    timeout_seconds: 60
+    env:
+      UV_CACHE_DIR: /tmp/uv-cache
+      UV_LINK_MODE: copy
+      UV_PYTHON_DOWNLOADS: "0"
+    failure_disposition: terminal
+  - name: postgres-reset-start
+    argv: [/bin/sh, .agent/bin/start-postgres]
+    cwd: .
+    timeout_seconds: 30
+    env: {}
+    failure_disposition: terminal

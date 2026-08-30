@@ -1,0 +1,31 @@
+schema_version: 1
+oracle_profiles:
+  fg-v1:
+    - name: frontend-lint
+      argv: [npm, run, lint]
+      cwd: .
+      timeout_seconds: 30
+    - name: django-check
+      argv: [.venv/bin/python, manage.py, check]
+      cwd: apps/api
+      timeout_seconds: 30
+focused_checks: []
+static_checks:
+  - name: django-migrations
+    argv: [.venv/bin/python, manage.py, makemigrations, --check, --dry-run]
+    cwd: apps/api
+    timeout_seconds: 30
+full_checks:
+  - name: frontend-build
+    argv: [npm, run, build]
+    cwd: .
+    timeout_seconds: 60
+  - name: frontend-unit
+    argv: [npm, run, test:unit, --workspace=web]
+    cwd: .
+    timeout_seconds: 60
+  - name: django-tests
+    argv: [.venv/bin/python, manage.py, test]
+    cwd: apps/api
+    timeout_seconds: 420
+policy_rules: {}

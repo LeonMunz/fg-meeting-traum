@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coding-agent-supervisor.local/schemas/review.schema.json",
+  "title": "V1 review result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "task_id", "base_commit", "candidate_tree", "decision", "findings"],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "task_id": {"type": "string", "minLength": 1},
+    "base_commit": {"$ref": "#/$defs/objectId"},
+    "candidate_tree": {"$ref": "#/$defs/objectId"},
+    "decision": {"type": "string", "enum": ["ACCEPT", "FIX", "HUMAN"]},
+    "findings": {"type": "array", "items": {"$ref": "#/$defs/finding"}}
+  },
+  "$defs": {
+    "objectId": {"type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"},
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["severity", "category", "file", "summary", "evidence"],
+      "properties": {
+        "severity": {"type": "string", "enum": ["low", "medium", "high", "critical"]},
+        "category": {"type": "string", "minLength": 1},
+        "file": {"type": ["string", "null"]},
+        "summary": {"type": "string", "minLength": 1},
+        "evidence": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

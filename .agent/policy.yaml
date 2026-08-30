@@ -1,0 +1,30 @@
+schema_version: 1
+max_attempts: 2
+worker_network: "off"
+allow_low_risk_strong_no_review: false
+protected_paths:
+  - .goose/recipes/**
+  - .agent/bin/**
+  - .agent/image/**
+  - .agent/oracles/**
+  - .agent/policy.yaml
+  - .agent/runtime.yaml
+  - .agent/toolchain.lock.json
+  - .agent/verification.yaml
+  - .agent/schemas/**
+human_gate_changes:
+  - dependencies
+  - build_system
+  - public_api
+  - database_schema
+  - authentication
+  - authorization
+  - secrets
+  - network_capability
+  - destructive_data_operation
+  - security_sensitive
+  - licensing
+  - push
+  - merge
+  - release
+  - deployment

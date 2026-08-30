@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "goose": {
+    "version": "1.46.0",
+    "binary_digest": "sha256:c891eb170b065b430c582fe5e363edd369deb7181786663b2fde6e81060eb75d"
+  },
+  "worker_image": {
+    "reference": null,
+    "digest": null,
+    "image_id": "sha256:b7108b91e760e1cca765da2f0e43b82f8042179071c7bc7a69779c6b349bba88"
+  },
+  "worker_model": {
+    "id": null,
+    "quantization": null
+  },
+  "inference": {
+    "engine": null,
+    "version": null
+  },
+  "repository_hashes": {
+    ".goose/recipes/worker.yaml": "sha256:8385240b88580d399a24381e5738ccac28911409ae5802949b354aeea5897e11",
+    ".agent/policy.yaml": "sha256:798f9f8d468348db6c5b8c694a2705de51f8a8214bc6097dc7bd963683999c50",
+    ".agent/verification.yaml": "sha256:264b059a77330017b11049c8a32a27157cbfe5ab82666ae2b86a2ce71351ebf7",
+    ".agent/runtime.yaml": "sha256:6c9ae7ff7a720a8d438cc041f9b7cc528d2b5628d40dc69470ced93f9501806b",
+    ".agent/schemas/task.schema.json": "sha256:e01a5d340aa7f0e0fe1540e0c05adb68fcd568d89c086b680c234107d61309a8",
+    ".agent/schemas/worker-result.schema.json": "sha256:f790e7f0ac6ed51e4c3eea5d5fd5afb8348204c3cccb57703e8dc7df3662e377",
+    ".agent/schemas/verify.schema.json": "sha256:12b3c90015e6151191c71c069239133d320c4660127d34309acff1a92e0d00d1",
+    ".agent/schemas/review.schema.json": "sha256:1f8ca13e590348142d866eccc168f55c17e9632ad3a9b99ea25144a4faaaa9ff",
+    ".agent/schemas/runtime.schema.json": "sha256:10b1c33a45b988a672ff3cecb8a99204662169924b3fe55c8fc16cc9bc7172b7"
+  }
+}

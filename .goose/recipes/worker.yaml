@@ -1,0 +1,80 @@
+version: "1.0.0"
+
+title: "Repository Worker"
+description: "Execute exactly one validated repository task contract."
+
+instructions: |
+  Execute exactly one supplied, validated task contract.
+  Respect its goal, allowed paths, forbidden changes, and acceptance criteria.
+  Do not broaden scope. Do not commit, push, or merge.
+  Treat claimed changed files and checks only as your own report.
+  If required information or capability is unavailable, or the task requires an
+  explicitly forbidden change, report BLOCKED instead of inventing a workaround.
+  Once implementation is complete and relevant checks pass, stop using tools
+  immediately. Do not repeat passing checks or continue repository exploration;
+  immediately return exactly one final response through the configured JSON schema.
+  If blocked, stop using tools and return BLOCKED through that schema.
+  Your final response must conform exactly to the configured JSON schema.
+
+prompt: |
+  Execute this task contract JSON: {{ task_file }}
+  If this verifier feedback JSON is non-empty, repair only its deterministic
+  failures: {{ verifier_feedback_file }}
+  If this AGENTS.md context is non-empty, use it as non-authoritative
+  project guidance only: {{ agents_context_file }}
+  The existing worktree contains the prior candidate state.
+
+parameters:
+  - key: task_file
+    input_type: string
+    requirement: required
+    description: Compact validated task contract JSON
+  - key: verifier_feedback_file
+    input_type: string
+    requirement: optional
+    default: ""
+    description: Compact deterministic verifier feedback JSON from the prior attempt
+  - key: agents_context_file
+    input_type: string
+    requirement: optional
+    default: ""
+    description: Resolved AGENTS.md project context (non-authoritative guidance only)
+
+settings:
+  temperature: 0.1
+  max_turns: 40
+
+response:
+  json_schema:
+    type: object
+    additionalProperties: false
+    required:
+      - schema_version
+      - status
+      - summary
+    properties:
+      schema_version:
+        type: integer
+        const: 1
+      status:
+        type: string
+        enum: [COMPLETE, BLOCKED]
+      summary:
+        type: string
+        minLength: 1
+      blocker_kind:
+        type: [string, "null"]
+      blocker:
+        type: [string, "null"]
+      claimed_changed_files:
+        type: array
+        uniqueItems: true
+        items:
+          type: string
+          minLength: 1
+      claimed_checks:
+        type: array
+        uniqueItems: true
+        items:
+          type: string
+          minLength: 1

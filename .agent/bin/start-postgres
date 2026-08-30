@@ -1,0 +1,67 @@
+#!/bin/sh
+set -eu
+
+pg_bin=/usr/lib/postgresql/17/bin
+pg_data=/tmp/fg-postgres-data
+pg_socket=/tmp/fg-postgres-socket
+pg_log=/tmp/fg-postgres.log
+
+if test -f "$pg_data/postmaster.pid"; then
+    "$pg_bin/pg_ctl" -D "$pg_data" -m immediate -w stop
+fi
+
+rm -rf /tmp/fg-postgres-data /tmp/fg-postgres-socket /tmp/fg-postgres.log
+mkdir -p "$pg_data" "$pg_socket"
+chmod 700 "$pg_data"
+
+"$pg_bin/initdb" \
+    -D "$pg_data" \
+    --encoding=UTF8 \
+    --locale=C \
+    --auth-local=trust \
+    --auth-host=scram-sha-256
+
+{
+    echo "listen_addresses = 'localhost'"
+    echo "port = 5432"
+    echo "unix_socket_directories = '$pg_socket'"
+    echo "fsync = off"
+    echo "full_page_writes = off"
+    echo "synchronous_commit = off"
+    echo "shared_buffers = '16MB'"
+    echo "max_connections = 50"
+    echo "min_wal_size = '32MB'"
+    echo "max_wal_size = '64MB'"
+} >> "$pg_data/postgresql.conf"
+
+set +e
+"$pg_bin/pg_ctl" -D "$pg_data" -l "$pg_log" -w start
+status=$?
+set -e
+if test "$status" -ne 0; then
+    if test -f "$pg_log"; then
+        tail -n 100 "$pg_log" >&2
+    fi
+    exit "$status"
+fi
+
+"$pg_bin/psql" \
+    --host="$pg_socket" \
+    --port=5432 \
+    --dbname=postgres \
+    --set=ON_ERROR_STOP=1 \
+    --command="CREATE ROLE fg_workspace LOGIN PASSWORD 'fg_workspace' CREATEDB"
+"$pg_bin/createdb" \
+    --host="$pg_socket" \
+    --port=5432 \
+    --owner=fg_workspace \
+    fg_workspace
+
+PGPASSWORD=fg_workspace "$pg_bin/psql" \
+    --host=localhost \
+    --port=5432 \
+    --username=fg_workspace \
+    --dbname=fg_workspace \
+    --set=ON_ERROR_STOP=1 \
+    --tuples-only \
+    --command="SELECT 1"
