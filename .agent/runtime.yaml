@@ -40,7 +40,7 @@ prepare:
     env: {}
     failure_disposition: terminal
   - name: uv-cache-seed
-    argv: [cp, -R, --no-preserve=mode,ownership, /opt/uv-cache/., /tmp/uv-cache]
+    argv: [cp, -R, "--no-preserve=mode,ownership", /opt/uv-cache/., /tmp/uv-cache]
     cwd: .
     timeout_seconds: 30
     env: {}

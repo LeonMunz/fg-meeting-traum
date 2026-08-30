@@ -21,7 +21,7 @@
     ".goose/recipes/worker.yaml": "sha256:8385240b88580d399a24381e5738ccac28911409ae5802949b354aeea5897e11",
     ".agent/policy.yaml": "sha256:798f9f8d468348db6c5b8c694a2705de51f8a8214bc6097dc7bd963683999c50",
     ".agent/verification.yaml": "sha256:264b059a77330017b11049c8a32a27157cbfe5ab82666ae2b86a2ce71351ebf7",
-    ".agent/runtime.yaml": "sha256:6c9ae7ff7a720a8d438cc041f9b7cc528d2b5628d40dc69470ced93f9501806b",
+    ".agent/runtime.yaml": "sha256:b2345bd18ad705e2f11703390a5d5745e20f33623e509567ded8d47ee1a49d87",
     ".agent/schemas/task.schema.json": "sha256:e01a5d340aa7f0e0fe1540e0c05adb68fcd568d89c086b680c234107d61309a8",
     ".agent/schemas/worker-result.schema.json": "sha256:f790e7f0ac6ed51e4c3eea5d5fd5afb8348204c3cccb57703e8dc7df3662e377",
     ".agent/schemas/verify.schema.json": "sha256:12b3c90015e6151191c71c069239133d320c4660127d34309acff1a92e0d00d1",
