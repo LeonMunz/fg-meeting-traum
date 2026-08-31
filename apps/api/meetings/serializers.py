@@ -1,12 +1,179 @@
 from rest_framework import serializers
 
-from .models import Meeting, MeetingItem
+from .models import (
+    Meeting,
+    MeetingItem,
+    MeetingSection,
+    MeetingSeries,
+    MeetingSeriesSection,
+)
+
+
+# ── MeetingSeries ────────────────────────────────────────────────
+
+
+class MeetingSeriesSerializer(serializers.ModelSerializer):
+    researchGroupId = serializers.IntegerField(
+        source="research_group_id",
+        read_only=True,
+    )
+    isArchived = serializers.BooleanField(
+        source="is_archived",
+        read_only=True,
+    )
+    createdById = serializers.IntegerField(
+        source="created_by_id",
+        read_only=True,
+    )
+    createdAt = serializers.DateTimeField(
+        source="created_at",
+        read_only=True,
+    )
+    updatedAt = serializers.DateTimeField(
+        source="updated_at",
+        read_only=True,
+    )
+
+    class Meta:
+        model = MeetingSeries
+        fields = [
+            "id",
+            "researchGroupId",
+            "title",
+            "description",
+            "isArchived",
+            "createdById",
+            "createdAt",
+            "updatedAt",
+        ]
+
+
+class MeetingSeriesCreateSerializer(serializers.Serializer):
+    title = serializers.CharField(
+        max_length=255,
+        allow_blank=False,
+    )
+    description = serializers.CharField(
+        required=False,
+        allow_blank=True,
+    )
+
+
+class MeetingSeriesPatchSerializer(serializers.Serializer):
+    title = serializers.CharField(
+        max_length=255,
+        allow_blank=False,
+        required=False,
+    )
+    description = serializers.CharField(
+        required=False,
+        allow_blank=True,
+    )
+    isArchived = serializers.BooleanField(
+        required=False,
+    )
+
+
+# ── MeetingSeriesSection ─────────────────────────────────────────
+
+
+class MeetingSeriesSectionSerializer(serializers.ModelSerializer):
+    meetingSeriesId = serializers.IntegerField(
+        source="meeting_series_id",
+        read_only=True,
+    )
+    isActive = serializers.BooleanField(
+        source="is_active",
+        read_only=True,
+    )
+
+    class Meta:
+        model = MeetingSeriesSection
+        fields = [
+            "id",
+            "meetingSeriesId",
+            "name",
+            "description",
+            "position",
+            "isActive",
+        ]
+
+
+class MeetingSeriesSectionCreateSerializer(serializers.Serializer):
+    name = serializers.CharField(
+        max_length=255,
+        allow_blank=False,
+    )
+    description = serializers.CharField(
+        required=False,
+        allow_blank=True,
+    )
+
+
+class MeetingSeriesSectionPatchSerializer(serializers.Serializer):
+    name = serializers.CharField(
+        max_length=255,
+        allow_blank=False,
+        required=False,
+    )
+    description = serializers.CharField(
+        required=False,
+        allow_blank=True,
+    )
+    isActive = serializers.BooleanField(
+        required=False,
+    )
+
+
+class MeetingSeriesSectionReorderSerializer(serializers.Serializer):
+    sectionIds = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
+    )
+
+
+# ── MeetingSection (snapshot) ────────────────────────────────────
+
+
+class MeetingSectionSerializer(serializers.ModelSerializer):
+    meetingId = serializers.IntegerField(
+        source="meeting_id",
+        read_only=True,
+    )
+    sourceSeriesSectionId = serializers.IntegerField(
+        source="source_series_section_id",
+        read_only=True,
+        allow_null=True,
+    )
+    isVisible = serializers.BooleanField(
+        source="is_visible",
+        read_only=True,
+    )
+
+    class Meta:
+        model = MeetingSection
+        fields = [
+            "id",
+            "meetingId",
+            "sourceSeriesSectionId",
+            "name",
+            "description",
+            "position",
+            "isVisible",
+        ]
+
+
+# ── Meeting ──────────────────────────────────────────────────────
 
 
 class MeetingSerializer(serializers.ModelSerializer):
     researchGroupId = serializers.IntegerField(
         source="research_group_id",
         read_only=True,
+    )
+    seriesId = serializers.IntegerField(
+        source="series_id",
+        read_only=True,
+        allow_null=True,
     )
     scheduledAt = serializers.DateTimeField(
         source="scheduled_at",
@@ -30,6 +197,7 @@ class MeetingSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "researchGroupId",
+            "seriesId",
             "title",
             "scheduledAt",
             "status",
@@ -60,6 +228,21 @@ class MeetingCreateSerializer(serializers.Serializer):
 
 
 class MeetingPatchSerializer(serializers.Serializer):
+    title = serializers.CharField(
+        max_length=255,
+        allow_blank=False,
+        required=False,
+    )
+    scheduledAt = serializers.DateTimeField(
+        required=False,
+    )
+    status = serializers.ChoiceField(
+        choices=Meeting.Status.choices,
+        required=False,
+    )
+
+
+class CreateMeetingFromSeriesSerializer(serializers.Serializer):
     title = serializers.CharField(
         max_length=255,
         allow_blank=False,

@@ -8,6 +8,8 @@ import { DashboardPage } from '../features/dashboard/DashboardPage'
 import { MyWorkPage } from '../features/my-work/MyWorkPage'
 import { MeetingListPage } from '../features/meetings/MeetingListPage'
 import { MeetingDetailPage } from '../features/meetings/MeetingDetailPage'
+import { MeetingSeriesListPage } from '../features/meetings/MeetingSeriesListPage'
+import { MeetingSeriesDetailPage } from '../features/meetings/MeetingSeriesDetailPage'
 import { ProjectDetailPage } from '../features/projects/ProjectDetailPage'
 import { ProjectListPage } from '../features/projects/ProjectListPage'
 import { ResearchGroupProvider } from '../features/research-group/ResearchGroupProvider'
@@ -169,6 +171,16 @@ function AppRoutes() {
                 <Route
                   path="/meetings"
                   element={<MeetingListPage />}
+                />
+
+                <Route
+                  path="/meetings/series"
+                  element={<MeetingSeriesListPage />}
+                />
+
+                <Route
+                  path="/meetings/series/:seriesId"
+                  element={<MeetingSeriesDetailPage />}
                 />
 
                 <Route

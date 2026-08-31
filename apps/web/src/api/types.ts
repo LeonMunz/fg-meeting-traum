@@ -247,6 +247,7 @@ export type ApiMeetingStatus =
 export interface ApiMeeting {
   id: number
   researchGroupId: number
+  seriesId: number | null
   title: string
   scheduledAt: string
   status: ApiMeetingStatus
@@ -316,6 +317,71 @@ export interface ApiUpdateMeetingItemInput {
 export interface ApiCreateMeetingWorkItemInput
   extends ApiCreateWorkItemInput {
   projectId: number
+}
+
+
+/* ── Meeting Series ────────────────────────────────────────────── */
+
+export interface ApiMeetingSeries {
+  id: number
+  researchGroupId: number
+  title: string
+  description: string
+  isArchived: boolean
+  createdById: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ApiCreateMeetingSeriesInput {
+  title: string
+  description?: string
+}
+
+export interface ApiUpdateMeetingSeriesInput {
+  title?: string
+  description?: string
+  isArchived?: boolean
+}
+
+export interface ApiMeetingSeriesSection {
+  id: number
+  meetingSeriesId: number
+  name: string
+  description: string
+  position: number
+  isActive: boolean
+}
+
+export interface ApiCreateMeetingSeriesSectionInput {
+  name: string
+  description?: string
+}
+
+export interface ApiUpdateMeetingSeriesSectionInput {
+  name?: string
+  description?: string
+  isActive?: boolean
+}
+
+export interface ApiReorderMeetingSeriesSectionsInput {
+  sectionIds: number[]
+}
+
+export interface ApiMeetingSection {
+  id: number
+  meetingId: number
+  sourceSeriesSectionId: number | null
+  name: string
+  description: string
+  position: number
+  isVisible: boolean
+}
+
+export interface ApiCreateMeetingFromSeriesInput {
+  title?: string
+  scheduledAt?: string
+  status?: ApiMeetingStatus
 }
 
 

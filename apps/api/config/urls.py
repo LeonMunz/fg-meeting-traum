@@ -50,6 +50,13 @@ from meetings.views import (
     MeetingItemWorkItemCreateView,
     MeetingParticipantDetailView,
     MeetingParticipantListCreateView,
+    MeetingSectionListView,
+    MeetingSeriesCreateOccurrenceView,
+    MeetingSeriesDetailView,
+    MeetingSeriesListCreateView,
+    MeetingSeriesSectionDetailView,
+    MeetingSeriesSectionListCreateView,
+    MeetingSeriesSectionReorderView,
     ResearchGroupMeetingListCreateView,
 )
 
@@ -111,6 +118,15 @@ urlpatterns = [
     path('api/meetings/<int:meeting_id>/participants/', MeetingParticipantListCreateView.as_view(), name='meeting-participants-list'),
     path('api/meetings/<int:meeting_id>/participants/<int:participant_id>/', MeetingParticipantDetailView.as_view(), name='meeting-participant-detail'),
     path('api/meetings/<int:meeting_id>/items/', MeetingItemListCreateView.as_view(), name='meeting-items-list'),
+    path('api/meetings/<int:meeting_id>/sections/', MeetingSectionListView.as_view(), name='meeting-sections-list'),
     path('api/meeting-items/<int:meeting_item_id>/', MeetingItemDetailView.as_view(), name='meeting-item-detail'),
     path('api/meeting-items/<int:meeting_item_id>/work-items/', MeetingItemWorkItemCreateView.as_view(), name='meeting-item-work-items-create'),
+
+    # Meeting Series
+    path('api/research-groups/<int:group_id>/meeting-series/', MeetingSeriesListCreateView.as_view(), name='research-group-meeting-series-list'),
+    path('api/meeting-series/<int:series_id>/', MeetingSeriesDetailView.as_view(), name='meeting-series-detail'),
+    path('api/meeting-series/<int:series_id>/sections/', MeetingSeriesSectionListCreateView.as_view(), name='meeting-series-sections-list'),
+    path('api/meeting-series/<int:series_id>/sections/reorder/', MeetingSeriesSectionReorderView.as_view(), name='meeting-series-sections-reorder'),
+    path('api/meeting-series/<int:series_id>/occurrences/', MeetingSeriesCreateOccurrenceView.as_view(), name='meeting-series-occurrences'),
+    path('api/meeting-series-sections/<int:section_id>/', MeetingSeriesSectionDetailView.as_view(), name='meeting-series-section-detail'),
 ]

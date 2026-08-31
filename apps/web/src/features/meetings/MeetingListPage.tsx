@@ -206,6 +206,17 @@ export function MeetingListPage() {
           </span>
           New meeting
         </button>
+
+        <button
+          type="button"
+          onClick={() => navigate('/meetings/series')}
+          className="inline-flex h-10 shrink-0 items-center gap-2 rounded-lg border border-outline-variant bg-surface-container-lowest px-4 text-sm font-semibold text-on-surface transition hover:bg-surface-container-low"
+        >
+          <span className="material-symbols-outlined text-[19px]">
+            event_repeat
+          </span>
+          Series
+        </button>
       </header>
 
       {pageLoading ? (

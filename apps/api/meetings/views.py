@@ -15,25 +15,43 @@ from .models import (
     Meeting,
     MeetingItem,
     MeetingParticipant,
+    MeetingSection,
+    MeetingSeries,
+    MeetingSeriesSection,
 )
 from .serializers import (
+    CreateMeetingFromSeriesSerializer,
     MeetingCreateSerializer,
     MeetingItemCreateSerializer,
     MeetingItemPatchSerializer,
     MeetingItemSerializer,
     MeetingPatchSerializer,
+    MeetingSectionSerializer,
     MeetingSerializer,
+    MeetingSeriesCreateSerializer,
+    MeetingSeriesPatchSerializer,
+    MeetingSeriesSectionCreateSerializer,
+    MeetingSeriesSectionPatchSerializer,
+    MeetingSeriesSectionReorderSerializer,
+    MeetingSeriesSectionSerializer,
+    MeetingSeriesSerializer,
     MeetingWorkItemCreateSerializer,
 )
 from .services import (
     MeetingDomainError,
     add_meeting_participant,
     create_meeting,
+    create_meeting_from_series,
     create_meeting_item,
+    create_meeting_series,
+    create_series_section,
     create_work_item_from_meeting_item,
+    reorder_series_sections,
     remove_meeting_participant,
     update_meeting,
+    update_meeting_series,
     update_meeting_item,
+    update_series_section,
 )
 
 
@@ -89,6 +107,395 @@ def _require_meeting_item_access(request, meeting_item_id):
         return None
 
     return item
+
+
+def _require_meeting_series_access(request, series_id):
+    try:
+        series = MeetingSeries.objects.select_related(
+            "research_group",
+            "created_by",
+        ).get(pk=series_id)
+    except MeetingSeries.DoesNotExist:
+        return None
+
+    if not ResearchGroupMembership.objects.filter(
+        research_group=series.research_group,
+        user=request.user,
+    ).exists():
+        return None
+
+    return series
+
+
+def _require_series_section_access(request, section_id):
+    try:
+        section = MeetingSeriesSection.objects.select_related(
+            "meeting_series",
+            "meeting_series__research_group",
+        ).get(pk=section_id)
+    except MeetingSeriesSection.DoesNotExist:
+        return None
+
+    if not ResearchGroupMembership.objects.filter(
+        research_group=section.meeting_series.research_group,
+        user=request.user,
+    ).exists():
+        return None
+
+    return section
+
+
+# ── MeetingSeries endpoints ──────────────────────────────────────
+
+
+class MeetingSeriesListCreateView(APIView):
+    """GET/POST /api/research-groups/{group_id}/meeting-series/"""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, group_id):
+        group = _require_research_group_access(request, group_id)
+        if group is None:
+            return Response([])
+
+        series = (
+            MeetingSeries.objects
+            .filter(research_group=group)
+            .select_related("research_group", "created_by")
+        )
+
+        return Response(
+            MeetingSeriesSerializer(series, many=True).data
+        )
+
+    def post(self, request, group_id):
+        group = _require_research_group_access(request, group_id)
+        if group is None:
+            return Response(
+                {"error": "Research group not found"},
+                status=404,
+            )
+
+        serializer = MeetingSeriesCreateSerializer(
+            data=request.data,
+        )
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=400)
+
+        data = serializer.validated_data
+
+        try:
+            series = create_meeting_series(
+                research_group=group,
+                actor=request.user,
+                title=data["title"],
+                description=data.get("description", ""),
+            )
+        except MeetingDomainError as exc:
+            return Response({"error": exc.message}, status=400)
+
+        return Response(
+            MeetingSeriesSerializer(series).data,
+            status=201,
+        )
+
+
+class MeetingSeriesDetailView(APIView):
+    """GET/PATCH /api/meeting-series/{series_id}/"""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, series_id):
+        series = _require_meeting_series_access(request, series_id)
+        if series is None:
+            return Response(
+                {"error": "Meeting series not found"},
+                status=404,
+            )
+
+        return Response(MeetingSeriesSerializer(series).data)
+
+    def patch(self, request, series_id):
+        if any(
+            field in request.data
+            for field in [
+                "researchGroupId",
+                "research_group",
+                "createdById",
+                "created_by",
+            ]
+        ):
+            return Response(
+                {
+                    "error": (
+                        "Cannot directly change Meeting series "
+                        "relationships or creator."
+                    )
+                },
+                status=400,
+            )
+
+        series = _require_meeting_series_access(request, series_id)
+        if series is None:
+            return Response(
+                {"error": "Meeting series not found"},
+                status=404,
+            )
+
+        serializer = MeetingSeriesPatchSerializer(
+            data=request.data,
+        )
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=400)
+
+        data = serializer.validated_data
+
+        try:
+            update_meeting_series(
+                meeting_series=series,
+                actor=request.user,
+                title=data.get("title"),
+                description=data.get("description"),
+                is_archived=data.get("isArchived"),
+            )
+        except MeetingDomainError as exc:
+            return Response({"error": exc.message}, status=400)
+
+        series.refresh_from_db()
+        return Response(MeetingSeriesSerializer(series).data)
+
+
+# ── MeetingSeriesSection endpoints ───────────────────────────────
+
+
+class MeetingSeriesSectionListCreateView(APIView):
+    """GET/POST /api/meeting-series/{series_id}/sections/"""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, series_id):
+        series = _require_meeting_series_access(request, series_id)
+        if series is None:
+            return Response(
+                {"error": "Meeting series not found"},
+                status=404,
+            )
+
+        sections = (
+            MeetingSeriesSection.objects
+            .filter(meeting_series=series)
+            .order_by("position", "id")
+        )
+
+        return Response(
+            MeetingSeriesSectionSerializer(sections, many=True).data
+        )
+
+    def post(self, request, series_id):
+        series = _require_meeting_series_access(request, series_id)
+        if series is None:
+            return Response(
+                {"error": "Meeting series not found"},
+                status=404,
+            )
+
+        serializer = MeetingSeriesSectionCreateSerializer(
+            data=request.data,
+        )
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=400)
+
+        data = serializer.validated_data
+
+        try:
+            section = create_series_section(
+                meeting_series=series,
+                actor=request.user,
+                name=data["name"],
+                description=data.get("description", ""),
+            )
+        except MeetingDomainError as exc:
+            return Response({"error": exc.message}, status=400)
+
+        return Response(
+            MeetingSeriesSectionSerializer(section).data,
+            status=201,
+        )
+
+
+class MeetingSeriesSectionDetailView(APIView):
+    """GET/PATCH /api/meeting-series-sections/{section_id}/"""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, section_id):
+        section = _require_series_section_access(request, section_id)
+        if section is None:
+            return Response(
+                {"error": "Series section not found"},
+                status=404,
+            )
+
+        return Response(
+            MeetingSeriesSectionSerializer(section).data
+        )
+
+    def patch(self, request, section_id):
+        if any(
+            field in request.data
+            for field in [
+                "meetingSeriesId",
+                "meeting_series",
+                "position",
+            ]
+        ):
+            return Response(
+                {
+                    "error": (
+                        "Cannot directly change Series section "
+                        "relationships or position."
+                    )
+                },
+                status=400,
+            )
+
+        section = _require_series_section_access(request, section_id)
+        if section is None:
+            return Response(
+                {"error": "Series section not found"},
+                status=404,
+            )
+
+        serializer = MeetingSeriesSectionPatchSerializer(
+            data=request.data,
+        )
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=400)
+
+        data = serializer.validated_data
+
+        try:
+            update_series_section(
+                series_section=section,
+                actor=request.user,
+                name=data.get("name"),
+                description=data.get("description"),
+                is_active=data.get("isActive"),
+            )
+        except MeetingDomainError as exc:
+            return Response({"error": exc.message}, status=400)
+
+        section.refresh_from_db()
+        return Response(
+            MeetingSeriesSectionSerializer(section).data
+        )
+
+
+class MeetingSeriesSectionReorderView(APIView):
+    """PATCH /api/meeting-series/{series_id}/sections/reorder/"""
+
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, series_id):
+        series = _require_meeting_series_access(request, series_id)
+        if series is None:
+            return Response(
+                {"error": "Meeting series not found"},
+                status=404,
+            )
+
+        serializer = MeetingSeriesSectionReorderSerializer(
+            data=request.data,
+        )
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=400)
+
+        data = serializer.validated_data
+
+        try:
+            reorder_series_sections(
+                meeting_series=series,
+                actor=request.user,
+                section_ids=data["sectionIds"],
+            )
+        except MeetingDomainError as exc:
+            return Response({"error": exc.message}, status=400)
+
+        # Return the updated section list.
+        sections = (
+            MeetingSeriesSection.objects
+            .filter(meeting_series=series)
+            .order_by("position", "id")
+        )
+
+        return Response(
+            MeetingSeriesSectionSerializer(sections, many=True).data
+        )
+
+
+# ── Meeting occurrence from Series ───────────────────────────────
+
+
+class MeetingSeriesCreateOccurrenceView(APIView):
+    """POST /api/meeting-series/{series_id}/occurrences/"""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, series_id):
+        series = _require_meeting_series_access(request, series_id)
+        if series is None:
+            return Response(
+                {"error": "Meeting series not found"},
+                status=404,
+            )
+
+        serializer = CreateMeetingFromSeriesSerializer(
+            data=request.data,
+        )
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=400)
+
+        data = serializer.validated_data
+
+        try:
+            meeting = create_meeting_from_series(
+                meeting_series=series,
+                actor=request.user,
+                title=data.get("title"),
+                scheduled_at=data.get("scheduledAt"),
+                status=data.get("status"),
+            )
+        except MeetingDomainError as exc:
+            return Response({"error": exc.message}, status=400)
+
+        return Response(MeetingSerializer(meeting).data, status=201)
+
+
+# ── MeetingSection (snapshot) endpoints ──────────────────────────
+
+
+class MeetingSectionListView(APIView):
+    """GET /api/meetings/{meeting_id}/sections/"""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, meeting_id):
+        meeting = _require_meeting_access(request, meeting_id)
+        if meeting is None:
+            return Response(
+                {"error": "Meeting not found"},
+                status=404,
+            )
+
+        sections = (
+            MeetingSection.objects
+            .filter(meeting=meeting)
+            .order_by("position", "id")
+        )
+
+        return Response(
+            MeetingSectionSerializer(sections, many=True).data
+        )
 
 
 class ResearchGroupMeetingListCreateView(APIView):
