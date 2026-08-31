@@ -244,9 +244,15 @@ export type ApiMeetingStatus =
   | 'live'
   | 'completed'
 
+export type ApiMeetingScope =
+  | 'group'
+  | 'project'
+
 export interface ApiMeeting {
   id: number
   researchGroupId: number
+  scope: ApiMeetingScope
+  projectId: number | null
   seriesId: number | null
   title: string
   scheduledAt: string
@@ -261,6 +267,8 @@ export interface ApiCreateMeetingInput {
   title: string
   scheduledAt: string
   status?: ApiMeetingStatus
+  scope?: ApiMeetingScope
+  projectId?: number | null
 }
 
 export interface ApiUpdateMeetingInput {
@@ -325,6 +333,8 @@ export interface ApiCreateMeetingWorkItemInput
 export interface ApiMeetingSeries {
   id: number
   researchGroupId: number
+  scope: ApiMeetingScope
+  projectId: number | null
   title: string
   description: string
   isArchived: boolean
@@ -334,6 +344,8 @@ export interface ApiMeetingSeries {
 }
 
 export interface ApiCreateMeetingSeriesInput {
+  scope: ApiMeetingScope
+  projectId?: number | null
   title: string
   description?: string
 }

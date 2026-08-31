@@ -1,6 +1,7 @@
 from django.conf import settings
 from django.db import models
 
+from projects.models import Project
 from research_groups.models import ResearchGroup
 from work_items.models import WorkItem
 
@@ -12,10 +13,26 @@ class MeetingSeries(models.Model):
     default Meeting structure (sections) for future occurrences.
     """
 
+    class Scope(models.TextChoices):
+        GROUP = "group", "Research group"
+        PROJECT = "project", "Project"
+
     research_group = models.ForeignKey(
         ResearchGroup,
         on_delete=models.RESTRICT,
         related_name="meeting_series",
+    )
+    scope = models.CharField(
+        max_length=16,
+        choices=Scope.choices,
+        default=Scope.GROUP,
+    )
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.RESTRICT,
+        related_name="meeting_series",
+        null=True,
+        blank=True,
     )
     title = models.CharField(max_length=255)
     description = models.TextField(default="", blank=True)
@@ -31,6 +48,15 @@ class MeetingSeries(models.Model):
     class Meta:
         db_table = "meetings_series"
         ordering = ["title", "id"]
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(scope="group", project__isnull=True)
+                    | models.Q(scope="project", project__isnull=False)
+                ),
+                name="meetings_series_scope_project_consistent",
+            )
+        ]
 
     def __str__(self):
         return self.title
@@ -76,10 +102,26 @@ class Meeting(models.Model):
         LIVE = "live", "Live"
         COMPLETED = "completed", "Completed"
 
+    class Scope(models.TextChoices):
+        GROUP = "group", "Research group"
+        PROJECT = "project", "Project"
+
     research_group = models.ForeignKey(
         ResearchGroup,
         on_delete=models.RESTRICT,
         related_name="meetings",
+    )
+    scope = models.CharField(
+        max_length=16,
+        choices=Scope.choices,
+        default=Scope.GROUP,
+    )
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.RESTRICT,
+        related_name="meetings",
+        null=True,
+        blank=True,
     )
     series = models.ForeignKey(
         MeetingSeries,
@@ -106,6 +148,15 @@ class Meeting(models.Model):
     class Meta:
         db_table = "meetings_meeting"
         ordering = ["scheduled_at", "id"]
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(scope="group", project__isnull=True)
+                    | models.Q(scope="project", project__isnull=False)
+                ),
+                name="meetings_meeting_scope_project_consistent",
+            )
+        ]
 
     def __str__(self):
         return self.title

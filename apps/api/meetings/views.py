@@ -1,4 +1,5 @@
 from django.contrib.auth import get_user_model
+from django.db.models import Q
 
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -39,6 +40,8 @@ from .serializers import (
 )
 from .services import (
     MeetingDomainError,
+    PROJECT_READ_ROLES,
+    PROJECT_WRITE_ROLES,
     add_meeting_participant,
     create_meeting,
     create_meeting_from_series,
@@ -76,15 +79,13 @@ def _require_meeting_access(request, meeting_id):
     try:
         meeting = Meeting.objects.select_related(
             "research_group",
+            "project",
             "created_by",
         ).get(pk=meeting_id)
     except Meeting.DoesNotExist:
         return None
 
-    if not ResearchGroupMembership.objects.filter(
-        research_group=meeting.research_group,
-        user=request.user,
-    ).exists():
+    if not _has_scoped_read_access(request.user, meeting):
         return None
 
     return meeting
@@ -95,15 +96,13 @@ def _require_meeting_item_access(request, meeting_item_id):
         item = MeetingItem.objects.select_related(
             "meeting",
             "meeting__research_group",
+            "meeting__project",
             "created_by",
         ).get(pk=meeting_item_id)
     except MeetingItem.DoesNotExist:
         return None
 
-    if not ResearchGroupMembership.objects.filter(
-        research_group=item.meeting.research_group,
-        user=request.user,
-    ).exists():
+    if not _has_scoped_read_access(request.user, item.meeting):
         return None
 
     return item
@@ -113,15 +112,13 @@ def _require_meeting_series_access(request, series_id):
     try:
         series = MeetingSeries.objects.select_related(
             "research_group",
+            "project",
             "created_by",
         ).get(pk=series_id)
     except MeetingSeries.DoesNotExist:
         return None
 
-    if not ResearchGroupMembership.objects.filter(
-        research_group=series.research_group,
-        user=request.user,
-    ).exists():
+    if not _has_scoped_read_access(request.user, series):
         return None
 
     return series
@@ -132,17 +129,110 @@ def _require_series_section_access(request, section_id):
         section = MeetingSeriesSection.objects.select_related(
             "meeting_series",
             "meeting_series__research_group",
+            "meeting_series__project",
         ).get(pk=section_id)
     except MeetingSeriesSection.DoesNotExist:
         return None
 
-    if not ResearchGroupMembership.objects.filter(
-        research_group=section.meeting_series.research_group,
-        user=request.user,
-    ).exists():
+    if not _has_scoped_read_access(request.user, section.meeting_series):
         return None
 
     return section
+
+
+def _has_scoped_read_access(user, resource):
+    if not ResearchGroupMembership.objects.filter(
+        research_group_id=resource.research_group_id,
+        user=user,
+    ).exists():
+        return False
+
+    if resource.scope == Meeting.Scope.GROUP:
+        return resource.project_id is None
+
+    return (
+        resource.scope == Meeting.Scope.PROJECT
+        and resource.project_id is not None
+        and ProjectMembership.objects.filter(
+            project_id=resource.project_id,
+            user=user,
+            role__in=PROJECT_READ_ROLES,
+        ).exists()
+    )
+
+
+def _has_project_write_access(user, project):
+    if project.archived_at is not None:
+        return False
+
+    return ProjectMembership.objects.filter(
+        project=project,
+        user=user,
+        role__in=PROJECT_WRITE_ROLES,
+    ).exists()
+
+
+def _has_scoped_write_access(user, resource):
+    if not _has_scoped_read_access(user, resource):
+        return False
+
+    if resource.scope == Meeting.Scope.GROUP:
+        return True
+
+    return _has_project_write_access(user, resource.project)
+
+
+def _mutation_forbidden_response():
+    return Response(
+        {
+            "error": (
+                "You do not have permission to modify "
+                "this Project Meeting resource."
+            )
+        },
+        status=403,
+    )
+
+
+def _accessible_scope_filter(user):
+    return (
+        Q(scope=Meeting.Scope.GROUP, project__isnull=True)
+        | Q(
+            scope=Meeting.Scope.PROJECT,
+            project__memberships__user=user,
+            project__memberships__role__in=PROJECT_READ_ROLES,
+        )
+    )
+
+
+def _resolve_project_for_scope_read(*, group, user, scope, project_id):
+    if scope == Meeting.Scope.GROUP:
+        if project_id is not None:
+            raise MeetingDomainError(
+                "A group-scoped Meeting cannot reference a Project."
+            )
+        return None
+
+    if project_id is None:
+        raise MeetingDomainError(
+            "A project-scoped Meeting requires projectId."
+        )
+
+    membership = (
+        ProjectMembership.objects
+        .select_related("project", "project__research_group")
+        .filter(
+            project_id=project_id,
+            project__research_group=group,
+            user=user,
+            role__in=PROJECT_READ_ROLES,
+        )
+        .first()
+    )
+    if membership is None:
+        return None
+
+    return membership.project
 
 
 # ── MeetingSeries endpoints ──────────────────────────────────────
@@ -161,7 +251,9 @@ class MeetingSeriesListCreateView(APIView):
         series = (
             MeetingSeries.objects
             .filter(research_group=group)
-            .select_related("research_group", "created_by")
+            .filter(_accessible_scope_filter(request.user))
+            .select_related("research_group", "project", "created_by")
+            .distinct()
         )
 
         return Response(
@@ -185,11 +277,32 @@ class MeetingSeriesListCreateView(APIView):
         data = serializer.validated_data
 
         try:
+            project = _resolve_project_for_scope_read(
+                group=group,
+                user=request.user,
+                scope=data["scope"],
+                project_id=data.get("projectId"),
+            )
+        except MeetingDomainError as exc:
+            return Response({"error": exc.message}, status=400)
+
+        if data["scope"] == Meeting.Scope.PROJECT and project is None:
+            return Response({"error": "Project not found"}, status=404)
+
+        if project is not None and not _has_project_write_access(
+            request.user,
+            project,
+        ):
+            return _mutation_forbidden_response()
+
+        try:
             series = create_meeting_series(
                 research_group=group,
                 actor=request.user,
                 title=data["title"],
                 description=data.get("description", ""),
+                scope=data["scope"],
+                project=project,
             )
         except MeetingDomainError as exc:
             return Response({"error": exc.message}, status=400)
@@ -216,11 +329,24 @@ class MeetingSeriesDetailView(APIView):
         return Response(MeetingSeriesSerializer(series).data)
 
     def patch(self, request, series_id):
+        series = _require_meeting_series_access(request, series_id)
+        if series is None:
+            return Response(
+                {"error": "Meeting series not found"},
+                status=404,
+            )
+
+        if not _has_scoped_write_access(request.user, series):
+            return _mutation_forbidden_response()
+
         if any(
             field in request.data
             for field in [
                 "researchGroupId",
                 "research_group",
+                "scope",
+                "projectId",
+                "project",
                 "createdById",
                 "created_by",
             ]
@@ -233,13 +359,6 @@ class MeetingSeriesDetailView(APIView):
                     )
                 },
                 status=400,
-            )
-
-        series = _require_meeting_series_access(request, series_id)
-        if series is None:
-            return Response(
-                {"error": "Meeting series not found"},
-                status=404,
             )
 
         serializer = MeetingSeriesPatchSerializer(
@@ -299,6 +418,9 @@ class MeetingSeriesSectionListCreateView(APIView):
                 status=404,
             )
 
+        if not _has_scoped_write_access(request.user, series):
+            return _mutation_forbidden_response()
+
         serializer = MeetingSeriesSectionCreateSerializer(
             data=request.data,
         )
@@ -341,6 +463,19 @@ class MeetingSeriesSectionDetailView(APIView):
         )
 
     def patch(self, request, section_id):
+        section = _require_series_section_access(request, section_id)
+        if section is None:
+            return Response(
+                {"error": "Series section not found"},
+                status=404,
+            )
+
+        if not _has_scoped_write_access(
+            request.user,
+            section.meeting_series,
+        ):
+            return _mutation_forbidden_response()
+
         if any(
             field in request.data
             for field in [
@@ -357,13 +492,6 @@ class MeetingSeriesSectionDetailView(APIView):
                     )
                 },
                 status=400,
-            )
-
-        section = _require_series_section_access(request, section_id)
-        if section is None:
-            return Response(
-                {"error": "Series section not found"},
-                status=404,
             )
 
         serializer = MeetingSeriesSectionPatchSerializer(
@@ -403,6 +531,9 @@ class MeetingSeriesSectionReorderView(APIView):
                 {"error": "Meeting series not found"},
                 status=404,
             )
+
+        if not _has_scoped_write_access(request.user, series):
+            return _mutation_forbidden_response()
 
         serializer = MeetingSeriesSectionReorderSerializer(
             data=request.data,
@@ -448,6 +579,9 @@ class MeetingSeriesCreateOccurrenceView(APIView):
                 {"error": "Meeting series not found"},
                 status=404,
             )
+
+        if not _has_scoped_write_access(request.user, series):
+            return _mutation_forbidden_response()
 
         serializer = CreateMeetingFromSeriesSerializer(
             data=request.data,
@@ -512,13 +646,16 @@ class ResearchGroupMeetingListCreateView(APIView):
         meetings = (
             Meeting.objects
             .filter(research_group=group)
+            .filter(_accessible_scope_filter(request.user))
             .select_related(
                 "research_group",
+                "project",
                 "created_by",
             )
             .prefetch_related(
                 "participant_relations",
             )
+            .distinct()
         )
 
         return Response(
@@ -551,12 +688,33 @@ class ResearchGroupMeetingListCreateView(APIView):
         data = serializer.validated_data
 
         try:
+            project = _resolve_project_for_scope_read(
+                group=group,
+                user=request.user,
+                scope=data["scope"],
+                project_id=data.get("projectId"),
+            )
+        except MeetingDomainError as exc:
+            return Response({"error": exc.message}, status=400)
+
+        if data["scope"] == Meeting.Scope.PROJECT and project is None:
+            return Response({"error": "Project not found"}, status=404)
+
+        if project is not None and not _has_project_write_access(
+            request.user,
+            project,
+        ):
+            return _mutation_forbidden_response()
+
+        try:
             meeting = create_meeting(
                 research_group=group,
                 actor=request.user,
                 title=data["title"],
                 scheduled_at=data["scheduledAt"],
                 status=data.get("status"),
+                scope=data["scope"],
+                project=project,
             )
         except MeetingDomainError as exc:
             return Response(
@@ -589,11 +747,27 @@ class MeetingDetailView(APIView):
         )
 
     def patch(self, request, meeting_id):
+        meeting = _require_meeting_access(
+            request,
+            meeting_id,
+        )
+        if meeting is None:
+            return Response(
+                {"error": "Meeting not found"},
+                status=404,
+            )
+
+        if not _has_scoped_write_access(request.user, meeting):
+            return _mutation_forbidden_response()
+
         if any(
             field in request.data
             for field in [
                 "researchGroupId",
                 "research_group",
+                "scope",
+                "projectId",
+                "project",
                 "createdById",
                 "created_by",
                 "participantIds",
@@ -607,16 +781,6 @@ class MeetingDetailView(APIView):
                     )
                 },
                 status=400,
-            )
-
-        meeting = _require_meeting_access(
-            request,
-            meeting_id,
-        )
-        if meeting is None:
-            return Response(
-                {"error": "Meeting not found"},
-                status=404,
             )
 
         serializer = MeetingPatchSerializer(
@@ -697,6 +861,9 @@ class MeetingParticipantListCreateView(APIView):
                 status=404,
             )
 
+        if not _has_scoped_write_access(request.user, meeting):
+            return _mutation_forbidden_response()
+
         user_id = request.data.get("userId")
         if user_id is None:
             return Response(
@@ -760,6 +927,9 @@ class MeetingParticipantDetailView(APIView):
                 status=404,
             )
 
+        if not _has_scoped_write_access(request.user, meeting):
+            return _mutation_forbidden_response()
+
         try:
             participant = MeetingParticipant.objects.get(
                 pk=participant_id,
@@ -815,6 +985,7 @@ class MeetingItemListCreateView(APIView):
             MeetingItemSerializer(
                 items,
                 many=True,
+                context={"request": request},
             ).data
         )
 
@@ -828,6 +999,9 @@ class MeetingItemListCreateView(APIView):
                 {"error": "Meeting not found"},
                 status=404,
             )
+
+        if not _has_scoped_write_access(request.user, meeting):
+            return _mutation_forbidden_response()
 
         serializer = MeetingItemCreateSerializer(
             data=request.data,
@@ -854,7 +1028,10 @@ class MeetingItemListCreateView(APIView):
             )
 
         return Response(
-            MeetingItemSerializer(item).data,
+            MeetingItemSerializer(
+                item,
+                context={"request": request},
+            ).data,
             status=201,
         )
 
@@ -874,10 +1051,26 @@ class MeetingItemDetailView(APIView):
             )
 
         return Response(
-            MeetingItemSerializer(item).data
+            MeetingItemSerializer(
+                item,
+                context={"request": request},
+            ).data
         )
 
     def patch(self, request, meeting_item_id):
+        item = _require_meeting_item_access(
+            request,
+            meeting_item_id,
+        )
+        if item is None:
+            return Response(
+                {"error": "Meeting item not found"},
+                status=404,
+            )
+
+        if not _has_scoped_write_access(request.user, item.meeting):
+            return _mutation_forbidden_response()
+
         if any(
             field in request.data
             for field in [
@@ -897,16 +1090,6 @@ class MeetingItemDetailView(APIView):
                     )
                 },
                 status=400,
-            )
-
-        item = _require_meeting_item_access(
-            request,
-            meeting_item_id,
-        )
-        if item is None:
-            return Response(
-                {"error": "Meeting item not found"},
-                status=404,
             )
 
         serializer = MeetingItemPatchSerializer(
@@ -937,7 +1120,10 @@ class MeetingItemDetailView(APIView):
         item.refresh_from_db()
 
         return Response(
-            MeetingItemSerializer(item).data
+            MeetingItemSerializer(
+                item,
+                context={"request": request},
+            ).data
         )
 
 
@@ -961,6 +1147,9 @@ class MeetingItemWorkItemCreateView(APIView):
                 {"error": "Meeting item not found"},
                 status=404,
             )
+
+        if not _has_scoped_write_access(request.user, item.meeting):
+            return _mutation_forbidden_response()
 
         serializer = MeetingWorkItemCreateSerializer(
             data=request.data,

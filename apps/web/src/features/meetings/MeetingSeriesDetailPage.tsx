@@ -457,12 +457,22 @@ export function MeetingSeriesDetailPage() {
       </button>
 
       <header className="mt-5 border-b border-outline-variant pb-6">
-        <h1 className="text-3xl font-semibold tracking-tight text-on-surface">
-          Series Structure
-        </h1>
+        <div className="flex flex-wrap items-center gap-3">
+          <h1 className="text-3xl font-semibold tracking-tight text-on-surface">
+            Series Structure
+          </h1>
+
+          {series && (
+            <span className="inline-flex rounded-full bg-surface-container-high px-2.5 py-1 text-xs font-medium text-on-surface-variant">
+              {series.scope === 'group'
+                ? 'Research group scope'
+                : 'Project scope'}
+            </span>
+          )}
+        </div>
 
         <p className="mt-1.5 text-sm text-on-surface-variant">
-          Edit the default sections for this meeting series.
+          {series?.title}. Edit the default sections for this meeting series.
           New occurrences will snapshot these sections.
         </p>
       </header>

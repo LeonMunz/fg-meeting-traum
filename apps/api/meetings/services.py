@@ -1,6 +1,7 @@
 from django.db import models, transaction
 from django.db.models import Max
 
+from projects.models import ProjectMembership
 from research_groups.models import ResearchGroupMembership
 
 from work_items.services import (
@@ -25,6 +26,17 @@ class MeetingDomainError(Exception):
         super().__init__(message)
 
 
+PROJECT_READ_ROLES = {
+    ProjectMembership.Role.OWNER,
+    ProjectMembership.Role.MEMBER,
+    ProjectMembership.Role.VIEWER,
+}
+PROJECT_WRITE_ROLES = {
+    ProjectMembership.Role.OWNER,
+    ProjectMembership.Role.MEMBER,
+}
+
+
 def _require_research_group_membership(*, research_group, user):
     if not ResearchGroupMembership.objects.filter(
         research_group=research_group,
@@ -33,6 +45,98 @@ def _require_research_group_membership(*, research_group, user):
         raise MeetingDomainError(
             "User is not a member of this Research Group."
         )
+
+
+def _require_scoped_read_access(
+    *,
+    research_group,
+    scope,
+    project,
+    user,
+):
+    _require_research_group_membership(
+        research_group=research_group,
+        user=user,
+    )
+
+    if scope == Meeting.Scope.GROUP:
+        if project is not None:
+            raise MeetingDomainError(
+                "A group-scoped Meeting cannot reference a Project."
+            )
+        return
+
+    if scope != Meeting.Scope.PROJECT:
+        raise MeetingDomainError("Invalid Meeting scope.")
+
+    if project is None:
+        raise MeetingDomainError(
+            "A project-scoped Meeting requires a Project."
+        )
+
+    if project.research_group_id != research_group.pk:
+        raise MeetingDomainError(
+            "Project must belong to the Meeting's Research Group."
+        )
+
+    membership = ProjectMembership.objects.filter(
+        project=project,
+        user=user,
+    ).first()
+    if membership is None or membership.role not in PROJECT_READ_ROLES:
+        raise MeetingDomainError(
+            "User does not have access to this Project."
+        )
+
+
+def _require_scoped_write_access(
+    *,
+    research_group,
+    scope,
+    project,
+    user,
+):
+    _require_scoped_read_access(
+        research_group=research_group,
+        scope=scope,
+        project=project,
+        user=user,
+    )
+
+    if scope == Meeting.Scope.GROUP:
+        return
+
+    if project.archived_at is not None:
+        raise MeetingDomainError(
+            "Archived Projects are read-only. Restore the Project first."
+        )
+
+    membership = ProjectMembership.objects.get(
+        project=project,
+        user=user,
+    )
+    if membership.role not in PROJECT_WRITE_ROLES:
+        raise MeetingDomainError(
+            "A viewer cannot modify Project Meeting content."
+        )
+
+
+def _require_series_write_access(*, meeting_series, user):
+    _require_scoped_write_access(
+        research_group=meeting_series.research_group,
+        scope=meeting_series.scope,
+        project=meeting_series.project,
+        user=user,
+    )
+
+
+def _require_meeting_write_access(*, meeting, user):
+    _require_scoped_write_access(
+        research_group=meeting.research_group,
+        scope=meeting.scope,
+        project=meeting.project,
+        user=user,
+    )
 
 
 # ── MeetingSeries ────────────────────────────────────────────────
@@ -45,9 +149,13 @@ def create_meeting_series(
     actor,
     title,
     description="",
+    scope=MeetingSeries.Scope.GROUP,
+    project=None,
 ):
-    _require_research_group_membership(
+    _require_scoped_write_access(
         research_group=research_group,
+        scope=scope,
+        project=project,
         user=actor,
     )
 
@@ -57,6 +165,8 @@ def create_meeting_series(
 
     return MeetingSeries.objects.create(
         research_group=research_group,
+        scope=scope,
+        project=project,
         title=title,
         description=description.strip(),
         created_by=actor,
@@ -71,10 +181,7 @@ def update_meeting_series(
     description=None,
     is_archived=None,
 ):
-    _require_research_group_membership(
-        research_group=meeting_series.research_group,
-        user=actor,
-    )
+    _require_series_write_access(meeting_series=meeting_series, user=actor)
 
     update_fields = []
 
@@ -111,10 +218,7 @@ def create_series_section(
     name,
     description="",
 ):
-    _require_research_group_membership(
-        research_group=meeting_series.research_group,
-        user=actor,
-    )
+    _require_series_write_access(meeting_series=meeting_series, user=actor)
 
     name = name.strip()
     if not name:
@@ -151,8 +255,8 @@ def update_series_section(
     description=None,
     is_active=None,
 ):
-    _require_research_group_membership(
-        research_group=series_section.meeting_series.research_group,
+    _require_series_write_access(
+        meeting_series=series_section.meeting_series,
         user=actor,
     )
 
@@ -191,10 +295,7 @@ def reorder_series_sections(
     section_ids is an ordered list of MeetingSeriesSection IDs.
     Only sections belonging to the given series are reordered.
     """
-    _require_research_group_membership(
-        research_group=meeting_series.research_group,
-        user=actor,
-    )
+    _require_series_write_access(meeting_series=meeting_series, user=actor)
 
     if not section_ids:
         raise MeetingDomainError("Section order list is required.")
@@ -254,10 +355,7 @@ def create_meeting_from_series(
     Snapshots only active Series sections into MeetingSection records.
     Later Series changes never mutate existing MeetingSection snapshots.
     """
-    _require_research_group_membership(
-        research_group=meeting_series.research_group,
-        user=actor,
-    )
+    _require_series_write_access(meeting_series=meeting_series, user=actor)
 
     if scheduled_at is None:
         raise MeetingDomainError("scheduled_at is required.")
@@ -272,6 +370,8 @@ def create_meeting_from_series(
 
     meeting = Meeting.objects.create(
         research_group=meeting_series.research_group,
+        scope=meeting_series.scope,
+        project=meeting_series.project,
         series=meeting_series,
         title=meeting_title,
         scheduled_at=scheduled_at,
@@ -313,9 +413,13 @@ def create_meeting(
     title,
     scheduled_at,
     status=None,
+    scope=Meeting.Scope.GROUP,
+    project=None,
 ):
-    _require_research_group_membership(
+    _require_scoped_write_access(
         research_group=research_group,
+        scope=scope,
+        project=project,
         user=actor,
     )
 
@@ -329,6 +433,8 @@ def create_meeting(
 
     meeting = Meeting.objects.create(
         research_group=research_group,
+        scope=scope,
+        project=project,
         title=title,
         scheduled_at=scheduled_at,
         status=meeting_status,
@@ -349,13 +455,12 @@ def add_meeting_participant(
     actor,
     target_user,
 ):
-    _require_research_group_membership(
-        research_group=meeting.research_group,
-        user=actor,
-    )
+    _require_meeting_write_access(meeting=meeting, user=actor)
 
-    _require_research_group_membership(
+    _require_scoped_read_access(
         research_group=meeting.research_group,
+        scope=meeting.scope,
+        project=meeting.project,
         user=target_user,
     )
 
@@ -381,10 +486,7 @@ def create_meeting_item(
     title,
     notes="",
 ):
-    _require_research_group_membership(
-        research_group=meeting.research_group,
-        user=actor,
-    )
+    _require_meeting_write_access(meeting=meeting, user=actor)
 
     title = title.strip()
     if not title:
@@ -424,10 +526,7 @@ def update_meeting(
     scheduled_at=None,
     status=None,
 ):
-    _require_research_group_membership(
-        research_group=meeting.research_group,
-        user=actor,
-    )
+    _require_meeting_write_access(meeting=meeting, user=actor)
 
     update_fields = []
 
@@ -466,10 +565,7 @@ def remove_meeting_participant(
     participant,
     actor,
 ):
-    _require_research_group_membership(
-        research_group=participant.meeting.research_group,
-        user=actor,
-    )
+    _require_meeting_write_access(meeting=participant.meeting, user=actor)
 
     participant.delete()
 
@@ -482,10 +578,7 @@ def update_meeting_item(
     notes=None,
     status=None,
 ):
-    _require_research_group_membership(
-        research_group=meeting_item.meeting.research_group,
-        user=actor,
-    )
+    _require_meeting_write_access(meeting=meeting_item.meeting, user=actor)
 
     update_fields = []
 
@@ -544,10 +637,7 @@ def create_work_item_from_meeting_item(
     A Meeting may only create work inside a Project belonging to the same
     Research Group.
     """
-    _require_research_group_membership(
-        research_group=meeting_item.meeting.research_group,
-        user=actor,
-    )
+    _require_meeting_write_access(meeting=meeting_item.meeting, user=actor)
 
     if (
         project.research_group_id
@@ -555,6 +645,14 @@ def create_work_item_from_meeting_item(
     ):
         raise MeetingDomainError(
             "Project must belong to the Meeting's Research Group."
+        )
+
+    if (
+        meeting_item.meeting.scope == Meeting.Scope.PROJECT
+        and project.pk != meeting_item.meeting.project_id
+    ):
+        raise MeetingDomainError(
+            "A project Meeting can only create work in its Project."
         )
 
     try:

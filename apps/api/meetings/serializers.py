@@ -17,6 +17,11 @@ class MeetingSeriesSerializer(serializers.ModelSerializer):
         source="research_group_id",
         read_only=True,
     )
+    projectId = serializers.IntegerField(
+        source="project_id",
+        read_only=True,
+        allow_null=True,
+    )
     isArchived = serializers.BooleanField(
         source="is_archived",
         read_only=True,
@@ -39,6 +44,8 @@ class MeetingSeriesSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "researchGroupId",
+            "scope",
+            "projectId",
             "title",
             "description",
             "isArchived",
@@ -49,6 +56,15 @@ class MeetingSeriesSerializer(serializers.ModelSerializer):
 
 
 class MeetingSeriesCreateSerializer(serializers.Serializer):
+    scope = serializers.ChoiceField(
+        choices=MeetingSeries.Scope.choices,
+        default=MeetingSeries.Scope.GROUP,
+    )
+    projectId = serializers.IntegerField(
+        min_value=1,
+        required=False,
+        allow_null=True,
+    )
     title = serializers.CharField(
         max_length=255,
         allow_blank=False,
@@ -170,6 +186,11 @@ class MeetingSerializer(serializers.ModelSerializer):
         source="research_group_id",
         read_only=True,
     )
+    projectId = serializers.IntegerField(
+        source="project_id",
+        read_only=True,
+        allow_null=True,
+    )
     seriesId = serializers.IntegerField(
         source="series_id",
         read_only=True,
@@ -197,6 +218,8 @@ class MeetingSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "researchGroupId",
+            "scope",
+            "projectId",
             "seriesId",
             "title",
             "scheduledAt",
@@ -216,6 +239,15 @@ class MeetingSerializer(serializers.ModelSerializer):
 
 
 class MeetingCreateSerializer(serializers.Serializer):
+    scope = serializers.ChoiceField(
+        choices=Meeting.Scope.choices,
+        default=Meeting.Scope.GROUP,
+    )
+    projectId = serializers.IntegerField(
+        min_value=1,
+        required=False,
+        allow_null=True,
+    )
     title = serializers.CharField(
         max_length=255,
         allow_blank=False,
@@ -293,10 +325,15 @@ class MeetingItemSerializer(serializers.ModelSerializer):
 
 
     def get_workItemIds(self, obj):
+        relations = obj.work_item_relations.order_by("id")
+        request = self.context.get("request")
+        if request is not None:
+            relations = relations.filter(
+                work_item__project__memberships__user=request.user,
+            )
+
         return list(
-            obj.work_item_relations
-            .order_by("id")
-            .values_list("work_item_id", flat=True)
+            relations.values_list("work_item_id", flat=True)
         )
 
 

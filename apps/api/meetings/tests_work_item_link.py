@@ -291,6 +291,30 @@ class MeetingWorkItemLinkApiTest(
             [work_item_id],
         )
 
+    def test_group_meeting_hides_linked_project_ids_from_group_only_member(
+        self,
+    ):
+        created = self.post_work_item()
+        work_item_id = created.json()["id"]
+        group_only = User.objects.create_user(
+            username="meeting-link-group-only",
+            password="Pass1!",
+        )
+        ResearchGroupMembership.objects.create(
+            research_group=self.group,
+            user=group_only,
+            role=ResearchGroupMembership.Role.MEMBER,
+        )
+
+        self.login(group_only)
+        response = self.client.get(
+            f"/api/meeting-items/{self.item.pk}/"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertNotIn(work_item_id, response.json()["workItemIds"])
+        self.assertEqual(response.json()["workItemIds"], [])
+
     def test_created_work_item_appears_in_assignee_my_work(
         self,
     ):

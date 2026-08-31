@@ -10,8 +10,11 @@ import {
   createMeetingSeries,
   listMeetingSeries,
 } from '../../api/meetings'
+import { listProjects } from '../../api/projects'
 import type {
+  ApiMeetingScope,
   ApiMeetingSeries,
+  ApiProject,
 } from '../../api/types'
 import { useResearchGroupListScope } from '../research-group/useResearchGroupListScope'
 
@@ -53,12 +56,17 @@ export function MeetingSeriesListPage() {
 
   const [series, setSeries] =
     useState<ApiMeetingSeries[]>([])
+  const [projects, setProjects] =
+    useState<ApiProject[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] =
     useState<string | null>(null)
 
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
+  const [scope, setScope] =
+    useState<ApiMeetingScope>('group')
+  const [projectId, setProjectId] = useState('')
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] =
     useState<string | null>(null)
@@ -66,6 +74,7 @@ export function MeetingSeriesListPage() {
   const loadSeries = useCallback(async () => {
     if (activeResearchGroupId == null) {
       setSeries([])
+      setProjects([])
       setLoading(false)
       return
     }
@@ -74,13 +83,16 @@ export function MeetingSeriesListPage() {
     setError(null)
 
     try {
-      const nextSeries = await listMeetingSeries(
-        activeResearchGroupId,
-      )
+      const [nextSeries, nextProjects] = await Promise.all([
+        listMeetingSeries(activeResearchGroupId),
+        listProjects(activeResearchGroupId),
+      ])
 
       setSeries(nextSeries)
+      setProjects(nextProjects)
     } catch (loadError) {
       setSeries([])
+      setProjects([])
       setError(
         getErrorMessage(
           loadError,
@@ -104,6 +116,7 @@ export function MeetingSeriesListPage() {
     if (
       activeResearchGroupId == null ||
       !title.trim() ||
+      (scope === 'project' && !projectId) ||
       creating
     ) {
       return
@@ -118,6 +131,11 @@ export function MeetingSeriesListPage() {
         {
           title: title.trim(),
           description: description.trim(),
+          scope,
+          projectId:
+            scope === 'project'
+              ? Number(projectId)
+              : undefined,
         },
       )
 
@@ -131,6 +149,8 @@ export function MeetingSeriesListPage() {
 
       setTitle('')
       setDescription('')
+      setScope('group')
+      setProjectId('')
 
       // Navigate to the new series detail page.
       navigate(
@@ -192,7 +212,7 @@ export function MeetingSeriesListPage() {
           New meeting series
         </h2>
 
-        <div className="mt-4 grid gap-4 md:grid-cols-[1fr_200px]">
+        <div className="mt-4 grid gap-4 md:grid-cols-2">
           <label>
             <span className="mb-1.5 block text-sm font-medium text-on-surface">
               Name
@@ -208,6 +228,60 @@ export function MeetingSeriesListPage() {
               className="h-10 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
             />
           </label>
+
+          <fieldset>
+            <legend className="mb-1.5 block text-sm font-medium text-on-surface">
+              Scope
+            </legend>
+
+            <div className="flex h-10 items-center gap-5 rounded-lg border border-outline-variant px-3">
+              {(['group', 'project'] as const).map((value) => (
+                <label key={value} className="flex items-center gap-2 text-sm text-on-surface">
+                  <input
+                    type="radio"
+                    name="meeting-series-scope"
+                    value={value}
+                    checked={scope === value}
+                    onChange={() => {
+                      setScope(value)
+                      if (value === 'group') {
+                        setProjectId('')
+                      }
+                    }}
+                  />
+                  {value === 'group' ? 'Research group' : 'Project'}
+                </label>
+              ))}
+            </div>
+          </fieldset>
+
+          {scope === 'project' && (
+            <label>
+              <span className="mb-1.5 block text-sm font-medium text-on-surface">
+                Project
+              </span>
+
+              <select
+                value={projectId}
+                onChange={(event) => setProjectId(event.target.value)}
+                className="h-10 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
+                required
+              >
+                <option value="">Select a project</option>
+                {projects.map((project) => (
+                  <option key={project.id} value={project.id}>
+                    {project.name}
+                  </option>
+                ))}
+              </select>
+
+              {projects.length === 0 && (
+                <span className="mt-1 block text-xs text-on-surface-variant">
+                  You do not have access to a project in this research group.
+                </span>
+              )}
+            </label>
+          )}
 
           <label>
             <span className="mb-1.5 block text-sm font-medium text-on-surface">
@@ -240,6 +314,7 @@ export function MeetingSeriesListPage() {
             type="submit"
             disabled={
               creating || !title.trim()
+              || (scope === 'project' && !projectId)
             }
             className="inline-flex h-9 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-white transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-45"
           >
@@ -309,9 +384,13 @@ export function MeetingSeriesListPage() {
         </div>
       ) : (
         <section className="mt-8 overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest">
-          <div className="grid grid-cols-[minmax(200px,1fr)_1fr_100px] border-b border-outline-variant bg-surface-container-low px-6 py-2.5">
+          <div className="grid grid-cols-[minmax(180px,1fr)_minmax(140px,220px)_1fr_100px] gap-4 border-b border-outline-variant bg-surface-container-low px-6 py-2.5">
             <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-on-surface-variant">
               Series
+            </div>
+
+            <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-on-surface-variant">
+              Scope
             </div>
 
             <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-on-surface-variant">
@@ -333,12 +412,18 @@ export function MeetingSeriesListPage() {
                     `/meetings/series/${s.id}`,
                   )
                 }
-                className="grid w-full grid-cols-[minmax(200px,1fr)_1fr_100px] items-center gap-4 px-6 py-4 text-left transition hover:bg-surface-container-low"
+                className="grid w-full grid-cols-[minmax(180px,1fr)_minmax(140px,220px)_1fr_100px] items-center gap-4 px-6 py-4 text-left transition hover:bg-surface-container-low"
               >
                 <div className="min-w-0">
                   <div className="truncate text-sm font-semibold text-on-surface">
                     {s.title}
                   </div>
+                </div>
+
+                <div className="min-w-0 truncate text-sm text-on-surface-variant">
+                  {s.scope === 'group'
+                    ? 'Research group'
+                    : projects.find((project) => project.id === s.projectId)?.name ?? 'Project'}
                 </div>
 
                 <div className="min-w-0 truncate text-sm text-on-surface-variant">
