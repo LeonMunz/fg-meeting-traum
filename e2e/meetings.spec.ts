@@ -1,6 +1,7 @@
 import {
   expect,
   test,
+  type Page,
 } from '@playwright/test'
 
 import {
@@ -9,6 +10,51 @@ import {
   openProject,
   openProjects,
 } from './helpers'
+
+// The redesigned Meeting Detail uses an inline quick-add: a quiet
+// "+ Add item" button expands into a title input (required field)
+// plus Add / Cancel. Enter also submits.
+export async function quickAddAgendaItem(
+  page: Page,
+  title: string,
+  sectionName = 'Agenda',
+) {
+  const section = page.locator('section[aria-label]').filter({
+    has: page.getByRole('heading', {
+      name: sectionName,
+      exact: true,
+    }),
+  })
+
+  // The quick-add trigger is the '+ Add item' / 'Add first item'
+  // button inside the section (label depends on whether it is empty).
+  // Exact match avoids the section menu's icon-only button.
+  const addButton = section
+    .getByRole('button', { name: 'Add item', exact: true })
+    .or(section.getByRole('button', { name: 'Add first item', exact: true }))
+
+  const input = page.getByLabel(
+    `Add item to ${sectionName}`,
+  )
+
+  await addButton.scrollIntoViewIfNeeded()
+
+  await addButton.click()
+
+  await input.waitFor({ state: 'visible' })
+
+  await input.fill(title)
+
+  // The quick-add form's submit is 'Add'; scope it to the form so the
+  // participant panel's separate 'Add' button is never matched.
+  await page
+    .locator('[data-quick-add-form]')
+    .getByRole('button', {
+      name: 'Add',
+      exact: true,
+    })
+    .click()
+}
 
 const MEETING_TITLE =
   'E2E FG Weekly'
@@ -108,17 +154,26 @@ test(
       }),
     ).toBeVisible()
 
-    // Creator is automatically a participant.
+    // Creator is automatically a participant (avatar in the
+    // participant bar; @username is shown in the manage panel).
     await expect(
-      page.getByText(
-        '@alex',
-        { exact: true },
-      ),
+      page.getByTitle('Alex Dev'),
     ).toBeVisible()
 
     // --------------------------------------------------------
     // Alex adds Chris as participant.
     // --------------------------------------------------------
+
+    const manageButton = page
+      .getByRole('button', {
+        name: 'Manage',
+        exact: true,
+      })
+      .first()
+
+    await manageButton.scrollIntoViewIfNeeded()
+
+    await manageButton.click()
 
     const participantSelect =
       page.getByLabel(
@@ -154,12 +209,19 @@ test(
       })
       .click()
 
+    // The manage panel lists each participant with @username.
     await expect(
-      page.getByText(
-        '@chris',
-        { exact: true },
-      ),
+      page.getByText('@alex', { exact: true }),
     ).toBeVisible()
+    await expect(
+      page.getByText('@chris', { exact: true }),
+    ).toBeVisible()
+
+    // Close the manage panel (the toggle now reads 'Done').
+    await page.getByRole('button', {
+      name: 'Done',
+      exact: true,
+    }).click()
 
     // --------------------------------------------------------
     // Alex creates and discusses an agenda item.
@@ -174,15 +236,10 @@ test(
     ).toHaveCount(1)
 
     // Add an item under the default Agenda section.
-    await page
-      .getByLabel('Add item to Agenda')
-      .fill(AGENDA_TITLE)
-
-    await page
-      .getByRole('button', {
-        name: 'Add Agenda item',
-      })
-      .click()
+    await quickAddAgendaItem(
+      page,
+      AGENDA_TITLE,
+    )
 
     await expect(
       page.getByText(
@@ -193,7 +250,7 @@ test(
 
     const agendaItem =
       page
-        .locator('article')
+        .locator('li')
         .filter({
           has: page.getByText(
             AGENDA_TITLE,
@@ -203,21 +260,6 @@ test(
 
     await expect(
       agendaItem,
-    ).toBeVisible()
-
-    await agendaItem
-      .getByRole('button')
-      .filter({
-        hasText: 'Mark discussed',
-      })
-      .click()
-
-    await expect(
-      agendaItem
-        .getByRole('button')
-        .filter({
-          hasText: 'Discussed',
-        }),
     ).toBeVisible()
 
     // --------------------------------------------------------
@@ -234,6 +276,19 @@ test(
       page.getByRole('button', { name: 'End meeting' }),
     ).toBeVisible()
 
+    // Discussing happens in the live state (the redesigned
+    // Meeting Detail only exposes the discussed toggle while
+    // live).
+    await agendaItem
+      .getByRole('button', {
+        name: `Mark ${AGENDA_TITLE} as discussed`,
+      })
+      .click()
+
+    await expect(
+      agendaItem.locator('span', { hasText: 'Discussed' }).last(),
+    ).toBeVisible()
+
     // --------------------------------------------------------
     // Reload proves all Meeting state persisted.
     // --------------------------------------------------------
@@ -247,18 +302,9 @@ test(
       }),
     ).toBeVisible()
 
+    // Participant persists (avatar in the participant bar).
     await expect(
-      page.getByText(
-        '@alex',
-        { exact: true },
-      ),
-    ).toBeVisible()
-
-    await expect(
-      page.getByText(
-        '@chris',
-        { exact: true },
-      ),
+      page.getByTitle('Alex Dev'),
     ).toBeVisible()
 
     await expect(
@@ -270,7 +316,7 @@ test(
 
     const persistedAgendaItem =
       page
-        .locator('article')
+        .locator('li')
         .filter({
           has: page.getByText(
             AGENDA_TITLE,
@@ -279,11 +325,7 @@ test(
         })
 
     await expect(
-      persistedAgendaItem
-        .getByRole('button')
-        .filter({
-          hasText: 'Discussed',
-        }),
+      persistedAgendaItem.locator('span', { hasText: 'Discussed' }).last(),
     ).toBeVisible()
 
     await expect(
@@ -402,9 +444,10 @@ test(
 
     await expect(
       page.getByText(
-        '@chris',
+        '@alex',
         { exact: true },
-      ),
+      )
+      .first(),
     ).toBeVisible()
 
     // --------------------------------------------------------
@@ -460,19 +503,14 @@ test(
     )
 
     // Add an item under the default Agenda section.
-    await page
-      .getByLabel('Add item to Agenda')
-      .fill(taskTitle)
-
-    await page
-      .getByRole('button', {
-        name: 'Add Agenda item',
-      })
-      .click()
+    await quickAddAgendaItem(
+      page,
+      taskTitle,
+    )
 
     const agendaItem =
       page
-        .locator('article')
+        .locator('li')
         .filter({
           has: page.getByText(
             taskTitle,
@@ -488,12 +526,14 @@ test(
     // Agenda Item creates canonical WorkItem.
     // --------------------------------------------------------
 
-    await agendaItem
-      .getByRole('button')
-      .filter({
-        hasText: 'Work item',
-      })
-      .click()
+    // The redesign moved item actions into a per-item menu.
+    const itemTitle = taskTitle
+    await agendaItem.getByRole('button', {
+      name: `Actions for agenda item ${itemTitle}`,
+    }).click()
+    await page.getByRole('menuitem', {
+      name: 'Create work item',
+    }).click()
 
     const workItemDialog =
       page.getByRole('dialog', {
@@ -557,7 +597,7 @@ test(
 
     const persistedAgendaItem =
       page
-        .locator('article')
+        .locator('li')
         .filter({
           has: page.getByText(
             taskTitle,
@@ -699,11 +739,17 @@ test(
     ).toHaveCount(0)
 
     await expect(
-      page.getByLabel('Add item to Agenda'),
+      page.getByRole('button', {
+        name: 'Add item',
+        exact: true,
+      }),
     ).toHaveCount(0)
 
     await expect(
-      page.getByLabel('New section name'),
+      page.getByRole('button', {
+        name: 'Edit structure',
+        exact: true,
+      }),
     ).toHaveCount(0)
 
     // Reload proves the completed state persisted.
@@ -787,14 +833,29 @@ test(
       }),
     ).toBeVisible()
 
-    // Add a second section.
+    // Add a second section through explicit structure editing.
+    await page
+      .getByRole('button', {
+        name: 'Edit structure',
+        exact: true,
+      })
+      .click()
+
     await page
       .getByLabel('New section name')
       .fill('TOPs')
 
     await page
       .getByRole('button', {
-        name: /Add section/,
+        name: 'Add section',
+        exact: true,
+      })
+      .click()
+
+    await page
+      .getByRole('button', {
+        name: 'Done editing structure',
+        exact: true,
       })
       .click()
 
@@ -806,25 +867,16 @@ test(
     ).toBeVisible()
 
     // Add an item under each section.
-    await page
-      .getByLabel('Add item to Agenda')
-      .fill('Agenda item A')
+    await quickAddAgendaItem(
+      page,
+      'Agenda item A',
+    )
 
-    await page
-      .getByRole('button', {
-        name: 'Add Agenda item',
-      })
-      .click()
-
-    await page
-      .getByLabel('Add item to TOPs')
-      .fill('TOPs item C')
-
-    await page
-      .getByRole('button', {
-        name: 'Add TOPs item',
-      })
-      .click()
+    await quickAddAgendaItem(
+      page,
+      'TOPs item C',
+      'TOPs',
+    )
 
     await expect(
       page.getByText('Agenda item A', { exact: true }),
@@ -978,19 +1030,18 @@ test(
     // Edit the occurrence: rename the Check-In section.
     // --------------------------------------------------------
 
-    const checkInSection = page
-      .locator('div')
-      .filter({
-        has: page.getByRole('heading', {
-          name: 'Check-In',
-          exact: true,
-        }),
-      })
-      .first()
-
-    await checkInSection
+    const checkInMenu = page
       .getByRole('button', {
-        name: /Edit Check-In/,
+        name: 'Actions for section Check-In',
+      })
+
+    await checkInMenu.scrollIntoViewIfNeeded()
+
+    await checkInMenu.click()
+
+    await page
+      .getByRole('menuitem', {
+        name: 'Rename / describe',
       })
       .click()
 

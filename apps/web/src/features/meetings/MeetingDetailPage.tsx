@@ -2,8 +2,11 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react'
+
+import type { ReactNode } from 'react'
 import {
   useNavigate,
   useParams,
@@ -42,6 +45,9 @@ import type {
   ApiResearchGroupMember,
   ApiWorkItem,
 } from '../../api/types'
+import { useSyncResearchGroupContext } from '../research-group/useSyncResearchGroupContext'
+
+type MeetingState = 'upcoming' | 'live' | 'completed'
 
 function getErrorMessage(
   error: unknown,
@@ -113,7 +119,186 @@ function getInitials(person: {
 
   return `${first}${last}`.toUpperCase()
 }
-import { useSyncResearchGroupContext } from '../research-group/useSyncResearchGroupContext'
+
+function meetingContentHeading(
+  status: MeetingState,
+) {
+  if (status === 'upcoming') {
+    return 'Agenda preparation'
+  }
+
+  if (status === 'completed') {
+    return 'Protocol'
+  }
+
+  return 'Discussion'
+}
+
+function meetingContentSubtitle(
+  status: MeetingState,
+) {
+  if (status === 'upcoming') {
+    return 'Agenda items, grouped by section.'
+  }
+
+  if (status === 'completed') {
+    return 'Meeting record, grouped by section.'
+  }
+
+  return 'Agenda items, grouped by section.'
+}
+
+function MenuItem({
+  label,
+  icon,
+  danger,
+  disabled,
+  onClick,
+}: {
+  label: string
+  icon?: string
+  danger?: boolean
+  disabled?: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      disabled={disabled}
+      onClick={onClick}
+      className={[
+        'flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-sm outline-none',
+        danger
+          ? 'text-error hover:bg-error-container/40 focus-visible:bg-error-container/40'
+          : 'text-on-surface hover:bg-surface-container-low focus-visible:bg-surface-container-low',
+        disabled ? 'pointer-events-none opacity-45' : '',
+      ].join(' ')}
+    >
+      {icon && (
+        <span
+          aria-hidden="true"
+          className="material-symbols-outlined text-[17px] text-on-surface-variant"
+        >
+          {icon}
+        </span>
+      )}
+
+      <span className="truncate">{label}</span>
+    </button>
+  )
+}
+
+function MenuTrigger({
+  label,
+  ariaLabel,
+  children,
+}: {
+  label: string
+  ariaLabel?: string
+  children: (
+    open: boolean,
+    toggle: () => void,
+  ) => ReactNode
+}) {
+  const [open, setOpen] = useState(false)
+  const [position, setPosition] = useState({
+    top: 0,
+    left: 0,
+  })
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) {
+      return
+    }
+
+    const onOutside = (event: MouseEvent) => {
+      if (
+        ref.current &&
+        !ref.current.contains(
+          event.target as Node,
+        )
+      ) {
+        setOpen(false)
+      }
+    }
+
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setOpen(false)
+      }
+    }
+
+    const onScroll = () => setOpen(false)
+
+    document.addEventListener('mousedown', onOutside, true)
+    document.addEventListener('keydown', onKey)
+    window.addEventListener('scroll', onScroll, true)
+
+    return () => {
+      document.removeEventListener('mousedown', onOutside, true)
+      document.removeEventListener('keydown', onKey)
+      window.removeEventListener('scroll', onScroll, true)
+    }
+  }, [open])
+
+  const toggle = () => {
+    if (!open && ref.current) {
+      const rect =
+        ref.current.getBoundingClientRect()
+
+      setPosition({
+        top: rect.bottom + 6,
+        left: Math.max(
+          8,
+          rect.right - 208,
+        ),
+      })
+    }
+
+    setOpen((current) => !current)
+  }
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        aria-label={ariaLabel ?? label}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={toggle}
+        className={[
+          'flex h-8 w-8 items-center justify-center rounded-lg text-on-surface-variant outline-none transition hover:bg-surface-container-high focus-visible:bg-surface-container-high focus-visible:ring-2 focus-visible:ring-primary/30',
+          open
+            ? 'bg-surface-container-high'
+            : 'group-hover/menu:bg-surface-container-high/70 focus-visible:bg-surface-container-high',
+        ].join(' ')}
+      >
+        <span
+          aria-hidden="true"
+          className="material-symbols-outlined text-[18px]"
+        >
+          more_horiz
+        </span>
+      </button>
+
+      {open && (
+        <div
+          role="menu"
+          style={{
+            position: 'fixed',
+            top: position.top,
+            left: position.left,
+          }}
+          className="z-50 w-52 rounded-xl border border-outline-variant bg-surface-container-lowest p-1 shadow-lg shadow-on-surface/10"
+        >
+          {children(open, toggle)}
+        </div>
+      )}
+    </div>
+  )
+}
 
 export function MeetingDetailPage() {
   const navigate = useNavigate()
@@ -133,7 +318,6 @@ export function MeetingDetailPage() {
   useSyncResearchGroupContext(
     meeting?.researchGroupId,
   )
-
 
   const [participants, setParticipants] =
     useState<ApiMeetingParticipant[]>([])
@@ -162,6 +346,11 @@ export function MeetingDetailPage() {
     setRemovingParticipantId,
   ] = useState<number | null>(null)
 
+  const [
+    managingParticipants,
+    setManagingParticipants,
+  ] = useState(false)
+
   const [sections, setSections] =
     useState<ApiMeetingSection[]>([])
 
@@ -183,6 +372,11 @@ export function MeetingDetailPage() {
     useState('')
 
   const [
+    structureEditing,
+    setStructureEditing,
+  ] = useState(false)
+
+  const [
     editingSectionId,
     setEditingSectionId,
   ] = useState<number | null>(null)
@@ -198,6 +392,17 @@ export function MeetingDetailPage() {
     setReorderingSections,
   ] = useState(false)
 
+  const [
+    editingItemId,
+    setEditingItemId,
+  ] = useState<number | null>(null)
+  const [editItemTitle, setEditItemTitle] =
+    useState('')
+  const [editItemNotes, setEditItemNotes] =
+    useState('')
+  const [savingItemId, setSavingItemId] =
+    useState<number | null>(null)
+
   const [updatingItemId, setUpdatingItemId] =
     useState<number | null>(null)
 
@@ -208,6 +413,9 @@ export function MeetingDetailPage() {
     workItemSource,
     setWorkItemSource,
   ] = useState<ApiMeetingItem | null>(null)
+
+  const quickAddInputRef =
+    useRef<HTMLInputElement>(null)
 
   const { user } = useSession()
   const { activeResearchGroup } = useResearchGroup()
@@ -343,6 +551,15 @@ export function MeetingDetailPage() {
     void loadMeeting()
   }, [loadMeeting])
 
+
+
+  useEffect(() => {
+    if (creatingSectionId !== null) {
+      quickAddInputRef.current?.focus()
+    }
+  }, [creatingSectionId])
+
+
   const participantUserIds = useMemo(
     () =>
       new Set(
@@ -406,6 +623,9 @@ export function MeetingDetailPage() {
       ),
     [sortedSections],
   )
+
+  const hiddenSectionCount =
+    sortedSections.length - visibleSections.length
 
   const itemsBySection = useMemo(() => {
     const map = new Map<number, ApiMeetingItem[]>()
@@ -535,10 +755,7 @@ export function MeetingDetailPage() {
   const handleCreateItemInSection = async (
     section: ApiMeetingSection,
   ) => {
-    if (
-      meetingId == null ||
-      creatingSectionId !== null
-    ) {
+    if (meetingId == null) {
       return
     }
 
@@ -547,7 +764,6 @@ export function MeetingDetailPage() {
       return
     }
 
-    setCreatingSectionId(section.id)
     setActionError(null)
 
     try {
@@ -578,8 +794,6 @@ export function MeetingDetailPage() {
           'Agenda item could not be created.',
         ),
       )
-    } finally {
-      setCreatingSectionId(null)
     }
   }
 
@@ -711,14 +925,11 @@ export function MeetingDetailPage() {
     setActionError(null)
 
     try {
-      await reorderMeetingSections(
-        meetingId!,
-        {
-          sectionIds: reordered.map(
-            (s) => s.id,
-          ),
-        },
-      )
+      await reorderMeetingSections(meetingId!, {
+        sectionIds: reordered.map(
+          (s) => s.id,
+        ),
+      })
       setSections(reordered)
     } catch (error) {
       setActionError(
@@ -729,6 +940,96 @@ export function MeetingDetailPage() {
       )
     } finally {
       setReorderingSections(false)
+    }
+  }
+
+  const startEditingItem = (item: ApiMeetingItem) => {
+    setEditingItemId(item.id)
+    setEditItemTitle(item.title)
+    setEditItemNotes(item.notes)
+  }
+
+  const handleSaveItem = async (
+    item: ApiMeetingItem,
+  ) => {
+    if (savingItemId != null) {
+      return
+    }
+
+    const title = editItemTitle.trim()
+
+    if (!title) {
+      setActionError(
+        'Agenda item title must not be empty.',
+      )
+
+      return
+    }
+
+    setSavingItemId(item.id)
+    setActionError(null)
+
+    try {
+      const updated = await updateMeetingItem(
+        item.id,
+        {
+          title,
+          notes: editItemNotes.trim(),
+        },
+      )
+
+      setItems((current) =>
+        current.map((candidate) =>
+          candidate.id === updated.id
+            ? updated
+            : candidate,
+        ),
+      )
+      setEditingItemId(null)
+    } catch (error) {
+      setActionError(
+        getErrorMessage(
+          error,
+          'Agenda item could not be updated.',
+        ),
+      )
+    } finally {
+      setSavingItemId(null)
+    }
+  }
+
+  const handleDeleteItem = async (
+    item: ApiMeetingItem,
+  ) => {
+    const confirmed = window.confirm(
+      `Delete agenda item "${item.title}"?`,
+    )
+
+    if (!confirmed) {
+      return
+    }
+
+    setActionError(null)
+
+    try {
+      await fetch(`/api/meetings/items/${item.id}`, {
+        method: 'DELETE',
+      })
+
+      setItems((current) =>
+        current.filter(
+          (candidate) => candidate.id !== item.id,
+        ),
+      )
+
+      setEditingItemId(null)
+    } catch (error) {
+      setActionError(
+        getErrorMessage(
+          error,
+          'Agenda item could not be deleted.',
+        ),
+      )
     }
   }
 
@@ -828,7 +1129,6 @@ export function MeetingDetailPage() {
     }
   }
 
-
   const handleReopenMeeting = async () => {
     if (
       meeting == null ||
@@ -884,8 +1184,6 @@ export function MeetingDetailPage() {
     )
   }
 
-  const isCompleted = meeting?.status === 'completed'
-
   if (loading) {
     return (
       <div className="w-full px-6 py-8 lg:px-8 lg:py-10 xl:px-10">
@@ -937,113 +1235,117 @@ export function MeetingDetailPage() {
     )
   }
 
-  return (
-    <div className="w-full px-6 py-8 lg:px-8 lg:py-10 xl:px-10">
-      <button
-        type="button"
-        onClick={() => navigate('/meetings')}
-        className="inline-flex items-center gap-2 text-sm font-medium text-on-surface-variant transition hover:text-primary"
-      >
-        <span className="material-symbols-outlined text-[18px]">
-          arrow_back
-        </span>
-        Meetings
-      </button>
+  const isUpcoming = meeting.status === 'upcoming'
+  const isCompleted = meeting.status === 'completed'
+  const isLive = meeting.status === 'live'
+  const canPrepare = isUpcoming && canManageLifecycle
+  const canEditParticipants =
+    canPrepare && !structureEditing
 
-      <header className="mt-5 flex items-start justify-between gap-6 border-b border-outline-variant pb-6">
-        <div className="min-w-0">
+  return (
+    <div className="mx-auto w-full max-w-5xl px-6 py-8 lg:px-8 lg:py-10 xl:px-10">
+      {/* Header */}
+      <nav>
+        <button
+          type="button"
+          onClick={() => navigate('/meetings')}
+          className="inline-flex items-center gap-1.5 text-sm font-medium text-on-surface-variant transition hover:text-primary"
+        >
+          <span aria-hidden="true" className="material-symbols-outlined text-[18px]">
+            arrow_back
+          </span>
+          Meetings
+        </button>
+      </nav>
+
+      <header className="mt-4 flex flex-wrap items-start justify-between gap-x-8 gap-y-4">
+        <div className="min-w-0 flex-1">
           <h1 className="truncate text-3xl font-semibold tracking-tight text-on-surface">
             {meeting.title}
           </h1>
 
-          <div className="mt-2 flex items-center gap-3 text-sm text-on-surface-variant">
+          <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm text-on-surface-variant">
             <span className="inline-flex items-center gap-1.5">
-              <span className="material-symbols-outlined text-[18px]">
+              <span aria-hidden="true" className="material-symbols-outlined text-[17px]">
                 event
               </span>
-
-              {formatMeetingDate(
-                meeting.scheduledAt,
-              )}
+              {formatMeetingDate(meeting.scheduledAt)}
             </span>
 
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-outline-variant bg-surface-container-low px-2.5 py-0.5 text-xs font-medium">
-              <span className="material-symbols-outlined text-[14px]">
+            <span className="inline-flex items-center gap-1.5">
+              <span aria-hidden="true" className="material-symbols-outlined text-[17px]">
                 {meeting.scope === 'project'
                   ? 'folder'
                   : 'groups'}
               </span>
-
               {meeting.scope === 'project'
                 ? 'Project Meeting'
                 : 'Research Group Meeting'}
             </span>
+
+            <span className="inline-flex items-center gap-1.5">
+              <span aria-hidden="true" className="material-symbols-outlined text-[17px]">
+                groups
+              </span>
+              {participants.length}{' '}
+              {participants.length === 1
+                ? 'participant'
+                : 'participants'}
+            </span>
           </div>
         </div>
 
-        <div className="flex shrink-0 items-center gap-3">
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-outline-variant bg-surface-container-lowest px-3 py-1.5 text-xs font-medium text-on-surface-variant">
-            <span
-              className={`material-symbols-outlined text-[16px] ${
-                meeting.status === 'live'
-                  ? 'text-primary'
-                  : 'text-on-surface-variant'
-              }`}
-            >
-              {meeting.status === 'live'
-                ? 'radio_button_checked'
-                : meeting.status === 'completed'
-                  ? 'check_circle'
-                  : 'schedule'}
+        <div className="flex shrink-0 items-center gap-2.5">
+          {isCompleted && (
+            <span className="inline-flex items-center gap-1.5 text-sm font-medium text-on-surface-variant">
+              <span aria-hidden="true" className="material-symbols-outlined text-[18px]">
+                check_circle
+              </span>
+              Completed
             </span>
-            {meeting.status.charAt(0).toUpperCase() +
-              meeting.status.slice(1)}
-          </span>
+          )}
 
-          {meeting.status === 'upcoming' &&
-            canManageLifecycle && (
-              <button
-                type="button"
-                disabled={updatingMeeting}
-                onClick={() => void handleStartMeeting()}
-                className="inline-flex h-10 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-medium text-on-primary outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 disabled:opacity-60"
-              >
-                <span className="material-symbols-outlined text-[18px]">
-                  play_arrow
-                </span>
-                Start meeting
-              </button>
-            )}
+          {isCompleted && canManageLifecycle && (
+            <button
+              type="button"
+              disabled={updatingMeeting}
+              onClick={() => void handleReopenMeeting()}
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-outline-variant bg-surface-container-lowest px-3.5 text-sm font-medium text-on-surface outline-none transition hover:border-primary/40 hover:bg-surface-container-low focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-60"
+            >
+              <span aria-hidden="true" className="material-symbols-outlined text-[18px]">
+                replay
+              </span>
+              Reopen meeting
+            </button>
+          )}
 
-          {meeting.status === 'live' &&
-            canManageLifecycle && (
-              <button
-                type="button"
-                disabled={updatingMeeting}
-                onClick={() => void handleEndMeeting()}
-                className="inline-flex h-10 items-center gap-2 rounded-lg bg-error-container px-4 text-sm font-medium text-on-error-container outline-none focus:ring-2 focus:ring-error-container focus:ring-offset-2 disabled:opacity-60"
-              >
-                <span className="material-symbols-outlined text-[18px]">
-                  stop
-                </span>
-                End meeting
-              </button>
-            )}
+          {isUpcoming && canManageLifecycle && (
+            <button
+              type="button"
+              disabled={updatingMeeting}
+              onClick={() => void handleStartMeeting()}
+              className="inline-flex h-10 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-medium text-on-primary outline-none transition hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 disabled:opacity-60"
+            >
+              <span aria-hidden="true" className="material-symbols-outlined text-[18px]">
+                play_arrow
+              </span>
+              Start meeting
+            </button>
+          )}
 
-          {meeting.status === 'completed' &&
-            canManageLifecycle && (
-              <button
-                type="button"
-                disabled={updatingMeeting}
-                onClick={() => void handleReopenMeeting()}
-                className="inline-flex h-10 items-center gap-2 rounded-lg border border-outline-variant bg-surface-container-lowest px-4 text-sm font-medium text-on-surface outline-none focus:border-primary disabled:opacity-60"
-              >
-                <span className="material-symbols-outlined text-[18px]">
-                  replay
-                </span>
-                Reopen meeting
-              </button>
-            )}
+          {isLive && canManageLifecycle && (
+            <button
+              type="button"
+              disabled={updatingMeeting}
+              onClick={() => void handleEndMeeting()}
+              className="inline-flex h-10 items-center gap-2 rounded-lg bg-error-container px-4 text-sm font-medium text-on-error-container outline-none focus:ring-2 focus:ring-error-container focus:ring-offset-2 disabled:opacity-60"
+            >
+              <span className="material-symbols-outlined text-[18px]">
+                stop
+              </span>
+              End meeting
+            </button>
+          )}
         </div>
       </header>
 
@@ -1056,564 +1358,739 @@ export function MeetingDetailPage() {
         </div>
       )}
 
-      <div className="mt-8 grid gap-8 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <section>
-          <div className="flex items-end justify-between gap-6">
-            <div>
-              <h2 className="text-lg font-semibold text-on-surface">
-                Discussion
-              </h2>
+      {/* Participants — compact context surface */}
+      <div className="mt-6 flex flex-wrap items-center gap-3 border-b border-outline-variant pb-5">
+        <div className="flex -space-x-1.5">
+          {sortedParticipants.slice(0, 6).map((participant) => (
+            <span
+              key={participant.id}
+              title={getPersonName(participant.user)}
+              className="flex h-7 w-7 items-center justify-center rounded-full border-2 border-background bg-surface-container-high text-[10px] font-semibold text-on-surface"
+            >
+              {getInitials(participant.user)}
+            </span>
+          ))}
 
-              <p className="mt-1 text-sm text-on-surface-variant">
-                Agenda items, grouped by section.
-              </p>
-            </div>
+          {participants.length > 6 && (
+            <span className="flex h-7 w-7 items-center justify-center rounded-full border-2 border-background bg-surface-container text-[10px] font-semibold text-on-surface-variant">
+              +{participants.length - 6}
+            </span>
+          )}
+        </div>
 
-            {!isCompleted && (
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  value={newSectionName}
-                  onChange={(e) =>
-                    setNewSectionName(e.target.value)
-                  }
-                  placeholder="New section name"
-                  aria-label="New section name"
-                  className="h-9 w-44 rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
-                />
+        <span className="text-sm text-on-surface-variant">
+          <span className="font-medium text-on-surface">
+            Participants
+          </span>{' '}
+          · {participants.length}
+        </span>
+
+        {canEditParticipants && (
+          <button
+            type="button"
+            onClick={() => {
+              setManagingParticipants((value) => {
+                const next = !value
+
+                if (next) {
+                  requestAnimationFrame(() => {
+                    document
+                      .querySelector<HTMLSelectElement>(
+                        'select[data-participant-select]',
+                      )
+                      ?.focus()
+                  })
+                }
+
+                return next
+              })
+            }}
+            aria-expanded={managingParticipants}
+            className="inline-flex h-8 items-center gap-1 rounded-lg px-2.5 text-sm font-medium text-primary outline-none transition hover:bg-primary/10 focus-visible:ring-2 focus-visible:ring-primary/40"
+          >
+            <span aria-hidden="true" className="material-symbols-outlined text-[17px]">
+              {managingParticipants
+                ? 'close'
+                : 'manage_accounts'}
+            </span>
+            {managingParticipants
+              ? 'Done'
+              : 'Manage'}
+          </button>
+        )}
+      </div>
+
+      {managingParticipants && canEditParticipants && (
+        <div className="mt-4 rounded-xl border border-outline-variant bg-surface-container-low/50 p-4">
+          <div className="flex gap-2">
+            <label className="min-w-0 flex-1">
+              <span className="sr-only">
+                Add participant
+              </span>
+
+              <select
+                data-participant-select
+                value={selectedMemberId}
+                disabled={
+                  addingParticipant ||
+                  availableMembers.length === 0
+                }
+                onChange={(event) =>
+                  setSelectedMemberId(event.target.value)
+                }
+                className="h-9 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-2 text-sm text-on-surface outline-none focus:border-primary"
+              >
+                <option value="">
+                  {availableMembers.length > 0
+                    ? 'Select member…'
+                    : 'Everyone added'}
+                </option>
+
+                {availableMembers.map((member) => (
+                  <option
+                    key={member.id}
+                    value={member.id}
+                  >
+                    {getPersonName(member)}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <button
+              type="button"
+              disabled={
+                addingParticipant ||
+                !selectedMemberId
+              }
+              onClick={() => void handleAddParticipant()}
+              className="inline-flex h-9 items-center justify-center rounded-lg bg-primary px-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-45"
+            >
+              Add
+            </button>
+          </div>
+
+          <div className="mt-4 divide-y divide-outline-variant">
+            {sortedParticipants.map((participant) => (
+              <div
+                key={participant.id}
+                className="flex items-center gap-3 py-2.5"
+              >
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-surface-container-high text-[10px] font-semibold text-on-surface">
+                  {getInitials(participant.user)}
+                </div>
+
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-medium text-on-surface">
+                    {getPersonName(participant.user)}
+                  </div>
+
+                  <div className="truncate text-xs text-on-surface-variant">
+                    @
+                    {participant.user.username}
+                  </div>
+                </div>
 
                 <button
                   type="button"
-                  disabled={addingSection}
-                  onClick={() => void handleAddSection()}
-                  className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-xs font-semibold text-on-surface transition hover:border-primary/40 hover:bg-surface-container-low disabled:opacity-45"
+                  aria-label={`Remove ${getPersonName(participant.user)}`}
+                  disabled={
+                    removingParticipantId === participant.id
+                  }
+                  onClick={() =>
+                    void handleRemoveParticipant(participant)
+                  }
+                  className="flex h-8 w-8 items-center justify-center rounded-lg text-on-surface-variant transition hover:bg-error-container hover:text-error disabled:opacity-45"
                 >
-                  <span className="material-symbols-outlined text-[16px]">
-                    add
+                  <span aria-hidden="true" className="material-symbols-outlined text-[18px]">
+                    close
                   </span>
-                  {addingSection
-                    ? 'Adding…'
-                    : 'Add section'}
                 </button>
               </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Content heading */}
+      <div className="mt-8 flex items-end justify-between gap-6">
+        <div>
+          <h2 className="text-lg font-semibold text-on-surface">
+            {meetingContentHeading(meeting.status)}
+          </h2>
+
+          <p className="mt-1 text-sm text-on-surface-variant">
+            {meetingContentSubtitle(meeting.status)}
+          </p>
+        </div>
+
+        {canPrepare && !isLive && (
+          <button
+            type="button"
+            onClick={() => setStructureEditing((value) => !value)}
+            aria-expanded={structureEditing}
+            className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-xs font-semibold text-on-surface outline-none transition hover:border-primary/40 hover:bg-surface-container-low focus-visible:ring-2 focus-visible:ring-primary/40"
+          >
+            <span aria-hidden="true" className="material-symbols-outlined text-[16px]">
+              {structureEditing ? 'close' : 'edit_note'}
+            </span>
+            {structureEditing
+              ? 'Done editing structure'
+              : 'Edit structure'}
+          </button>
+        )}
+      </div>
+
+      {/* Structure editing banner */}
+      {structureEditing && canPrepare && (
+        <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-primary/25 bg-primary/5 px-4 py-3">
+          <span aria-hidden="true" className="material-symbols-outlined text-[18px] text-primary">
+            edit_note
+          </span>
+
+          <div className="min-w-0 flex-1 text-sm text-on-surface">
+            Section structure editing.
+            {hiddenSectionCount > 0 && (
+              <span className="text-on-surface-variant">
+                {' '}
+                {hiddenSectionCount} hidden{' '}
+                {hiddenSectionCount === 1
+                  ? 'section'
+                  : 'sections'}{' '}
+                are listed here.
+              </span>
             )}
           </div>
 
-          {visibleSections.length === 0 ? (
-            <div className="mt-5 rounded-xl border border-dashed border-outline-variant bg-surface-container-lowest px-6 py-12 text-center">
-              <span className="material-symbols-outlined text-[28px] text-on-surface-variant">
-                checklist
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              void handleAddSection()
+            }}
+            className="flex items-center gap-2"
+          >
+            <input
+              type="text"
+              value={newSectionName}
+              onChange={(e) => setNewSectionName(e.target.value)}
+              placeholder="New section name"
+              aria-label="New section name"
+              className="h-8 w-44 rounded-lg border border-outline-variant bg-surface-container-lowest px-2.5 text-sm text-on-surface outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
+            />
+
+            <button
+              type="submit"
+              disabled={addingSection || !newSectionName.trim()}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-semibold text-white transition hover:bg-primary/90 disabled:opacity-45"
+            >
+              <span aria-hidden="true" className="material-symbols-outlined text-[15px]">
+                add
               </span>
+              {addingSection ? 'Adding…' : 'Add section'}
+            </button>
+          </form>
+        </div>
+      )}
 
-              <p className="mt-3 text-sm font-medium text-on-surface">
-                No visible sections
-              </p>
+      {/* Agenda / Protocol */}
+      <div className="mt-6">
+        {visibleSections.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-outline-variant px-6 py-12 text-center">
+            <span aria-hidden="true" className="material-symbols-outlined text-[26px] text-on-surface-variant">
+              checklist
+            </span>
 
-              <p className="mt-1 text-sm text-on-surface-variant">
-                Add a section to start building the agenda.
-              </p>
-            </div>
-          ) : (
-            <div className="mt-5 space-y-6">
-              {visibleSections.map(
-                (section, sectionIndex) => {
-                  const sectionItems =
-                    itemsBySection.get(
-                      section.id,
-                    ) ?? []
+            <p className="mt-3 text-sm font-medium text-on-surface">
+              {structureEditing && canPrepare
+                ? 'No sections yet'
+                : 'No agenda items yet.'}
+            </p>
 
-                  return (
-                    <div
-                      key={section.id}
-                      className="rounded-xl border border-outline-variant bg-surface-container-lowest"
-                    >
-                      {/* Section header */}
-                      <div className="flex items-center justify-between gap-4 border-b border-outline-variant px-5 py-3">
-                        <div className="flex items-center gap-2">
-                          <h3 className="text-sm font-semibold text-on-surface">
-                            {section.name}
-                          </h3>
+            {!structureEditing && canPrepare && (
+              <button
+                type="button"
+                onClick={() => setStructureEditing(true)}
+                className="mt-3 inline-flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3.5 text-sm font-medium text-on-primary transition hover:bg-primary/90"
+              >
+                <span aria-hidden="true" className="material-symbols-outlined text-[17px]">
+                  add
+                </span>
+                Add first section
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="space-y-10">
+            {(structureEditing && canPrepare
+              ? sortedSections
+              : visibleSections
+            ).map((section) => {
+              const sectionItems =
+                itemsBySection.get(section.id) ?? []
 
-                          {section.description && (
-                            <span className="text-xs text-on-surface-variant">
-                              {section.description}
-                            </span>
-                          )}
-                        </div>
+              return (
+                <section key={section.id} aria-label={section.name}>
+                  {/* Section header */}
+                  <div className="group/menu flex items-center gap-2">
+                    <h3 className="text-base font-semibold text-on-surface">
+                      {section.name}
+                    </h3>
 
-                        <div className="flex items-center gap-1">
-                          {/* Move up */}
-                          {!isCompleted && (
+                    {section.description && (
+                      <span className="truncate text-sm text-on-surface-variant">
+                        {section.description}
+                      </span>
+                    )}
+
+                    <span className="text-xs tabular-nums text-on-surface-variant/70">
+                      {sectionItems.length}{' '}
+                      {sectionItems.length === 1
+                        ? 'item'
+                        : 'items'}
+                    </span>
+
+                    {!section.isVisible && (
+                      <span className="rounded-full bg-surface-container px-2 py-0.5 text-[11px] font-medium text-on-surface-variant">
+                        hidden
+                      </span>
+                    )}
+
+                    {canPrepare && (
+                      <span className="ml-auto flex items-center gap-0.5">
+                        <MenuTrigger
+                          label={`Actions for section ${section.name}`}
+                        >
+                          {(_, close) => (
                             <>
-                              <button
-                                type="button"
-                                aria-label={`Move ${section.name} up`}
-                                disabled={
-                                  sectionIndex ===
-                                    0 ||
-                                  reorderingSections
-                                }
-                                onClick={() =>
-                                  void handleMoveSection(
-                                    section,
-                                    -1,
-                                  )
-                                }
-                                className="flex h-7 w-7 items-center justify-center rounded text-on-surface-variant transition hover:bg-surface-container-high disabled:opacity-30"
-                              >
-                                <span className="material-symbols-outlined text-[15px]">
-                                  arrow_upward
-                                </span>
-                              </button>
-
-                              <button
-                                type="button"
-                                aria-label={`Move ${section.name} down`}
-                                disabled={
-                                  sectionIndex ===
-                                    visibleSections.length -
-                                    1 ||
-                                  reorderingSections
-                                }
-                                onClick={() =>
-                                  void handleMoveSection(
-                                    section,
-                                    1,
-                                  )
-                                }
-                                className="flex h-7 w-7 items-center justify-center rounded text-on-surface-variant transition hover:bg-surface-container-high disabled:opacity-30"
-                              >
-                                <span className="material-symbols-outlined text-[15px]">
-                                  arrow_downward
-                                </span>
-                              </button>
-
-                              {/* Edit */}
-                              <button
-                                type="button"
-                                aria-label={`Edit ${section.name}`}
+                              <MenuItem
+                                label="Rename / describe"
+                                icon="edit"
                                 onClick={() => {
-                                  setEditingSectionId(
-                                    section.id,
-                                  )
-                                  setEditSectionName(
-                                    section.name,
-                                  )
-                                  setEditSectionDescription(
-                                    section.description,
-                                  )
+                                  setEditingSectionId(section.id)
+                                  setEditSectionName(section.name)
+                                  setEditSectionDescription(section.description)
+                                  close()
                                 }}
-                                className="flex h-7 w-7 items-center justify-center rounded text-on-surface-variant transition hover:bg-surface-container-high"
-                              >
-                                <span className="material-symbols-outlined text-[15px]">
-                                  edit
-                                </span>
-                              </button>
+                              />
 
-                              {/* Hide */}
-                              <button
-                                type="button"
-                                aria-label={`Hide ${section.name}`}
-                                onClick={() =>
-                                  void handleToggleSectionVisibility(
-                                    section,
-                                  )
+                              <MenuItem
+                                label="Move up"
+                                icon="arrow_upward"
+                                disabled={
+                                  sortedSections[0]?.id !==
+                                  section.id ||
+                                  reorderingSections
                                 }
-                                className="flex h-7 w-7 items-center justify-center rounded text-on-surface-variant transition hover:bg-surface-container-high"
-                              >
-                                <span className="material-symbols-outlined text-[15px]">
-                                  visibility_off
-                                </span>
-                              </button>
+                                onClick={() => {
+                                  void handleMoveSection(section, -1)
+                                  close()
+                                }}
+                              />
+
+                              <MenuItem
+                                label="Move down"
+                                icon="arrow_downward"
+                                disabled={
+                                  sortedSections.at(-1)?.id !==
+                                  section.id ||
+                                  reorderingSections
+                                }
+                                onClick={() => {
+                                  void handleMoveSection(section, 1)
+                                  close()
+                                }}
+                              />
+
+                              <MenuItem
+                                label={
+                                  section.isVisible
+                                    ? 'Hide section'
+                                    : 'Show section'
+                                }
+                                icon={
+                                  section.isVisible
+                                    ? 'visibility_off'
+                                    : 'visibility'
+                                }
+                                onClick={() => {
+                                  void handleToggleSectionVisibility(section)
+                                  close()
+                                }}
+                              />
+
                             </>
                           )}
-                        </div>
-                      </div>
+                        </MenuTrigger>
+                      </span>
+                    )}
+                  </div>
 
-                      {/* Edit form */}
-                      {editingSectionId ===
-                        section.id && (
-                        <div className="border-b border-outline-variant bg-surface-container-low/40 px-5 py-4">
-                          <div className="flex items-end gap-3">
-                            <label className="flex-1">
-                              <span className="mb-1 block text-xs font-medium text-on-surface-variant">
-                                Name
-                              </span>
+                  {/* Section edit form */}
+                  {canPrepare &&
+                    editingSectionId === section.id && (
+                      <div className="mt-3 rounded-xl border border-outline-variant bg-surface-container-low/50 p-4">
+                        <div className="flex flex-wrap items-end gap-3">
+                          <label className="min-w-40 flex-1">
+                            <span className="mb-1 block text-xs font-medium text-on-surface-variant">
+                              Name
+                            </span>
 
-                              <input
-                                type="text"
-                                value={editSectionName}
-                                onChange={(e) =>
-                                  setEditSectionName(
-                                    e.target.value,
-                                  )
-                                }
-                                className="h-9 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none focus:border-primary"
-                              />
-                            </label>
+                            <input
+                              type="text"
+                              aria-label="Name"
+                              value={editSectionName}
+                              onChange={(e) =>
+                                setEditSectionName(e.target.value)
+                              }
+                              className="h-9 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none focus:border-primary"
+                            />
+                          </label>
 
-                            <label className="flex-1">
-                              <span className="mb-1 block text-xs font-medium text-on-surface-variant">
-                                Description
-                              </span>
+                          <label className="min-w-40 flex-1">
+                            <span className="mb-1 block text-xs font-medium text-on-surface-variant">
+                              Description
+                            </span>
 
-                              <input
-                                type="text"
-                                value={editSectionDescription}
-                                onChange={(e) =>
-                                  setEditSectionDescription(
-                                    e.target.value,
-                                  )
-                                }
-                                className="h-9 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none focus:border-primary"
-                              />
-                            </label>
+                            <input
+                              type="text"
+                              aria-label="Description"
+                              value={editSectionDescription}
+                              onChange={(e) =>
+                                setEditSectionDescription(e.target.value)
+                              }
+                              className="h-9 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none focus:border-primary"
+                            />
+                          </label>
 
+                          <div className="flex items-center gap-2">
                             <button
                               type="button"
                               disabled={savingSection}
                               onClick={() =>
-                                void handleSaveSection(
-                                  section,
-                                )
+                                void handleSaveSection(section)
                               }
                               className="h-9 rounded-lg bg-primary px-4 text-sm font-semibold text-white transition hover:bg-primary/90 disabled:opacity-45"
                             >
-                              {savingSection
-                                ? 'Saving…'
-                                : 'Save'}
+                              {savingSection ? 'Saving…' : 'Save'}
                             </button>
 
                             <button
                               type="button"
-                              onClick={() =>
-                                setEditingSectionId(
-                                  null,
-                                )
-                              }
+                              onClick={() => setEditingSectionId(null)}
                               className="h-9 rounded-lg px-3 text-sm font-medium text-on-surface-variant transition hover:bg-surface-container-high"
                             >
                               Cancel
                             </button>
                           </div>
                         </div>
-                      )}
+                      </div>
+                    )}
 
-                      {/* Items */}
-                      <div className="p-4">
-                        {sectionItems.length ===
-                          0 &&
-                          !isCompleted && (
-                          <p className="mb-3 text-xs text-on-surface-variant">
-                            No items in this section yet.
-                          </p>
-                        )}
+                  {/* Items */}
+                  <div className="mt-3">
+                    {sectionItems.length === 0 && !canPrepare && (
+                      <p className="text-sm text-on-surface-variant/70">
+                        No agenda items yet.
+                      </p>
+                    )}
 
-                        {sectionItems.length ===
-                          0 &&
-                          isCompleted && (
-                          <p className="text-xs text-on-surface-variant">
-                            No items.
-                          </p>
-                        )}
+                    <ul className="space-y-1">
+                      {sectionItems.map((item, itemIndex) => (
+                        <li key={item.id}>
+                          {/* Item editing form */}
+                          {canPrepare &&
+                            editingItemId === item.id ? (
+                            <div className="rounded-xl border border-outline-variant bg-surface-container-low/50 p-4">
+                              <label className="block">
+                                <span className="mb-1 block text-xs font-medium text-on-surface-variant">
+                                  Title
+                                </span>
 
-                        <div className="space-y-3">
-                          {sectionItems.map(
-                            (item, itemIndex) => (
-                              <article
-                                key={item.id}
-                                className="rounded-lg border border-outline-variant bg-surface-container-lowest p-4"
-                              >
-                                <div className="flex items-start justify-between gap-4">
-                                  <div className="min-w-0">
-                                    <div className="flex items-center gap-2">
-                                      <span className="text-xs font-medium text-on-surface-variant">
-                                        #{itemIndex + 1}
-                                      </span>
+                                <input
+                                  type="text"
+                                  value={editItemTitle}
+                                  onChange={(e) =>
+                                    setEditItemTitle(e.target.value)
+                                  }
+                                  className="h-9 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none focus:border-primary"
+                                />
+                              </label>
 
-                                      <h4 className="text-sm font-medium text-on-surface">
-                                        {item.title}
-                                      </h4>
-                                    </div>
+                              <label className="mt-3 block">
+                                <span className="mb-1 block text-xs font-medium text-on-surface-variant">
+                                  Context / notes
+                                </span>
 
-                                    {item.notes && (
-                                      <p className="mt-1.5 whitespace-pre-wrap text-sm text-on-surface-variant">
-                                        {item.notes}
-                                      </p>
-                                    )}
+                                <textarea
+                                  value={editItemNotes}
+                                  onChange={(e) =>
+                                    setEditItemNotes(e.target.value)
+                                  }
+                                  rows={3}
+                                  className="w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 py-2 text-sm text-on-surface outline-none focus:border-primary"
+                                />
+                              </label>
 
-                                    {item.workItemIds.length >
-                                      0 && (
-                                      <div className="mt-2 inline-flex items-center gap-1.5 text-xs font-medium text-primary">
-                                        <span className="material-symbols-outlined text-[14px]">
-                                          task_alt
-                                        </span>
+                              <div className="mt-3 flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  disabled={savingItemId === item.id}
+                                  onClick={() =>
+                                    void handleSaveItem(item)
+                                  }
+                                  className="h-9 rounded-lg bg-primary px-4 text-sm font-semibold text-white transition hover:bg-primary/90 disabled:opacity-45"
+                                >
+                                  {savingItemId === item.id
+                                    ? 'Saving…'
+                                    : 'Save'}
+                                </button>
 
-                                        {item.workItemIds.length}{' '}
-                                        linked work{' '}
-                                        {item.workItemIds.length ===
-                                          1
-                                          ? 'item'
-                                          : 'items'}
-                                      </div>
-                                    )}
-                                  </div>
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingItemId(null)}
+                                  className="h-9 rounded-lg px-3 text-sm font-medium text-on-surface-variant transition hover:bg-surface-container-high"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="group/item -mx-3 rounded-lg px-3 py-2.5 transition hover:bg-surface-container-low/60">
+                              <div className="flex items-start gap-3">
+                                <span
+                                  aria-hidden="true"
+                                  className="mt-0.5 select-none text-xs tabular-nums text-on-surface-variant/50"
+                                >
+                                  {itemIndex + 1}
+                                </span>
 
-                                  <div className="flex shrink-0 items-center gap-2">
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        setWorkItemSource(item)
-                                      }
-                                      className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-outline-variant bg-surface-container-lowest px-2.5 text-xs font-semibold text-on-surface transition hover:border-primary/40 hover:bg-surface-container-low"
-                                    >
-                                      <span className="material-symbols-outlined text-[15px]">
-                                        add_task
-                                      </span>
-
-                                      Work item
-                                    </button>
-
-                                    <button
-                                      type="button"
-                                      disabled={
-                                        isCompleted ||
-                                        updatingItemId ===
-                                          item.id
-                                      }
-                                      onClick={() =>
-                                        void handleToggleItemStatus(
-                                          item,
-                                        )
-                                      }
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-baseline gap-2">
+                                    <h4
                                       className={[
-                                        'inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-semibold transition disabled:opacity-45',
-                                        item.status ===
-                                        'discussed'
-                                          ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
-                                          : 'border-outline-variant bg-surface-container-lowest text-on-surface hover:bg-surface-container-low',
+                                        'text-sm font-medium',
+                                        item.status === 'discussed' &&
+                                        isCompleted
+                                          ? 'text-on-surface-variant'
+                                          : 'text-on-surface',
                                       ].join(' ')}
                                     >
-                                      <span className="material-symbols-outlined text-[15px]">
-                                        {item.status ===
-                                        'discussed'
-                                          ? 'check_circle'
-                                          : 'radio_button_unchecked'}
+                                      {item.title}
+                                    </h4>
+
+                                    {item.status === 'discussed' && (
+                                      <span className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-on-surface-variant">
+                                        <span aria-hidden="true" className="material-symbols-outlined text-[13px]">
+                                          check_circle
+                                        </span>
+                                        Discussed
                                       </span>
-
-                                      {item.status ===
-                                      'discussed'
-                                        ? 'Discussed'
-                                        : 'Mark discussed'}
-                                    </button>
+                                    )}
                                   </div>
-                                </div>
-                              </article>
-                            ),
-                          )}
-                        </div>
 
-                        {/* Add item */}
-                        {!isCompleted && (
-                          <form
-                            onSubmit={(e) => {
-                              e.preventDefault()
-                              void handleCreateItemInSection(
-                                section,
+                                  {item.notes && (
+                                    <p className="mt-1 line-clamp-2 whitespace-pre-wrap text-sm text-on-surface-variant">
+                                      {item.notes}
+                                    </p>
+                                  )}
+
+                                  {item.workItemIds.length > 0 && (
+                                    <div className="mt-1.5 inline-flex items-center gap-1 text-xs font-medium text-primary">
+                                      <span aria-hidden="true" className="material-symbols-outlined text-[14px]">
+                                        task_alt
+                                      </span>
+                                      {item.workItemIds.length}{' '}
+                                      linked work{' '}
+                                      {item.workItemIds.length === 1
+                                        ? 'item'
+                                        : 'items'}
+                                    </div>
+                                  )}
+                                </div>
+
+                                {/* Live: keep the discussed toggle available */}
+                                {isLive && canManageLifecycle && (
+                                  <button
+                                    type="button"
+                                    disabled={
+                                      updatingItemId === item.id
+                                    }
+                                    onClick={() =>
+                                      void handleToggleItemStatus(item)
+                                    }
+                                    aria-label={
+                                      item.status === 'discussed'
+                                        ? `Mark ${item.title} as open`
+                                        : `Mark ${item.title} as discussed`
+                                    }
+                                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-on-surface-variant transition hover:bg-surface-container-high disabled:opacity-45"
+                                  >
+                                    <span aria-hidden="true" className="material-symbols-outlined text-[18px]">
+                                      {item.status === 'discussed'
+                                        ? 'check_circle'
+                                        : 'radio_button_unchecked'}
+                                    </span>
+                                  </button>
+                                )}
+
+                                {/* Upcoming: secondary actions on hover/focus */}
+                                {canPrepare && (
+                                  <span className="shrink-0 opacity-0 transition group-hover/item:opacity-100 focus-within:opacity-100">
+                                    <MenuTrigger
+                                      label={`Actions for agenda item ${item.title}`}
+                                    >
+                                      {(_, close) => (
+                                        <>
+                                          <MenuItem
+                                            label="Edit"
+                                            icon="edit"
+                                            onClick={() => {
+                                              startEditingItem(item)
+                                              close()
+                                            }}
+                                          />
+
+                                          <MenuItem
+                                            label="Create work item"
+                                            icon="add_task"
+                                            onClick={() => {
+                                              setWorkItemSource(item)
+                                              close()
+                                            }}
+                                          />
+
+                                          <span role="none" className="my-1 border-t border-outline-variant" />
+
+                                          <MenuItem
+                                            label="Delete"
+                                            icon="delete"
+                                            danger
+                                            onClick={() => {
+                                              void handleDeleteItem(item)
+                                              close()
+                                            }}
+                                          />
+                                        </>
+                                      )}
+                                    </MenuTrigger>
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+
+                    {/* Inline quick-add: the inline form opens for any
+                        section (empty or not); the trigger label and
+                        emphasis adapt to the empty case. */}
+                    {canPrepare &&
+                      (creatingSectionId === section.id ? (
+                        <form
+                          data-quick-add-form={section.id}
+                          onSubmit={(e) => {
+                            e.preventDefault()
+                            void handleCreateItemInSection(section)
+                          }}
+                          className="mt-2 flex items-center gap-2"
+                        >
+                          <input
+                            ref={quickAddInputRef}
+                            type="text"
+                            value={
+                              sectionItemTitle[section.id] ?? ''
+                            }
+                            onChange={(e) =>
+                              setSectionItemTitle(
+                                (current) => ({
+                                  ...current,
+                                  [section.id]:
+                                    e.target.value,
+                                }),
                               )
+                            }
+                            onKeyDown={(e) => {
+                              if (e.key === 'Escape') {
+                                e.preventDefault()
+                                setCreatingSectionId(null)
+                                setSectionItemTitle((current) => ({
+                                  ...current,
+                                  [section.id]: '',
+                                }))
+                              }
                             }}
-                            className="mt-3 flex items-center gap-2"
-                          >
-                            <input
-                              type="text"
-                              value={
+                            placeholder="Agenda item title"
+                            aria-label={`Add item to ${section.name}`}
+                            className="h-9 min-w-0 flex-1 rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
+                          />
+
+                          <button
+                            type="submit"
+                            disabled={
+                              !(
                                 sectionItemTitle[section.id] ??
                                 ''
-                              }
-                              onChange={(e) =>
-                                setSectionItemTitle(
-                                  (current) => ({
-                                    ...current,
-                                    [section.id]:
-                                      e.target.value,
-                                  }),
-                                )
-                              }
-                              placeholder="+ Add item"
-                              aria-label={`Add item to ${section.name}`}
-                              disabled={
-                                creatingSectionId ===
-                                section.id
-                              }
-                              className="h-9 flex-1 rounded-lg border border-dashed border-outline-variant bg-transparent px-3 text-sm text-on-surface outline-none transition placeholder:text-on-surface-variant/50 focus:border-solid focus:border-primary"
-                            />
+                              ).trim()
+                            }
+                            className="inline-flex h-9 items-center gap-1 rounded-lg bg-primary px-3 text-sm font-semibold text-white transition hover:bg-primary/90 disabled:opacity-45"
+                          >
+                            Add
+                          </button>
 
-                            <button
-                              type="submit"
-                              aria-label={`Add ${section.name} item`}
-                              disabled={
-                                creatingSectionId ===
-                                section.id
-                              }
-                              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary text-white transition hover:bg-primary/90 disabled:opacity-45"
-                            >
-                              <span className="material-symbols-outlined text-[18px]">
-                                add
-                              </span>
-                            </button>
-                          </form>
-                        )}
-                      </div>
-                    </div>
-                  )
-                },
-              )}
-            </div>
-          )}
-        </section>
-
-        <aside>
-          <div className="rounded-xl border border-outline-variant bg-surface-container-lowest">
-            <div className="border-b border-outline-variant px-5 py-4">
-              <h2 className="text-base font-semibold text-on-surface">
-                Participants
-              </h2>
-
-              <p className="mt-1 text-xs text-on-surface-variant">
-                {participants.length}{' '}
-                {participants.length === 1
-                  ? 'person'
-                  : 'people'}
-              </p>
-            </div>
-
-            <div className="p-5">
-              <div className="flex gap-2">
-                <label className="min-w-0 flex-1">
-                  <span className="sr-only">
-                    Add participant
-                  </span>
-
-                  <select
-                    value={selectedMemberId}
-                    disabled={
-                      isCompleted ||
-                      addingParticipant ||
-                      availableMembers.length ===
-                        0
-                    }
-                    onChange={(event) =>
-                      setSelectedMemberId(
-                        event.target.value,
-                      )
-                    }
-                    className="h-9 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-2 text-sm text-on-surface outline-none focus:border-primary"
-                  >
-                    <option value="">
-                      {availableMembers.length >
-                      0
-                        ? 'Select member…'
-                        : 'Everyone added'}
-                    </option>
-
-                    {availableMembers.map(
-                      (member) => (
-                        <option
-                          key={member.id}
-                          value={member.id}
-                        >
-                          {getPersonName(member)}
-                        </option>
-                      ),
-                    )}
-                  </select>
-                </label>
-
-                <button
-                  type="button"
-                  disabled={
-                    isCompleted ||
-                    addingParticipant ||
-                    !selectedMemberId
-                  }
-                  onClick={() =>
-                    void handleAddParticipant()
-                  }
-                  className="inline-flex h-9 items-center justify-center rounded-lg bg-primary px-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-45"
-                >
-                  Add
-                </button>
-              </div>
-
-              <div className="mt-5 divide-y divide-outline-variant">
-                {sortedParticipants.map(
-                  (participant) => (
-                    <div
-                      key={participant.id}
-                      className="flex items-center gap-3 py-3"
-                    >
-                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-surface-container-high text-[11px] font-semibold text-on-surface">
-                        {getInitials(
-                          participant.user,
-                        )}
-                      </div>
-
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate text-sm font-medium text-on-surface">
-                          {getPersonName(
-                            participant.user,
-                          )}
-                        </div>
-
-                        <div className="truncate text-xs text-on-surface-variant">
-                          @
-                          {
-                            participant.user
-                              .username
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setCreatingSectionId(null)
+                              setSectionItemTitle((current) => ({
+                                ...current,
+                                [section.id]: '',
+                              }))
+                            }}
+                            className="inline-flex h-9 items-center rounded-lg px-3 text-sm font-medium text-on-surface-variant transition hover:bg-surface-container-high"
+                          >
+                            Cancel
+                          </button>
+                        </form>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCreatingSectionId(section.id)
+                            setSectionItemTitle((current) => ({
+                              ...current,
+                              [section.id]: '',
+                            }))
+                          }}
+                          className={
+                            sectionItems.length === 0
+                              ? 'mt-2 inline-flex h-9 items-center gap-1.5 rounded-lg px-2 text-sm font-medium text-primary outline-none transition hover:bg-primary/10 focus-visible:ring-2 focus-visible:ring-primary/40'
+                              : 'mt-2 inline-flex h-8 items-center gap-1.5 rounded-lg px-2 text-sm font-medium text-on-surface-variant outline-none transition hover:bg-surface-container-low hover:text-primary focus-visible:ring-2 focus-visible:ring-primary/40'
                           }
-                        </div>
-                      </div>
+                        >
+                          <span aria-hidden="true" className="material-symbols-outlined text-[17px]">
+                            add
+                          </span>
+                          {sectionItems.length === 0
+                            ? 'Add first item'
+                            : 'Add item'}
+                        </button>
+                      ))}
 
-                      <button
-                        type="button"
-                        aria-label={`Remove ${getPersonName(participant.user)}`}
-                        disabled={
-                          isCompleted ||
-                          removingParticipantId ===
-                          participant.id
-                        }
-                        onClick={() =>
-                          void handleRemoveParticipant(
-                            participant,
-                          )
-                        }
-                        className="flex h-8 w-8 items-center justify-center rounded-lg text-on-surface-variant transition hover:bg-error-container hover:text-error disabled:opacity-45"
-                      >
-                        <span className="material-symbols-outlined text-[18px]">
-                          close
-                        </span>
-                      </button>
-                    </div>
-                  ),
-                )}
-              </div>
-            </div>
+                  </div>
+                </section>
+              )
+            })}
           </div>
-        </aside>
+        )}
       </div>
 
       <CreateMeetingWorkItemDialog
         open={workItemSource != null}
-        researchGroupId={
-          meeting.researchGroupId
-        }
+        researchGroupId={meeting.researchGroupId}
         meetingItem={workItemSource}
-        onClose={() =>
-          setWorkItemSource(null)
-        }
-        onCreated={
-          handleWorkItemCreated
-        }
+        onClose={() => setWorkItemSource(null)}
+        onCreated={handleWorkItemCreated}
       />
     </div>
   )
