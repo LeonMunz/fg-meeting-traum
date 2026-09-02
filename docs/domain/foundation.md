@@ -404,47 +404,33 @@ filter, sort order, collapsed sections):
 UI preferences must not be modeled as shared Project workflow
 configuration.
 
-### 3a.7. Future API Direction
+### 3a.7. API contract (implemented)
 
-WorkItem writes will reference stable definition IDs rather than
+WorkItem reads and writes reference stable definition IDs, not
 display-name strings:
 
 ```text
 typeDefinitionId
 statusDefinitionId
-labelIds[]
+labelDefinitionIds[]
 ```
 
-rather than globally fixed identifiers such as:
+rather than globally fixed identifiers such as `"Task"`, `"Writing"`, or
+`"Urgent"`. Legacy fixed-string `type` / `status` values are not part of the
+canonical contract; do not write logic that branches on them.
 
-```text
-"Task"
-"Writing"
-"Urgent"
-```
+### 3a.8. Migration (completed)
 
-The final API contract will be defined by the backend implementation
-slice.
+The earlier Core implementation stored WorkItem `type` and `status` as
+fixed strings. That migration is now complete: every Project has local
+TypeDefinitions and StatusDefinitions, and every WorkItem references the
+corresponding definition for its Project via `type_definition` and
+`status_definition` foreign keys.
 
-### 3a.8. Migration Requirement
+Legacy fixed-string `type` / `status` values are **not** part of the
+canonical contract. New logic must not branch on legacy strings; it must use
+the definition IDs.
 
-The current Core implementation stores WorkItem type and status as
-fixed strings. A future implementation must safely migrate existing
-Projects and WorkItems:
-
-For each existing Project:
-
-1. Create local TypeDefinitions: Epic, Milestone, Deliverable, Task.
-2. Create local StatusDefinitions: Todo (todo, default), In
-   Progress (in_progress), Review (review), Done (done).
-3. Map every existing WorkItem to the corresponding Definition
-   for that Project.
-
-Existing WorkItem identity and data must remain intact. No duplicate
-WorkItems, no loss of assignment or hierarchy.
-
-This migration is a backend implementation concern, not a
-documentation implementation.
 
 ## 4. Project Membership
 
@@ -766,13 +752,58 @@ Possible UI filters:
 
 No `MyWorkTask` entity is created.
 
-## 15. Project Board
+## 15. Project Board (implemented)
 
-The Project Board is another projection over the same Work Items.
+The Project Board is a projection over the same canonical Project Work Items
+shown by the Project List and My Work. Board and List are views over one data
+source; switching views must not create separate state.
 
-Columns correspond to `WorkItem.status`.
+### Columns
 
-Moving an item changes the canonical Work Item and is reflected everywhere else.
+A Board column corresponds to a **Status Definition**
+(`WorkItemStatusDefinition`), identified by `statusDefinitionId`. An item is
+placed in the column of its current `statusDefinitionId`.
+
+### Manual ordering (persisted)
+
+Manual ordering is persisted on the Work Item via `board_position`
+(`Integer`, nullable). Ordering is meaningful within one Project/status
+column. A column renders by `(board_position ASC NULLS LAST, created_at, id)`:
+explicitly positioned items first, then unpositioned items in canonical
+creation order. `board_position = NULL` means "unsorted".
+
+- Items can be reordered within a column.
+- An item can be inserted at an exact position, including across columns
+  (a cross-column drag).
+
+### Cross-column drag (one atomic operation)
+
+`reposition_work_item` performs a single atomic Board operation that changes
+the Work Item's `status_definition` (when the target column differs) and its
+`board_position` together, so a cross-column drop can never be split into a
+racy status update followed by a separate position update. On each reorder the
+target column is normalized to explicit positions 1…N in render order.
+The server remains authoritative for status and ordering.
+
+`before_work_item_id` (API: `beforeWorkItemId`) anchors the insertion: the
+moved item is placed immediately before that Work Item; `null` means the end
+of the target column.
+
+### Board ↔ Editor invariant
+
+The Board column, the Work Item Editor status, the Work Item's
+`statusDefinitionId`, and the persisted backend state must always agree.
+Changing the status in the Editor moves the item to the target column;
+changing the column on the Board updates the canonical status.
+
+### Editor status change placement (implemented)
+
+Changing status through the Work Item Editor sends a `statusDefinitionId`
+patch (the editor resolves the chosen status category to the Project's
+matching Status Definition) and does not send an insertion anchor. The server
+then appends the item to the **end** of the target column. Board drag/drop
+uses `reposition_work_item` instead, which honors an explicit insertion
+anchor.
 
 No `KanbanTask` entity exists.
 

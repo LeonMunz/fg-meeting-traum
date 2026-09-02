@@ -1,7 +1,9 @@
 # FG Workspace — Meetings
 
-**Status:** Canonical Meeting MVP domain/product/UX specification  
-**Scope:** MeetingSeries, Meeting, Sections, Topics, MeetingItems, notes, decisions, follow-up, Work Item integration, preparation, live meeting, protocol, continuity, permissions, privacy and MVP boundaries
+**Status:** Canonical Meeting domain specification
+**Scope:** Meeting templates, Meeting, Sections, MeetingItems, lifecycle, Work Item integration, permissions, privacy and implementation boundaries
+
+> **User-facing terminology:** the product exposes `Research Group Meeting`, `Project Meeting`, and `Meeting Templates`. Internally, a `Meeting Template` is persisted as a `MeetingSeries`. No recurrence semantics are implemented, and no `MeetingSeries` may be presented to users as "Series" or implied to auto-create recurring Meetings. When this document (or other canonical docs) uses the word “Series”, it refers to the internal `MeetingSeries` persistence model, not a user-facing concept; user-facing copy must say “Meeting Template”.
 
 ---
 
@@ -161,7 +163,7 @@ type MeetingScope =
   | "project"
 ```
 
-### Group Meeting
+### Research Group Meeting
 
 ```text
 scope = group
@@ -193,74 +195,74 @@ The Project context is private and may directly reference its Work Items, Topics
 
 ## 4. Core domain concepts
 
-The Meeting domain has distinct concepts with distinct responsibilities:
+The Meeting domain has distinct concepts with distinct responsibilities.
+
+**Implemented occurrence structure:**
 
 ```text
-MeetingSeries
-    ↓
 Meeting
-    ↓
-MeetingSection
-    ↓
-MeetingItem
-    ↕
-Topic
-    ↓
-NoteEntries / Decision
-    ↓
-Work Item origin / later discussion
+    └─ MeetingSection[]
+        └─ MeetingItem[]
+            └─ MeetingItemWorkItem[]   (historical origin link to a canonical Work Item)
 ```
 
-These concepts must not be collapsed into one generic “meeting document”.
+These concepts must not be collapsed into one generic “meeting document”. The
+`Topic`, `NoteEntry`, `MeetingItemAcknowledgement`, and separate Work Item
+discussion-link concepts from the original product concept remain
+documented below as intended direction; they are not part of the current
+occurrence model.
 
 ---
 
-## 5. MeetingSeries
+## 5. Meeting Template (internal: `MeetingSeries`)
 
-A `MeetingSeries` represents a recurring meeting format such as `FG Weekly`.
+A **Meeting Template** defines a reusable meeting format such as `FG Weekly`.
 
-It is not a historical Meeting occurrence.
+It is not a historical Meeting occurrence. A Meeting Template is persisted
+internally by the Django model `MeetingSeries`; that name is an internal
+implementation detail and is not the user-facing term.
 
-Conceptual model:
+**There are no recurrence semantics.** A Meeting Template does not schedule,
+repeat, or automatically create Meetings. Creating an occurrence is always an
+explicit action by a user.
+
+Conceptual model (internal persistence):
 
 ```text
 MeetingSeries
 
 id
 research_group_id
-scope
+scope              group | project
 project_id NULLABLE
 title
-description NULLABLE
-guidance_markdown NULLABLE
+description
 is_archived
+created_by_id
 created_at
 updated_at
-created_by_id
 ```
 
 ### Responsibilities
 
-A MeetingSeries defines:
+A Meeting Template defines:
 
 - identity and purpose,
 - group or Project scope,
-- the default Meeting structure,
-- default participant selection,
-- moderator rotation,
-- historical Meeting collection.
+- the default Meeting structure (its editable Sections),
+- the collection of Meeting occurrences created from it.
 
-### Editable
+Not yet implemented on the Template: default participants, moderator rotation,
+and Series-level guidance. Those remain intended direction from the product
+concept, not current behavior.
 
-The Series must be editable.
+### Editable (implemented)
 
-Users with the appropriate Series permissions can change:
+Users with appropriate write access for the Template's scope can change:
 
 - title,
-- description/purpose,
-- guidance / meeting principles,
-- default participants,
-- moderator rotation,
+- description,
+- archive state,
 - Section names,
 - Section descriptions,
 - Section order,
@@ -270,9 +272,9 @@ This editability is mandatory for real use.
 
 ---
 
-## 6. Editable Meeting structure (“Template”)
+## 6. Editable Meeting structure (Sections)
 
-A MeetingSeries has a simple editable structure that acts as the template for future Meetings.
+A Meeting Template has a simple editable structure (its Sections) that is snapshotted into future Meeting occurrences.
 
 This is intentionally **not** a generic schema builder.
 
@@ -368,7 +370,9 @@ The `intent` field on the MeetingItem carries the meeting-purpose semantics.
 
 ---
 
-## 8. Series guidance / meeting principles
+## 8. Template guidance / meeting principles
+
+> **Not yet implemented.** A Meeting Template currently has no `guidance_markdown` field. The following is intended direction.
 
 Stable content such as the current FG Weekly “Spielregeln” should not be modeled as ordinary agenda items.
 
@@ -395,11 +399,11 @@ This preserves the ritual without consuming prime agenda space every week.
 
 ---
 
-## 9. MeetingSeriesSection and MeetingSection snapshots
+## 9. Template Sections and MeetingSection snapshots
 
-Historical Meetings must retain the structure they actually used.
+A Meeting occurrence must retain the structure it actually used.
 
-A simple snapshot model is sufficient.
+Template sections are persisted as `MeetingSeriesSection`:
 
 ```text
 MeetingSeriesSection
@@ -407,12 +411,13 @@ MeetingSeriesSection
 id
 meeting_series_id
 name
-description NULLABLE
+description
 position
 is_active
 ```
 
-When a concrete Meeting is created, active Series Sections are copied into:
+When a concrete Meeting is created from a Template, only **active**
+Template Sections are copied into occurrence-level `MeetingSection` records:
 
 ```text
 MeetingSection
@@ -421,7 +426,7 @@ id
 meeting_id
 source_series_section_id NULLABLE
 name
-description NULLABLE
+description
 position
 is_visible
 ```
@@ -432,10 +437,20 @@ It simply ensures:
 
 ```text
 August: "Tech-News"
-September Series renamed to: "Research & Tech"
+September template renamed to: "Research & Tech"
 ```
 
 does not silently rewrite the historical August Meeting.
+
+**Snapshot invariants (implemented):**
+
+- Template sections are copied/snapshotted into the Meeting occurrence at
+  creation time.
+- After creation, the occurrence structure is independent of the Template.
+- Editing, reordering, hiding, renaming, or adding Sections on an occurrence
+  never mutates the Template.
+- A Meeting created without a Template still has a usable structure (see
+  Section 10).
 
 ### Meeting-specific structure
 
@@ -446,38 +461,66 @@ A concrete Meeting may additionally:
 - rename a Section for this occurrence,
 - add a one-off Section.
 
-Those changes do not mutate the Series template.
+Those changes do not mutate the Template.
+
+### Legacy migration invariant (MeetingItem → MeetingSection)
+
+The `MeetingItem.meeting_section` relation is NOT NULL. When it was introduced,
+pre-existing (legacy) flat `MeetingItem` rows had to be attached to a valid
+`MeetingSection` without guessing at meaning:
+
+- Legacy flat items are **preserved**, never dropped or rewritten.
+- They are **not** assigned to unrelated snapshotted Template sections by guesswork.
+- A Meeting that had no sections at all receives exactly one occurrence-level
+  default Section named `Unsectioned`; its legacy flat items are attached there.
+- Items that already referenced a Section were never touched.
+
+This is a one-time migration concern; the rule that matters going forward is
+the invariant that every `MeetingItem` must belong to exactly one
+`MeetingSection`.
 
 ---
 
-## 10. Creating a new MeetingSeries
+## 10. Creating a Template and a Meeting
 
-The create flow should be small.
+### Creating a Meeting Template (implemented)
+
+The create flow is small:
 
 ```text
-New meeting series
+New meeting template
 
 Name
 [ FG Weekly ]
 
 Scope
 ● Research group
-○ Project
-
-Start with
-● Blank
-○ Copy structure from another series
-
-Create
+○ Project   (requires choosing a Project)
 ```
 
-After creation, the user can edit the simple Section list.
+After creation, the user edits the simple Section list.
 
-“Copy structure” is useful and cheap. It avoids needing a template marketplace.
+### Creating a Meeting (implemented)
+
+A Meeting is created in one of two ways:
+
+- **Standalone** (`create_meeting`): no Template. The Meeting receives a real,
+  occurrence-level default Section named `Agenda` (position 0).
+- **From a Template** (`create_meeting_from_series`): the Template's active
+  Sections are snapshotted into the new occurrence.
+
+Creation requires a Research Group. The Project is optional; the Meeting
+Template is optional.
+
+- No Project ⇒ **Research Group Meeting** (`scope = group`, `project_id IS NULL`).
+- Selected Project ⇒ **Project Meeting** (`scope = project`, `project_id` set).
+
+Only Templates whose scope matches the chosen Meeting scope (group, or the
+specific Project) are offered for selection.
 
 ---
 
-## 11. Meeting model
+## 11. Meeting model (implemented)
 
 A concrete Meeting is one occurrence.
 
@@ -488,17 +531,15 @@ id
 research_group_id
 scope
 project_id NULLABLE
-series_id NULLABLE
+series_id NULLABLE          # internal MeetingSeries (Meeting Template)
 title
 status
-scheduled_start_at
-scheduled_end_at
+scheduled_at
 started_at NULLABLE
 ended_at NULLABLE
-moderator_id NULLABLE
+created_by_id
 created_at
 updated_at
-created_by_id
 ```
 
 Status:
@@ -510,18 +551,30 @@ type MeetingStatus =
   | "completed"
 ```
 
-Constraint:
+Constraint (enforced by a database check constraint on both `Meeting` and
+`MeetingSeries`):
 
 ```text
 group meeting   → project_id IS NULL
 project meeting → project_id IS NOT NULL
 ```
 
+`moderator_id` is not part of the implemented model (see Section 14).
+
+### `started_at` / `ended_at` semantics (implemented)
+
+- `scheduled_at` is the planned time. It is independent of actual start/end.
+- `started_at` is set when the Meeting transitions `upcoming → live`.
+- `ended_at` is set when the Meeting transitions `live → completed`.
+- Reopening a completed Meeting (`completed → live`) preserves the original
+  `started_at` and clears `ended_at`. Ending the reopened Meeting records a
+  new `ended_at`.
+
 ---
 
 ## 12. Meeting-level editing
 
-A concrete Meeting is editable independently from its Series.
+A concrete Meeting is editable independently from its Meeting Template.
 
 Editable occurrence data:
 
@@ -534,7 +587,7 @@ Editable occurrence data:
 - agenda items,
 - agenda-item order.
 
-A change to one Meeting does not automatically alter the Series.
+A change to one Meeting does not automatically alter its Meeting Template.
 
 This distinction must be clear in UX:
 
@@ -546,7 +599,7 @@ Edit series structure
 
 ---
 
-## 13. Meeting participants
+## 13. Meeting participants (implemented)
 
 Participants are relational.
 
@@ -555,6 +608,7 @@ MeetingParticipant
 
 meeting_id
 user_id
+added_at
 ```
 
 Constraint:
@@ -563,27 +617,31 @@ Constraint:
 UNIQUE(meeting_id, user_id)
 ```
 
-Group Meeting:
+Research Group Meeting:
 
 ```text
-participant ∈ Research Group
+participant is a member of the Meeting's Research Group
 ```
 
 Project Meeting:
 
 ```text
-participant has Project access
+participant has read access to the Meeting's Project
 ```
 
-A Series may define default participants. A Meeting copies those defaults and may be changed for the occurrence.
+The creator of a Meeting is automatically added as a participant. Adding a
+participant is authorized against the Meeting's scope.
 
-Do not build attendance analytics, rankings or performance metrics in MVP.
+Default participants are not implemented (see Section 14 for the scope of the
+implemented model).
+
+Do not build attendance analytics, rankings or performance metrics.
 
 ---
 
 ## 14. Moderator and moderator rotation
 
-A Meeting may have one moderator.
+> **Not yet implemented.** The implemented Meeting model has no `moderator` field and no moderator rotation. The following is intended direction.
 
 The moderator controls the live-meeting flow:
 
@@ -632,6 +690,8 @@ may be shown as a system projection.
 ---
 
 ## 15. Topic
+
+> **Not yet implemented.** There is no `Topic` model in the current backend. Topics are intended direction (see below), not current behavior.
 
 A Topic is a durable discussion subject that may appear in multiple Meetings.
 
@@ -711,85 +771,56 @@ The Topic must not be automatically marked resolved merely because it was deferr
 
 ---
 
-## 17. MeetingItem
+## 17. MeetingItem (implemented)
 
-A `MeetingItem` records what happened with one agenda point in one concrete Meeting.
+A `MeetingItem` records one agenda point inside one `MeetingSection` of one
+concrete Meeting.
 
-It is a historical snapshot.
-
-Conceptual model:
+**Every `MeetingItem` belongs to exactly one `MeetingSection`.** The
+`meeting_section` relation is `NOT NULL`.
 
 ```text
 MeetingItem
 
 id
 meeting_id
-meeting_section_id
-topic_id NULLABLE
+meeting_section_id NOT NULL
 title
-context_markdown NULLABLE
-intent NULLABLE
-origin
-status
-decision_markdown NULLABLE
+notes
 position
+status
+created_by_id
 created_at
 updated_at
-created_by_id
 ```
 
-### Intent
+`position` is unique within a Section. Items are ordered by
+`position`, then `id`.
 
-Optional:
-
-```ts
-type MeetingItemIntent =
-  | "inform"
-  | "discuss"
-  | "decide"
-```
-
-Intent answers:
-
-> What outcome is expected from the synchronous meeting time?
-
-Examples:
-
-```text
-Cluster maintenance             INFORM
-GPU procurement                 DECIDE
-Paper results                   DISCUSS
-```
-
-Intent is optional. Creating an agenda item must never require more than a title.
-
-### Origin
-
-```ts
-type MeetingItemOrigin =
-  | "planned"
-  | "spontaneous"
-```
-
-`spontaneous` is not a Section.
-
-A spontaneous item can still belong to any normal Section.
-
-### Status
+### Status (implemented)
 
 ```ts
 type MeetingItemStatus =
-  | "not_discussed"
-  | "discussing"
-  | "done"
-  | "follow_up"
+  | "open"
+  | "discussed"
 ```
 
-This status answers:
+The current model uses a simple open/discussed status, not the richer
+`not_discussed / discussing / done / follow_up` lifecycle from the product
+concept.
 
-> What happened to this item in this concrete Meeting?
+### Intended but not yet implemented
 
-It is independent from Topic status and Work Item status.
+The following `MeetingItem` capabilities remain intended direction and are not
+in the current model:
+
+- optional `intent` (`inform / discuss / decide`),
+- `origin` (`planned / spontaneous`),
+- `decision_markdown`,
+- a linked `Topic`,
+- `follow_up` / carry-forward state.
+
+Creating an item requires only a title (plus its Section).
 
 ---
 
@@ -1292,7 +1323,9 @@ A decision remains historical even if the Topic later changes.
 
 ---
 
-## 33. Meeting → Work Item
+## 33. Meeting → Work Item (implemented)
+
+A Work Item created from a Meeting is **canonical Project work** — the same object shown in the Project Board, Project List, and My Work. A Meeting is not an alternative Work Item store.
 
 Central flow:
 
@@ -1316,7 +1349,7 @@ Create
 
 The Meeting version of Work Item creation should be faster than the full Project Create flow.
 
-Example in a Group Meeting:
+Example in a Research Group Meeting:
 
 ```text
 New task
@@ -1335,15 +1368,15 @@ Create
 
 Description, Parent, advanced status/type configuration and other properties belong behind “More” or can be added later.
 
-### Project Meeting
+### Target Project is required
 
-Project is already known:
+The target Project is required when creating a Work Item from a Meeting. The Work Item's type, status, and label definitions come from **that** Project's configuration (referenced by definition ID).
 
-```text
-Project = current Meeting.project_id
-```
+Rules (enforced server-side):
 
-Do not ask again.
+- The target Project must belong to the same Research Group as the Meeting.
+- A Project Meeting may only create work inside its own Project (`project_id`); the Project is not re-requested.
+- A Research Group Meeting requires the caller to select a target Project.
 
 ### Task default
 
@@ -1353,15 +1386,21 @@ Do not invent a type mapping if the Project configuration cannot provide one.
 
 ---
 
-## 34. Work Item origin
+## 34. Work Item origin (implemented)
 
-If a Work Item is created from a MeetingItem:
+Creating a Work Item from a MeetingItem records the origin in a
+`MeetingItemWorkItem` link table:
 
 ```text
-source_meeting_item_id
+MeetingItemWorkItem
+
+meeting_item_id
+work_item_id
+created_by_id
+created_at
 ```
 
-records the single origin event.
+Constraint: `UNIQUE(meeting_item_id, work_item_id)`.
 
 Meaning:
 
@@ -1372,6 +1411,8 @@ This relation is historical provenance.
 ---
 
 ## 35. Later Work Item discussions
+
+> **Not yet implemented.** A separate `WorkItemDiscussion` relation (distinct from the origin link) is intended direction, not current behavior. Currently, a `MeetingItemWorkItem` link records the origin.
 
 An existing Work Item may be discussed in later Meetings.
 
@@ -1433,11 +1474,11 @@ Historical origin remains unchanged.
 
 This is security-critical.
 
-### Group Meeting
+### Research Group Meeting
 
 Referencing a private Project object does not make that object visible to Research Group members without Project access.
 
-A Group Meeting must not automatically expose private:
+A Research Group Meeting must not automatically expose private:
 
 - Project details,
 - Project Topics,
@@ -1480,67 +1521,41 @@ Do not leak titles, assignees, descriptions, statuses or Project names unless th
 
 ---
 
-## 38. Meeting lifecycle
+## 38. Meeting lifecycle (implemented)
 
-### Upcoming
+A Meeting moves through three statuses with explicit server-side actions.
+Transitions are guarded and serialized (each action takes a row lock on the
+Meeting and re-checks the current status).
 
 ```text
-upcoming
+upcoming  →  live  →  completed
+             ↑  (reopen)
 ```
-
-Users may:
-
-- edit agenda,
-- add items,
-- acknowledge `inform` items,
-- change moderator/participants,
-- reorder agenda.
 
 ### Start
 
-```text
-upcoming → live
-started_at = now
-```
-
-Start should be explicit when used, but the system must tolerate late start.
-
-### Live
-
-Moderator may:
-
-- select active item,
-- mark item `discussing`,
-- close as `done` or `follow_up`,
-- record decision,
-- create/link Work Item,
-- add spontaneous items,
-- end Meeting.
-
-Participants may add notes and permitted agenda contributions.
+`upcoming → live` — `started_at = now` (server time).
 
 ### End
 
-```text
-live → completed
-ended_at = now
-```
+`live → completed` — `ended_at = now` (server time).
+Only a live Meeting can be ended.
 
-A Meeting cannot end while an item is `discussing`.
+### Reopen
 
-It must first become:
+`completed → live` — preserves the original `started_at` and clears
+`ended_at`. Only a completed Meeting can be reopened. Ending the reopened
+Meeting records a new `ended_at`.
 
-```text
-done
-```
+### What is and is not enforced
 
-or:
-
-```text
-follow_up
-```
-
-Undiscussed items may remain `not_discussed`.
+- The implemented lifecycle is **only** the upcoming/live/completed state
+  machine above. There is no rule that blocks ending while an item is
+  `discussing`, because the implemented `MeetingItem` status is the simpler
+  `open`/`discussed` pair (see Section 17).
+- The richer live-meeting controls from the product concept (active-item
+  mode, `discussing`/`done`/`follow_up` item states, per-item completion
+  before end) are not implemented.
 
 ---
 
@@ -1777,7 +1792,7 @@ Fails & Highlights
 KVP
 ```
 
-Series guidance contains the current “Spielregeln”.
+The (not-yet-implemented) Template guidance would contain the current “Spielregeln”.
 
 Moderator rotation contains the current member order.
 
@@ -2025,62 +2040,50 @@ Move to section…
 
 ---
 
-## 54. Server-side invariants
+## 54. Server-side invariants (implemented)
 
-1. Group Meeting has no `project_id`.
-2. Project Meeting has a `project_id`.
-3. Group Meeting participants are Research Group members.
-4. Project Meeting participants have Project access.
-5. Project Topic remains private Project content.
-6. Group Meeting does not expose private Project objects.
-7. Explicit group-level Project update text is Meeting content, not automatic Project projection.
-8. MeetingItem belongs to exactly one Meeting.
-9. MeetingItem belongs to exactly one MeetingSection.
-10. Topic and MeetingItem are different entities.
-11. Historical MeetingItems remain stable snapshots.
-12. Topic may appear in multiple MeetingItems.
-13. Topic status is independent from Work Item status.
-14. MeetingItem status is independent from Topic and Work Item status.
-15. `spontaneous` is an origin, not a Section.
-16. Meeting cannot end while an item is `discussing`.
-17. Follow-up preserves a durable Topic connection.
-18. Work Item creation from Meeting always requires a Project.
-19. Meeting → Work Item obeys Project write permissions.
-20. Every Work Item assignee obeys Project assignment rules.
-21. Work Item origin and later Meeting discussion are separate relations.
-22. Meeting/Topic queries must not leak inaccessible Project data.
-23. Historical MeetingSection labels do not change when the Series structure is later edited.
-24. NoteEntries are attributed append-oriented records rather than one multi-user shared text blob.
+1. A Research Group Meeting has no `project_id` (scope `group`).
+2. A Project Meeting has a `project_id` (scope `project`).
+3. Both `Meeting` and `MeetingSeries` enforce the scope/project consistency constraint at the database level.
+4. Research Group Meeting participants must be members of the Meeting's Research Group.
+5. Project Meeting participants must have read access to the Meeting's Project.
+6. Meeting content on a Project Meeting obeys Project write roles: `viewer` cannot mutate; archived Projects are read-only.
+7. Every `MeetingItem` belongs to exactly one `Meeting`.
+8. Every `MeetingItem` belongs to exactly one `MeetingSection` (`meeting_section` is NOT NULL).
+9. Historical `MeetingSection` labels do not change when the Template structure is later edited (occurrence is a snapshot).
+10. Editing an occurrence never mutates its Template.
+11. A Meeting created without a Template still has a real default `Agenda` Section.
+12. Meeting → Work Item creation always requires a target Project.
+13. A Project Meeting can only create work in its own Project.
+14. Meeting → Work Item creation obeys Project write permissions, assignee eligibility, and Work Item invariants (the Work Item service remains authoritative).
+15. Meeting/MeetingItem queries are permission-filtered and must not leak inaccessible Project data.
+16. Meeting lifecycle transitions (start/end/reopen) are guarded and serialized per Meeting.
+
+> Intended invariants that depend on not-yet-implemented concepts (Topic
+> state, `discussing`/`follow_up` item states, NoteEntry streams, spontaneous
+> origin) are described in the relevant sections and are not current
+> guarantees.
 
 ---
 
-## 55. Conceptual data model
+## 55. Data model (implemented)
 
 ```text
 ResearchGroup
 │
-├── MeetingSeries
-│   │
-│   ├── MeetingSeriesSection[]
-│   ├── DefaultParticipant[]
-│   ├── ModeratorRotation[]
-│   │
-│   └── Meeting[]
-│       │
+├── MeetingSeries   (a Meeting Template)
+│   ├── MeetingSeriesSection[]   (template structure)
+│   └── Meeting[]                (occurrences)
 │       ├── MeetingParticipant[]
-│       ├── MeetingSection[]
+│       ├── MeetingSection[]     (occurrence structure / snapshot)
 │       │   └── MeetingItem[]
-│       │       ├── MeetingNoteEntry[]
-│       │       ├── MeetingItemAcknowledgement[]
-│       │       ├── decision_markdown
-│       │       ├── Topic?
-│       │       ├── Work Item origin links
-│       │       └── Work Item discussion links
-│       │
-│       └── protocol = projection
-│
-└── Topic[]
+│       │       └── MeetingItemWorkItem[]   (origin link to canonical WorkItem)
+│       └── (standalone meeting: one default "Agenda" section)
 ```
+
+Not yet persisted: `DefaultParticipant`, `ModeratorRotation`, `Topic`,
+`MeetingNoteEntry`, `MeetingItemAcknowledgement`, `decision_markdown`, and a
+separate Work Item discussion link. Those are intended direction.
 
 ---
 

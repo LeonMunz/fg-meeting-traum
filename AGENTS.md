@@ -38,7 +38,9 @@ Read only the documentation relevant to the requested change:
 - Product intent, scope, milestones → `docs/product.md`
 - Technical architecture, boundaries, sequencing → `docs/architecture.md`
 - Identity, research group, projects, memberships, work items → `docs/domain/foundation.md`
-- Meetings, topics, meeting items, follow-up → `docs/domain/meetings.md`
+- Meetings, sections, items, templates, lifecycle, meeting→work → `docs/domain/meetings.md`
+- Work Item definitions, Board semantics, Board ordering → `docs/domain/foundation.md` (Sections 3a, 7, 15)
+- Current implemented vs. not-yet-implemented checkpoint → `docs/CURRENT_STATE.md`
 - Tests, seed/reset, deployment, privacy, Living Lab → `docs/living-lab.md`
 - Unsure where to look → `docs/README.md`
 
@@ -77,6 +79,14 @@ The following rules are always relevant:
 - My Work, Project Board, Dashboard, and Meetings must reference the same canonical Work Items; do not create screen-specific copies.
 - API representations may contain ID lists, but relational database relationships must remain relational.
 - Do not expose private project data through group-level meeting views.
+- Work Item Type, Status, and Label definitions are Project-configured; every Work Item references its own Project's definitions.
+- Definition IDs (`typeDefinitionId`, `statusDefinitionId`, `labelDefinitionIds`) are the canonical Work Item API contract.
+- Do not introduce new logic based on legacy fixed Work Item `type` / `status` strings.
+- Backend authorization and scope checks are authoritative; the UI never grants access.
+- Meeting occurrence structure is independent from its template after creation; editing an occurrence never mutates the template.
+- Every MeetingItem belongs to exactly one MeetingSection.
+- User-facing terminology must use `Research Group Meeting`, `Project Meeting`, and `Meeting Templates`.
+- Internal backend naming may still use `MeetingSeries`; do not rename persistence models merely for presentation terminology.
 
 For full semantics and invariants, read the relevant domain document.
 
@@ -104,7 +114,13 @@ npm run build
 npm run lint
 ```
 
-For backend changes, use the checks defined by the backend project once `apps/api/` exists. At minimum, backend tasks must run Django system checks and the relevant backend tests.
+For backend changes (from `apps/api/`), at minimum run Django system checks, `makemigrations --check`, and the relevant backend tests:
+
+```bash
+uv run python manage.py check
+uv run python manage.py makemigrations --check --dry-run
+uv run python manage.py test <app>
+```
 
 Do not invent a new testing framework merely to complete a task.
 

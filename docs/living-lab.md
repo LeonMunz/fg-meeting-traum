@@ -56,9 +56,8 @@ Prioritize business rules and authorization over broad visual snapshot testing.
 
 After Meeting implementation:
 - Project Meeting contains only users with Project access.
-- Group Meeting does not expose private Project objects.
-- Meeting with a `discussing` item cannot end.
-- Topic is not automatically resolved from Work Item state.
+- Research Group Meeting does not expose private Project objects.
+- Meeting lifecycle transitions (start/end/reopen) are guarded server-side.
 
 ## Permission tests
 

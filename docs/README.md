@@ -10,8 +10,9 @@ The documentation is intentionally split by concern so humans and coding agents 
 |---|---|
 | Product vision, scope, product milestones | `product.md` |
 | Technical stack, architecture, boundaries, development strategy | `architecture.md` |
-| Identity, Research Group, Project, Membership, Work Item | `domain/foundation.md` |
-| Meeting, MeetingSeries, Topic, MeetingItem, follow-up/history | `domain/meetings.md` |
+| Identity, Research Group, Project, Membership, Work Item, Board | `domain/foundation.md` |
+| Meetings, Meeting Templates, Sections, Items, lifecycle, meeting→work | `domain/meetings.md` |
+| Current implemented vs. not-yet-implemented checkpoint | `CURRENT_STATE.md` |
 | Testing, seed/reset, Living Lab, deployment, privacy | `living-lab.md` |
 | UI appearance | relevant file under `stitch_examples/` |
 
@@ -25,6 +26,7 @@ Each kind of truth has one canonical owner:
 - **Technical architecture and development rules** → `architecture.md`
 - **Foundation domain semantics and invariants** → `domain/foundation.md`
 - **Meeting domain semantics and invariants** → `domain/meetings.md`
+- **Current implementation checkpoint** → `CURRENT_STATE.md`
 - **Living-Lab and validation process** → `living-lab.md`
 - **Implemented persistence** → Django models + migrations
 - **Implemented API contract** → DRF serializers/endpoints
