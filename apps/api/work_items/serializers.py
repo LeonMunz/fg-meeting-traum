@@ -37,6 +37,9 @@ class WorkItemSerializer(serializers.ModelSerializer):
     statusDefinitionId = serializers.PrimaryKeyRelatedField(
         source="status_definition", read_only=True,
     )
+    boardPosition = serializers.IntegerField(
+        source="board_position", read_only=True,
+    )
     labelDefinitionIds = serializers.SerializerMethodField()
 
     class Meta:
@@ -56,6 +59,7 @@ class WorkItemSerializer(serializers.ModelSerializer):
             "createdById",
             "typeDefinitionId",
             "statusDefinitionId",
+            "boardPosition",
             "labelDefinitionIds",
         )
         read_only_fields = fields

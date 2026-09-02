@@ -129,10 +129,21 @@ export type ApiWorkItemStatus =
 export interface ApiWorkItem {
   id: number
   projectId: number
-  type: ApiWorkItemType
   title: string
   description: string
-  status: ApiWorkItemStatus
+  // Canonical, project-configurable identifiers. The backend Work Item list
+  // returns these (not fixed strings); UI maps them against the Project's
+  // Work Item configuration (see getProjectWorkItemConfiguration).
+  typeDefinitionId: number
+  statusDefinitionId: number
+  // Manual Board position within the Project/status column (see
+  // WorkItem.board_position). null = unsorted (appended in creation order).
+  boardPosition: number | null
+  labelDefinitionIds: number[]
+  // Legacy fixed-string fields, kept optional for backward compatibility with
+  // older payloads. Prefer the definition IDs above.
+  type?: ApiWorkItemType
+  status?: ApiWorkItemStatus
   assigneeIds: number[]
   parentId: number | null
   dueDate: string | null
@@ -150,10 +161,11 @@ export interface ApiPersonalWorkItem extends ApiWorkItem {
 }
 
 export interface ApiCreateWorkItemInput {
-  type: ApiWorkItemType
+  typeDefinitionId: number
   title: string
   description?: string
-  status?: ApiWorkItemStatus
+  statusDefinitionId?: number | null
+  labelDefinitionIds?: number[]
   assigneeIds?: number[]
   parentId?: number | null
   dueDate?: string | null
@@ -165,6 +177,7 @@ export interface ApiUpdateWorkItemInput {
   title?: string
   description?: string
   status?: ApiWorkItemStatus
+  statusDefinitionId?: number | null
   assigneeIds?: number[]
   parentId?: number | null
   dueDate?: string | null
@@ -256,6 +269,8 @@ export interface ApiMeeting {
   seriesId: number | null
   title: string
   scheduledAt: string
+  startedAt: string | null
+  endedAt: string | null
   status: ApiMeetingStatus
   participantIds: number[]
   createdById: number
@@ -274,7 +289,6 @@ export interface ApiCreateMeetingInput {
 export interface ApiUpdateMeetingInput {
   title?: string
   scheduledAt?: string
-  status?: ApiMeetingStatus
 }
 
 export interface ApiMeetingParticipantUser {
@@ -301,6 +315,7 @@ export type ApiMeetingItemStatus =
 export interface ApiMeetingItem {
   id: number
   meetingId: number
+  meetingSectionId: number
   title: string
   notes: string
   position: number
@@ -312,6 +327,7 @@ export interface ApiMeetingItem {
 }
 
 export interface ApiCreateMeetingItemInput {
+  meetingSectionId: number
   title: string
   notes?: string
 }
@@ -322,9 +338,44 @@ export interface ApiUpdateMeetingItemInput {
   status?: ApiMeetingItemStatus
 }
 
-export interface ApiCreateMeetingWorkItemInput
-  extends ApiCreateWorkItemInput {
+export interface ApiWorkItemTypeDefinition {
+  id: number
+  name: string
+  order: number
+  active: boolean
+}
+
+export interface ApiWorkItemStatusDefinition {
+  id: number
+  name: string
+  category: string
+  order: number
+  active: boolean
+  isDefault: boolean
+}
+
+export interface ApiProjectWorkItemConfiguration {
+  types: ApiWorkItemTypeDefinition[]
+  statuses: ApiWorkItemStatusDefinition[]
+  labels: Array<{
+    id: number
+    name: string
+    order: number
+    active: boolean
+  }>
+}
+
+export interface ApiCreateMeetingWorkItemInput {
   projectId: number
+  typeDefinitionId: number
+  title: string
+  description?: string
+  statusDefinitionId?: number | null
+  assigneeIds?: number[]
+  parentId?: number | null
+  dueDate?: string | null
+  blockedReason?: string | null
+  labelDefinitionIds?: number[]
 }
 
 
@@ -388,6 +439,21 @@ export interface ApiMeetingSection {
   description: string
   position: number
   isVisible: boolean
+}
+
+export interface ApiCreateMeetingSectionInput {
+  name: string
+  description?: string
+}
+
+export interface ApiUpdateMeetingSectionInput {
+  name?: string
+  description?: string
+  isVisible?: boolean
+}
+
+export interface ApiReorderMeetingSectionsInput {
+  sectionIds: number[]
 }
 
 export interface ApiCreateMeetingFromSeriesInput {

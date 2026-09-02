@@ -14,7 +14,7 @@ from projects.services import (
 )
 from research_groups.models import ResearchGroup, ResearchGroupMembership
 
-from .models import Meeting, MeetingItem, MeetingParticipant, MeetingSeries
+from .models import Meeting, MeetingItem, MeetingParticipant, MeetingSeries, MeetingSection
 from .services import (
     MeetingDomainError,
     add_meeting_participant,
@@ -23,8 +23,11 @@ from .services import (
     create_meeting_item,
     create_meeting_series,
     create_series_section,
+    end_meeting,
     remove_meeting_participant,
+    reopen_meeting,
     reorder_series_sections,
+    start_meeting,
     update_meeting,
     update_meeting_item,
     update_meeting_series,
@@ -186,6 +189,7 @@ class MeetingScopeDomainTest(MeetingScopeBase):
         )
         item = create_meeting_item(
             meeting=meeting,
+            meeting_section=MeetingSection.objects.filter(meeting=meeting).first(),
             actor=self.alex,
             title="Original item",
         )
@@ -248,6 +252,9 @@ class MeetingScopeDomainTest(MeetingScopeBase):
             ),
             "item create": lambda: create_meeting_item(
                 meeting=meeting,
+                meeting_section=MeetingSection.objects.filter(
+                    meeting=meeting,
+                ).first(),
                 actor=self.laura,
                 title="Viewer item",
             ),
@@ -361,6 +368,7 @@ class MeetingScopeApiTest(MeetingScopeBase):
         )
         item = create_meeting_item(
             meeting=meeting,
+            meeting_section=MeetingSection.objects.filter(meeting=meeting).first(),
             actor=self.alex,
             title="Readable item",
         )
@@ -511,6 +519,11 @@ class MeetingScopeApiTest(MeetingScopeBase):
         self.assertEqual(Meeting.objects.count(), before_count)
 
     def test_viewer_cannot_mutate_meeting_participants_or_items(self):
+        create_series_section(
+            meeting_series=self.project_series,
+            actor=self.alex,
+            name="Agenda",
+        )
         meeting = create_meeting_from_series(
             meeting_series=self.project_series,
             actor=self.alex,
@@ -523,6 +536,7 @@ class MeetingScopeApiTest(MeetingScopeBase):
         )
         item = create_meeting_item(
             meeting=meeting,
+            meeting_section=MeetingSection.objects.filter(meeting=meeting).first(),
             actor=self.alex,
             title="Original item",
         )
@@ -547,7 +561,12 @@ class MeetingScopeApiTest(MeetingScopeBase):
             ),
             self.client.post(
                 f"/api/meetings/{meeting.pk}/items/",
-                {"title": "Viewer item"},
+                {
+                    "meetingSectionId": MeetingSection.objects.filter(
+                        meeting=meeting,
+                    ).first().pk,
+                    "title": "Viewer item",
+                },
                 format="json",
             ),
             self.client.patch(
@@ -752,6 +771,7 @@ class MeetingScopeApiTest(MeetingScopeBase):
         )
         item = create_meeting_item(
             meeting=meeting,
+            meeting_section=MeetingSection.objects.filter(meeting=meeting).first(),
             actor=self.alex,
             title="Original item",
         )
@@ -864,3 +884,126 @@ class MeetingScopeApiTest(MeetingScopeBase):
         self.assertTrue(
             MeetingParticipant.objects.filter(pk=participant.pk).exists()
         )
+
+
+class MeetingLifecycleScopeApiTest(MeetingScopeBase):
+    """Lifecycle Start/End reuse the scope-aware Meeting write rule."""
+
+    def setUp(self):
+        super().setUp()
+        self.client = APIClient()
+        self.group_meeting = create_meeting(
+            research_group=self.group,
+            actor=self.alex,
+            title="Group Weekly",
+            scheduled_at=self.scheduled_at,
+        )
+        self.project_meeting = create_meeting(
+            research_group=self.group,
+            actor=self.alex,
+            title="Project Weekly",
+            scheduled_at=self.scheduled_at,
+            scope=Meeting.Scope.PROJECT,
+            project=self.project,
+        )
+
+    def login(self, user):
+        self.client.logout()
+        self.client.force_login(user)
+
+    def test_project_owner_and_member_can_start_end(self):
+        for user in (self.alex, self.chris):
+            with self.subTest(user=user.username):
+                meeting = create_meeting(
+                    research_group=self.group,
+                    actor=self.alex,
+                    title="Lifecycle Weekly",
+                    scheduled_at=self.scheduled_at,
+                    scope=Meeting.Scope.PROJECT,
+                    project=self.project,
+                )
+                self.login(user)
+                self.assertEqual(
+                    self.client.post(
+                        f"/api/meetings/{meeting.pk}/start",
+                        {},
+                        format="json",
+                    ).status_code,
+                    status.HTTP_200_OK,
+                )
+                self.assertEqual(
+                    self.client.post(
+                        f"/api/meetings/{meeting.pk}/end",
+                        {},
+                        format="json",
+                    ).status_code,
+                    status.HTTP_200_OK,
+                )
+                meeting.refresh_from_db()
+                self.assertEqual(
+                    meeting.status,
+                    Meeting.Status.COMPLETED,
+                )
+                self.assertIsNotNone(meeting.ended_at)
+
+    def test_viewer_cannot_start_or_end_project_meeting(self):
+        meeting = create_meeting(
+            research_group=self.group,
+            actor=self.alex,
+            title="Lifecycle Weekly",
+            scheduled_at=self.scheduled_at,
+            scope=Meeting.Scope.PROJECT,
+            project=self.project,
+        )
+        self.login(self.laura)
+        self.assertEqual(
+            self.client.post(
+                f"/api/meetings/{meeting.pk}/start",
+                {},
+                format="json",
+            ).status_code,
+            status.HTTP_403_FORBIDDEN,
+        )
+        meeting.refresh_from_db()
+        self.assertEqual(meeting.status, Meeting.Status.UPCOMING)
+
+    def test_project_owner_can_reopen_and_viewer_cannot(self):
+        meeting = create_meeting(
+            research_group=self.group,
+            actor=self.alex,
+            title="Lifecycle Weekly",
+            scheduled_at=self.scheduled_at,
+            scope=Meeting.Scope.PROJECT,
+            project=self.project,
+        )
+
+        # Complete it first.
+        self.login(self.alex)
+        self.client.post(f"/api/meetings/{meeting.pk}/start", {}, format="json")
+        self.client.post(f"/api/meetings/{meeting.pk}/end", {}, format="json")
+        meeting.refresh_from_db()
+        self.assertEqual(meeting.status, Meeting.Status.COMPLETED)
+
+        # Owner can reopen.
+        self.assertEqual(
+            self.client.post(
+                f"/api/meetings/{meeting.pk}/reopen",
+                {},
+                format="json",
+            ).status_code,
+            status.HTTP_200_OK,
+        )
+        meeting.refresh_from_db()
+        self.assertEqual(meeting.status, Meeting.Status.LIVE)
+
+        # A viewer cannot reopen (or start/end) a project meeting.
+        self.login(self.laura)
+        for action in ("start", "end", "reopen"):
+            self.assertEqual(
+                self.client.post(
+                    f"/api/meetings/{meeting.pk}/{action}",
+                    {},
+                    format="json",
+                ).status_code,
+                status.HTTP_403_FORBIDDEN,
+            )

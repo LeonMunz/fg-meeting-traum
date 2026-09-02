@@ -2,6 +2,7 @@
 URL configuration for config project.
 """
 from django.contrib import admin
+
 from django.urls import path
 from django.views.decorators.csrf import csrf_protect
 
@@ -40,17 +41,23 @@ from work_items.views import (
     WorkItemCommentDetailView,
     WorkItemCommentListCreateView,
     WorkItemDetailView,
+    WorkItemReorderView,
     WorkItemHistoryView,
 )
 
 from meetings.views import (
     MeetingDetailView,
+    MeetingEndView,
+    MeetingReopenView,
+    MeetingStartView,
     MeetingItemDetailView,
     MeetingItemListCreateView,
     MeetingItemWorkItemCreateView,
     MeetingParticipantDetailView,
     MeetingParticipantListCreateView,
-    MeetingSectionListView,
+    MeetingSectionListCreateView,
+    MeetingSectionReorderView,
+    MeetingSectionDetailView,
     MeetingSeriesCreateOccurrenceView,
     MeetingSeriesDetailView,
     MeetingSeriesListCreateView,
@@ -96,6 +103,7 @@ urlpatterns = [
     # Work Items
     path('api/projects/<int:project_id>/work-items/', ProjectWorkItemListCreateView.as_view(), name='project-work-items-list'),
     path('api/work-items/<int:work_item_id>/', WorkItemDetailView.as_view(), name='work-item-detail'),
+    path('api/work-items/<int:work_item_id>/reorder/', csrf_protect_view(WorkItemReorderView), name='work-item-reorder'),
     path('api/work-items/<int:work_item_id>/history/', WorkItemHistoryView.as_view(), name='work-item-history'),
     path('api/work-items/<int:work_item_id>/comments/', WorkItemCommentListCreateView.as_view(), name='work-item-comments-list'),
     path('api/work-item-comments/<int:comment_id>/', WorkItemCommentDetailView.as_view(), name='work-item-comment-detail'),
@@ -115,10 +123,15 @@ urlpatterns = [
     # Meetings
     path('api/research-groups/<int:group_id>/meetings/', ResearchGroupMeetingListCreateView.as_view(), name='research-group-meetings-list'),
     path('api/meetings/<int:meeting_id>/', MeetingDetailView.as_view(), name='meeting-detail'),
+    path('api/meetings/<int:meeting_id>/start', MeetingStartView.as_view(), name='meeting-start'),
+    path('api/meetings/<int:meeting_id>/end', MeetingEndView.as_view(), name='meeting-end'),
+    path('api/meetings/<int:meeting_id>/reopen', MeetingReopenView.as_view(), name='meeting-reopen'),
     path('api/meetings/<int:meeting_id>/participants/', MeetingParticipantListCreateView.as_view(), name='meeting-participants-list'),
     path('api/meetings/<int:meeting_id>/participants/<int:participant_id>/', MeetingParticipantDetailView.as_view(), name='meeting-participant-detail'),
     path('api/meetings/<int:meeting_id>/items/', MeetingItemListCreateView.as_view(), name='meeting-items-list'),
-    path('api/meetings/<int:meeting_id>/sections/', MeetingSectionListView.as_view(), name='meeting-sections-list'),
+    path('api/meetings/<int:meeting_id>/sections/', MeetingSectionListCreateView.as_view(), name='meeting-sections-list'),
+    path('api/meetings/<int:meeting_id>/sections/reorder/', MeetingSectionReorderView.as_view(), name='meeting-sections-reorder'),
+    path('api/meeting-sections/<int:section_id>/', MeetingSectionDetailView.as_view(), name='meeting-section-detail'),
     path('api/meeting-items/<int:meeting_item_id>/', MeetingItemDetailView.as_view(), name='meeting-item-detail'),
     path('api/meeting-items/<int:meeting_item_id>/work-items/', MeetingItemWorkItemCreateView.as_view(), name='meeting-item-work-items-create'),
 

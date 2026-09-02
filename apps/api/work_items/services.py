@@ -1,3 +1,4 @@
+from django.db.models import F
 """Work Item application/domain operations.
 
 Centralizes domain rules for WorkItem creation and mutation.
@@ -757,10 +758,45 @@ def _apply_work_item_fields(
     # Status transition with completion handling
     if status_definition_id is not None:
         status_def = _resolve_status_definition(project, status_definition_id)
+        status_changing = (
+            status_def.pk != work_item.status_definition_id
+        )
         work_item.status_definition = status_def
         update_fields.append("status_definition")
         _apply_status_completion(work_item, status_def)
         update_fields.append("completed_at")
+
+        # Non-drag status change (Work Item Editor): no explicit
+        # insertion target, so the item deterministically goes to the
+        # end of the target column. Board drag/drop uses
+        # reposition_work_item instead, which never reaches here.
+        if status_changing:
+            # The item goes to the end of the target column's render
+            # order. Normalize the column to explicit positions first
+            # (unpositioned items keep their creation order at the
+            # end), then place the item one slot past the last.
+            target_column = list(
+                WorkItem.objects.filter(
+                    project=project,
+                    status_definition_id=status_def.pk,
+                )
+                .exclude(pk=work_item.pk)
+                .order_by(
+                    F("board_position").asc(nulls_last=True),
+                    "created_at",
+                    "id",
+                )
+            )
+            for index, item in enumerate(target_column, start=1):
+                if item.board_position != index:
+                    item.board_position = index
+                    item.save(update_fields=["board_position"])
+            work_item.board_position = (
+                (target_column[-1].board_position or 0) + 1
+                if target_column
+                else 1
+            )
+            update_fields.append("board_position")
     else:
         # Even when status is not being changed, ensure completed_at
         # is consistent with the current status. This prevents a client
@@ -952,3 +988,158 @@ def delete_work_item_comment(
         )
 
     comment.delete()
+
+
+# ── Board reordering ──
+
+
+def reposition_work_item(
+    *,
+    work_item: WorkItem,
+    actor: Optional[object] = None,
+    status_definition_id: Optional[int] = None,
+    before_work_item_id: Optional[int] = None,
+) -> WorkItem:
+    """Move a Work Item to an exact position inside a Board column.
+
+    This is the single Board drag/drop operation: it changes the
+    Work Item's canonical status_definition (when the target column
+    differs from the current one) and its persisted board_position in
+    one atomic transaction, so a cross-column drop can never be split
+    into a race-prone status PATCH followed by a position PATCH.
+
+    Semantics:
+    - Ordering is meaningful within one Project/status-definition
+      column. The list endpoint renders each column by
+      (board_position ASC NULLS LAST, created_at, id): items with an
+      explicit position first, unpositioned items after in canonical
+      creation order.
+    - ``before_work_item_id`` is the Work Item that should follow the
+      moved one; None means "end of the target column" (which also
+      covers the empty-column case).
+    - The insertion position is anchored to a stable id, so the moved
+      item lands exactly at the intended gap even if concurrent drags
+      run in parallel.
+    - On every reorder the target column is normalized: all of its
+      items receive explicit positions 1..N in their current render
+      order, and the move is applied on top. This keeps the column
+      fully position-based, so hidden (filtered-out) items are never
+      scrambled relative to each other and reload is deterministic.
+    """
+    project = work_item.project
+    target_status = (
+        _resolve_status_definition(project, status_definition_id)
+        if status_definition_id is not None
+        else work_item.status_definition
+    )
+
+    before_item: Optional[WorkItem] = None
+    if before_work_item_id is not None:
+        before_item = (
+            WorkItem.objects.filter(pk=before_work_item_id)
+            .select_related("status_definition")
+            .first()
+        )
+        if (
+            before_item is None
+            or before_item.project_id != project.pk
+            or before_item.pk == work_item.pk
+        ):
+            raise WorkItemDomainError(
+                "beforeWorkItemId does not reference a Work Item "
+                "in this Project."
+            )
+        if before_item.status_definition_id != target_status.pk:
+            raise WorkItemDomainError(
+                "beforeWorkItemId is not in the target status column."
+            )
+
+    with transaction.atomic():
+        locked_project = Project.objects.select_for_update().get(
+            pk=project.pk
+        )
+        work_item = WorkItem.objects.select_for_update().get(
+            pk=work_item.pk
+        )
+        if actor is not None:
+            _require_project_write_access(locked_project, actor)
+
+        before_state = _snapshot_work_item_state(work_item)
+
+        # Lock the full target column (excluding the moved item) and
+        # render it in Board order (positioned first, then unpositioned
+        # in creation order). This is the list the Board shows.
+        column = list(
+            WorkItem.objects.select_for_update()
+            .filter(
+                project=locked_project,
+                status_definition_id=target_status.pk,
+            )
+            .exclude(pk=work_item.pk)
+            .order_by(
+                F("board_position").asc(nulls_last=True),
+                "created_at",
+                "id",
+            )
+            .select_related("status_definition")
+        )
+
+        # Normalize: assign explicit positions 1..N in render order so
+        # the whole column is position-based.
+        for index, item in enumerate(column, start=1):
+            if item.board_position != index:
+                item.board_position = index
+                item.save(update_fields=["board_position"])
+
+        # Compute the new render order: the column with the moved item
+        # inserted before the anchor (or at the end when no anchor).
+        if before_item is not None:
+            anchor_index = next(
+                i for i, item in enumerate(column)
+                if item.pk == before_item.pk
+            )
+            new_order = (
+                column[:anchor_index]
+                + [work_item]
+                + column[anchor_index:]
+            )
+        else:
+            new_order = column + [work_item]
+
+        # Persist the resulting order: the moved item and any item
+        # whose slot changed.
+        for index, item in enumerate(new_order, start=1):
+            if item is work_item:
+                work_item.status_definition = target_status
+                work_item.board_position = index
+                continue
+            if item.board_position != index:
+                item.board_position = index
+                item.save(update_fields=["board_position"])
+
+        _apply_status_completion(work_item, target_status)
+        work_item.save(
+            update_fields=[
+                "status_definition",
+                "board_position",
+                "completed_at",
+            ]
+        )
+
+        after_state = _snapshot_work_item_state(work_item)
+        changes = _diff_work_item_changes(
+            project_id=locked_project.pk,
+            before=before_state,
+            after=after_state,
+        )
+        if changes:
+            record_audit_event(
+                research_group=locked_project.research_group,
+                actor=actor,
+                event_type=WorkItemAuditEventType.UPDATED,
+                project=locked_project,
+                work_item=work_item,
+                data={"changes": changes},
+            )
+
+    return work_item

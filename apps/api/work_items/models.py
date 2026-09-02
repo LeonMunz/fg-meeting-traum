@@ -41,6 +41,13 @@ class WorkItem(models.Model):
         null=True,
         blank=True,
     )
+    # Manual Board position within the Project/status-definition column.
+    #
+    # NULL = unsorted (server appends to the end of its column, ordered by
+    # (board_position, created_at, id)). Reordering within a column is an
+    # O(number of moved items) relative move — see
+    # `work_items.services.reposition_work_item` — not a global renumber.
+    board_position = models.IntegerField(null=True, blank=True)
     due_date = models.DateField(null=True, blank=True)
     blocked_reason = models.TextField(default="", blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)

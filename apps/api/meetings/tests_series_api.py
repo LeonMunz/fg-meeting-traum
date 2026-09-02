@@ -9,6 +9,11 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
 
+from projects.models import ProjectMembership
+from projects.services import (
+    add_project_membership,
+    create_project,
+)
 from research_groups.models import (
     ResearchGroup,
     ResearchGroupMembership,
@@ -517,3 +522,281 @@ class MeetingOccurrenceApiTest(TestCase):
         self.assertIn("Check-In", names)
         self.assertIn("Projekte", names)
         self.assertNotIn("TOPs", names)
+
+
+class MeetingTemplateApiTest(TestCase):
+    """API tests for Meeting Template (series) availability and the
+    standalone-vs-template Meeting creation path.
+
+    The product-facing name is "Meeting Template"; the backend model
+    remains MeetingSeries. These tests pin the scope/permission rules
+    that drive the create-Meeting template dropdown and the occurrence
+    snapshot isolation.
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+
+        self.alex = User.objects.create_user(
+            username="api-tpl-alex", password="Pass1!",
+        )
+        self.chris = User.objects.create_user(
+            username="api-tpl-chris", password="Pass1!",
+        )
+        self.maria = User.objects.create_user(
+            username="api-tpl-maria", password="Pass1!",
+        )
+
+        self.group = ResearchGroup.objects.create(
+            name="API Template Group", created_by=self.alex,
+        )
+        ResearchGroupMembership.objects.create(
+            research_group=self.group,
+            user=self.alex,
+            role=ResearchGroupMembership.Role.ADMIN,
+        )
+        ResearchGroupMembership.objects.create(
+            research_group=self.group,
+            user=self.chris,
+            role=ResearchGroupMembership.Role.MEMBER,
+        )
+        ResearchGroupMembership.objects.create(
+            research_group=self.group,
+            user=self.maria,
+            role=ResearchGroupMembership.Role.MEMBER,
+        )
+
+        self.project = create_project(
+            research_group=self.group,
+            creator=self.alex,
+            name="Template Project",
+        )
+        add_project_membership(
+            project=self.project,
+            actor=self.alex,
+            target_user=self.chris,
+            role=ProjectMembership.Role.MEMBER,
+        )
+        add_project_membership(
+            project=self.project,
+            actor=self.alex,
+            target_user=self.maria,
+            role=ProjectMembership.Role.VIEWER,
+        )
+
+        self.group_series = MeetingSeries.objects.create(
+            research_group=self.group,
+            scope=MeetingSeries.Scope.GROUP,
+            title="Group Template",
+            created_by=self.alex,
+        )
+        create_series_section(
+            meeting_series=self.group_series,
+            actor=self.alex,
+            name="Group Agenda",
+        )
+
+        self.project_series = MeetingSeries.objects.create(
+            research_group=self.group,
+            scope=MeetingSeries.Scope.PROJECT,
+            project=self.project,
+            title="Project Template",
+            created_by=self.alex,
+        )
+        create_series_section(
+            meeting_series=self.project_series,
+            actor=self.alex,
+            name="Project Agenda",
+        )
+
+        self.scheduled_at = (
+            timezone.now().replace(microsecond=0) + timedelta(days=1)
+        )
+
+    def login(self, user):
+        self.client.logout()
+        self.client.force_login(user)
+
+    def list_templates(self, user):
+        self.login(user)
+        response = self.client.get(
+            f"/api/research-groups/{self.group.pk}/meeting-series/"
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        return response.json()
+
+    # ── Template availability (scope + permission) ────────────────
+
+    def test_group_member_sees_group_and_member_project_templates(self):
+        templates = self.list_templates(self.chris)
+        ids = {t["id"] for t in templates}
+
+        # chris is a MEMBER of the project, so both the group template
+        # and the project template are available.
+        self.assertIn(self.group_series.pk, ids)
+        self.assertIn(self.project_series.pk, ids)
+
+    def test_group_only_member_sees_only_group_template(self):
+        # maria is a group MEMBER but a VIEWER of the project. A
+        # project-scoped template is still readable (viewer can read),
+        # so it is offered, but she cannot create an occurrence from it.
+        templates = self.list_templates(self.maria)
+        ids = {t["id"] for t in templates}
+
+        self.assertIn(self.group_series.pk, ids)
+        self.assertIn(self.project_series.pk, ids)
+
+    def test_non_group_member_sees_no_templates(self):
+        outsider = User.objects.create_user(
+            username="api-tpl-outsider", password="Pass1!",
+        )
+        templates = self.list_templates(outsider)
+        self.assertEqual(templates, [])
+
+    # ── Standalone Meeting (no template) ──────────────────────────
+
+    def test_create_standalone_group_meeting_without_template(self):
+        self.login(self.alex)
+        response = self.client.post(
+            f"/api/research-groups/{self.group.pk}/meetings/",
+            {
+                "title": "Standalone",
+                "scheduledAt": self.scheduled_at.isoformat(),
+                "scope": "group",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        data = response.json()
+        self.assertIsNone(data.get("seriesId"))
+        self.assertIsNone(data.get("projectId"))
+
+        # A standalone Meeting must receive a real default Agenda section.
+        sections = MeetingSection.objects.filter(meeting_id=data["id"])
+        self.assertEqual(sections.count(), 1)
+        self.assertEqual(sections.get().name, "Agenda")
+
+    def test_create_standalone_project_meeting_without_template(self):
+        self.login(self.alex)
+        response = self.client.post(
+            f"/api/research-groups/{self.group.pk}/meetings/",
+            {
+                "title": "Standalone Project",
+                "scheduledAt": self.scheduled_at.isoformat(),
+                "scope": "project",
+                "projectId": self.project.pk,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        data = response.json()
+        self.assertIsNone(data.get("seriesId"))
+        self.assertEqual(data.get("projectId"), self.project.pk)
+
+    # ── Meeting from template (series) ────────────────────────────
+
+    def test_create_meeting_from_group_template_snapshots_sections(self):
+        self.login(self.alex)
+        response = self.client.post(
+            f"/api/meeting-series/{self.group_series.pk}/occurrences/",
+            {
+                "scheduledAt": self.scheduled_at.isoformat(),
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        data = response.json()
+        self.assertEqual(data["seriesId"], self.group_series.pk)
+
+        sections = list(
+            MeetingSection.objects.filter(meeting_id=data["id"])
+            .order_by("position")
+        )
+        self.assertEqual(len(sections), 1)
+        self.assertEqual(sections[0].name, "Group Agenda")
+
+    def test_create_meeting_from_project_template_snapshots_sections(self):
+        self.login(self.alex)
+        response = self.client.post(
+            f"/api/meeting-series/{self.project_series.pk}/occurrences/",
+            {
+                "scheduledAt": self.scheduled_at.isoformat(),
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        data = response.json()
+        self.assertEqual(data["projectId"], self.project.pk)
+
+        sections = list(
+            MeetingSection.objects.filter(meeting_id=data["id"])
+            .order_by("position")
+        )
+        self.assertEqual(len(sections), 1)
+        self.assertEqual(sections[0].name, "Project Agenda")
+
+    def test_template_section_edit_does_not_mutate_occurrence(self):
+        self.login(self.alex)
+
+        response = self.client.post(
+            f"/api/meeting-series/{self.group_series.pk}/occurrences/",
+            {
+                "scheduledAt": self.scheduled_at.isoformat(),
+            },
+            format="json",
+        )
+        meeting_id = response.json()["id"]
+
+        section = MeetingSeriesSection.objects.get(
+            meeting_series=self.group_series, name="Group Agenda",
+        )
+        section.name = "Group Agenda (edited)"
+        section.save(update_fields=["name"])
+
+        occurrence_sections = list(
+            MeetingSection.objects.filter(meeting_id=meeting_id)
+        )
+        self.assertEqual(
+            occurrence_sections[0].name,
+            "Group Agenda",
+        )
+
+    def test_occurrence_section_edit_does_not_mutate_template(self):
+        self.login(self.alex)
+
+        response = self.client.post(
+            f"/api/meeting-series/{self.group_series.pk}/occurrences/",
+            {
+                "scheduledAt": self.scheduled_at.isoformat(),
+            },
+            format="json",
+        )
+        meeting_id = response.json()["id"]
+
+        occurrence_section = MeetingSection.objects.get(
+            meeting_id=meeting_id,
+        )
+        occurrence_section.name = "Renamed in Occurrence"
+        occurrence_section.save(update_fields=["name"])
+
+        template_section = MeetingSeriesSection.objects.get(
+            meeting_series=self.group_series,
+        )
+        self.assertEqual(template_section.name, "Group Agenda")
+
+    def test_viewer_cannot_create_occurrence_from_project_template(self):
+        self.login(self.maria)
+        response = self.client.post(
+            f"/api/meeting-series/{self.project_series.pk}/occurrences/",
+            {
+                "scheduledAt": self.scheduled_at.isoformat(),
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(
+            MeetingSection.objects.filter(
+                meeting__series_id=self.project_series.pk,
+            ).count(),
+            0,
+        )

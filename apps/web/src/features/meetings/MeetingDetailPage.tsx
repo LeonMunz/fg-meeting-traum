@@ -4,7 +4,6 @@ import {
   useMemo,
   useState,
 } from 'react'
-import type { FormEvent } from 'react'
 import {
   useNavigate,
   useParams,
@@ -14,33 +13,35 @@ import { ApiError } from '../../api/client'
 import {
   addMeetingParticipant,
   createMeetingItem,
+  createMeetingSection,
+  endMeeting,
   getMeeting,
   listMeetingItems,
   listMeetingParticipants,
+  listMeetingSections,
+  reorderMeetingSections,
+  reopenMeeting,
   removeMeetingParticipant,
-  updateMeeting,
+  startMeeting,
   updateMeetingItem,
+  updateMeetingSection,
 } from '../../api/meetings'
-import { listResearchGroupMembers } from '../../api/projects'
+import {
+  getProject,
+  listResearchGroupMembers,
+} from '../../api/projects'
+import { useResearchGroup } from '../research-group/useResearchGroup'
+import { useSession } from '../../api/useSession'
 import { CreateMeetingWorkItemDialog } from './CreateMeetingWorkItemDialog'
 
 import type {
   ApiMeeting,
   ApiMeetingItem,
   ApiMeetingParticipant,
-  ApiMeetingStatus,
+  ApiMeetingSection,
   ApiResearchGroupMember,
   ApiWorkItem,
 } from '../../api/types'
-
-const meetingStatusLabels: Record<
-  ApiMeetingStatus,
-  string
-> = {
-  upcoming: 'Upcoming',
-  live: 'Live',
-  completed: 'Completed',
-}
 
 function getErrorMessage(
   error: unknown,
@@ -161,14 +162,41 @@ export function MeetingDetailPage() {
     setRemovingParticipantId,
   ] = useState<number | null>(null)
 
-  const [agendaTitle, setAgendaTitle] =
+  const [sections, setSections] =
+    useState<ApiMeetingSection[]>([])
+
+  const [
+    sectionItemTitle,
+    setSectionItemTitle,
+  ] = useState<Record<number, string>>({})
+
+  const [
+    creatingSectionId,
+    setCreatingSectionId,
+  ] = useState<number | null>(null)
+
+  const [
+    addingSection,
+    setAddingSection,
+  ] = useState(false)
+  const [newSectionName, setNewSectionName] =
     useState('')
 
-  const [agendaNotes, setAgendaNotes] =
+  const [
+    editingSectionId,
+    setEditingSectionId,
+  ] = useState<number | null>(null)
+  const [editSectionName, setEditSectionName] =
     useState('')
-
-  const [creatingItem, setCreatingItem] =
+  const [editSectionDescription, setEditSectionDescription] =
+    useState('')
+  const [savingSection, setSavingSection] =
     useState(false)
+
+  const [
+    reorderingSections,
+    setReorderingSections,
+  ] = useState(false)
 
   const [updatingItemId, setUpdatingItemId] =
     useState<number | null>(null)
@@ -181,12 +209,86 @@ export function MeetingDetailPage() {
     setWorkItemSource,
   ] = useState<ApiMeetingItem | null>(null)
 
+  const { user } = useSession()
+  const { activeResearchGroup } = useResearchGroup()
+
+  const isGroupAdmin = useMemo(() => {
+    if (user == null) {
+      return false
+    }
+
+    return (
+      activeResearchGroup?.role === 'admin' &&
+      activeResearchGroup.id === meeting?.researchGroupId
+    )
+  }, [activeResearchGroup, user, meeting?.researchGroupId])
+
+  // For a Project Meeting, resolve the current user's role from the
+  // Project read-model so viewers never see enabled lifecycle actions.
+  const [projectRole, setProjectRole] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (meeting == null || meeting.scope !== 'project') {
+      setProjectRole(null)
+
+      return
+    }
+
+    if (meeting.projectId == null) {
+      setProjectRole(null)
+
+      return
+    }
+
+    let cancelled = false
+
+    getProject(meeting.projectId)
+      .then((project) => {
+        if (!cancelled) {
+          setProjectRole(project.currentUserRole)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setProjectRole(null)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [meeting])
+
+  // Group Meetings are managed by Research Group admins. Project
+  // Meetings are managed by the Project's owner/member (write roles).
+  // The server remains authoritative; this only decides whether to
+  // render the controls.
+  const canManageLifecycle = useMemo(() => {
+    if (meeting == null) {
+      return false
+    }
+
+    if (meeting.scope === 'group') {
+      return isGroupAdmin
+    }
+
+    if (meeting.projectId == null) {
+      return false
+    }
+
+    return (
+      projectRole === 'owner' ||
+      projectRole === 'member'
+    )
+  }, [meeting, isGroupAdmin, projectRole])
+
   const loadMeeting = useCallback(async () => {
     if (meetingId == null) {
       setMeeting(null)
       setParticipants([])
       setMembers([])
       setItems([])
+      setSections([])
       setLoadError('Invalid Meeting ID.')
       setLoading(false)
       return
@@ -204,23 +306,27 @@ export function MeetingDetailPage() {
         nextParticipants,
         nextItems,
         nextMembers,
+        nextSections,
       ] = await Promise.all([
         listMeetingParticipants(meetingId),
         listMeetingItems(meetingId),
         listResearchGroupMembers(
           nextMeeting.researchGroupId,
         ),
+        listMeetingSections(meetingId),
       ])
 
       setMeeting(nextMeeting)
       setParticipants(nextParticipants)
       setItems(nextItems)
       setMembers(nextMembers)
+      setSections(nextSections)
     } catch (error) {
       setMeeting(null)
       setParticipants([])
       setMembers([])
       setItems([])
+      setSections([])
 
       setLoadError(
         getErrorMessage(
@@ -282,6 +388,39 @@ export function MeetingDetailPage() {
       ),
     [items],
   )
+
+  const sortedSections = useMemo(
+    () =>
+      [...sections].sort(
+        (a, b) =>
+          a.position - b.position ||
+          a.id - b.id,
+      ),
+    [sections],
+  )
+
+  const visibleSections = useMemo(
+    () =>
+      sortedSections.filter(
+        (section) => section.isVisible,
+      ),
+    [sortedSections],
+  )
+
+  const itemsBySection = useMemo(() => {
+    const map = new Map<number, ApiMeetingItem[]>()
+
+    for (const item of sortedItems) {
+      const existing = map.get(
+        item.meetingSectionId,
+      ) ?? []
+
+      existing.push(item)
+      map.set(item.meetingSectionId, existing)
+    }
+
+    return map
+  }, [sortedItems])
 
   const handleAddParticipant = async () => {
     if (
@@ -393,28 +532,30 @@ export function MeetingDetailPage() {
     }
   }
 
-  const handleCreateItem = async (
-    event: FormEvent<HTMLFormElement>,
+  const handleCreateItemInSection = async (
+    section: ApiMeetingSection,
   ) => {
-    event.preventDefault()
-
     if (
       meetingId == null ||
-      !agendaTitle.trim() ||
-      creatingItem
+      creatingSectionId !== null
     ) {
       return
     }
 
-    setCreatingItem(true)
+    const title = (sectionItemTitle[section.id] ?? '').trim()
+    if (!title) {
+      return
+    }
+
+    setCreatingSectionId(section.id)
     setActionError(null)
 
     try {
       const item = await createMeetingItem(
         meetingId,
         {
-          title: agendaTitle.trim(),
-          notes: agendaNotes.trim(),
+          meetingSectionId: section.id,
+          title,
         },
       )
 
@@ -426,8 +567,10 @@ export function MeetingDetailPage() {
         item,
       ])
 
-      setAgendaTitle('')
-      setAgendaNotes('')
+      setSectionItemTitle((current) => ({
+        ...current,
+        [section.id]: '',
+      }))
     } catch (error) {
       setActionError(
         getErrorMessage(
@@ -436,7 +579,156 @@ export function MeetingDetailPage() {
         ),
       )
     } finally {
-      setCreatingItem(false)
+      setCreatingSectionId(null)
+    }
+  }
+
+  const handleAddSection = async () => {
+    if (
+      meetingId == null ||
+      !newSectionName.trim() ||
+      addingSection
+    ) {
+      return
+    }
+
+    setAddingSection(true)
+    setActionError(null)
+
+    try {
+      const section = await createMeetingSection(
+        meetingId,
+        { name: newSectionName.trim() },
+      )
+
+      setSections((current) => [...current, section])
+      setNewSectionName('')
+    } catch (error) {
+      setActionError(
+        getErrorMessage(
+          error,
+          'Section could not be created.',
+        ),
+      )
+    } finally {
+      setAddingSection(false)
+    }
+  }
+
+  const handleSaveSection = async (
+    section: ApiMeetingSection,
+  ) => {
+    if (savingSection) {
+      return
+    }
+
+    setSavingSection(true)
+    setActionError(null)
+
+    try {
+      const updated = await updateMeetingSection(
+        section.id,
+        {
+          name: editSectionName.trim(),
+          description: editSectionDescription.trim(),
+        },
+      )
+
+      setSections((current) =>
+        current.map((candidate) =>
+          candidate.id === updated.id
+            ? updated
+            : candidate,
+        ),
+      )
+      setEditingSectionId(null)
+    } catch (error) {
+      setActionError(
+        getErrorMessage(
+          error,
+          'Section could not be updated.',
+        ),
+      )
+    } finally {
+      setSavingSection(false)
+    }
+  }
+
+  const handleToggleSectionVisibility = async (
+    section: ApiMeetingSection,
+  ) => {
+    setActionError(null)
+
+    try {
+      const updated = await updateMeetingSection(
+        section.id,
+        { isVisible: !section.isVisible },
+      )
+
+      setSections((current) =>
+        current.map((candidate) =>
+          candidate.id === updated.id
+            ? updated
+            : candidate,
+        ),
+      )
+    } catch (error) {
+      setActionError(
+        getErrorMessage(
+          error,
+          'Section could not be updated.',
+        ),
+      )
+    }
+  }
+
+  const handleMoveSection = async (
+    section: ApiMeetingSection,
+    direction: -1 | 1,
+  ) => {
+    if (reorderingSections) {
+      return
+    }
+
+    const sorted = sortedSections
+    const index = sorted.findIndex(
+      (s) => s.id === section.id,
+    )
+    const targetIndex = index + direction
+
+    if (
+      targetIndex < 0 ||
+      targetIndex >= sorted.length
+    ) {
+      return
+    }
+
+    const reordered = [...sorted]
+    ;[reordered[index], reordered[targetIndex]] =
+      [reordered[targetIndex], reordered[index]]
+
+    setReorderingSections(true)
+    setActionError(null)
+
+    try {
+      await reorderMeetingSections(
+        meetingId!,
+        {
+          sectionIds: reordered.map(
+            (s) => s.id,
+          ),
+        },
+      )
+      setSections(reordered)
+    } catch (error) {
+      setActionError(
+        getErrorMessage(
+          error,
+          'Sections could not be reordered.',
+        ),
+      )
+    } finally {
+      setReorderingSections(false)
     }
   }
 
@@ -480,13 +772,11 @@ export function MeetingDetailPage() {
     }
   }
 
-  const handleMeetingStatusChange = async (
-    status: ApiMeetingStatus,
-  ) => {
+  const handleStartMeeting = async () => {
     if (
       meeting == null ||
       updatingMeeting ||
-      meeting.status === status
+      meeting.status !== 'upcoming'
     ) {
       return
     }
@@ -495,17 +785,71 @@ export function MeetingDetailPage() {
     setActionError(null)
 
     try {
-      const updated = await updateMeeting(
-        meeting.id,
-        { status },
-      )
+      const updated = await startMeeting(meeting.id)
 
       setMeeting(updated)
     } catch (error) {
       setActionError(
         getErrorMessage(
           error,
-          'Meeting status could not be updated.',
+          'Meeting could not be started.',
+        ),
+      )
+    } finally {
+      setUpdatingMeeting(false)
+    }
+  }
+
+  const handleEndMeeting = async () => {
+    if (
+      meeting == null ||
+      updatingMeeting ||
+      meeting.status !== 'live'
+    ) {
+      return
+    }
+
+    setUpdatingMeeting(true)
+    setActionError(null)
+
+    try {
+      const updated = await endMeeting(meeting.id)
+
+      setMeeting(updated)
+    } catch (error) {
+      setActionError(
+        getErrorMessage(
+          error,
+          'Meeting could not be ended.',
+        ),
+      )
+    } finally {
+      setUpdatingMeeting(false)
+    }
+  }
+
+
+  const handleReopenMeeting = async () => {
+    if (
+      meeting == null ||
+      updatingMeeting ||
+      meeting.status !== 'completed'
+    ) {
+      return
+    }
+
+    setUpdatingMeeting(true)
+    setActionError(null)
+
+    try {
+      const updated = await reopenMeeting(meeting.id)
+
+      setMeeting(updated)
+    } catch (error) {
+      setActionError(
+        getErrorMessage(
+          error,
+          'Meeting could not be reopened.',
         ),
       )
     } finally {
@@ -539,6 +883,8 @@ export function MeetingDetailPage() {
       ),
     )
   }
+
+  const isCompleted = meeting?.status === 'completed'
 
   if (loading) {
     return (
@@ -610,47 +956,95 @@ export function MeetingDetailPage() {
             {meeting.title}
           </h1>
 
-          <div className="mt-2 flex items-center gap-2 text-sm text-on-surface-variant">
-            <span className="material-symbols-outlined text-[18px]">
-              event
+          <div className="mt-2 flex items-center gap-3 text-sm text-on-surface-variant">
+            <span className="inline-flex items-center gap-1.5">
+              <span className="material-symbols-outlined text-[18px]">
+                event
+              </span>
+
+              {formatMeetingDate(
+                meeting.scheduledAt,
+              )}
             </span>
 
-            {formatMeetingDate(
-              meeting.scheduledAt,
-            )}
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-outline-variant bg-surface-container-low px-2.5 py-0.5 text-xs font-medium">
+              <span className="material-symbols-outlined text-[14px]">
+                {meeting.scope === 'project'
+                  ? 'folder'
+                  : 'groups'}
+              </span>
+
+              {meeting.scope === 'project'
+                ? 'Project Meeting'
+                : 'Research Group Meeting'}
+            </span>
           </div>
         </div>
 
-        <label className="shrink-0">
-          <span className="sr-only">
-            Meeting status
+        <div className="flex shrink-0 items-center gap-3">
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-outline-variant bg-surface-container-lowest px-3 py-1.5 text-xs font-medium text-on-surface-variant">
+            <span
+              className={`material-symbols-outlined text-[16px] ${
+                meeting.status === 'live'
+                  ? 'text-primary'
+                  : 'text-on-surface-variant'
+              }`}
+            >
+              {meeting.status === 'live'
+                ? 'radio_button_checked'
+                : meeting.status === 'completed'
+                  ? 'check_circle'
+                  : 'schedule'}
+            </span>
+            {meeting.status.charAt(0).toUpperCase() +
+              meeting.status.slice(1)}
           </span>
 
-          <select
-            value={meeting.status}
-            disabled={updatingMeeting}
-            onChange={(event) =>
-              void handleMeetingStatusChange(
-                event.target
-                  .value as ApiMeetingStatus,
-              )
-            }
-            className="h-10 rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm font-medium text-on-surface outline-none focus:border-primary"
-          >
-            {(
-              Object.keys(
-                meetingStatusLabels,
-              ) as ApiMeetingStatus[]
-            ).map((status) => (
-              <option
-                key={status}
-                value={status}
+          {meeting.status === 'upcoming' &&
+            canManageLifecycle && (
+              <button
+                type="button"
+                disabled={updatingMeeting}
+                onClick={() => void handleStartMeeting()}
+                className="inline-flex h-10 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-medium text-on-primary outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 disabled:opacity-60"
               >
-                {meetingStatusLabels[status]}
-              </option>
-            ))}
-          </select>
-        </label>
+                <span className="material-symbols-outlined text-[18px]">
+                  play_arrow
+                </span>
+                Start meeting
+              </button>
+            )}
+
+          {meeting.status === 'live' &&
+            canManageLifecycle && (
+              <button
+                type="button"
+                disabled={updatingMeeting}
+                onClick={() => void handleEndMeeting()}
+                className="inline-flex h-10 items-center gap-2 rounded-lg bg-error-container px-4 text-sm font-medium text-on-error-container outline-none focus:ring-2 focus:ring-error-container focus:ring-offset-2 disabled:opacity-60"
+              >
+                <span className="material-symbols-outlined text-[18px]">
+                  stop
+                </span>
+                End meeting
+              </button>
+            )}
+
+          {meeting.status === 'completed' &&
+            canManageLifecycle && (
+              <button
+                type="button"
+                disabled={updatingMeeting}
+                onClick={() => void handleReopenMeeting()}
+                className="inline-flex h-10 items-center gap-2 rounded-lg border border-outline-variant bg-surface-container-lowest px-4 text-sm font-medium text-on-surface outline-none focus:border-primary disabled:opacity-60"
+              >
+                <span className="material-symbols-outlined text-[18px]">
+                  replay
+                </span>
+                Reopen meeting
+              </button>
+            )}
+        </div>
       </header>
 
       {actionError && (
@@ -667,189 +1061,413 @@ export function MeetingDetailPage() {
           <div className="flex items-end justify-between gap-6">
             <div>
               <h2 className="text-lg font-semibold text-on-surface">
-                Agenda
+                Discussion
               </h2>
 
               <p className="mt-1 text-sm text-on-surface-variant">
-                Discussion points for this meeting.
+                Agenda items, grouped by section.
               </p>
             </div>
 
-            <div className="text-sm text-on-surface-variant">
-              {items.length}{' '}
-              {items.length === 1
-                ? 'item'
-                : 'items'}
-            </div>
-          </div>
-
-          <form
-            onSubmit={handleCreateItem}
-            className="mt-5 rounded-xl border border-outline-variant bg-surface-container-lowest p-5"
-          >
-            <div className="grid gap-4">
-              <label>
-                <span className="mb-1.5 block text-sm font-medium text-on-surface">
-                  Agenda item
-                </span>
-
+            {!isCompleted && (
+              <div className="flex items-center gap-2">
                 <input
                   type="text"
-                  value={agendaTitle}
-                  onChange={(event) =>
-                    setAgendaTitle(
-                      event.target.value,
-                    )
+                  value={newSectionName}
+                  onChange={(e) =>
+                    setNewSectionName(e.target.value)
                   }
-                  placeholder="What should be discussed?"
-                  className="h-10 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
+                  placeholder="New section name"
+                  aria-label="New section name"
+                  className="h-9 w-44 rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
                 />
-              </label>
 
-              <label>
-                <span className="mb-1.5 block text-sm font-medium text-on-surface">
-                  Notes
-                </span>
+                <button
+                  type="button"
+                  disabled={addingSection}
+                  onClick={() => void handleAddSection()}
+                  className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-xs font-semibold text-on-surface transition hover:border-primary/40 hover:bg-surface-container-low disabled:opacity-45"
+                >
+                  <span className="material-symbols-outlined text-[16px]">
+                    add
+                  </span>
+                  {addingSection
+                    ? 'Adding…'
+                    : 'Add section'}
+                </button>
+              </div>
+            )}
+          </div>
 
-                <textarea
-                  value={agendaNotes}
-                  onChange={(event) =>
-                    setAgendaNotes(
-                      event.target.value,
-                    )
-                  }
-                  rows={3}
-                  placeholder="Optional context or notes..."
-                  className="w-full resize-y rounded-lg border border-outline-variant bg-surface-container-lowest px-3 py-2.5 text-sm text-on-surface outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
-                />
-              </label>
-            </div>
-
-            <div className="mt-4 flex justify-end">
-              <button
-                type="submit"
-                disabled={
-                  creatingItem ||
-                  !agendaTitle.trim()
-                }
-                className="inline-flex h-9 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-white transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-45"
-              >
-                <span className="material-symbols-outlined text-[18px]">
-                  add
-                </span>
-
-                {creatingItem
-                  ? 'Adding…'
-                  : 'Add agenda item'}
-              </button>
-            </div>
-          </form>
-
-          {sortedItems.length === 0 ? (
+          {visibleSections.length === 0 ? (
             <div className="mt-5 rounded-xl border border-dashed border-outline-variant bg-surface-container-lowest px-6 py-12 text-center">
               <span className="material-symbols-outlined text-[28px] text-on-surface-variant">
                 checklist
               </span>
 
               <p className="mt-3 text-sm font-medium text-on-surface">
-                No agenda items yet
+                No visible sections
               </p>
 
               <p className="mt-1 text-sm text-on-surface-variant">
-                Add the first discussion point above.
+                Add a section to start building the agenda.
               </p>
             </div>
           ) : (
-            <div className="mt-5 space-y-3">
-              {sortedItems.map((item) => (
-                <article
-                  key={item.id}
-                  className="rounded-xl border border-outline-variant bg-surface-container-lowest p-5"
-                >
-                  <div className="flex items-start justify-between gap-6">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-medium text-on-surface-variant">
-                          #{item.position + 1}
-                        </span>
+            <div className="mt-5 space-y-6">
+              {visibleSections.map(
+                (section, sectionIndex) => {
+                  const sectionItems =
+                    itemsBySection.get(
+                      section.id,
+                    ) ?? []
 
-                        <h3 className="text-sm font-semibold text-on-surface">
-                          {item.title}
-                        </h3>
+                  return (
+                    <div
+                      key={section.id}
+                      className="rounded-xl border border-outline-variant bg-surface-container-lowest"
+                    >
+                      {/* Section header */}
+                      <div className="flex items-center justify-between gap-4 border-b border-outline-variant px-5 py-3">
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-sm font-semibold text-on-surface">
+                            {section.name}
+                          </h3>
+
+                          {section.description && (
+                            <span className="text-xs text-on-surface-variant">
+                              {section.description}
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-1">
+                          {/* Move up */}
+                          {!isCompleted && (
+                            <>
+                              <button
+                                type="button"
+                                aria-label={`Move ${section.name} up`}
+                                disabled={
+                                  sectionIndex ===
+                                    0 ||
+                                  reorderingSections
+                                }
+                                onClick={() =>
+                                  void handleMoveSection(
+                                    section,
+                                    -1,
+                                  )
+                                }
+                                className="flex h-7 w-7 items-center justify-center rounded text-on-surface-variant transition hover:bg-surface-container-high disabled:opacity-30"
+                              >
+                                <span className="material-symbols-outlined text-[15px]">
+                                  arrow_upward
+                                </span>
+                              </button>
+
+                              <button
+                                type="button"
+                                aria-label={`Move ${section.name} down`}
+                                disabled={
+                                  sectionIndex ===
+                                    visibleSections.length -
+                                    1 ||
+                                  reorderingSections
+                                }
+                                onClick={() =>
+                                  void handleMoveSection(
+                                    section,
+                                    1,
+                                  )
+                                }
+                                className="flex h-7 w-7 items-center justify-center rounded text-on-surface-variant transition hover:bg-surface-container-high disabled:opacity-30"
+                              >
+                                <span className="material-symbols-outlined text-[15px]">
+                                  arrow_downward
+                                </span>
+                              </button>
+
+                              {/* Edit */}
+                              <button
+                                type="button"
+                                aria-label={`Edit ${section.name}`}
+                                onClick={() => {
+                                  setEditingSectionId(
+                                    section.id,
+                                  )
+                                  setEditSectionName(
+                                    section.name,
+                                  )
+                                  setEditSectionDescription(
+                                    section.description,
+                                  )
+                                }}
+                                className="flex h-7 w-7 items-center justify-center rounded text-on-surface-variant transition hover:bg-surface-container-high"
+                              >
+                                <span className="material-symbols-outlined text-[15px]">
+                                  edit
+                                </span>
+                              </button>
+
+                              {/* Hide */}
+                              <button
+                                type="button"
+                                aria-label={`Hide ${section.name}`}
+                                onClick={() =>
+                                  void handleToggleSectionVisibility(
+                                    section,
+                                  )
+                                }
+                                className="flex h-7 w-7 items-center justify-center rounded text-on-surface-variant transition hover:bg-surface-container-high"
+                              >
+                                <span className="material-symbols-outlined text-[15px]">
+                                  visibility_off
+                                </span>
+                              </button>
+                            </>
+                          )}
+                        </div>
                       </div>
 
-                      {item.notes && (
-                        <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-on-surface-variant">
-                          {item.notes}
-                        </p>
-                      )}
+                      {/* Edit form */}
+                      {editingSectionId ===
+                        section.id && (
+                        <div className="border-b border-outline-variant bg-surface-container-low/40 px-5 py-4">
+                          <div className="flex items-end gap-3">
+                            <label className="flex-1">
+                              <span className="mb-1 block text-xs font-medium text-on-surface-variant">
+                                Name
+                              </span>
 
-                      {item.workItemIds.length >
-                        0 && (
-                        <div className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-primary">
-                          <span className="material-symbols-outlined text-[16px]">
-                            task_alt
-                          </span>
+                              <input
+                                type="text"
+                                value={editSectionName}
+                                onChange={(e) =>
+                                  setEditSectionName(
+                                    e.target.value,
+                                  )
+                                }
+                                className="h-9 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none focus:border-primary"
+                              />
+                            </label>
 
-                          {item.workItemIds.length}{' '}
-                          linked work{' '}
-                          {item.workItemIds
-                            .length === 1
-                            ? 'item'
-                            : 'items'}
+                            <label className="flex-1">
+                              <span className="mb-1 block text-xs font-medium text-on-surface-variant">
+                                Description
+                              </span>
+
+                              <input
+                                type="text"
+                                value={editSectionDescription}
+                                onChange={(e) =>
+                                  setEditSectionDescription(
+                                    e.target.value,
+                                  )
+                                }
+                                className="h-9 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none focus:border-primary"
+                              />
+                            </label>
+
+                            <button
+                              type="button"
+                              disabled={savingSection}
+                              onClick={() =>
+                                void handleSaveSection(
+                                  section,
+                                )
+                              }
+                              className="h-9 rounded-lg bg-primary px-4 text-sm font-semibold text-white transition hover:bg-primary/90 disabled:opacity-45"
+                            >
+                              {savingSection
+                                ? 'Saving…'
+                                : 'Save'}
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setEditingSectionId(
+                                  null,
+                                )
+                              }
+                              className="h-9 rounded-lg px-3 text-sm font-medium text-on-surface-variant transition hover:bg-surface-container-high"
+                            >
+                              Cancel
+                            </button>
+                          </div>
                         </div>
                       )}
+
+                      {/* Items */}
+                      <div className="p-4">
+                        {sectionItems.length ===
+                          0 &&
+                          !isCompleted && (
+                          <p className="mb-3 text-xs text-on-surface-variant">
+                            No items in this section yet.
+                          </p>
+                        )}
+
+                        {sectionItems.length ===
+                          0 &&
+                          isCompleted && (
+                          <p className="text-xs text-on-surface-variant">
+                            No items.
+                          </p>
+                        )}
+
+                        <div className="space-y-3">
+                          {sectionItems.map(
+                            (item, itemIndex) => (
+                              <article
+                                key={item.id}
+                                className="rounded-lg border border-outline-variant bg-surface-container-lowest p-4"
+                              >
+                                <div className="flex items-start justify-between gap-4">
+                                  <div className="min-w-0">
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-xs font-medium text-on-surface-variant">
+                                        #{itemIndex + 1}
+                                      </span>
+
+                                      <h4 className="text-sm font-medium text-on-surface">
+                                        {item.title}
+                                      </h4>
+                                    </div>
+
+                                    {item.notes && (
+                                      <p className="mt-1.5 whitespace-pre-wrap text-sm text-on-surface-variant">
+                                        {item.notes}
+                                      </p>
+                                    )}
+
+                                    {item.workItemIds.length >
+                                      0 && (
+                                      <div className="mt-2 inline-flex items-center gap-1.5 text-xs font-medium text-primary">
+                                        <span className="material-symbols-outlined text-[14px]">
+                                          task_alt
+                                        </span>
+
+                                        {item.workItemIds.length}{' '}
+                                        linked work{' '}
+                                        {item.workItemIds.length ===
+                                          1
+                                          ? 'item'
+                                          : 'items'}
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  <div className="flex shrink-0 items-center gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setWorkItemSource(item)
+                                      }
+                                      className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-outline-variant bg-surface-container-lowest px-2.5 text-xs font-semibold text-on-surface transition hover:border-primary/40 hover:bg-surface-container-low"
+                                    >
+                                      <span className="material-symbols-outlined text-[15px]">
+                                        add_task
+                                      </span>
+
+                                      Work item
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      disabled={
+                                        isCompleted ||
+                                        updatingItemId ===
+                                          item.id
+                                      }
+                                      onClick={() =>
+                                        void handleToggleItemStatus(
+                                          item,
+                                        )
+                                      }
+                                      className={[
+                                        'inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-semibold transition disabled:opacity-45',
+                                        item.status ===
+                                        'discussed'
+                                          ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
+                                          : 'border-outline-variant bg-surface-container-lowest text-on-surface hover:bg-surface-container-low',
+                                      ].join(' ')}
+                                    >
+                                      <span className="material-symbols-outlined text-[15px]">
+                                        {item.status ===
+                                        'discussed'
+                                          ? 'check_circle'
+                                          : 'radio_button_unchecked'}
+                                      </span>
+
+                                      {item.status ===
+                                      'discussed'
+                                        ? 'Discussed'
+                                        : 'Mark discussed'}
+                                    </button>
+                                  </div>
+                                </div>
+                              </article>
+                            ),
+                          )}
+                        </div>
+
+                        {/* Add item */}
+                        {!isCompleted && (
+                          <form
+                            onSubmit={(e) => {
+                              e.preventDefault()
+                              void handleCreateItemInSection(
+                                section,
+                              )
+                            }}
+                            className="mt-3 flex items-center gap-2"
+                          >
+                            <input
+                              type="text"
+                              value={
+                                sectionItemTitle[section.id] ??
+                                ''
+                              }
+                              onChange={(e) =>
+                                setSectionItemTitle(
+                                  (current) => ({
+                                    ...current,
+                                    [section.id]:
+                                      e.target.value,
+                                  }),
+                                )
+                              }
+                              placeholder="+ Add item"
+                              aria-label={`Add item to ${section.name}`}
+                              disabled={
+                                creatingSectionId ===
+                                section.id
+                              }
+                              className="h-9 flex-1 rounded-lg border border-dashed border-outline-variant bg-transparent px-3 text-sm text-on-surface outline-none transition placeholder:text-on-surface-variant/50 focus:border-solid focus:border-primary"
+                            />
+
+                            <button
+                              type="submit"
+                              aria-label={`Add ${section.name} item`}
+                              disabled={
+                                creatingSectionId ===
+                                section.id
+                              }
+                              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary text-white transition hover:bg-primary/90 disabled:opacity-45"
+                            >
+                              <span className="material-symbols-outlined text-[18px]">
+                                add
+                              </span>
+                            </button>
+                          </form>
+                        )}
+                      </div>
                     </div>
-
-                    <div className="flex shrink-0 items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setWorkItemSource(item)
-                        }
-                        className="inline-flex h-9 items-center gap-2 rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-xs font-semibold text-on-surface transition hover:border-primary/40 hover:bg-surface-container-low"
-                      >
-                        <span className="material-symbols-outlined text-[17px]">
-                          add_task
-                        </span>
-
-                        Create work item
-                      </button>
-
-                      <button
-                      type="button"
-                      disabled={
-                        updatingItemId === item.id
-                      }
-                      onClick={() =>
-                        void handleToggleItemStatus(
-                          item,
-                        )
-                      }
-                      className={[
-                        'inline-flex h-9 shrink-0 items-center gap-2 rounded-lg border px-3 text-xs font-semibold transition disabled:opacity-45',
-                        item.status ===
-                        'discussed'
-                          ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
-                          : 'border-outline-variant bg-surface-container-lowest text-on-surface hover:bg-surface-container-low',
-                      ].join(' ')}
-                    >
-                      <span className="material-symbols-outlined text-[17px]">
-                        {item.status ===
-                        'discussed'
-                          ? 'check_circle'
-                          : 'radio_button_unchecked'}
-                      </span>
-
-                      {item.status ===
-                      'discussed'
-                        ? 'Discussed'
-                        : 'Mark discussed'}
-                    </button>
-                    </div>
-                  </div>
-                </article>
-              ))}
+                  )
+                },
+              )}
             </div>
           )}
         </section>
@@ -879,6 +1497,7 @@ export function MeetingDetailPage() {
                   <select
                     value={selectedMemberId}
                     disabled={
+                      isCompleted ||
                       addingParticipant ||
                       availableMembers.length ===
                         0
@@ -913,6 +1532,7 @@ export function MeetingDetailPage() {
                 <button
                   type="button"
                   disabled={
+                    isCompleted ||
                     addingParticipant ||
                     !selectedMemberId
                   }
@@ -958,6 +1578,7 @@ export function MeetingDetailPage() {
                         type="button"
                         aria-label={`Remove ${getPersonName(participant.user)}`}
                         disabled={
+                          isCompleted ||
                           removingParticipantId ===
                           participant.id
                         }

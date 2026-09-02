@@ -111,7 +111,7 @@ export function MeetingSeriesDetailPage() {
     if (seriesId == null) {
       setSeries(null)
       setSections([])
-      setLoadError('Invalid series ID.')
+      setLoadError('Invalid template ID.')
       setLoading(false)
       return
     }
@@ -134,7 +134,7 @@ export function MeetingSeriesDetailPage() {
       setLoadError(
         getErrorMessage(
           error,
-          'Series could not be loaded.',
+          'Template could not be loaded.',
         ),
       )
     } finally {
@@ -418,7 +418,7 @@ export function MeetingSeriesDetailPage() {
           <span className="material-symbols-outlined text-[18px]">
             arrow_back
           </span>
-          Meeting Series
+          Meeting Templates
         </button>
 
         <div
@@ -430,7 +430,7 @@ export function MeetingSeriesDetailPage() {
           </span>
 
           <h1 className="mt-3 text-lg font-semibold text-on-surface">
-            Series unavailable
+            Template unavailable
           </h1>
 
           <p className="mt-1 text-sm text-on-surface-variant">
@@ -453,26 +453,26 @@ export function MeetingSeriesDetailPage() {
         <span className="material-symbols-outlined text-[18px]">
           arrow_back
         </span>
-        Meeting Series
+        Meeting Templates
       </button>
 
       <header className="mt-5 border-b border-outline-variant pb-6">
         <div className="flex flex-wrap items-center gap-3">
           <h1 className="text-3xl font-semibold tracking-tight text-on-surface">
-            Series Structure
+            Template Structure
           </h1>
 
           {series && (
             <span className="inline-flex rounded-full bg-surface-container-high px-2.5 py-1 text-xs font-medium text-on-surface-variant">
               {series.scope === 'group'
-                ? 'Research group scope'
-                : 'Project scope'}
+                ? 'Research Group Meeting'
+                : 'Project Meeting'}
             </span>
           )}
         </div>
 
         <p className="mt-1.5 text-sm text-on-surface-variant">
-          {series?.title}. Edit the default sections for this meeting series.
+          {series?.title}. Edit the default sections for this meeting template.
           New occurrences will snapshot these sections.
         </p>
       </header>
@@ -555,10 +555,7 @@ export function MeetingSeriesDetailPage() {
             <div className="mt-4 flex justify-end">
               <button
                 type="submit"
-                disabled={
-                  creatingSection ||
-                  !sectionName.trim()
-                }
+                disabled={creatingSection}
                 className="inline-flex h-9 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-white transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-45"
               >
                 <span className="material-symbols-outlined text-[18px]">
@@ -775,7 +772,7 @@ export function MeetingSeriesDetailPage() {
               </h2>
 
               <p className="mt-1 text-xs text-on-surface-variant">
-                Create a meeting from this series. Active
+                Create a meeting from this template. Active
                 sections will be snapshotted.
               </p>
             </div>
@@ -798,7 +795,7 @@ export function MeetingSeriesDetailPage() {
                         event.target.value,
                       )
                     }
-                    placeholder="Uses series name"
+                    placeholder="Uses template name"
                     className="h-10 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
                   />
                 </label>

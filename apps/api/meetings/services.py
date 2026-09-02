@@ -1,4 +1,5 @@
 from django.db import models, transaction
+from django.utils import timezone
 from django.db.models import Max
 
 from projects.models import ProjectMembership
@@ -446,6 +447,16 @@ def create_meeting(
         user=actor,
     )
 
+    # A standalone Meeting (no Series) still needs a usable structure.
+    # Create a real, occurrence-level default Section.
+    MeetingSection.objects.create(
+        meeting=meeting,
+        name="Agenda",
+        description="",
+        position=0,
+        is_visible=True,
+    )
+
     return meeting
 
 
@@ -482,11 +493,17 @@ def add_meeting_participant(
 def create_meeting_item(
     *,
     meeting,
+    meeting_section,
     actor,
     title,
     notes="",
 ):
     _require_meeting_write_access(meeting=meeting, user=actor)
+
+    if meeting_section.meeting_id != meeting.pk:
+        raise MeetingDomainError(
+            "The Section does not belong to this Meeting."
+        )
 
     title = title.strip()
     if not title:
@@ -494,12 +511,14 @@ def create_meeting_item(
             "Meeting item title is required."
         )
 
-    # Serialize position allocation for this Meeting.
-    Meeting.objects.select_for_update().get(pk=meeting.pk)
+    # Serialize position allocation for this Section.
+    MeetingSection.objects.select_for_update().get(
+        pk=meeting_section.pk,
+    )
 
     max_position = (
         MeetingItem.objects
-        .filter(meeting=meeting)
+        .filter(meeting_section=meeting_section)
         .aggregate(value=Max("position"))["value"]
     )
 
@@ -511,11 +530,145 @@ def create_meeting_item(
 
     return MeetingItem.objects.create(
         meeting=meeting,
+        meeting_section=meeting_section,
         title=title,
         notes=notes.strip(),
         position=position,
         created_by=actor,
     )
+
+
+# ── Meeting occurrence Sections (one-off structure) ─────────────
+
+
+@transaction.atomic
+def create_meeting_section(
+    *,
+    meeting,
+    actor,
+    name,
+    description="",
+):
+    """Add a one-off Section to a concrete Meeting occurrence.
+
+    This never touches the Series template.
+    """
+    _require_meeting_write_access(meeting=meeting, user=actor)
+
+    name = name.strip()
+    if not name:
+        raise MeetingDomainError("Section name is required.")
+
+    # Serialize position allocation for this Meeting.
+    Meeting.objects.select_for_update().get(pk=meeting.pk)
+
+    max_position = (
+        MeetingSection.objects
+        .filter(meeting=meeting)
+        .aggregate(value=Max("position"))["value"]
+    )
+
+    position = (
+        max_position + 1
+        if max_position is not None
+        else 0
+    )
+
+    return MeetingSection.objects.create(
+        meeting=meeting,
+        name=name,
+        description=description.strip(),
+        position=position,
+        is_visible=True,
+    )
+
+
+def update_meeting_section(
+    *,
+    section,
+    actor,
+    name=None,
+    description=None,
+    is_visible=None,
+):
+    """Rename / edit / hide-show a Section on one Meeting occurrence.
+
+    Never mutates the Series template.
+    """
+    _require_meeting_write_access(
+        meeting=section.meeting,
+        user=actor,
+    )
+
+    update_fields = []
+
+    if name is not None:
+        name = name.strip()
+        if not name:
+            raise MeetingDomainError("Section name is required.")
+        section.name = name
+        update_fields.append("name")
+
+    if description is not None:
+        section.description = description.strip()
+        update_fields.append("description")
+
+    if is_visible is not None:
+        section.is_visible = is_visible
+        update_fields.append("is_visible")
+
+    if update_fields:
+        section.save(update_fields=update_fields)
+
+    return section
+
+
+@transaction.atomic
+def reorder_meeting_sections(
+    *,
+    meeting,
+    actor,
+    section_ids,
+):
+    """Reorder a Meeting occurrence's Sections by the given ID order.
+
+    All of the Meeting's Sections must be included; a partial list is
+    rejected so no Section is left at a stale position.
+    """
+    _require_meeting_write_access(meeting=meeting, user=actor)
+
+    if not section_ids:
+        raise MeetingDomainError("Section order list is required.")
+
+    sections = MeetingSection.objects.filter(
+        meeting=meeting,
+        pk__in=section_ids,
+    )
+
+    if len(sections) != len(section_ids):
+        raise MeetingDomainError(
+            "One or more sections do not belong to this meeting."
+        )
+
+    total_sections = MeetingSection.objects.filter(
+        meeting=meeting,
+    ).count()
+    if len(section_ids) != total_sections:
+        raise MeetingDomainError(
+            "Reorder must include all sections of the meeting."
+        )
+
+    offset = len(section_ids)
+    MeetingSection.objects.filter(
+        meeting=meeting,
+        pk__in=section_ids,
+    ).update(position=models.F("position") + offset)
+
+    for new_position, section_id in enumerate(section_ids):
+        MeetingSection.objects.filter(
+            pk=section_id,
+            meeting=meeting,
+        ).update(position=new_position)
 
 
 def update_meeting(
@@ -524,8 +677,14 @@ def update_meeting(
     actor,
     title=None,
     scheduled_at=None,
-    status=None,
 ):
+    """Update editable Meeting metadata (title / scheduled time).
+
+    Lifecycle transitions are intentionally not part of this service.
+    Status moves from upcoming to live and from live to completed must
+    go through the explicit start/end domain actions below, so clients
+    cannot bypass the state machine with an arbitrary status PATCH.
+    """
     _require_meeting_write_access(meeting=meeting, user=actor)
 
     update_fields = []
@@ -543,19 +702,90 @@ def update_meeting(
         meeting.scheduled_at = scheduled_at
         update_fields.append("scheduled_at")
 
-    if status is not None:
-        if status not in Meeting.Status.values:
-            raise MeetingDomainError(
-                "Invalid Meeting status."
-            )
-        meeting.status = status
-        update_fields.append("status")
-
     if update_fields:
         update_fields.append("updated_at")
         meeting.save(
             update_fields=update_fields,
         )
+
+    return meeting
+
+
+@transaction.atomic
+def start_meeting(*, meeting, actor):
+    """Move an upcoming Meeting to live and record the actual start time.
+
+    Only upcoming -> live is valid. Uses server time; an already live or
+    completed Meeting cannot be started again.
+    """
+    _require_meeting_write_access(meeting=meeting, user=actor)
+
+    # Serialize lifecycle transitions for this Meeting so two concurrent
+    # start/end requests cannot both observe the old status and both commit.
+    Meeting.objects.select_for_update().get(pk=meeting.pk)
+    meeting.refresh_from_db()
+
+    if meeting.status != Meeting.Status.UPCOMING:
+        raise MeetingDomainError(
+            "Only an upcoming Meeting can be started."
+        )
+
+    meeting.status = Meeting.Status.LIVE
+    meeting.started_at = timezone.now()
+    meeting.save(update_fields=["status", "started_at", "updated_at"])
+
+    return meeting
+
+
+@transaction.atomic
+def end_meeting(*, meeting, actor):
+    """Move a live Meeting to completed and record the actual end time.
+
+    Only live -> completed is valid. Uses server time; an upcoming or
+    already completed Meeting cannot be ended.
+    """
+    _require_meeting_write_access(meeting=meeting, user=actor)
+
+    # Serialize lifecycle transitions for this Meeting so two concurrent
+    # start/end requests cannot both observe the old status and both commit.
+    Meeting.objects.select_for_update().get(pk=meeting.pk)
+    meeting.refresh_from_db()
+
+    if meeting.status != Meeting.Status.LIVE:
+        raise MeetingDomainError(
+            "Only a live Meeting can be ended."
+        )
+
+    meeting.status = Meeting.Status.COMPLETED
+    meeting.ended_at = timezone.now()
+    meeting.save(update_fields=["status", "ended_at", "updated_at"])
+
+    return meeting
+
+
+@transaction.atomic
+def reopen_meeting(*, meeting, actor):
+    """Reopen a completed Meeting: completed -> live.
+
+    Only a completed Meeting may be reopened. The original started_at is
+    preserved and ended_at is cleared. Ending the reopened Meeting later
+    records a new ended_at.
+    """
+    _require_meeting_write_access(meeting=meeting, user=actor)
+
+    # Serialize lifecycle transitions for this Meeting so two concurrent
+    # transitions cannot both observe the old status and both commit.
+    Meeting.objects.select_for_update().get(pk=meeting.pk)
+    meeting.refresh_from_db()
+
+    if meeting.status != Meeting.Status.COMPLETED:
+        raise MeetingDomainError(
+            "Only a completed Meeting can be reopened."
+        )
+
+    meeting.status = Meeting.Status.LIVE
+    meeting.ended_at = None
+    meeting.save(update_fields=["status", "ended_at", "updated_at"])
 
     return meeting
 

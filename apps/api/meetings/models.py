@@ -137,6 +137,8 @@ class Meeting(models.Model):
         choices=Status.choices,
         default=Status.UPCOMING,
     )
+    started_at = models.DateTimeField(null=True, blank=True)
+    ended_at = models.DateTimeField(null=True, blank=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
@@ -240,6 +242,11 @@ class MeetingItem(models.Model):
         on_delete=models.CASCADE,
         related_name="items",
     )
+    meeting_section = models.ForeignKey(
+        MeetingSection,
+        on_delete=models.CASCADE,
+        related_name="items",
+    )
     title = models.CharField(max_length=255)
     notes = models.TextField(default="", blank=True)
     position = models.PositiveIntegerField()
@@ -261,8 +268,8 @@ class MeetingItem(models.Model):
         ordering = ["position", "id"]
         constraints = [
             models.UniqueConstraint(
-                fields=["meeting", "position"],
-                name="meetings_item_unique_meeting_position",
+                fields=["meeting_section", "position"],
+                name="meetings_item_unique_section_position",
             )
         ]
 

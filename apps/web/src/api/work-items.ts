@@ -42,6 +42,21 @@ export async function getWorkItem(
   )
 }
 
+export interface ApiReorderWorkItemInput {
+  statusDefinitionId?: number | null
+  beforeWorkItemId?: number | null
+}
+
+export async function reorderWorkItem(
+  workItemId: number,
+  input: ApiReorderWorkItemInput,
+): Promise<ApiWorkItem> {
+  return apiPost<ApiWorkItem>(
+    `/api/work-items/${workItemId}/reorder/`,
+    input,
+  )
+}
+
 export async function updateWorkItem(
   workItemId: number,
   input: ApiUpdateWorkItemInput,

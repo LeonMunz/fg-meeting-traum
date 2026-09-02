@@ -96,7 +96,7 @@ export function MeetingSeriesListPage() {
       setError(
         getErrorMessage(
           loadError,
-          'Meeting series could not be loaded.',
+          'Meeting templates could not be loaded.',
         ),
       )
     } finally {
@@ -160,7 +160,7 @@ export function MeetingSeriesListPage() {
       setCreateError(
         getErrorMessage(
           err,
-          'Meeting series could not be created.',
+          'Meeting template could not be created.',
         ),
       )
     } finally {
@@ -192,13 +192,13 @@ export function MeetingSeriesListPage() {
           </div>
 
           <h1 className="mt-2 text-3xl font-semibold tracking-tight text-on-surface">
-            Meeting Series
+            Meeting Templates
           </h1>
 
           <p className="mt-1.5 text-sm leading-6 text-on-surface-variant">
             {activeResearchGroup
-              ? `Recurring meeting formats in ${activeResearchGroup.name}.`
-              : 'Manage recurring meeting formats.'}
+              ? `Meeting templates in ${activeResearchGroup.name}.`
+              : 'Manage meeting templates.'}
           </p>
         </div>
       </header>
@@ -209,7 +209,7 @@ export function MeetingSeriesListPage() {
         className="mt-6 rounded-xl border border-outline-variant bg-surface-container-lowest p-5"
       >
         <h2 className="text-sm font-semibold text-on-surface">
-          New meeting series
+          New meeting template
         </h2>
 
         <div className="mt-4 grid gap-4 md:grid-cols-2">
@@ -224,7 +224,7 @@ export function MeetingSeriesListPage() {
               onChange={(event) =>
                 setTitle(event.target.value)
               }
-              placeholder="e.g. FG Weekly"
+              placeholder="e.g. Weekly Sync"
               className="h-10 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
             />
           </label>
@@ -324,7 +324,7 @@ export function MeetingSeriesListPage() {
 
             {creating
               ? 'Creating…'
-              : 'Create series'}
+              : 'Create template'}
           </button>
         </div>
       </form>
@@ -337,7 +337,7 @@ export function MeetingSeriesListPage() {
           </span>
 
           <span className="text-sm text-on-surface-variant">
-            Loading series…
+            Loading templates…
           </span>
         </div>
       ) : pageError ? (
@@ -350,7 +350,7 @@ export function MeetingSeriesListPage() {
           </span>
 
           <h2 className="mt-3 text-base font-semibold text-on-surface">
-            Series couldn't be loaded
+            Templates couldn't be loaded
           </h2>
 
           <p className="mt-1 text-sm text-on-surface-variant">
@@ -375,11 +375,11 @@ export function MeetingSeriesListPage() {
           </span>
 
           <p className="mt-3 text-sm font-medium text-on-surface">
-            No meeting series yet
+            No meeting templates yet
           </p>
 
           <p className="mt-1 text-sm text-on-surface-variant">
-            Create a recurring meeting format above.
+            Create a meeting template above.
           </p>
         </div>
       ) : (
@@ -422,7 +422,7 @@ export function MeetingSeriesListPage() {
 
                 <div className="min-w-0 truncate text-sm text-on-surface-variant">
                   {s.scope === 'group'
-                    ? 'Research group'
+                    ? 'Research Group'
                     : projects.find((project) => project.id === s.projectId)?.name ?? 'Project'}
                 </div>
 

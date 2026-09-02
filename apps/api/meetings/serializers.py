@@ -178,6 +178,38 @@ class MeetingSectionSerializer(serializers.ModelSerializer):
         ]
 
 
+class MeetingSectionCreateSerializer(serializers.Serializer):
+    name = serializers.CharField(
+        max_length=255,
+        allow_blank=False,
+    )
+    description = serializers.CharField(
+        required=False,
+        allow_blank=True,
+    )
+
+
+class MeetingSectionPatchSerializer(serializers.Serializer):
+    name = serializers.CharField(
+        max_length=255,
+        allow_blank=False,
+        required=False,
+    )
+    description = serializers.CharField(
+        required=False,
+        allow_blank=True,
+    )
+    isVisible = serializers.BooleanField(
+        required=False,
+    )
+
+
+class MeetingSectionReorderSerializer(serializers.Serializer):
+    sectionIds = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
+    )
+
+
 # ── Meeting ──────────────────────────────────────────────────────
 
 
@@ -198,6 +230,16 @@ class MeetingSerializer(serializers.ModelSerializer):
     )
     scheduledAt = serializers.DateTimeField(
         source="scheduled_at",
+    )
+    startedAt = serializers.DateTimeField(
+        source="started_at",
+        read_only=True,
+        allow_null=True,
+    )
+    endedAt = serializers.DateTimeField(
+        source="ended_at",
+        read_only=True,
+        allow_null=True,
     )
     participantIds = serializers.SerializerMethodField()
     createdById = serializers.IntegerField(
@@ -223,6 +265,8 @@ class MeetingSerializer(serializers.ModelSerializer):
             "seriesId",
             "title",
             "scheduledAt",
+            "startedAt",
+            "endedAt",
             "status",
             "participantIds",
             "createdById",
@@ -253,10 +297,6 @@ class MeetingCreateSerializer(serializers.Serializer):
         allow_blank=False,
     )
     scheduledAt = serializers.DateTimeField()
-    status = serializers.ChoiceField(
-        choices=Meeting.Status.choices,
-        required=False,
-    )
 
 
 class MeetingPatchSerializer(serializers.Serializer):
@@ -266,10 +306,6 @@ class MeetingPatchSerializer(serializers.Serializer):
         required=False,
     )
     scheduledAt = serializers.DateTimeField(
-        required=False,
-    )
-    status = serializers.ChoiceField(
-        choices=Meeting.Status.choices,
         required=False,
     )
 
@@ -283,15 +319,15 @@ class CreateMeetingFromSeriesSerializer(serializers.Serializer):
     scheduledAt = serializers.DateTimeField(
         required=False,
     )
-    status = serializers.ChoiceField(
-        choices=Meeting.Status.choices,
-        required=False,
-    )
 
 
 class MeetingItemSerializer(serializers.ModelSerializer):
     meetingId = serializers.IntegerField(
         source="meeting_id",
+        read_only=True,
+    )
+    meetingSectionId = serializers.IntegerField(
+        source="meeting_section_id",
         read_only=True,
     )
     workItemIds = serializers.SerializerMethodField()
@@ -313,6 +349,7 @@ class MeetingItemSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "meetingId",
+            "meetingSectionId",
             "title",
             "notes",
             "position",
@@ -338,6 +375,7 @@ class MeetingItemSerializer(serializers.ModelSerializer):
 
 
 class MeetingItemCreateSerializer(serializers.Serializer):
+    meetingSectionId = serializers.IntegerField(min_value=1)
     title = serializers.CharField(
         max_length=255,
         allow_blank=False,

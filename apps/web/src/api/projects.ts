@@ -12,6 +12,7 @@ import type {
   ApiDeleteProjectResponse,
   ApiProject,
   ApiProjectMembership,
+  ApiProjectWorkItemConfiguration,
   ApiRemoveProjectMembershipInput,
   ApiResearchGroupMember,
   ApiUpdateProjectInput,
@@ -59,6 +60,14 @@ export async function updateProject(
   return apiPatch<ApiProject>(
     `/api/projects/${projectId}/`,
     input,
+  )
+}
+
+export async function getProjectWorkItemConfiguration(
+  projectId: number,
+): Promise<ApiProjectWorkItemConfiguration> {
+  return apiGet<ApiProjectWorkItemConfiguration>(
+    `/api/projects/${projectId}/work-item-configuration/`,
   )
 }
 

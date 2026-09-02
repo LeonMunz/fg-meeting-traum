@@ -8,6 +8,7 @@ import type { FormEvent } from 'react'
 import { ApiError } from '../../api/client'
 import { createWorkItemFromMeetingItem } from '../../api/meetings'
 import {
+  getProjectWorkItemConfiguration,
   listProjectMemberships,
   listProjects,
 } from '../../api/projects'
@@ -16,7 +17,7 @@ import type {
   ApiProject,
   ApiProjectMembership,
   ApiWorkItem,
-  ApiWorkItemType,
+  ApiWorkItemTypeDefinition,
 } from '../../api/types'
 
 type CreateMeetingWorkItemDialogProps = {
@@ -25,13 +26,6 @@ type CreateMeetingWorkItemDialogProps = {
   meetingItem: ApiMeetingItem | null
   onClose: () => void
   onCreated: (workItem: ApiWorkItem) => void
-}
-
-const typeLabels: Record<ApiWorkItemType, string> = {
-  task: 'Task',
-  deliverable: 'Deliverable',
-  milestone: 'Milestone',
-  epic: 'Epic',
 }
 
 function getErrorMessage(
@@ -86,8 +80,11 @@ export function CreateMeetingWorkItemDialog({
   const [projectId, setProjectId] =
     useState('')
 
-  const [type, setType] =
-    useState<ApiWorkItemType>('task')
+  const [typeDefinitions, setTypeDefinitions] =
+    useState<ApiWorkItemTypeDefinition[]>([])
+
+  const [typeDefinitionId, setTypeDefinitionId] =
+    useState<number | null>(null)
 
   const [title, setTitle] =
     useState('')
@@ -120,7 +117,8 @@ export function CreateMeetingWorkItemDialog({
 
     setTitle(meetingItem.title)
     setDescription(meetingItem.notes)
-    setType('task')
+    setTypeDefinitionId(null)
+    setTypeDefinitions([])
     setDueDate('')
     setAssigneeIds([])
     setMemberships([])
@@ -239,6 +237,67 @@ export function CreateMeetingWorkItemDialog({
     }
   }, [open, projectId])
 
+  useEffect(() => {
+    if (!open || !projectId) {
+      setTypeDefinitions([])
+      setTypeDefinitionId(null)
+      return
+    }
+
+    const numericProjectId =
+      Number(projectId)
+
+    if (!Number.isInteger(numericProjectId)) {
+      return
+    }
+
+    let cancelled = false
+
+    const load = async () => {
+      try {
+        const config =
+          await getProjectWorkItemConfiguration(
+            numericProjectId,
+          )
+
+        if (cancelled) {
+          return
+        }
+
+        const activeTypes = config.types.filter(
+          (typeDefinition) =>
+            typeDefinition.active,
+        )
+
+        setTypeDefinitions(activeTypes)
+
+        // The Type defaults to the first active type definition.
+        setTypeDefinitionId(
+          activeTypes.length > 0
+            ? activeTypes[0].id
+            : null,
+        )
+      } catch (loadError) {
+        if (!cancelled) {
+          setTypeDefinitions([])
+          setTypeDefinitionId(null)
+          setError(
+            getErrorMessage(
+              loadError,
+              'Work item options could not be loaded.',
+            ),
+          )
+        }
+      }
+    }
+
+    void load()
+
+    return () => {
+      cancelled = true
+    }
+  }, [open, projectId])
+
   const eligibleAssignees = useMemo(
     () =>
       memberships.filter(
@@ -276,6 +335,7 @@ export function CreateMeetingWorkItemDialog({
 
     if (
       !Number.isInteger(numericProjectId) ||
+      typeDefinitionId == null ||
       !title.trim() ||
       submitting
     ) {
@@ -291,7 +351,7 @@ export function CreateMeetingWorkItemDialog({
           meetingItem.id,
           {
             projectId: numericProjectId,
-            type,
+            typeDefinitionId,
             title: title.trim(),
             description: description.trim(),
             assigneeIds,
@@ -300,13 +360,22 @@ export function CreateMeetingWorkItemDialog({
           },
         )
 
+      // A Project page opened in another tab (or still mounted in
+      // this SPA) must pick up the new canonical WorkItem without
+      // requiring a hard reload.
+      window.dispatchEvent(
+        new CustomEvent('fg-workspace:work-item-created', {
+          detail: workItem,
+        }),
+      )
+
       onCreated(workItem)
       onClose()
     } catch (submitError) {
       setError(
         getErrorMessage(
           submitError,
-          'Work item could not be created.',
+          'Select a valid project and type before creating a work item.',
         ),
       )
     } finally {
@@ -382,27 +451,33 @@ export function CreateMeetingWorkItemDialog({
             </span>
 
             <select
-              value={type}
-              onChange={(event) =>
-                setType(
-                  event.target
-                    .value as ApiWorkItemType,
-                )
-              }
+              value={typeDefinitionId == null ? '' : typeDefinitionId}
+              disabled={typeDefinitions.length === 0}
+              onChange={(event) => {
+                const next = Number(event.target.value)
+
+                if (Number.isInteger(next)) {
+                  setTypeDefinitionId(next)
+                }
+              }}
               className="h-10 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none focus:border-primary"
             >
-              {(
-                Object.keys(
-                  typeLabels,
-                ) as ApiWorkItemType[]
-              ).map((value) => (
-                <option
-                  key={value}
-                  value={value}
-                >
-                  {typeLabels[value]}
+              {typeDefinitions.length === 0 ? (
+                <option value="">
+                  {loadingProjects
+                    ? 'Loading…'
+                    : 'No work item types available'}
                 </option>
-              ))}
+              ) : (
+                typeDefinitions.map((typeDefinition) => (
+                  <option
+                    key={typeDefinition.id}
+                    value={typeDefinition.id}
+                  >
+                    {typeDefinition.name}
+                  </option>
+                ))
+              )}
             </select>
           </label>
 

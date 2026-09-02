@@ -19,9 +19,12 @@ import type {
   ApiMeetingSection,
   ApiMeetingSeries,
   ApiMeetingSeriesSection,
+  ApiCreateMeetingSectionInput,
+  ApiReorderMeetingSectionsInput,
   ApiReorderMeetingSeriesSectionsInput,
   ApiUpdateMeetingInput,
   ApiUpdateMeetingItemInput,
+  ApiUpdateMeetingSectionInput,
   ApiUpdateMeetingSeriesInput,
   ApiUpdateMeetingSeriesSectionInput,
   ApiWorkItem,
@@ -60,6 +63,33 @@ export async function updateMeeting(
   return apiPatch<ApiMeeting>(
     `/api/meetings/${meetingId}/`,
     input,
+  )
+}
+
+export async function startMeeting(
+  meetingId: number,
+): Promise<ApiMeeting> {
+  return apiPost<ApiMeeting>(
+    `/api/meetings/${meetingId}/start`,
+    {},
+  )
+}
+
+export async function endMeeting(
+  meetingId: number,
+): Promise<ApiMeeting> {
+  return apiPost<ApiMeeting>(
+    `/api/meetings/${meetingId}/end`,
+    {},
+  )
+}
+
+export async function reopenMeeting(
+  meetingId: number,
+): Promise<ApiMeeting> {
+  return apiPost<ApiMeeting>(
+    `/api/meetings/${meetingId}/reopen`,
+    {},
   )
 }
 
@@ -226,12 +256,42 @@ export async function createMeetingFromSeries(
   )
 }
 
-/* ── Meeting Sections (snapshots) ──────────────────────────────── */
+/* ── Meeting Sections (occurrence structure) ───────────────────── */
 
 export async function listMeetingSections(
   meetingId: number,
 ): Promise<ApiMeetingSection[]> {
   return apiGet<ApiMeetingSection[]>(
     `/api/meetings/${meetingId}/sections/`,
+  )
+}
+
+export async function createMeetingSection(
+  meetingId: number,
+  input: ApiCreateMeetingSectionInput,
+): Promise<ApiMeetingSection> {
+  return apiPost<ApiMeetingSection>(
+    `/api/meetings/${meetingId}/sections/`,
+    input,
+  )
+}
+
+export async function updateMeetingSection(
+  sectionId: number,
+  input: ApiUpdateMeetingSectionInput,
+): Promise<ApiMeetingSection> {
+  return apiPatch<ApiMeetingSection>(
+    `/api/meeting-sections/${sectionId}/`,
+    input,
+  )
+}
+
+export async function reorderMeetingSections(
+  meetingId: number,
+  input: ApiReorderMeetingSectionsInput,
+): Promise<ApiMeetingSection[]> {
+  return apiPatch<ApiMeetingSection[]>(
+    `/api/meetings/${meetingId}/sections/reorder/`,
+    input,
   )
 }

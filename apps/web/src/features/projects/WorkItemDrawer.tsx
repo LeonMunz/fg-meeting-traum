@@ -16,6 +16,7 @@ import {
   markdownToPlainText,
 } from '../../components/editor/markdownExtensions'
 import type {
+  ApiProjectWorkItemConfiguration,
   ApiUpdateWorkItemInput,
   ApiWorkItem,
   ApiWorkItemComment,
@@ -32,12 +33,16 @@ import {
   listWorkItemHistory,
   updateWorkItemComment,
 } from '../../api/work-items'
+import {
+  resolveStatusDefinitionIdByCategory,
+  resolveWorkItemStatusSelectValue,
+} from './workItemMapping'
 
 export type WorkItemFormInput = {
   title: string
   description: string
-  type: ApiWorkItemType
-  status: ApiWorkItemStatus
+  typeDefinitionId: number
+  statusDefinitionId: number | null
   assigneeIds: string[]
   parentId: string | null
   dueDate: string | null
@@ -63,6 +68,7 @@ type WorkItemDrawerProps = {
   item: ApiWorkItem | null
   readOnly: boolean
   currentUserId: number | null
+  workItemConfiguration: ApiProjectWorkItemConfiguration | null
   assignees: AssigneeOption[]
   parentItems: ParentOption[]
   onClose: () => void
@@ -123,6 +129,16 @@ const statusOptions: Array<{
     label: 'Done',
   },
 ]
+
+// Icon for a Project-configured type definition by its display name.
+// Falls back to the generic task icon for custom types we do not know.
+function typeIconForName(name: string): string {
+  const match = typeOptions.find(
+    (option) =>
+      option.label.toLowerCase() === name.trim().toLowerCase(),
+  )
+  return match ? match.icon : 'check_box_outline_blank'
+}
 
 /* ── History presentation helpers ─────────────────────────────────
  * Map the typed backend history contract (see api/types.ts) to
@@ -775,6 +791,7 @@ export function WorkItemDrawer({
   item,
   readOnly,
   currentUserId,
+  workItemConfiguration,
   assignees,
   parentItems,
   onClose,
@@ -796,6 +813,7 @@ export function WorkItemDrawer({
         item={item}
         readOnly={readOnly}
         currentUserId={currentUserId}
+        workItemConfiguration={workItemConfiguration}
         assignees={assignees}
         parentItems={parentItems}
         onClose={onClose}
@@ -808,6 +826,7 @@ export function WorkItemDrawer({
     <CreateWorkItemPanel
       projectName={projectName}
       readOnly={readOnly}
+      workItemConfiguration={workItemConfiguration}
       assignees={assignees}
       parentItems={parentItems}
       onClose={onClose}
@@ -821,6 +840,7 @@ export function WorkItemDrawer({
 function CreateWorkItemPanel({
   projectName,
   readOnly,
+  workItemConfiguration,
   assignees,
   parentItems,
   onClose,
@@ -828,6 +848,7 @@ function CreateWorkItemPanel({
 }: {
   projectName: string
   readOnly: boolean
+  workItemConfiguration: ApiProjectWorkItemConfiguration | null
   assignees: AssigneeOption[]
   parentItems: ParentOption[]
   onClose: () => void
@@ -844,10 +865,14 @@ function CreateWorkItemPanel({
     description,
     setDescription,
   ] = useState('')
-  const [type, setType] =
-    useState<ApiWorkItemType>('task')
-  const [status, setStatus] =
-    useState<ApiWorkItemStatus>('todo')
+  const [
+    typeDefinitionId,
+    setTypeDefinitionId,
+  ] = useState<number | null>(null)
+  const [
+    statusDefinitionId,
+    setStatusDefinitionId,
+  ] = useState<number | null>(null)
   const [
     assigneeIds,
     setAssigneeIds,
@@ -929,6 +954,30 @@ function CreateWorkItemPanel({
       sortedAssignees,
     ])
 
+  const activeTypeDefinitions =
+    useMemo(
+      () =>
+        (workItemConfiguration?.types ?? [])
+          .filter((definition) => definition.active)
+          .sort(
+            (left, right) =>
+              left.order - right.order,
+          ),
+      [workItemConfiguration],
+    )
+
+  const activeStatusDefinitions =
+    useMemo(
+      () =>
+        (workItemConfiguration?.statuses ?? [])
+          .filter((definition) => definition.active)
+          .sort(
+            (left, right) =>
+              left.order - right.order,
+          ),
+      [workItemConfiguration],
+    )
+
   const availableParentItems =
     useMemo(
       () =>
@@ -940,6 +989,36 @@ function CreateWorkItemPanel({
         ),
       [parentItems],
     )
+
+  // Seed type/status once the Project's Work Item configuration arrives:
+  // the default type (the configured 'Task' type when present, otherwise
+  // the first configured type), and the Project's default status.
+  useEffect(() => {
+    if (typeDefinitionId == null) {
+      const defaultType =
+        activeTypeDefinitions.find(
+          (definition) =>
+            definition.name.trim().toLowerCase() === 'task',
+        ) ?? activeTypeDefinitions[0]
+      if (defaultType) {
+        setTypeDefinitionId(defaultType.id)
+      }
+    }
+    if (statusDefinitionId == null) {
+      const defaultStatus =
+        activeStatusDefinitions.find(
+          (definition) => definition.isDefault,
+        ) ?? activeStatusDefinitions[0]
+      if (defaultStatus) {
+        setStatusDefinitionId(defaultStatus.id)
+      }
+    }
+  }, [
+    activeTypeDefinitions,
+    activeStatusDefinitions,
+    typeDefinitionId,
+    statusDefinitionId,
+  ])
 
   useEffect(() => {
     setAssigneePickerOpen(false)
@@ -1033,6 +1112,7 @@ function CreateWorkItemPanel({
     !readOnly &&
     !submitting &&
     title.trim().length > 0 &&
+    typeDefinitionId != null &&
     (
       !blocked ||
       normalizedBlockedReason
@@ -1052,8 +1132,9 @@ function CreateWorkItemPanel({
       title: title.trim(),
       description:
         description.trim(),
-      type,
-      status,
+      typeDefinitionId:
+        typeDefinitionId as number,
+      statusDefinitionId,
       assigneeIds,
       parentId:
         parentId || null,
@@ -1199,70 +1280,81 @@ function CreateWorkItemPanel({
                   Type
                 </legend>
 
-                <div className="grid grid-cols-4 overflow-hidden rounded-lg border border-outline-variant">
-                  {typeOptions.map(
-                    (option, index) => {
-                      const selected =
-                        type ===
-                        option.value
+                {activeTypeDefinitions.length > 0 ? (
+                  <div
+                    className="grid gap-0 overflow-hidden rounded-lg border border-outline-variant"
+                    style={{
+                      gridTemplateColumns:
+                        `repeat(${
+                          Math.min(
+                            activeTypeDefinitions.length,
+                            4,
+                          )
+                        }, minmax(0, 1fr))`,
+                    }}
+                  >
+                    {activeTypeDefinitions.map(
+                      (definition, index) => {
+                        const selected =
+                          typeDefinitionId ===
+                          definition.id
 
-                      return (
-                        <label
-                          key={
-                            option.value
-                          }
-                          className={[
-                            'relative flex min-w-0 cursor-pointer items-center justify-center gap-1.5 px-2 py-2.5 text-xs font-medium transition',
-                            index > 0
-                              ? 'border-l border-outline-variant'
-                              : '',
-                            selected
-                              ? 'bg-secondary-container text-on-surface'
-                              : 'bg-surface-container-lowest text-on-surface-variant hover:bg-surface-container-low hover:text-on-surface',
-                            readOnly
-                              ? 'cursor-default'
-                              : '',
-                          ].join(' ')}
-                        >
-                          <input
-                            type="radio"
-                            name="work-item-type"
-                            value={
-                              option.value
-                            }
-                            checked={
+                        return (
+                          <label
+                            key={definition.id}
+                            className={[
+                              'relative flex min-w-0 cursor-pointer items-center justify-center gap-1.5 px-2 py-2.5 text-xs font-medium transition',
+                              index > 0
+                                ? 'border-l border-outline-variant'
+                                : '',
                               selected
-                            }
-                            disabled={
+                                ? 'bg-secondary-container text-on-surface'
+                                : 'bg-surface-container-lowest text-on-surface-variant hover:bg-surface-container-low hover:text-on-surface',
                               readOnly
-                            }
-                            onChange={() =>
-                              setType(
-                                option.value,
-                              )
-                            }
-                            className="absolute inset-0 cursor-pointer appearance-none focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-primary disabled:cursor-default"
-                          />
-
-                          <span
-                            aria-hidden="true"
-                            className="pointer-events-none material-symbols-outlined text-[16px]"
+                                ? 'cursor-default'
+                                : '',
+                            ].join(' ')}
                           >
-                            {
-                              option.icon
-                            }
-                          </span>
+                            <input
+                              type="radio"
+                              name="work-item-type"
+                              value={definition.id}
+                              checked={selected}
+                              disabled={
+                                readOnly
+                              }
+                              onChange={() =>
+                                setTypeDefinitionId(
+                                  definition.id,
+                                )
+                              }
+                              className="absolute inset-0 cursor-pointer appearance-none focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-primary disabled:cursor-default"
+                            />
 
-                          <span className="pointer-events-none truncate">
-                            {
-                              option.label
-                            }
-                          </span>
-                        </label>
-                      )
-                    },
-                  )}
-                </div>
+                            <span
+                              aria-hidden="true"
+                              className="pointer-events-none material-symbols-outlined text-[16px]"
+                            >
+                              {typeIconForName(
+                                definition.name,
+                              )}
+                            </span>
+
+                            <span className="pointer-events-none truncate">
+                              {definition.name}
+                            </span>
+                          </label>
+                        )
+                      },
+                    )}
+                  </div>
+                ) : (
+                  <p className="rounded-lg border border-outline-variant bg-surface-container-lowest px-3 py-2.5 text-xs text-on-surface-variant">
+                    {readOnly
+                      ? 'No type definitions.'
+                      : 'No Work Item types are configured for this Project.'}
+                  </p>
+                )}
               </fieldset>
 
               <div className="grid grid-cols-2 gap-4">
@@ -1272,27 +1364,29 @@ function CreateWorkItemPanel({
                   </span>
 
                   <select
-                    value={status}
-                    disabled={readOnly}
+                    value={
+                      statusDefinitionId == null
+                        ? ''
+                        : statusDefinitionId
+                    }
+                    disabled={
+                      readOnly ||
+                      activeStatusDefinitions.length === 0
+                    }
                     onChange={(event) =>
-                      setStatus(
-                        event.target
-                          .value as ApiWorkItemStatus,
+                      setStatusDefinitionId(
+                        Number(event.target.value),
                       )
                     }
                     className="h-10 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15 disabled:cursor-default disabled:bg-surface-container-low disabled:text-on-surface-variant"
                   >
-                    {statusOptions.map(
-                      (option) => (
+                    {activeStatusDefinitions.map(
+                      (definition) => (
                         <option
-                          key={
-                            option.value
-                          }
-                          value={
-                            option.value
-                          }
+                          key={definition.id}
+                          value={definition.id}
                         >
-                          {option.label}
+                          {definition.name}
                         </option>
                       ),
                     )}
@@ -1668,6 +1762,7 @@ function WorkItemInspector({
   item,
   readOnly,
   currentUserId,
+  workItemConfiguration,
   assignees,
   parentItems,
   onClose,
@@ -1677,6 +1772,7 @@ function WorkItemInspector({
   item: ApiWorkItem
   readOnly: boolean
   currentUserId: number | null
+  workItemConfiguration: ApiProjectWorkItemConfiguration | null
   assignees: AssigneeOption[]
   parentItems: ParentOption[]
   onClose: () => void
@@ -1703,6 +1799,36 @@ function WorkItemInspector({
     Promise<void>
   >(Promise.resolve())
   const queuedPatchCountRef = useRef(0)
+
+  const inspectorStatusDefinitions =
+    useMemo(
+      () =>
+        (workItemConfiguration?.statuses ?? [])
+          .filter((definition) => definition.active)
+          .sort(
+            (left, right) =>
+              left.order - right.order,
+          ),
+      [workItemConfiguration],
+    )
+
+  // The controlled <select> must render the option that matches the Work
+  // Item's *actual* status — the same value the Board column and the
+  // persisted API agree on. Derive it from the canonical definition ID
+  // (with the resolved category as a fallback) rather than from the
+  // legacy fixed-string `item.status`, which the API no longer populates.
+  const statusSelectValue = useMemo(
+    () =>
+      resolveWorkItemStatusSelectValue(
+        item,
+        item.status ?? 'todo',
+        workItemConfiguration,
+      ),
+    [
+      item,
+      workItemConfiguration,
+    ],
+  )
 
   const [titleEditing, setTitleEditing] =
     useState(false)
@@ -2575,8 +2701,18 @@ function WorkItemInspector({
       return
     }
 
+    const statusDefinitionId =
+      resolveStatusDefinitionIdByCategory(
+        nextStatus,
+        workItemConfiguration,
+      )
+
+    if (statusDefinitionId == null) {
+      return
+    }
+
     void patchField({
-      status: nextStatus,
+      statusDefinitionId,
     })
   }
 
@@ -2910,26 +3046,40 @@ function WorkItemInspector({
 
               <PropertyRow label="Status">
                 <select
-                  value={item.status}
-                  disabled={readOnly}
-                  onChange={(event) =>
-                    handleStatusChange(
-                      event.target
-                        .value as ApiWorkItemStatus,
-                    )
+                  value={
+                    statusSelectValue == null
+                      ? ''
+                      : statusSelectValue
                   }
+                  disabled={
+                    readOnly ||
+                    inspectorStatusDefinitions.length === 0
+                  }
+                  onChange={(event) => {
+                    const option =
+                      inspectorStatusDefinitions.find(
+                        (definition) =>
+                          String(definition.id) ===
+                          event.target.value,
+                      )
+                    if (option) {
+                      handleStatusChange(
+                        option.category as ApiWorkItemStatus,
+                      )
+                    }
+                  }}
                   aria-label="Status"
                   className={
                     compactControlClassName
                   }
                 >
-                  {statusOptions.map(
-                    (option) => (
+                  {inspectorStatusDefinitions.map(
+                    (definition) => (
                       <option
-                        key={option.value}
-                        value={option.value}
+                        key={definition.id}
+                        value={definition.id}
                       >
-                        {option.label}
+                        {definition.name}
                       </option>
                     ),
                   )}

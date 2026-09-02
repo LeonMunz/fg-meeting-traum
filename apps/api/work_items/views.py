@@ -1,3 +1,4 @@
+from django.db.models import F
 """Work Item API views.
 
 Read authorization uses the existing Project security boundary:
@@ -31,6 +32,7 @@ from .services import (
     delete_work_item_comment,
     update_work_item,
     update_work_item_comment,
+    reposition_work_item,
 )
 
 
@@ -82,6 +84,7 @@ def serialize_work_item(work_item):
         "createdById": data["createdById"],
         "typeDefinitionId": data["typeDefinitionId"],
         "statusDefinitionId": data["statusDefinitionId"],
+        "boardPosition": data["boardPosition"],
         "labelDefinitionIds": data["labelDefinitionIds"],
     }
 
@@ -110,10 +113,20 @@ class ProjectWorkItemListCreateView(APIView):
             )
         project, membership = result
 
-        # Query scoped to this project
+        # Query scoped to this project. Board columns are rendered in
+        # this order: persisted manual position (WorkItem.board_position)
+        # first, with unsorted items (NULL) following in canonical
+        # creation order. The same list the Project Board and List
+        # render from, so a WorkItem created through the Meeting
+        # quick-create flow is immediately visible here without
+        # requiring a client-side refresh.
         work_items = WorkItem.objects.filter(
             project_id=project_id,
-        ).select_related("project", "created_by", "parent")
+        ).select_related("project", "created_by", "parent").order_by(
+            F("board_position").asc(nulls_last=True),
+            "created_at",
+            "id",
+        )
 
         data = [serialize_work_item(wi) for wi in work_items]
         return Response(data)
@@ -287,6 +300,96 @@ class WorkItemDetailView(APIView):
 
         work_item.refresh_from_db()
         return Response(serialize_work_item(work_item))
+
+
+
+# ── WorkItem Board reorder (drag/drop) ──
+
+
+class WorkItemReorderView(APIView):
+    """POST /api/work-items/{work_item_id}/reorder/
+
+    Single atomic Board drag/drop operation: moves the Work Item to an
+    exact position inside a Board column. When the target column differs
+    from the Work Item's current column, the canonical status_definition
+    moves with it, so a cross-column drop is never split into a race-prone
+    status PATCH followed by a position PATCH.
+
+    Body (both fields optional):
+    - statusDefinitionId: target column (Project status definition ID).
+      Omit to keep the Work Item's current status.
+    - beforeWorkItemId: Work Item that should follow the moved one in the
+      target column. Omit / null to place it at the end of the column.
+
+    Requires ProjectMembership owner/member (not viewer).
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, work_item_id):
+        try:
+            work_item = WorkItem.objects.get(pk=work_item_id)
+        except WorkItem.DoesNotExist:
+            return Response(
+                {"error": "WorkItem not found"},
+                status=404,
+            )
+
+        result = _require_project_access(request, work_item.project_id)
+        if result is None:
+            return Response(
+                {"error": "WorkItem not found"},
+                status=404,
+            )
+        project, membership = result
+
+        if membership.role == ProjectMembership.Role.VIEWER:
+            return Response(
+                {"error": "A viewer cannot modify WorkItems."},
+                status=403,
+            )
+
+        status_definition_id = request.data.get("statusDefinitionId")
+        if status_definition_id is not None:
+            try:
+                status_definition_id = int(status_definition_id)
+            except (TypeError, ValueError):
+                return Response(
+                    {"error": "statusDefinitionId is invalid."},
+                    status=400,
+                )
+
+        before_work_item_id = request.data.get("beforeWorkItemId")
+        if before_work_item_id is not None:
+            try:
+                before_work_item_id = int(before_work_item_id)
+            except (TypeError, ValueError):
+                return Response(
+                    {"error": "beforeWorkItemId is invalid."},
+                    status=400,
+                )
+
+        if (
+            status_definition_id is None
+            and before_work_item_id is None
+        ):
+            return Response(
+                {"error": "Nothing to reorder: provide a target status, "
+                          "a before Work Item, or both."},
+                status=400,
+            )
+
+        try:
+            repositioned = reposition_work_item(
+                work_item=work_item,
+                actor=request.user,
+                status_definition_id=status_definition_id,
+                before_work_item_id=before_work_item_id,
+            )
+        except WorkItemDomainError as exc:
+            return Response({"error": exc.message}, status=400)
+
+        return Response(serialize_work_item(repositioned))
 
 
 # ── WorkItem History (read-only) ──

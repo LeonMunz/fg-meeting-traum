@@ -27,6 +27,9 @@ from .serializers import (
     MeetingItemPatchSerializer,
     MeetingItemSerializer,
     MeetingPatchSerializer,
+    MeetingSectionCreateSerializer,
+    MeetingSectionPatchSerializer,
+    MeetingSectionReorderSerializer,
     MeetingSectionSerializer,
     MeetingSerializer,
     MeetingSeriesCreateSerializer,
@@ -46,12 +49,18 @@ from .services import (
     create_meeting,
     create_meeting_from_series,
     create_meeting_item,
+    create_meeting_section,
     create_meeting_series,
     create_series_section,
     create_work_item_from_meeting_item,
+    end_meeting,
+    reopen_meeting,
+    reorder_meeting_sections,
     reorder_series_sections,
     remove_meeting_participant,
+    start_meeting,
     update_meeting,
+    update_meeting_section,
     update_meeting_series,
     update_meeting_item,
     update_series_section,
@@ -140,6 +149,22 @@ def _require_series_section_access(request, section_id):
     return section
 
 
+def _require_meeting_section_access(request, section_id):
+    try:
+        section = MeetingSection.objects.select_related(
+            "meeting",
+            "meeting__research_group",
+            "meeting__project",
+        ).get(pk=section_id)
+    except MeetingSection.DoesNotExist:
+        return None
+
+    if not _has_scoped_read_access(request.user, section.meeting):
+        return None
+
+    return section
+
+
 def _has_scoped_read_access(user, resource):
     if not ResearchGroupMembership.objects.filter(
         research_group_id=resource.research_group_id,
@@ -192,6 +217,25 @@ def _mutation_forbidden_response():
         },
         status=403,
     )
+
+
+def _run_meeting_lifecycle_action(request, meeting, action):
+    """Shared handler for explicit Start/End lifecycle actions.
+
+    Enforces the scope-aware Meeting write rule, runs the domain
+    transition, and returns the updated canonical Meeting.
+    """
+    if not _has_scoped_write_access(request.user, meeting):
+        return _mutation_forbidden_response()
+
+    try:
+        return Response(
+            MeetingSerializer(
+                action(meeting=meeting, actor=request.user)
+            ).data
+        )
+    except MeetingDomainError as exc:
+        return Response({"error": exc.message}, status=400)
 
 
 def _accessible_scope_filter(user):
@@ -608,8 +652,8 @@ class MeetingSeriesCreateOccurrenceView(APIView):
 # ── MeetingSection (snapshot) endpoints ──────────────────────────
 
 
-class MeetingSectionListView(APIView):
-    """GET /api/meetings/{meeting_id}/sections/"""
+class MeetingSectionListCreateView(APIView):
+    """GET/POST /api/meetings/{meeting_id}/sections/"""
 
     permission_classes = [IsAuthenticated]
 
@@ -629,6 +673,163 @@ class MeetingSectionListView(APIView):
 
         return Response(
             MeetingSectionSerializer(sections, many=True).data
+        )
+
+    def post(self, request, meeting_id):
+        meeting = _require_meeting_access(request, meeting_id)
+        if meeting is None:
+            return Response(
+                {"error": "Meeting not found"},
+                status=404,
+            )
+
+        if not _has_scoped_write_access(request.user, meeting):
+            return _mutation_forbidden_response()
+
+        serializer = MeetingSectionCreateSerializer(
+            data=request.data,
+        )
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=400)
+
+        data = serializer.validated_data
+
+        try:
+            section = create_meeting_section(
+                meeting=meeting,
+                actor=request.user,
+                name=data["name"],
+                description=data.get("description", ""),
+            )
+        except MeetingDomainError as exc:
+            return Response({"error": exc.message}, status=400)
+
+        return Response(
+            MeetingSectionSerializer(section).data,
+            status=201,
+        )
+
+
+class MeetingSectionReorderView(APIView):
+    """PATCH /api/meetings/{meeting_id}/sections/reorder/"""
+
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, meeting_id):
+        meeting = _require_meeting_access(request, meeting_id)
+        if meeting is None:
+            return Response(
+                {"error": "Meeting not found"},
+                status=404,
+            )
+
+        if not _has_scoped_write_access(request.user, meeting):
+            return _mutation_forbidden_response()
+
+        serializer = MeetingSectionReorderSerializer(
+            data=request.data,
+        )
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=400)
+
+        data = serializer.validated_data
+
+        try:
+            reorder_meeting_sections(
+                meeting=meeting,
+                actor=request.user,
+                section_ids=data["sectionIds"],
+            )
+        except MeetingDomainError as exc:
+            return Response({"error": exc.message}, status=400)
+
+        sections = (
+            MeetingSection.objects
+            .filter(meeting=meeting)
+            .order_by("position", "id")
+        )
+
+        return Response(
+            MeetingSectionSerializer(sections, many=True).data
+        )
+
+
+class MeetingSectionDetailView(APIView):
+    """GET/PATCH /api/meeting-sections/{section_id}/"""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, section_id):
+        section = _require_meeting_section_access(
+            request,
+            section_id,
+        )
+        if section is None:
+            return Response(
+                {"error": "Meeting section not found"},
+                status=404,
+            )
+
+        return Response(
+            MeetingSectionSerializer(section).data
+        )
+
+    def patch(self, request, section_id):
+        section = _require_meeting_section_access(
+            request,
+            section_id,
+        )
+        if section is None:
+            return Response(
+                {"error": "Meeting section not found"},
+                status=404,
+            )
+
+        if not _has_scoped_write_access(request.user, section.meeting):
+            return _mutation_forbidden_response()
+
+        if any(
+            field in request.data
+            for field in [
+                "meetingId",
+                "meeting",
+                "position",
+                "sourceSeriesSectionId",
+            ]
+        ):
+            return Response(
+                {
+                    "error": (
+                        "Cannot directly change Meeting section "
+                        "relationships or position."
+                    )
+                },
+                status=400,
+            )
+
+        serializer = MeetingSectionPatchSerializer(
+            data=request.data,
+        )
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=400)
+
+        data = serializer.validated_data
+
+        try:
+            update_meeting_section(
+                section=section,
+                actor=request.user,
+                name=data.get("name"),
+                description=data.get("description"),
+                is_visible=data.get("isVisible"),
+            )
+        except MeetingDomainError as exc:
+            return Response({"error": exc.message}, status=400)
+
+        section.refresh_from_db()
+
+        return Response(
+            MeetingSectionSerializer(section).data
         )
 
 
@@ -771,13 +972,17 @@ class MeetingDetailView(APIView):
                 "createdById",
                 "created_by",
                 "participantIds",
+                "status",
+                "startedAt",
+                "endedAt",
             ]
         ):
             return Response(
                 {
                     "error": (
-                        "Cannot directly change Meeting "
-                        "relationships or creator."
+                        "Cannot change Meeting lifecycle or "
+                        "relationships directly. Use the Start "
+                        "and End actions."
                     )
                 },
                 status=400,
@@ -800,7 +1005,6 @@ class MeetingDetailView(APIView):
                 actor=request.user,
                 title=data.get("title"),
                 scheduled_at=data.get("scheduledAt"),
-                status=data.get("status"),
             )
         except MeetingDomainError as exc:
             return Response(
@@ -812,6 +1016,66 @@ class MeetingDetailView(APIView):
 
         return Response(
             MeetingSerializer(meeting).data
+        )
+
+
+class MeetingStartView(APIView):
+    """POST /api/meetings/{id}/start — explicit upcoming -> live action."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, meeting_id):
+        meeting = _require_meeting_access(request, meeting_id)
+        if meeting is None:
+            return Response(
+                {"error": "Meeting not found"},
+                status=404,
+            )
+
+        return _run_meeting_lifecycle_action(
+            request,
+            meeting,
+            start_meeting,
+        )
+
+
+class MeetingEndView(APIView):
+    """POST /api/meetings/{id}/end — explicit live -> completed action."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, meeting_id):
+        meeting = _require_meeting_access(request, meeting_id)
+        if meeting is None:
+            return Response(
+                {"error": "Meeting not found"},
+                status=404,
+            )
+
+        return _run_meeting_lifecycle_action(
+            request,
+            meeting,
+            end_meeting,
+        )
+
+
+class MeetingReopenView(APIView):
+    """POST /api/meetings/{id}/reopen — explicit completed -> live action."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, meeting_id):
+        meeting = _require_meeting_access(request, meeting_id)
+        if meeting is None:
+            return Response(
+                {"error": "Meeting not found"},
+                status=404,
+            )
+
+        return _run_meeting_lifecycle_action(
+            request,
+            meeting,
+            reopen_meeting,
         )
 
 
@@ -1014,9 +1278,29 @@ class MeetingItemListCreateView(APIView):
 
         data = serializer.validated_data
 
+        section = (
+            MeetingSection.objects
+            .filter(
+                pk=data["meetingSectionId"],
+                meeting=meeting,
+            )
+            .first()
+        )
+        if section is None:
+            return Response(
+                {
+                    "error": (
+                        "The section does not belong to this "
+                        "meeting."
+                    )
+                },
+                status=400,
+            )
+
         try:
             item = create_meeting_item(
                 meeting=meeting,
+                meeting_section=section,
                 actor=request.user,
                 title=data["title"],
                 notes=data.get("notes", ""),
@@ -1076,6 +1360,8 @@ class MeetingItemDetailView(APIView):
             for field in [
                 "meetingId",
                 "meeting",
+                "meetingSectionId",
+                "meeting_section",
                 "position",
                 "workItemIds",
                 "createdById",

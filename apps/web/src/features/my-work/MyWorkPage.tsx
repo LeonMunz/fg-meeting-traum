@@ -27,24 +27,29 @@ const statusLabels: Record<
   done: 'Done',
 }
 
-const typeLabels: Record<
-  ApiPersonalWorkItem['type'],
-  string
-> = {
+const typeLabels: Record<string, string> = {
   epic: 'Epic',
   milestone: 'Milestone',
   deliverable: 'Deliverable',
   task: 'Task',
 }
 
-const typeIcons: Record<
-  ApiPersonalWorkItem['type'],
-  string
-> = {
+const typeIcons: Record<string, string> = {
   epic: 'account_tree',
   milestone: 'flag',
   deliverable: 'inventory_2',
   task: 'check_box_outline_blank',
+}
+
+// Defensive: an item's canonical type key may not be one of the built-ins
+// (the backend returns configurable type definitions). Never crash the
+// lookup.
+function personalTypeIcon(type: string | undefined): string {
+  return type ? typeIcons[type] ?? typeIcons.task : typeIcons.task
+}
+
+function personalTypeLabel(type: string | undefined): string {
+  return type ? typeLabels[type] ?? typeLabels.task : typeLabels.task
 }
 
 type GroupFilter = 'all' | number
@@ -231,6 +236,8 @@ export function MyWorkPage() {
     if (status === item.status) {
       return
     }
+    // (item.status may be undefined for definition-based items; the
+    // select below resolves the effective status separately.)
 
     setUpdatingItemId(item.id)
     setError(null)
@@ -400,7 +407,7 @@ export function MyWorkPage() {
                 >
                   <div className="flex items-center gap-2">
                     <span className="material-symbols-outlined shrink-0 text-[17px] text-on-surface-variant">
-                      {typeIcons[item.type]}
+                      {personalTypeIcon(item.type)}
                     </span>
 
                     <span className="truncate text-sm font-semibold text-on-surface hover:text-primary">
@@ -410,7 +417,7 @@ export function MyWorkPage() {
 
                   <div className="mt-1 flex items-center gap-2 pl-[25px]">
                     <span className="text-xs text-on-surface-variant">
-                      {typeLabels[item.type]}
+                      {personalTypeLabel(item.type)}
                     </span>
 
                     {item.blockedReason && (
@@ -474,7 +481,7 @@ export function MyWorkPage() {
                 </div>
 
                 <select
-                  value={item.status}
+                  value={item.status ?? 'todo'}
                   disabled={
                     updatingItemId ===
                     item.id

@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
@@ -15,6 +15,7 @@ from research_groups.models import (
 from .models import (
     MeetingItem,
     MeetingParticipant,
+    MeetingSection,
 )
 from .services import (
     add_meeting_participant,
@@ -134,6 +135,8 @@ class MeetingApiTest(TestCase):
             self.group.pk,
         )
         self.assertEqual(data["status"], "upcoming")
+        self.assertIsNone(data["startedAt"])
+        self.assertIsNone(data["endedAt"])
         self.assertEqual(
             data["participantIds"],
             [self.alex.pk],
@@ -235,7 +238,6 @@ class MeetingApiTest(TestCase):
             {
                 "title": "Updated Weekly",
                 "scheduledAt": new_scheduled_at.isoformat(),
-                "status": "live",
             },
             format="json",
         )
@@ -255,9 +257,10 @@ class MeetingApiTest(TestCase):
             meeting.scheduled_at,
             new_scheduled_at,
         )
+        # Lifecycle cannot be moved via PATCH.
         self.assertEqual(
             meeting.status,
-            "live",
+            "upcoming",
         )
 
     def test_invalid_scheduled_at_is_rejected(self):
@@ -295,6 +298,283 @@ class MeetingApiTest(TestCase):
             response.status_code,
             status.HTTP_400_BAD_REQUEST,
         )
+
+    def test_start_meeting_endpoint(self):
+        meeting = self.create_default_meeting()
+
+        self.login(self.alex)
+
+        response = self.client.post(
+            f"/api/meetings/{meeting.pk}/start",
+            {},
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_200_OK,
+        )
+
+        data = response.json()
+        self.assertEqual(data["status"], "live")
+        self.assertIsNotNone(data["startedAt"])
+        self.assertIsNone(data["endedAt"])
+
+        meeting.refresh_from_db()
+        self.assertEqual(meeting.status, "live")
+        self.assertIsNotNone(meeting.started_at)
+        self.assertEqual(meeting.scheduled_at, self.scheduled_at)
+
+    def test_start_meeting_rejects_repeat(self):
+        meeting = self.create_default_meeting()
+        self.login(self.alex)
+
+        self.assertEqual(
+            self.client.post(
+                f"/api/meetings/{meeting.pk}/start",
+                {},
+                format="json",
+            ).status_code,
+            status.HTTP_200_OK,
+        )
+
+        response = self.client.post(
+            f"/api/meetings/{meeting.pk}/start",
+            {},
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+        # Still live; repeated start must not alter the recorded start.
+        meeting.refresh_from_db()
+        self.assertEqual(meeting.status, "live")
+
+    def test_end_meeting_endpoint(self):
+        meeting = self.create_default_meeting()
+        self.login(self.alex)
+
+        self.client.post(
+            f"/api/meetings/{meeting.pk}/start",
+            {},
+            format="json",
+        )
+
+        response = self.client.post(
+            f"/api/meetings/{meeting.pk}/end",
+            {},
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_200_OK,
+        )
+
+        data = response.json()
+        self.assertEqual(data["status"], "completed")
+        self.assertIsNotNone(data["startedAt"])
+        self.assertIsNotNone(data["endedAt"])
+
+    def test_end_meeting_rejects_upcoming(self):
+        meeting = self.create_default_meeting()
+        self.login(self.alex)
+
+        response = self.client.post(
+            f"/api/meetings/{meeting.pk}/end",
+            {},
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+        meeting.refresh_from_db()
+        self.assertEqual(meeting.status, "upcoming")
+        self.assertIsNone(meeting.ended_at)
+
+    def test_completed_meeting_cannot_restart_or_end(self):
+        meeting = self.create_default_meeting()
+        self.login(self.alex)
+
+        self.client.post(
+            f"/api/meetings/{meeting.pk}/start",
+            {},
+            format="json",
+        )
+        self.client.post(
+            f"/api/meetings/{meeting.pk}/end",
+            {},
+            format="json",
+        )
+
+        self.assertEqual(
+            self.client.post(
+                f"/api/meetings/{meeting.pk}/start",
+                {},
+                format="json",
+            ).status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+        self.assertEqual(
+            self.client.post(
+                f"/api/meetings/{meeting.pk}/end",
+                {},
+                format="json",
+            ).status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+    def test_reopen_meeting_endpoint(self):
+        meeting = self.create_default_meeting()
+        self.login(self.alex)
+
+        self.client.post(f"/api/meetings/{meeting.pk}/start", {}, format="json")
+        self.client.post(f"/api/meetings/{meeting.pk}/end", {}, format="json")
+        meeting.refresh_from_db()
+        started_at = meeting.started_at
+
+        response = self.client.post(
+            f"/api/meetings/{meeting.pk}/reopen",
+            {},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.json()
+        self.assertEqual(data["status"], "live")
+        self.assertIsNone(data["endedAt"])
+        # Original start is preserved (same instant), not reset.
+        self.assertEqual(
+            datetime.fromisoformat(data["startedAt"]).replace(tzinfo=None),
+            started_at.replace(tzinfo=None),
+        )
+
+        meeting.refresh_from_db()
+        self.assertEqual(meeting.status, "live")
+        self.assertIsNone(meeting.ended_at)
+
+    def test_reopen_rejects_upcoming_and_live(self):
+        # upcoming
+        upcoming = self.create_default_meeting()
+        self.login(self.alex)
+        self.assertEqual(
+            self.client.post(
+                f"/api/meetings/{upcoming.pk}/reopen",
+                {},
+                format="json",
+            ).status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+        upcoming.refresh_from_db()
+        self.assertEqual(upcoming.status, "upcoming")
+
+        # live
+        live = self.create_default_meeting()
+        self.client.post(f"/api/meetings/{live.pk}/start", {}, format="json")
+        self.assertEqual(
+            self.client.post(
+                f"/api/meetings/{live.pk}/reopen",
+                {},
+                format="json",
+            ).status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+        live.refresh_from_db()
+        self.assertEqual(live.status, "live")
+
+    def test_reopened_meeting_can_be_ended_again(self):
+        meeting = self.create_default_meeting()
+        self.login(self.alex)
+        self.client.post(f"/api/meetings/{meeting.pk}/start", {}, format="json")
+        self.client.post(f"/api/meetings/{meeting.pk}/end", {}, format="json")
+        self.client.post(f"/api/meetings/{meeting.pk}/reopen", {}, format="json")
+
+        end = self.client.post(
+            f"/api/meetings/{meeting.pk}/end",
+            {},
+            format="json",
+        )
+        self.assertEqual(end.status_code, status.HTTP_200_OK)
+        self.assertEqual(end.json()["status"], "completed")
+        self.assertIsNotNone(end.json()["endedAt"])
+
+    def test_non_member_cannot_reopen(self):
+        meeting = self.create_default_meeting()
+        self.login(self.maria)
+
+        self.assertEqual(
+            self.client.post(
+                f"/api/meetings/{meeting.pk}/reopen",
+                {},
+                format="json",
+            ).status_code,
+            status.HTTP_404_NOT_FOUND,
+        )
+
+    def test_status_cannot_be_set_via_patch(self):
+        meeting = self.create_default_meeting()
+        self.login(self.alex)
+
+        for target in ("live", "completed"):
+            response = self.client.patch(
+                f"/api/meetings/{meeting.pk}/",
+                {"status": target},
+                format="json",
+            )
+            self.assertEqual(
+                response.status_code,
+                status.HTTP_400_BAD_REQUEST,
+            )
+
+        meeting.refresh_from_db()
+        self.assertEqual(meeting.status, "upcoming")
+
+    def test_started_ended_timestamps_cannot_be_set_via_patch(self):
+        meeting = self.create_default_meeting()
+        self.login(self.alex)
+
+        for field in ("startedAt", "endedAt"):
+            response = self.client.patch(
+                f"/api/meetings/{meeting.pk}/",
+                {field: "2020-01-01T00:00:00Z"},
+                format="json",
+            )
+            self.assertEqual(
+                response.status_code,
+                status.HTTP_400_BAD_REQUEST,
+            )
+
+    def test_non_member_cannot_start_or_end(self):
+        meeting = self.create_default_meeting()
+
+        # maria is not a member of the group.
+        self.login(self.maria)
+
+        self.assertEqual(
+            self.client.post(
+                f"/api/meetings/{meeting.pk}/start",
+                {},
+                format="json",
+            ).status_code,
+            status.HTTP_404_NOT_FOUND,
+        )
+        self.assertEqual(
+            self.client.post(
+                f"/api/meetings/{meeting.pk}/end",
+                {},
+                format="json",
+            ).status_code,
+            status.HTTP_404_NOT_FOUND,
+        )
+
+        meeting.refresh_from_db()
+        self.assertEqual(meeting.status, "upcoming")
 
     def test_meeting_research_group_cannot_be_changed(self):
         meeting = self.create_default_meeting()
@@ -462,9 +742,12 @@ class MeetingApiTest(TestCase):
 
         self.login(self.chris)
 
+        section = MeetingSection.objects.get(meeting=meeting)
+
         response = self.client.post(
             f"/api/meetings/{meeting.pk}/items/",
             {
+                "meetingSectionId": section.pk,
                 "title": "Rewrite introduction",
                 "notes": "Discuss scope.",
             },
@@ -493,13 +776,16 @@ class MeetingApiTest(TestCase):
     def test_group_member_can_list_meeting_items(self):
         meeting = self.create_default_meeting()
 
+        section = MeetingSection.objects.get(meeting=meeting)
         first = create_meeting_item(
             meeting=meeting,
+            meeting_section=section,
             actor=self.alex,
             title="First",
         )
         second = create_meeting_item(
             meeting=meeting,
+            meeting_section=section,
             actor=self.alex,
             title="Second",
         )
@@ -528,6 +814,7 @@ class MeetingApiTest(TestCase):
 
         item = create_meeting_item(
             meeting=meeting,
+            meeting_section=MeetingSection.objects.get(meeting=meeting),
             actor=self.alex,
             title="Discussion",
         )
@@ -569,6 +856,7 @@ class MeetingApiTest(TestCase):
 
         item = create_meeting_item(
             meeting=meeting,
+            meeting_section=MeetingSection.objects.get(meeting=meeting),
             actor=self.alex,
             title="Discussion",
         )
@@ -597,6 +885,7 @@ class MeetingApiTest(TestCase):
 
         item = create_meeting_item(
             meeting=meeting,
+            meeting_section=MeetingSection.objects.get(meeting=meeting),
             actor=self.alex,
             title="Discussion",
         )
@@ -628,6 +917,7 @@ class MeetingApiTest(TestCase):
 
         item = create_meeting_item(
             meeting=meeting,
+            meeting_section=MeetingSection.objects.get(meeting=meeting),
             actor=self.alex,
             title="Private discussion",
         )
@@ -687,3 +977,45 @@ class MeetingApiTest(TestCase):
             allowed.status_code,
             status.HTTP_201_CREATED,
         )
+
+    def test_stale_live_meeting_remains_live_and_can_be_ended(self):
+        """A live Meeting past its scheduled time stays live (no
+        auto-completion) and an authorized user can explicitly end it."""
+        meeting = self.create_default_meeting()
+        self.login(self.alex)
+
+        self.client.post(
+            f"/api/meetings/{meeting.pk}/start",
+            {},
+            format="json",
+        )
+        meeting.refresh_from_db()
+        self.assertEqual(meeting.status, "live")
+
+        # Simulate "far beyond the scheduled time" by moving the planned
+        # timestamp into the past while the meeting stays live. No code
+        # path may turn this into completed on its own.
+        from datetime import timedelta
+
+        meeting.scheduled_at = meeting.scheduled_at - timedelta(days=2)
+        meeting.save(update_fields=["scheduled_at"])
+        meeting.refresh_from_db()
+        self.assertEqual(meeting.scheduled_at < timezone.now(), True)
+        self.assertEqual(meeting.status, "live")
+        self.assertIsNone(meeting.ended_at)
+
+        # The stored representation must still be live (no auto-completion).
+        read = self.client.get(f"/api/meetings/{meeting.pk}/")
+        self.assertEqual(read.status_code, status.HTTP_200_OK)
+        self.assertEqual(read.json()["status"], "live")
+        self.assertIsNone(read.json()["endedAt"])
+
+        # An authorized user can explicitly end it; that records the end.
+        end = self.client.post(
+            f"/api/meetings/{meeting.pk}/end",
+            {},
+            format="json",
+        )
+        self.assertEqual(end.status_code, status.HTTP_200_OK)
+        self.assertEqual(end.json()["status"], "completed")
+        self.assertIsNotNone(end.json()["endedAt"])

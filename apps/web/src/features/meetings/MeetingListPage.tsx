@@ -9,6 +9,7 @@ import { useNavigate } from 'react-router'
 import { ApiError } from '../../api/client'
 import {
   createMeeting,
+  createMeetingFromSeries,
   listMeetings,
 } from '../../api/meetings'
 import type {
@@ -135,17 +136,29 @@ export function MeetingListPage() {
       return
     }
 
+
     setCreating(true)
     setCreateError(null)
 
     try {
-      const meeting = await createMeeting(
-        activeResearchGroupId,
-        {
-          title: input.title,
-          scheduledAt: input.scheduledAt,
-        },
-      )
+      const meeting =
+        input.seriesId != null
+          ? await createMeetingFromSeries(
+              input.seriesId,
+              {
+                title: input.title,
+                scheduledAt: input.scheduledAt,
+              },
+            )
+          : await createMeeting(
+              Number(input.researchGroupId),
+              {
+                title: input.title,
+                scheduledAt: input.scheduledAt,
+                scope: input.scope,
+                projectId: input.projectId,
+              },
+            )
 
       setMeetings((current) => [
         ...current.filter(
@@ -185,7 +198,7 @@ export function MeetingListPage() {
           <p className="mt-1.5 text-sm leading-6 text-on-surface-variant">
             {activeResearchGroup
               ? `Meetings in ${activeResearchGroup.name}.`
-              : 'Research group meetings and follow-up work.'}
+              : 'Research Group Meetings and follow-up work.'}
           </p>
         </div>
 
@@ -215,7 +228,7 @@ export function MeetingListPage() {
           <span className="material-symbols-outlined text-[19px]">
             event_repeat
           </span>
-          Series
+          Meeting Templates
         </button>
       </header>
 

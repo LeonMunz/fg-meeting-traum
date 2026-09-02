@@ -1,6 +1,7 @@
 import {
   lazy,
   Suspense,
+  useCallback,
   useEffect,
   useMemo,
   useState,
@@ -33,6 +34,7 @@ import {
   archiveProject,
   deleteProject,
   getProject,
+  getProjectWorkItemConfiguration,
   listProjectMemberships,
   listResearchGroupMembers,
   removeProjectMembership,
@@ -40,8 +42,15 @@ import {
   updateProject,
   updateProjectMembership,
 } from '../../api/projects'
+import {
+  buildCreateWorkItemInput,
+  resolveStatusDefinitionIdByCategory,
+  resolveWorkItemDisplay,
+} from './workItemMapping'
+
 import type {
   ApiProjectMembership,
+  ApiProjectWorkItemConfiguration,
   ApiResearchGroupMember,
   ApiUpdateWorkItemInput,
   ApiWorkItem,
@@ -49,6 +58,7 @@ import type {
 import {
   createWorkItem,
   listProjectWorkItems,
+  reorderWorkItem,
   updateWorkItem,
 } from '../../api/work-items'
 import { useSession } from '../../api/useSession'
@@ -141,11 +151,14 @@ type DemoWorkItem = {
   title: string
   type: DemoWorkItemType
   status: DemoWorkItemStatus
+  typeLabel: string
   assignees: DemoWorkItemAssignee[]
   dueInDays: number | null
   dueLabel: string | null
   blockedReason: string | null
   parentId: string | null
+  // Manual Board position (canonical, from the server). null = unsorted.
+  boardPosition: number | null
 }
 
 type OverviewAttentionItem = {
@@ -181,12 +194,6 @@ const workItemStatusLabels: Record<DemoWorkItemStatus, string> = {
   done: 'Done',
 }
 
-const workItemTypeLabels: Record<DemoWorkItemType, string> = {
-  epic: 'Epic',
-  milestone: 'Milestone',
-  deliverable: 'Deliverable',
-  task: 'Task',
-}
 
 const workItemStatusOptions: Array<{
   value: DemoWorkItemStatus
@@ -514,14 +521,17 @@ function compareAttentionItems(
 function mapApiWorkItem(
   item: ApiWorkItem,
   members: ProjectMember[],
+  config: ApiProjectWorkItemConfiguration | null,
 ): DemoWorkItem {
   const due = getWorkItemDueFields(item.dueDate)
+  const display = resolveWorkItemDisplay(item, config)
 
   return {
     id: String(item.id),
     title: item.title,
-    type: item.type,
-    status: item.status,
+    type: display.type,
+    status: display.status,
+    typeLabel: display.typeLabel,
     assignees: item.assigneeIds.map(
       (assigneeId) => {
         const member = members.find(
@@ -546,6 +556,7 @@ function mapApiWorkItem(
       item.parentId == null
         ? null
         : String(item.parentId),
+    boardPosition: item.boardPosition ?? null,
   }
 }
 
@@ -669,6 +680,13 @@ export function ProjectDetailPage() {
   } | null>(null)
   const [apiWorkItems, setApiWorkItems] =
     useState<ApiWorkItem[]>([])
+  const [workItemConfig, setWorkItemConfig] =
+    useState<ApiProjectWorkItemConfiguration | null>(null)
+  // Bumped by the cross-flow "work-item-created" event so that an
+  // already-mounted Project page re-fetches its canonical WorkItem
+  // list without requiring a hard reload.
+  const [workItemsRefreshKey, setWorkItemsRefreshKey] =
+    useState(0)
   const [workItemsLoading, setWorkItemsLoading] =
     useState(false)
   const [workItemsError, setWorkItemsError] =
@@ -952,6 +970,77 @@ export function ProjectDetailPage() {
     return () => {
       cancelled = true
     }
+  }, [project, workItemsRefreshKey])
+
+  const requestWorkItemsRefresh = useCallback(() => {
+    setWorkItemsRefreshKey((current) => current + 1)
+  }, [])
+
+  useEffect(() => {
+    function handleWorkItemCreated(
+      event: Event,
+    ) {
+      // The event payload carries the newly created ApiWorkItem,
+      // which includes the canonical projectId.
+      const detail = (event as CustomEvent<{
+        projectId?: number
+      }>).detail
+      const numericProjectId = Number(project?.id)
+
+      if (
+        detail &&
+        typeof detail.projectId === 'number' &&
+        detail.projectId !== numericProjectId
+      ) {
+        return
+      }
+
+      requestWorkItemsRefresh()
+    }
+
+    window.addEventListener(
+      'fg-workspace:work-item-created',
+      handleWorkItemCreated,
+    )
+
+    return () => {
+      window.removeEventListener(
+        'fg-workspace:work-item-created',
+        handleWorkItemCreated,
+      )
+    }
+  }, [project?.id, requestWorkItemsRefresh])
+
+  // The backend WorkItems carry configurable type/status *definition IDs*,
+  // not fixed strings. To render them (labels, icons, board columns,
+  // "done" detection) we must join each item against the Project's own
+  // Work Item configuration. Load it alongside the WorkItems.
+  useEffect(() => {
+    if (!project) {
+      setWorkItemConfig(null)
+      return
+    }
+
+    const numericProjectId = Number(project.id)
+    let cancelled = false
+
+    setWorkItemConfig(null)
+
+    getProjectWorkItemConfiguration(numericProjectId)
+      .then((config) => {
+        if (!cancelled) {
+          setWorkItemConfig(config)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setWorkItemConfig(null)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
   }, [project])
 
   useEffect(() => {
@@ -1124,7 +1213,7 @@ export function ProjectDetailPage() {
   })
 
   const workItems = apiWorkItems.map(
-    (item) => mapApiWorkItem(item, members),
+    (item) => mapApiWorkItem(item, members, workItemConfig),
   )
 
   const isArchived = project.archivedAt !== null
@@ -1747,56 +1836,26 @@ export function ProjectDetailPage() {
 
     const numericProjectId = Number(project.id)
 
-    const assigneeIds = input.assigneeIds.map(
-      (id) => Number(id),
-    )
-
-    if (
-      !Number.isInteger(numericProjectId) ||
-      assigneeIds.some(
-        (id) => !Number.isInteger(id),
-      )
-    ) {
-      throw new Error(
-        'Invalid Project or assignee ID.',
-      )
+    if (!Number.isInteger(numericProjectId)) {
+      throw new Error('Invalid Project ID.')
     }
 
-    let parentId: number | null = null
-
-    if (input.parentId != null) {
-      parentId = Number(input.parentId)
-
-      if (!Number.isInteger(parentId)) {
-        throw new Error(
-          'Invalid parent Work Item ID.',
-        )
-      }
-    }
+    const createInput = buildCreateWorkItemInput(input)
 
     setWorkItemsError(null)
 
     try {
       const created = await createWorkItem(
         numericProjectId,
-        {
-          title: input.title.trim(),
-          description:
-            input.description.trim(),
-          type: input.type,
-          status: input.status,
-          assigneeIds,
-          parentId,
-          dueDate: input.dueDate,
-          blockedReason: input.blockedReason,
-        },
+        createInput,
       )
 
+      // New Work Items are appended to the end of their status column
+      // by the server (see WorkItem.board_position), so mirror that by
+      // appending here to keep the local list in canonical order.
       setApiWorkItems((current) => [
+        ...current.filter((item) => item.id !== created.id),
         created,
-        ...current.filter(
-          (item) => item.id !== created.id,
-        ),
       ])
     } catch (error) {
       const message = getWorkItemErrorMessage(
@@ -1881,6 +1940,7 @@ export function ProjectDetailPage() {
   const handleWorkItemStatusDrop = async (
     workItemId: number,
     newStatus: DemoWorkItemStatus,
+    beforeWorkItemId: number | null,
   ) => {
     if (isReadOnly) {
       return
@@ -1890,42 +1950,45 @@ export function ProjectDetailPage() {
       (item) => item.id === workItemId,
     )
 
-    if (!previous || previous.status === newStatus) {
+    if (!previous) {
+      return
+    }
+
+    const statusDefinitionId =
+      resolveStatusDefinitionIdByCategory(
+        newStatus,
+        workItemConfig,
+      )
+
+    if (statusDefinitionId == null) {
+      setBoardStatusDropError(
+        'No matching status is configured for this Project.',
+      )
+      return
+    }
+
+    // Same status + no explicit target = no-op (drop on own column with
+    // no meaningful gap).
+    if (previous.status === newStatus && beforeWorkItemId == null) {
       return
     }
 
     setBoardStatusDropError(null)
 
-    setApiWorkItems((current) =>
-      current.map((item) =>
-        item.id === workItemId
-          ? { ...item, status: newStatus }
-          : item,
-      ),
-    )
-
     try {
-      const updated = await updateWorkItem(
-        workItemId,
-        { status: newStatus },
-      )
+      await reorderWorkItem(workItemId, {
+        statusDefinitionId,
+        beforeWorkItemId,
+      })
 
-      setApiWorkItems((current) =>
-        current.map((item) =>
-          item.id === updated.id ? updated : item,
-        ),
-      )
+      // The server renumbers the whole target column, so refresh the
+      // list to render every card in its canonical position.
+      requestWorkItemsRefresh()
     } catch (error) {
-      setApiWorkItems((current) =>
-        current.map((item) =>
-          item.id === workItemId ? previous : item,
-        ),
-      )
-
       setBoardStatusDropError(
         getWorkItemErrorMessage(
           error,
-          'Work item status could not be updated.',
+          'Work item could not be moved.',
         ),
       )
     }
@@ -3019,6 +3082,7 @@ export function ProjectDetailPage() {
             item={selectedDrawerWorkItem}
             readOnly={isReadOnly}
             currentUserId={user ? user.id : null}
+            workItemConfiguration={workItemConfig}
             assignees={sortedMembers
               .filter(
                 (member) =>
@@ -3112,11 +3176,11 @@ function OverviewWorkItemRow({
 
         <div className="flex min-w-0 items-center gap-2">
           <span
-            title={workItemTypeLabels[item.type]}
-            aria-label={workItemTypeLabels[item.type]}
+            title={item.typeLabel}
+            aria-label={item.typeLabel}
             className="material-symbols-outlined shrink-0 text-[15px] text-on-surface-variant/80"
           >
-            {workItemTypeIcons[item.type]}
+            {workItemTypeIcon(item.type)}
           </span>
 
           <span className="truncate text-sm font-semibold text-on-surface">
@@ -3182,6 +3246,7 @@ function ProjectWorkItemsPanel({
   onStatusDrop: (
     workItemId: number,
     newStatus: DemoWorkItemStatus,
+    beforeWorkItemId: number | null,
   ) => void
   statusDropError: string | null
   onDismissStatusDropError: () => void
@@ -3190,8 +3255,13 @@ function ProjectWorkItemsPanel({
   const [view, setView] = useState<WorkItemsView>('board')
   const [draggedItemId, setDraggedItemId] =
     useState<string | null>(null)
-  const [dragOverStatus, setDragOverStatus] =
-    useState<DemoWorkItemStatus | null>(null)
+  // Insertion indicator: the status column being hovered plus the index
+  // of the card the dragged card would be inserted *before* (items.length
+  // means "after the last card"). null indicator = no hover yet.
+  const [dragIndicator, setDragIndicator] = useState<{
+    status: DemoWorkItemStatus
+    index: number
+  } | null>(null)
   const [query, setQuery] = useState('')
   const [typeFilter, setTypeFilter] =
     useState<WorkItemsTypeFilter>('all')
@@ -3310,17 +3380,46 @@ function ProjectWorkItemsPanel({
     [eligibleAssignees],
   )
 
+  // Stable Board order: manual position first (NULLs last, in creation
+  // order), mirroring the server list ordering. This keeps the Board in
+  // canonical order even after an optimistic reorder update, and stays
+  // stable when filters hide items.
+  const orderedItems = useMemo(() => {
+    const numericId = (item: DemoWorkItem) => Number(item.id)
+
+    return [...items].sort((left, right) => {
+      const leftPosition = left.boardPosition
+      const rightPosition = right.boardPosition
+
+      const leftHas = leftPosition != null
+      const rightHas = rightPosition != null
+
+      if (leftHas && rightHas) {
+        if (leftPosition !== rightPosition) {
+          return leftPosition - rightPosition
+        }
+      } else if (leftHas !== rightHas) {
+        // Positioned items render before unpositioned ones.
+        return leftHas ? -1 : 1
+      }
+
+      // Unpositioned (or equal-position) items fall back to creation
+      // order (server id), matching the list endpoint.
+      return numericId(left) - numericId(right)
+    })
+  }, [items])
+
   const filteredItems = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase()
 
-    return items.filter((item) => {
+    return orderedItems.filter((item) => {
       const matchesQuery =
         normalizedQuery.length === 0 ||
         item.title.toLowerCase().includes(normalizedQuery) ||
         item.assignees.some((assignee) =>
           assignee.name.toLowerCase().includes(normalizedQuery),
         ) ||
-        workItemTypeLabels[item.type]
+        item.typeLabel
           .toLowerCase()
           .includes(normalizedQuery)
 
@@ -3345,7 +3444,7 @@ function ProjectWorkItemsPanel({
   }, [
     assigneeFilter,
     blockedOnly,
-    items,
+    orderedItems,
     query,
     typeFilter,
   ])
@@ -3662,57 +3761,112 @@ function ProjectWorkItemsPanel({
             const isDragOver =
               !readOnly &&
               draggedItemId !== null &&
-              dragOverStatus === column.status
+              dragIndicator?.status === column.status
+
+            const indicatorIndex =
+              isDragOver &&
+              dragIndicator !== null &&
+              dragIndicator.index <= columnItems.length
+                ? dragIndicator.index
+                : null
+
+            const handleColumnDragOver = (event: React.DragEvent) => {
+              if (readOnly || draggedItemId === null) {
+                return
+              }
+
+              event.preventDefault()
+              event.dataTransfer.dropEffect = 'move'
+
+              const y = event.clientY
+              let index = columnItems.length
+
+              for (let i = 0; i < columnItems.length; i += 1) {
+                const card = document.querySelector(
+                  `[data-board-card="${columnItems[i].id}"]`,
+                ) as HTMLElement | null
+
+                if (!card) {
+                  continue
+                }
+
+                const rect = card.getBoundingClientRect()
+
+                if (y < rect.top + rect.height / 2) {
+                  index = i
+                  break
+                }
+              }
+
+              setDragIndicator({
+                status: column.status,
+                index,
+              })
+            }
+
+            const handleColumnDragLeave = (event: React.DragEvent) => {
+              if (
+                event.currentTarget.contains(
+                  event.relatedTarget as Node | null,
+                )
+              ) {
+                return
+              }
+
+              setDragIndicator((current) =>
+                current?.status === column.status ? null : current,
+              )
+            }
+
+            const handleColumnDrop = (event: React.DragEvent) => {
+              event.preventDefault()
+
+              const droppedId = event.dataTransfer.getData(
+                'text/plain',
+              )
+
+              const currentIndicator = dragIndicator
+              setDragIndicator(null)
+              setDraggedItemId(null)
+
+              if (readOnly || !droppedId) {
+                return
+              }
+
+              const numericId = Number(droppedId)
+
+              if (!Number.isInteger(numericId)) {
+                return
+              }
+
+              const beforeItem =
+                currentIndicator?.status === column.status
+                  ? columnItems[currentIndicator.index]
+                  : undefined
+
+              const beforeId = beforeItem
+                ? Number(beforeItem.id)
+                : null
+
+              onStatusDrop(numericId, column.status, beforeId)
+            }
+
+            const renderIndicator = (index: number) =>
+              indicatorIndex === index ? (
+                <div
+                  data-board-insertion-indicator
+                  aria-hidden="true"
+                  className="h-0.5 shrink-0 rounded-full bg-primary"
+                />
+              ) : null
 
             return (
               <div
                 key={column.status}
                 data-board-column={column.status}
-                onDragOver={(event) => {
-                  if (readOnly || draggedItemId === null) {
-                    return
-                  }
-
-                  event.preventDefault()
-                  event.dataTransfer.dropEffect = 'move'
-
-                  if (dragOverStatus !== column.status) {
-                    setDragOverStatus(column.status)
-                  }
-                }}
-                onDragLeave={(event) => {
-                  if (
-                    event.currentTarget.contains(
-                      event.relatedTarget as Node | null,
-                    )
-                  ) {
-                    return
-                  }
-
-                  setDragOverStatus((current) =>
-                    current === column.status ? null : current,
-                  )
-                }}
-                onDrop={(event) => {
-                  event.preventDefault()
-
-                  const droppedId = event.dataTransfer.getData(
-                    'text/plain',
-                  )
-
-                  setDragOverStatus(null)
-                  setDraggedItemId(null)
-
-                  if (readOnly || !droppedId) {
-                    return
-                  }
-
-                  const numericId = Number(droppedId)
-
-                  if (Number.isInteger(numericId)) {
-                    onStatusDrop(numericId, column.status)
-                  }
-                }}
+                onDragOver={handleColumnDragOver}
+                onDragLeave={handleColumnDragLeave}
+                onDrop={handleColumnDrop}
                 className={[
                   'flex min-h-[26rem] min-w-0 flex-col rounded-lg transition-colors',
                   isDragOver
@@ -3730,26 +3884,49 @@ function ProjectWorkItemsPanel({
                   </span>
                 </div>
 
-                <div className="flex-1 space-y-2 px-2 pb-3">
-                  {columnItems.map((item) => (
-                    <WorkItemBoardCard
-                      key={item.id}
-                      item={item}
-                      selected={
-                        selectedWorkItemId === item.id
-                      }
-                      dragging={draggedItemId === item.id}
-                      readOnly={readOnly}
-                      onOpen={onOpen}
-                      onDragHandleStart={(itemId) =>
-                        setDraggedItemId(itemId)
-                      }
-                      onDragHandleEnd={() => {
-                        setDraggedItemId(null)
-                        setDragOverStatus(null)
-                      }}
-                    />
-                  ))}
+                <div className="flex flex-1 flex-col gap-2 px-2 pb-3">
+                  {columnItems.length === 0 ? (
+                    renderIndicator(0)
+                  ) : (
+                    columnItems.map((item) => {
+                      const itemIndex = columnItems.findIndex(
+                        (candidate) => candidate.id === item.id,
+                      )
+
+                      return (
+                        <div
+                          key={item.id}
+                          data-board-card={item.id}
+                          className="flex flex-col gap-2"
+                        >
+                          {renderIndicator(itemIndex)}
+                          <WorkItemBoardCard
+                            item={item}
+                            selected={
+                              selectedWorkItemId === item.id
+                            }
+                            dragging={
+                              draggedItemId === item.id
+                            }
+                            readOnly={readOnly}
+                            onOpen={onOpen}
+                            onDragHandleStart={(itemId) =>
+                              setDraggedItemId(itemId)
+                            }
+                            onDragHandleEnd={() => {
+                              setDraggedItemId(null)
+                              setDragIndicator(null)
+                            }}
+                          />
+                        </div>
+                      )
+                    })
+                  )}
+
+                  {columnItems.length > 0 &&
+                  indicatorIndex === columnItems.length ? (
+                    renderIndicator(columnItems.length)
+                  ) : null}
                 </div>
               </div>
             )
@@ -3774,6 +3951,18 @@ const workItemTypeIcons: Record<DemoWorkItemType, string> = {
   milestone: 'flag',
   deliverable: 'inventory_2',
   task: 'assignment',
+}
+
+// Defensive lookup: a type key that is not one of the built-in
+// DemoWorkItemType values (e.g. a project-configured type definition whose
+// canonical key we cannot resolve) must never crash the icon lookup.
+function workItemTypeIcon(
+  type: string | null | undefined,
+): string {
+  if (type && type in workItemTypeIcons) {
+    return workItemTypeIcons[type as DemoWorkItemType]
+  }
+  return 'assignment'
 }
 
 const workItemStatusDisplay: Record<
@@ -3901,11 +4090,11 @@ function WorkItemBoardCard({
     >
       <div className="flex items-start gap-2">
         <span
-          title={workItemTypeLabels[item.type]}
-          aria-label={workItemTypeLabels[item.type]}
+          title={item.typeLabel}
+          aria-label={item.typeLabel}
           className="material-symbols-outlined mt-0.5 shrink-0 text-[15px] text-on-surface-variant"
         >
-          {workItemTypeIcons[item.type]}
+          {workItemTypeIcon(item.type)}
         </span>
 
         <div className="min-w-0 flex-1">
@@ -4060,11 +4249,11 @@ function WorkItemsList({
               >
                 <div className="flex min-w-0 items-center gap-2 pr-5">
                   <span
-                    title={workItemTypeLabels[item.type]}
-                    aria-label={workItemTypeLabels[item.type]}
+                    title={item.typeLabel}
+                    aria-label={item.typeLabel}
                     className="material-symbols-outlined shrink-0 text-[15px] text-on-surface-variant/80"
                   >
-                    {workItemTypeIcons[item.type]}
+                    {workItemTypeIcon(item.type)}
                   </span>
 
                   <span className="truncate text-sm font-semibold text-on-surface">

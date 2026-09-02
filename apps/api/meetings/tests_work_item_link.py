@@ -16,7 +16,7 @@ from research_groups.models import (
 )
 from work_items.models import WorkItem
 
-from .models import MeetingItemWorkItem
+from .models import MeetingItemWorkItem, MeetingSection
 from .services import (
     MeetingDomainError,
     create_meeting,
@@ -99,8 +99,11 @@ class MeetingWorkItemLinkBase(TestCase):
             scheduled_at=timezone.now(),
         )
 
+        self.section = MeetingSection.objects.get(meeting=self.meeting)
+
         self.item = create_meeting_item(
             meeting=self.meeting,
+            meeting_section=self.section,
             actor=self.alex,
             title="Rewrite Introduction",
         )
@@ -236,6 +239,71 @@ class MeetingWorkItemLinkApiTest(
             format="json",
         )
 
+    def test_missing_project_id_is_rejected_clearly(self):
+        # The frontend must always resolve a target Project. Without one,
+        # the request is invalid and the item is left untouched.
+        self.login(self.alex)
+
+        response = self.client.post(
+            f"/api/meeting-items/{self.item.pk}/work-items/",
+            {
+                "typeDefinitionId": self.task_type.pk,
+                "title": "No project",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("projectId", response.json())
+
+    def test_stale_string_type_payload_is_rejected(self):
+        # Regression for the "Work item could not be created" bug: the
+        # frontend used to send a string `type` instead of a
+        # `typeDefinitionId`. That must be rejected clearly.
+        self.login(self.alex)
+
+        response = self.client.post(
+            f"/api/meeting-items/{self.item.pk}/work-items/",
+            {
+                "projectId": self.project.pk,
+                "type": "task",
+                "title": "Stale type",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("typeDefinitionId", response.json())
+        self.assertFalse(
+            WorkItem.objects.filter(title="Stale type").exists()
+        )
+
+    def test_viewer_cannot_target_their_own_project(self):
+        # laura is a member of the research group (can read the group
+        # meeting) but a VIEWER of the project, so she cannot create work.
+        self.login(self.laura)
+        response = self.client.post(
+            f"/api/meeting-items/{self.item.pk}/work-items/",
+            {
+                "projectId": self.project.pk,
+                "typeDefinitionId": self.task_type.pk,
+                "title": "Viewer forbidden",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertFalse(
+            WorkItem.objects.filter(title="Viewer forbidden").exists()
+        )
+
+    def test_group_meeting_work_item_belongs_to_selected_project(self):
+        response = self.post_work_item()
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+        data = response.json()
+        self.assertEqual(data["projectId"], self.project.pk)
+
+        work_item = WorkItem.objects.get(pk=data["id"])
+        self.assertEqual(work_item.project, self.project)
+
     def test_endpoint_creates_canonical_work_item(self):
         response = self.post_work_item()
 
@@ -289,6 +357,53 @@ class MeetingWorkItemLinkApiTest(
         self.assertEqual(
             response.json()["workItemIds"],
             [work_item_id],
+        )
+
+    def test_created_work_item_is_visible_in_target_project_list(
+        self,
+    ):
+        # Regression: a Work Item created through the Meeting
+        # quick-create flow must immediately be visible in the target
+        # Project's canonical Work Item list (the same list the Board
+        # and List render from), without requiring a client-side
+        # refresh or hard reload.
+        created = self.post_work_item()
+        self.assertEqual(
+            created.status_code,
+            status.HTTP_201_CREATED,
+        )
+        work_item_id = created.json()["id"]
+
+        response = self.client.get(
+            f"/api/projects/{self.project.pk}/work-items/"
+        )
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_200_OK,
+        )
+
+        listed_ids = [item["id"] for item in response.json()]
+        self.assertIn(work_item_id, listed_ids)
+
+        # The listed item must carry the canonical definition IDs so
+        # the frontend can resolve its type/status from the Project's
+        # Work Item configuration.
+        created_in_list = next(
+            item
+            for item in response.json()
+            if item["id"] == work_item_id
+        )
+        self.assertEqual(
+            created_in_list["projectId"],
+            self.project.pk,
+        )
+        self.assertEqual(
+            created_in_list["typeDefinitionId"],
+            self.task_type.pk,
+        )
+        self.assertIsInstance(
+            created_in_list["statusDefinitionId"],
+            int,
         )
 
     def test_group_meeting_hides_linked_project_ids_from_group_only_member(

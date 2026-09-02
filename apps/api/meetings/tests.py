@@ -13,13 +13,17 @@ from .models import (
     Meeting,
     MeetingItem,
     MeetingParticipant,
+    MeetingSection,
 )
 from .services import (
     MeetingDomainError,
     add_meeting_participant,
     create_meeting,
     create_meeting_item,
+    end_meeting,
     remove_meeting_participant,
+    reopen_meeting,
+    start_meeting,
     update_meeting_item,
     update_meeting,
 )
@@ -168,13 +172,16 @@ class MeetingDomainTest(TestCase):
     def test_meeting_items_receive_sequential_positions(self):
         meeting = self.create_default_meeting()
 
+        section = MeetingSection.objects.get(meeting=meeting)
         first = create_meeting_item(
             meeting=meeting,
+            meeting_section=section,
             actor=self.alex,
             title="First item",
         )
         second = create_meeting_item(
             meeting=meeting,
+            meeting_section=section,
             actor=self.alex,
             title="Second item",
         )
@@ -188,25 +195,10 @@ class MeetingDomainTest(TestCase):
         with self.assertRaises(MeetingDomainError):
             create_meeting_item(
                 meeting=meeting,
+                meeting_section=MeetingSection.objects.get(meeting=meeting),
                 actor=self.maria,
                 title="Forbidden item",
             )
-
-    def test_meeting_status_can_be_updated(self):
-        meeting = self.create_default_meeting()
-
-        update_meeting(
-            meeting=meeting,
-            actor=self.alex,
-            status=Meeting.Status.LIVE,
-        )
-
-        meeting.refresh_from_db()
-
-        self.assertEqual(
-            meeting.status,
-            Meeting.Status.LIVE,
-        )
 
     def test_meeting_metadata_can_be_updated(self):
         meeting = self.create_default_meeting()
@@ -219,7 +211,6 @@ class MeetingDomainTest(TestCase):
             actor=self.alex,
             title="Updated Weekly",
             scheduled_at=new_scheduled_at,
-            status=Meeting.Status.LIVE,
         )
 
         meeting.refresh_from_db()
@@ -232,10 +223,106 @@ class MeetingDomainTest(TestCase):
             meeting.scheduled_at,
             new_scheduled_at,
         )
+        # Metadata edits must not move the lifecycle.
         self.assertEqual(
             meeting.status,
-            Meeting.Status.LIVE,
+            Meeting.Status.UPCOMING,
         )
+
+    def test_start_meeting_sets_status_and_started_at(self):
+        meeting = self.create_default_meeting()
+
+        started = start_meeting(meeting=meeting, actor=self.alex)
+
+        self.assertEqual(started.status, Meeting.Status.LIVE)
+        self.assertIsNotNone(started.started_at)
+        self.assertIsNone(started.ended_at)
+
+        # scheduled timestamp is preserved, not overwritten.
+        self.assertEqual(started.scheduled_at, self.scheduled_at)
+
+    def test_start_meeting_rejects_live_and_completed(self):
+        meeting = self.create_default_meeting()
+        start_meeting(meeting=meeting, actor=self.alex)
+
+        with self.assertRaises(MeetingDomainError):
+            start_meeting(meeting=meeting, actor=self.alex)
+
+    def test_end_meeting_requires_live(self):
+        meeting = self.create_default_meeting()
+
+        with self.assertRaises(MeetingDomainError):
+            end_meeting(meeting=meeting, actor=self.alex)
+
+    def test_end_meeting_sets_status_and_ended_at(self):
+        meeting = self.create_default_meeting()
+        start_meeting(meeting=meeting, actor=self.alex)
+
+        ended = end_meeting(meeting=meeting, actor=self.alex)
+
+        self.assertEqual(ended.status, Meeting.Status.COMPLETED)
+        self.assertIsNotNone(ended.ended_at)
+        self.assertIsNotNone(ended.started_at)
+        self.assertEqual(ended.scheduled_at, self.scheduled_at)
+
+    def test_completed_meeting_cannot_restart(self):
+        meeting = self.create_default_meeting()
+        start_meeting(meeting=meeting, actor=self.alex)
+        end_meeting(meeting=meeting, actor=self.alex)
+
+        with self.assertRaises(MeetingDomainError):
+            start_meeting(meeting=meeting, actor=self.alex)
+        with self.assertRaises(MeetingDomainError):
+            end_meeting(meeting=meeting, actor=self.alex)
+
+
+    def test_reopen_completed_meeting_returns_to_live(self):
+        meeting = self.create_default_meeting()
+        start_meeting(meeting=meeting, actor=self.alex)
+        meeting.refresh_from_db()
+        started_at = meeting.started_at
+        end_meeting(meeting=meeting, actor=self.alex)
+
+        reopened = reopen_meeting(meeting=meeting, actor=self.alex)
+
+        self.assertEqual(reopened.status, Meeting.Status.LIVE)
+        self.assertIsNone(reopened.ended_at)
+        # Original started_at is preserved.
+        self.assertEqual(reopened.started_at, started_at)
+        self.assertEqual(reopened.scheduled_at, self.scheduled_at)
+
+    def test_reopen_rejects_upcoming_and_live(self):
+        upcoming = self.create_default_meeting()
+        with self.assertRaises(MeetingDomainError):
+            reopen_meeting(meeting=upcoming, actor=self.alex)
+
+        live = self.create_default_meeting()
+        start_meeting(meeting=live, actor=self.alex)
+        with self.assertRaises(MeetingDomainError):
+            reopen_meeting(meeting=live, actor=self.alex)
+
+    def test_reopened_meeting_can_be_ended_again(self):
+        meeting = self.create_default_meeting()
+        start_meeting(meeting=meeting, actor=self.alex)
+        end_meeting(meeting=meeting, actor=self.alex)
+        reopen_meeting(meeting=meeting, actor=self.alex)
+
+        ended = end_meeting(meeting=meeting, actor=self.alex)
+        self.assertEqual(ended.status, Meeting.Status.COMPLETED)
+        self.assertIsNotNone(ended.ended_at)
+
+    def test_update_meeting_does_not_accept_status(self):
+        meeting = self.create_default_meeting()
+
+        update_meeting(
+            meeting=meeting,
+            actor=self.alex,
+            title="No lifecycle here",
+        )
+
+        meeting.refresh_from_db()
+        self.assertEqual(meeting.title, "No lifecycle here")
+        self.assertEqual(meeting.status, Meeting.Status.UPCOMING)
 
     def test_meeting_participant_can_be_removed(self):
         meeting = self.create_default_meeting()
@@ -263,6 +350,7 @@ class MeetingDomainTest(TestCase):
 
         item = create_meeting_item(
             meeting=meeting,
+            meeting_section=MeetingSection.objects.get(meeting=meeting),
             actor=self.alex,
             title="Discussion",
         )
