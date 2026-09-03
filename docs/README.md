@@ -14,6 +14,7 @@ The documentation is intentionally split by concern so humans and coding agents 
 | Meetings, Meeting Templates, Sections, Items, lifecycle, meeting→work | `domain/meetings.md` |
 | Current implemented vs. not-yet-implemented checkpoint | `CURRENT_STATE.md` |
 | Testing, seed/reset, Living Lab, deployment, privacy | `living-lab.md` |
+| Canonical agent execution flow, debugging budget, verification boundary | `agent/WORKFLOW.md` |
 | UI appearance | relevant file under `stitch_examples/` |
 
 Do not read all documents by default.

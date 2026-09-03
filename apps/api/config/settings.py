@@ -148,3 +148,11 @@ REST_FRAMEWORK = {
         'rest_framework.permissions.IsAuthenticated',
     ],
 }
+
+# Canonical development origins for the normal Vite dev server.
+# Workstation-specific origins must not be added here; keep overrides out of tracked settings.
+# E2E runs use settings_e2e.py, which is isolated to http://127.0.0.1:4173.
+CSRF_TRUSTED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]

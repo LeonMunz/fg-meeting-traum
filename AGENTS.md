@@ -4,11 +4,12 @@
 
 Build FG Workspace incrementally as a multiuser research-group workspace.
 
-The current product priority is the core foundation:
+The authoritative current implementation checkpoint is:
+`docs/CURRENT_STATE.md`
 
-`Identity -> Research Group -> Project + Membership -> Work Item + Assignment -> My Work + Project Board`
-
-Meetings are built only after this core checkpoint works.
+This file is repository-wide. Domain-specific instructions live in
+`apps/web/AGENTS.md` (frontend) and `apps/api/AGENTS.md` (backend). The
+canonical agent execution flow lives in `docs/agent/WORKFLOW.md`.
 
 ## Stable technical direction
 
@@ -25,9 +26,10 @@ Do not change these choices without an explicit architecture decision.
 ## Repository map
 
 - `apps/web/` — React frontend
-- `apps/api/` — Django backend once created
+- `apps/api/` — Django backend
 - `docs/` — durable product, domain, architecture, and Living-Lab documentation
 - `docs/stitch_examples/` — visual reference exports only
+- `scripts/agent-verify.sh` — repository verification helper (frontend / backend / full)
 
 ## Documentation usage
 
@@ -92,18 +94,49 @@ For full semantics and invariants, read the relevant domain document.
 
 ## Working method
 
-For every task:
+For every task, follow the canonical flow in `docs/agent/WORKFLOW.md`:
+PRECHECK → BASELINE / REPRODUCE → PLAN → EDIT → FAST VERIFY → TARGET VERIFY →
+FINAL VERIFY → REPORT.
 
-1. Inspect before editing.
-2. State a short implementation plan when the change is non-trivial.
-3. Make the smallest coherent change that satisfies the task.
-4. Do not implement future steps preemptively.
-5. Do not perform unrelated refactors.
-6. Do not add dependencies unless the task explicitly approves them.
-7. Add or update tests for domain rules introduced or changed by the task.
-8. Run the checks relevant to the changed area.
-9. Report changed files, behavior, checks, and relevant limitations.
-10. Stop when the requested Definition of Done is met.
+Task discipline:
+- One independently verifiable product outcome per task.
+- Inspect before editing.
+- Make the smallest coherent change that satisfies the task.
+- Do not implement future steps preemptively.
+- Do not perform unrelated improvements or refactors.
+- Do not add dependencies unless the task explicitly approves them.
+- Add or update tests for domain rules introduced or changed by the task.
+- Stop when the requested Definition of Done is met.
+
+Bug discipline:
+- Reproduce before changing production code.
+- Label every diagnostic finding explicitly as:
+  - **FACT** — directly observed evidence.
+  - **HYPOTHESIS** — a possible explanation, not a conclusion.
+  - **NEXT TEST** — one test that can falsify or materially distinguish the hypothesis.
+- Maximum 3 failed diagnostic experiments for one blocker.
+- Maximum 2 materially different root-cause hypotheses.
+- If that budget is exhausted without materially new evidence: STOP and report **BLOCKED** with the FACTs, hypotheses, and what was tried.
+- Do not escalate an application bug into framework/runtime speculation without direct evidence.
+
+Structural validity:
+- If your own edit introduces a parser, syntax, type, import, or server-boot failure, restore structural validity immediately before continuing diagnosis.
+- Never continue behavioral debugging against code that does not parse or typecheck.
+
+Verification boundary:
+- Verification-only work must not silently become open-ended implementation.
+- Verification may inspect code and execute tests.
+- Stale selectors may be updated only when product behavior remains unchanged.
+- If verification discovers a production regression not explicitly authorized for repair, report it and stop; do not opportunistically fix unrelated failures.
+
+Test integrity:
+- Never change product copy solely to satisfy a test selector.
+- Never weaken behavioral assertions merely to accommodate implementation.
+- Strict locator ambiguity is evidence to refine the locator, not a reason to blindly use `.first()`.
+
+Session guidance:
+- Use the **CURRENT** session only for the same root cause or a direct continuation.
+- Start a **NEW** session for a new feature/domain/root cause, or after substantial debugging has polluted the context.
 
 ## Validation
 
@@ -113,6 +146,10 @@ For frontend changes, from repository root run:
 npm run build
 npm run lint
 ```
+
+For a fast structural check use `npm run typecheck` (delegates to the web
+workspace). For a combined frontend/backend verification pass use
+`./scripts/agent-verify.sh frontend|backend|full`.
 
 For backend changes (from `apps/api/`), at minimum run Django system checks, `makemigrations --check`, and the relevant backend tests:
 
