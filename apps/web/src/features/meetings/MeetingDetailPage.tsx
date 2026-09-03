@@ -16,7 +16,10 @@ import { ApiError } from '../../api/client'
 import {
   addMeetingParticipant,
   createMeetingItem,
+  createMeetingNote,
   createMeetingSection,
+  deleteMeeting,
+  deleteMeetingNote,
   endMeeting,
   getMeeting,
   listMeetingItems,
@@ -27,6 +30,7 @@ import {
   removeMeetingParticipant,
   startMeeting,
   updateMeetingItem,
+  updateMeetingNote,
   updateMeetingSection,
 } from '../../api/meetings'
 import {
@@ -40,6 +44,7 @@ import { CreateMeetingWorkItemDialog } from './CreateMeetingWorkItemDialog'
 import type {
   ApiMeeting,
   ApiMeetingItem,
+  ApiMeetingNote,
   ApiMeetingParticipant,
   ApiMeetingSection,
   ApiResearchGroupMember,
@@ -85,6 +90,20 @@ function formatMeetingDate(value: string) {
   return new Intl.DateTimeFormat('en', {
     dateStyle: 'full',
     timeStyle: 'short',
+  }).format(date)
+}
+
+function formatNoteTime(value: string) {
+  const date = new Date(value)
+
+  if (Number.isNaN(date.getTime())) {
+    return value
+  }
+
+  return new Intl.DateTimeFormat('en', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
   }).format(date)
 }
 
@@ -409,11 +428,58 @@ export function MeetingDetailPage() {
   const [updatingMeeting, setUpdatingMeeting] =
     useState(false)
 
+  const [deleteDialogOpen, setDeleteDialogOpen] =
+    useState(false)
+  const [deletingMeeting, setDeletingMeeting] =
+    useState(false)
+
   const [
     workItemSource,
     setWorkItemSource,
   ] = useState<ApiMeetingItem | null>(null)
 
+  // ── Persistent Meeting Notes ────────────────────────────────
+  // Notes come from the canonical API; this block only tracks
+  // transient UI concerns (which composer is open, drafts, in-flight
+  // mutation IDs, the in-flight delete confirmation).
+  const [
+    noteComposerItemId,
+    setNoteComposerItemId,
+  ] = useState<number | null>(null)
+  const [noteDraftContent, setNoteDraftContent] =
+    useState('')
+  const [
+    creatingNoteItemId,
+    setCreatingNoteItemId,
+  ] = useState<number | null>(null)
+  const [
+    editingNoteId,
+    setEditingNoteId,
+  ] = useState<number | null>(null)
+  const [
+    noteEditContent,
+    setNoteEditContent,
+  ] = useState('')
+  const [
+    savingNoteId,
+    setSavingNoteId,
+  ] = useState<number | null>(null)
+  const [
+    deletingNoteId,
+    setDeletingNoteId,
+  ] = useState<number | null>(null)
+  const [
+    pendingDeleteNote,
+    setPendingDeleteNote,
+  ] = useState<ApiMeetingNote | null>(null)
+  const [
+    noteWorkItemDraft,
+    setNoteWorkItemDraft,
+  ] = useState<string | null>(null)
+  const [
+    noteWorkItemProjectId,
+    setNoteWorkItemProjectId,
+  ] = useState<number | null>(null)
   const quickAddInputRef =
     useRef<HTMLInputElement>(null)
 
@@ -946,7 +1012,7 @@ export function MeetingDetailPage() {
   const startEditingItem = (item: ApiMeetingItem) => {
     setEditingItemId(item.id)
     setEditItemTitle(item.title)
-    setEditItemNotes(item.notes)
+    setEditItemNotes(item.contextNotes)
   }
 
   const handleSaveItem = async (
@@ -1157,6 +1223,222 @@ export function MeetingDetailPage() {
     }
   }
 
+  const handleDeleteMeeting = async () => {
+    if (meeting == null || deletingMeeting) {
+      return
+    }
+
+    setDeletingMeeting(true)
+    setActionError(null)
+
+    try {
+      await deleteMeeting(meeting.id)
+      setDeleteDialogOpen(false)
+      navigate('/meetings')
+    } catch (error) {
+      setActionError(getErrorMessage(error, 'Meeting could not be deleted.'))
+    } finally {
+      setDeletingMeeting(false)
+    }
+  }
+
+  const updateItemNotes = (
+    itemId: number,
+    notes: ApiMeetingNote[],
+  ) => {
+    setItems((current) =>
+      current.map((candidate) =>
+        candidate.id === itemId
+          ? { ...candidate, notes }
+          : candidate,
+      ),
+    )
+  }
+
+  const openNoteComposer = (item: ApiMeetingItem) => {
+    // Only one composer open at a time; an unsaved draft in another
+    // composer is simply discarded (never submitted).
+    setNoteComposerItemId(item.id)
+    setNoteDraftContent('')
+  }
+
+  const submitNoteComposer = async (
+    item: ApiMeetingItem,
+  ) => {
+    const trimmed = noteDraftContent.trim()
+    if (!trimmed || creatingNoteItemId != null) {
+      return
+    }
+
+    setCreatingNoteItemId(item.id)
+    setActionError(null)
+
+    try {
+      const created = await createMeetingNote(
+        item.id,
+        { content: trimmed },
+      )
+      updateItemNotes(
+        item.id,
+        [...(item.notes ?? []), created],
+      )
+      setNoteComposerItemId(null)
+      setNoteDraftContent('')
+    } catch (error) {
+      // Preserve the draft so the user can retry without re-typing.
+      setActionError(
+        getErrorMessage(
+          error,
+          'Note could not be added.',
+        ),
+      )
+    } finally {
+      setCreatingNoteItemId(null)
+    }
+  }
+
+  const cancelNoteComposer = () => {
+    setNoteComposerItemId(null)
+    setNoteDraftContent('')
+  }
+
+  const startEditingNote = (
+    note: ApiMeetingNote,
+  ) => {
+    setEditingNoteId(note.id)
+    setNoteEditContent(note.content)
+  }
+
+  const cancelEditingNote = () => {
+    setEditingNoteId(null)
+    setNoteEditContent('')
+  }
+
+  const saveNoteEdit = async (
+    item: ApiMeetingItem,
+    note: ApiMeetingNote,
+  ) => {
+    const trimmed = noteEditContent.trim()
+    if (!trimmed || savingNoteId != null) {
+      return
+    }
+
+    setSavingNoteId(note.id)
+    setActionError(null)
+
+    try {
+      const updated = await updateMeetingNote(
+        note.id,
+        { content: trimmed },
+      )
+      updateItemNotes(
+        item.id,
+        (item.notes ?? []).map((candidate) =>
+          candidate.id === updated.id ? updated : candidate,
+        ),
+      )
+      setEditingNoteId(null)
+      setNoteEditContent('')
+    } catch (error) {
+      // Keep the edited draft visible so it is not lost.
+      setActionError(
+        getErrorMessage(
+          error,
+          'Note could not be updated.',
+        ),
+      )
+    } finally {
+      setSavingNoteId(null)
+    }
+  }
+
+  const confirmDeleteNote = () => {
+    if (pendingDeleteNote == null || deletingNoteId != null) {
+      return
+    }
+
+    const note = pendingDeleteNote
+    setPendingDeleteNote(null)
+
+    setDeletingNoteId(note.id)
+    setActionError(null)
+
+    void (async () => {
+      try {
+        await deleteMeetingNote(note.id)
+        setItems((current) =>
+          current.map((candidate) =>
+            candidate.id === note.meetingItemId
+              ? {
+                  ...candidate,
+                  notes: (candidate.notes ?? []).filter(
+                    (n) => n.id !== note.id,
+                  ),
+                }
+              : candidate,
+          ),
+        )
+        if (editingNoteId === note.id) {
+          setEditingNoteId(null)
+          setNoteEditContent('')
+        }
+      } catch (error) {
+        setActionError(
+          getErrorMessage(
+            error,
+            'Note could not be deleted.',
+          ),
+        )
+      } finally {
+        setDeletingNoteId(null)
+      }
+    })()
+  }
+
+  const openNoteWorkItem = (
+    item: ApiMeetingItem,
+    content: string,
+  ) => {
+    const trimmed = content.trim()
+    if (!trimmed) {
+      return
+    }
+
+    const firstLine = trimmed
+      .split('\n')
+      .map((line) => line.trim())
+      .find(Boolean) ?? trimmed
+
+    // React batches these updates, so the inline composer closes in
+    // the same commit that opens the work item dialog — they never
+    // coexist as active layers.
+    setNoteComposerItemId(null)
+    setNoteDraftContent('')
+    setNoteWorkItemDraft(
+      firstLine.length > 80
+        ? `${firstLine.slice(0, 80)}…`
+        : firstLine,
+    )
+    setNoteWorkItemProjectId(meeting?.projectId ?? null)
+    setWorkItemSource(item)
+  }
+
+  const handleNoteWorkItemCreated = (
+    workItem: ApiWorkItem,
+  ) => {
+    if (noteWorkItemDraft != null) {
+      setNoteWorkItemDraft(null)
+    }
+    setNoteWorkItemProjectId(null)
+    handleWorkItemCreated(workItem)
+  }
+
+  const closeNoteWorkItemDialog = () => {
+    setNoteWorkItemDraft(null)
+    setNoteWorkItemProjectId(null)
+    setWorkItemSource(null)
+  }
+
   const handleWorkItemCreated = (
     workItem: ApiWorkItem,
   ) => {
@@ -1345,6 +1627,24 @@ export function MeetingDetailPage() {
               </span>
               End meeting
             </button>
+          )}
+
+          {canManageLifecycle && (
+            <MenuTrigger label="Meeting actions">
+              {(_, close) => (
+                <>
+                  <MenuItem
+                    label="Delete meeting"
+                    icon="delete"
+                    danger
+                    onClick={() => {
+                      setDeleteDialogOpen(true)
+                      close()
+                    }}
+                  />
+                </>
+              )}
+            </MenuTrigger>
           )}
         </div>
       </header>
@@ -1888,9 +2188,9 @@ export function MeetingDetailPage() {
                                     )}
                                   </div>
 
-                                  {item.notes && (
+                                  {item.contextNotes && (
                                     <p className="mt-1 line-clamp-2 whitespace-pre-wrap text-sm text-on-surface-variant">
-                                      {item.notes}
+                                      {item.contextNotes}
                                     </p>
                                   )}
 
@@ -1904,6 +2204,287 @@ export function MeetingDetailPage() {
                                       {item.workItemIds.length === 1
                                         ? 'item'
                                         : 'items'}
+                                    </div>
+                                  )}
+
+                                  {/* Persistent meeting Notes:
+                                      saved notes render in Live and Completed;
+                                      authoring controls are Live-only. */}
+                                  {(isLive || isCompleted) && (
+                                    <div className="mt-2">
+                                      {isLive &&
+                                      noteComposerItemId ===
+                                        item.id && (
+                                          <div className="mb-2">
+                                            <textarea
+                                              value={noteDraftContent}
+                                              onChange={(event) =>
+                                                setNoteDraftContent(
+                                                  event.target.value,
+                                                )
+                                              }
+                                              onKeyDown={(event) => {
+                                                if (
+                                                  event.key ===
+                                                    'Escape'
+                                                ) {
+                                                  event.preventDefault()
+                                                  cancelNoteComposer()
+                                                }
+                                              }}
+                                              autoFocus
+                                              rows={2}
+                                              placeholder="Add what came up during the discussion…"
+                                              aria-label={`Add note to ${item.title}`}
+                                              className="w-full resize-y rounded-lg border border-outline-variant bg-surface-container-lowest px-3 py-2 text-sm text-on-surface outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
+                                            />
+
+                                            <div className="mt-2 flex items-center justify-end gap-2">
+                                              <button
+                                                type="button"
+                                                onClick={
+                                                  cancelNoteComposer
+                                                }
+                                                className="h-8 rounded-lg px-2 text-sm font-medium text-on-surface-variant outline-none transition hover:bg-surface-container-high focus-visible:ring-2 focus-visible:ring-primary/40"
+                                              >
+                                                Cancel
+                                              </button>
+
+                                              <button
+                                                type="button"
+                                                disabled={
+                                                  !noteDraftContent.trim()
+                                                }
+                                                onClick={() =>
+                                                  openNoteWorkItem(
+                                                    item,
+                                                    noteDraftContent,
+                                                  )
+                                                }
+                                                className="h-8 rounded-lg px-2 text-xs font-medium text-on-surface-variant outline-none transition hover:bg-surface-container-high hover:text-on-surface focus-visible:ring-2 focus-visible:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-45"
+                                              >
+                                                Create work item
+                                              </button>
+
+                                              <button
+                                                type="button"
+                                                disabled={
+                                                  !noteDraftContent.trim()
+                                                }
+                                                onClick={() =>
+                                                  void submitNoteComposer(
+                                                    item,
+                                                  )
+                                                }
+                                                className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-sm font-semibold text-white outline-none transition hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-45"
+                                              >
+                                                {creatingNoteItemId ===
+                                                item.id && (
+                                                  <span
+                                                    aria-hidden="true"
+                                                    className="material-symbols-outlined animate-spin text-[15px]"
+                                                  >
+                                                    refresh
+                                                  </span>
+                                                )}
+                                                {creatingNoteItemId ===
+                                                item.id
+                                                  ? 'Adding…'
+                                                  : 'Add note'}
+                                              </button>
+                                            </div>
+                                          </div>
+                                        )}
+
+                                      {(item.notes ?? []).length >
+                                        0 && (
+                                        <div>
+                                          <p className="text-xs font-semibold text-on-surface-variant">
+                                            Notes
+                                          </p>
+
+                                          <ul className="mt-1 space-y-2">
+                                            {(item.notes ?? []).map(
+                                              (note) => (
+                                                <li
+                                                  key={note.id}
+                                                  className="group/note relative rounded-lg px-2 py-1 transition hover:bg-surface-container-low/60"
+                                                >
+                                                  {isLive &&
+                                                  editingNoteId ===
+                                                    note.id ? (
+                                                    <div>
+                                                      <textarea
+                                                        value={noteEditContent}
+                                                        onChange={(
+                                                          event,
+                                                        ) =>
+                                                          setNoteEditContent(
+                                                            event.target.value,
+                                                          )
+                                                        }
+                                                        onKeyDown={
+                                                          (event) => {
+                                                            if (
+                                                              event.key ===
+                                                                'Escape'
+                                                            ) {
+                                                              event.preventDefault()
+                                                              cancelEditingNote()
+                                                            }
+                                                          }
+                                                        }
+                                                        autoFocus
+                                                        rows={2}
+                                                        aria-label={`Edit note on ${item.title}`}
+                                                        className="w-full resize-y rounded-lg border border-outline-variant bg-surface-container-lowest px-2 py-1.5 text-sm text-on-surface outline-none focus:border-primary"
+                                                      />
+
+                                                      <div className="mt-1.5 flex items-center justify-end gap-2">
+                                                        <button
+                                                          type="button"
+                                                          onClick={
+                                                            cancelEditingNote
+                                                          }
+                                                          className="h-7 rounded-md px-2 text-xs font-medium text-on-surface-variant outline-none transition hover:bg-surface-container-high focus-visible:ring-2 focus-visible:ring-primary/40"
+                                                        >
+                                                          Cancel
+                                                        </button>
+
+                                                        <button
+                                                          type="button"
+                                                          disabled={
+                                                            !noteEditContent.trim()
+                                                          }
+                                                          onClick={
+                                                            () =>
+                                                              void saveNoteEdit(
+                                                                item,
+                                                                note,
+                                                              )
+                                                          }
+                                                          className="inline-flex h-7 items-center gap-1 rounded-md bg-primary px-2 text-xs font-semibold text-white outline-none transition hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-45"
+                                                        >
+                                                          {savingNoteId ===
+                                                          note.id && (
+                                                            <span
+                                                              aria-hidden="true"
+                                                              className="material-symbols-outlined animate-spin text-[13px]"
+                                                            >
+                                                              refresh
+                                                            </span>
+                                                          )}
+                                                          {savingNoteId ===
+                                                          note.id
+                                                            ? 'Saving…'
+                                                            : 'Save'}
+                                                        </button>
+                                                      </div>
+                                                    </div>
+                                                  ) : (
+                                                    <>
+                                                      <p className="whitespace-pre-wrap text-sm text-on-surface">
+                                                        {note.content}
+                                                      </p>
+
+                                                      <p className="mt-0.5 text-[11px] text-on-surface-variant/70">
+                                                        {getPersonName(
+                                                          note.author,
+                                                        )}{' '}
+                                                        ·{' '}
+                                                        {formatNoteTime(
+                                                          note.createdAt,
+                                                        )}
+                                                      </p>
+
+                                                      {isLive && (
+                                                        <div className="mt-0.5 flex items-center justify-end gap-1 opacity-0 transition group-hover/note:opacity-100 focus-within:opacity-100">
+                                                          <button
+                                                            type="button"
+                                                            onClick={() =>
+                                                              openNoteWorkItem(
+                                                                item,
+                                                                note.content,
+                                                              )
+                                                            }
+                                                            aria-label={`Create work item from note: ${note.content}`}
+                                                            title="Create work item"
+                                                            className="rounded-md p-1 text-on-surface-variant/50 outline-none transition hover:bg-surface-container-high hover:text-on-surface-variant focus-visible:text-primary focus-visible:ring-2 focus-visible:ring-primary/40"
+                                                          >
+                                                            <span aria-hidden="true" className="material-symbols-outlined text-[15px]">
+                                                              add_task
+                                                            </span>
+                                                          </button>
+
+                                                          <MenuTrigger
+                                                            label={`Note actions for ${note.content}`}
+                                                          >
+                                                            {(_, close) => (
+                                                              <>
+                                                                <MenuItem
+                                                                  label="Edit note"
+                                                                  icon="edit"
+                                                                  onClick={
+                                                                    () => {
+                                                                      startEditingNote(
+                                                                        note,
+                                                                      )
+                                                                      close()
+                                                                    }
+                                                                  }
+                                                                />
+
+                                                                <span
+                                                                  role="none"
+                                                                  className="my-1 border-t border-outline-variant"
+                                                                />
+
+                                                                <MenuItem
+                                                                  label="Delete note"
+                                                                  icon="delete"
+                                                                  danger
+                                                                  onClick={
+                                                                    () => {
+                                                                      close()
+                                                                      setPendingDeleteNote(
+                                                                        note,
+                                                                      )
+                                                                    }
+                                                                  }
+                                                                />
+                                                              </>
+                                                            )}
+                                                          </MenuTrigger>
+                                                        </div>
+                                                      )}
+                                                    </>
+                                                  )}
+                                                </li>
+                                              ),
+                                            )}
+                                          </ul>
+                                        </div>
+                                      )}
+
+                                      {isLive &&
+                                      noteComposerItemId !==
+                                        item.id && (
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            openNoteComposer(item)
+                                          }
+                                          className="mt-2 inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-xs font-medium text-on-surface-variant/70 outline-none transition hover:bg-surface-container-low hover:text-on-surface focus-visible:ring-2 focus-visible:ring-primary/40"
+                                        >
+                                          <span aria-hidden="true" className="material-symbols-outlined text-[14px]">
+                                            add
+                                          </span>
+                                          {(item.notes ?? []).length >
+                                          0
+                                            ? 'Add note'
+                                            : 'Add note…'}
+                                        </button>
+                                      )}
                                     </div>
                                   )}
                                 </div>
@@ -2085,12 +2666,180 @@ export function MeetingDetailPage() {
         )}
       </div>
 
+      {deleteDialogOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-on-surface/25 px-4 py-8 backdrop-blur-[2px]"
+          onMouseDown={(event) => {
+            if (
+              event.target === event.currentTarget &&
+              !deletingMeeting
+            ) {
+              setDeleteDialogOpen(false)
+            }
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="meeting-delete-title"
+            className="w-full max-w-md overflow-hidden rounded-2xl border border-outline-variant bg-surface-container-lowest shadow-xl"
+          >
+            <div className="px-6 py-5">
+              <h2
+                id="meeting-delete-title"
+                className="text-lg font-semibold tracking-tight text-on-surface"
+              >
+                Delete meeting?
+              </h2>
+
+              <p className="mt-2 text-sm text-on-surface-variant">
+                This permanently deletes this meeting and its
+                agenda/protocol content. Work Items created from this
+                meeting will not be deleted.
+              </p>
+
+              {actionError && (
+                <p
+                  role="alert"
+                  className="mt-3 rounded-lg bg-error-container px-3 py-2 text-sm text-error"
+                >
+                  {actionError}
+                </p>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-2 border-t border-outline-variant px-6 py-4">
+              <button
+                type="button"
+                disabled={deletingMeeting}
+                onClick={() => setDeleteDialogOpen(false)}
+                className="inline-flex h-9 items-center rounded-lg px-3.5 text-sm font-medium text-on-surface-variant outline-none transition hover:bg-surface-container-high focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-60"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                disabled={deletingMeeting}
+                onClick={() => void handleDeleteMeeting()}
+                className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-error-container px-3.5 text-sm font-semibold text-on-error-container outline-none transition hover:bg-error-container/80 focus-visible:ring-2 focus-visible:ring-error focus-visible:ring-offset-2 disabled:opacity-60"
+              >
+                {deletingMeeting && (
+                  <span
+                    aria-hidden="true"
+                    className="material-symbols-outlined animate-spin text-[18px]"
+                  >
+                    refresh
+                  </span>
+                )}
+                {deletingMeeting
+                  ? 'Deleting…'
+                  : 'Delete meeting'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pendingDeleteNote != null && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-on-surface/25 px-4 py-8 backdrop-blur-[2px]"
+          onMouseDown={(event) => {
+            if (
+              event.target === event.currentTarget &&
+              deletingNoteId == null
+            ) {
+              setPendingDeleteNote(null)
+            }
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="note-delete-title"
+            className="w-full max-w-md overflow-hidden rounded-2xl border border-outline-variant bg-surface-container-lowest shadow-xl"
+          >
+            <div className="px-6 py-5">
+              <h2
+                id="note-delete-title"
+                className="text-lg font-semibold tracking-tight text-on-surface"
+              >
+                Delete note?
+              </h2>
+
+              <p className="mt-2 text-sm text-on-surface-variant">
+                This permanently deletes the note. The agenda item
+                and any linked Work Items are not affected.
+              </p>
+
+              {actionError && (
+                <p
+                  role="alert"
+                  className="mt-3 rounded-lg bg-error-container px-3 py-2 text-sm text-error"
+                >
+                  {actionError}
+                </p>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-2 border-t border-outline-variant px-6 py-4">
+              <button
+                type="button"
+                disabled={deletingNoteId != null}
+                onClick={() => setPendingDeleteNote(null)}
+                className="inline-flex h-9 items-center rounded-lg px-3.5 text-sm font-medium text-on-surface-variant outline-none transition hover:bg-surface-container-high focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-60"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                disabled={deletingNoteId != null}
+                onClick={() => void confirmDeleteNote()}
+                className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-error-container px-3.5 text-sm font-semibold text-on-error-container outline-none transition hover:bg-error-container/80 focus-visible:ring-2 focus-visible:ring-error focus-visible:ring-offset-2 disabled:opacity-60"
+              >
+                {deletingNoteId != null && (
+                  <span
+                    aria-hidden="true"
+                    className="material-symbols-outlined animate-spin text-[18px]"
+                  >
+                    refresh
+                  </span>
+                )}
+                {deletingNoteId != null
+                  ? 'Deleting…'
+                  : 'Delete note'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <CreateMeetingWorkItemDialog
         open={workItemSource != null}
         researchGroupId={meeting.researchGroupId}
         meetingItem={workItemSource}
-        onClose={() => setWorkItemSource(null)}
-        onCreated={handleWorkItemCreated}
+        defaultProjectId={noteWorkItemProjectId}
+        initialTitle={noteWorkItemDraft ?? ''}
+        initialDescription={
+          noteWorkItemDraft != null
+            ? workItemSource
+              ? (workItemSource.notes ?? []).map(
+                  (note) => note.content,
+                ).join('\n\n')
+              : ''
+            : ''
+        }
+        onClose={
+          noteWorkItemDraft != null
+            ? closeNoteWorkItemDialog
+            : () => setWorkItemSource(null)
+        }
+        onCreated={
+          noteWorkItemDraft != null
+            ? handleNoteWorkItemCreated
+            : handleWorkItemCreated
+        }
       />
     </div>
   )

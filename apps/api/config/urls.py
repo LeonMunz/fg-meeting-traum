@@ -51,8 +51,10 @@ from meetings.views import (
     MeetingReopenView,
     MeetingStartView,
     MeetingItemDetailView,
+    MeetingItemNoteListCreateView,
     MeetingItemListCreateView,
     MeetingItemWorkItemCreateView,
+    MeetingNoteDetailView,
     MeetingParticipantDetailView,
     MeetingParticipantListCreateView,
     MeetingSectionListCreateView,
@@ -133,6 +135,8 @@ urlpatterns = [
     path('api/meetings/<int:meeting_id>/sections/reorder/', MeetingSectionReorderView.as_view(), name='meeting-sections-reorder'),
     path('api/meeting-sections/<int:section_id>/', MeetingSectionDetailView.as_view(), name='meeting-section-detail'),
     path('api/meeting-items/<int:meeting_item_id>/', MeetingItemDetailView.as_view(), name='meeting-item-detail'),
+    path('api/meeting-items/<int:meeting_item_id>/notes/', MeetingItemNoteListCreateView.as_view(), name='meeting-item-notes-list'),
+    path('api/meeting-notes/<int:note_id>/', MeetingNoteDetailView.as_view(), name='meeting-note-detail'),
     path('api/meeting-items/<int:meeting_item_id>/work-items/', MeetingItemWorkItemCreateView.as_view(), name='meeting-item-work-items-create'),
 
     # Meeting Series

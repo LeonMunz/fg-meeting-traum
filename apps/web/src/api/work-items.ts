@@ -42,6 +42,14 @@ export async function getWorkItem(
   )
 }
 
+export async function deleteWorkItem(
+  workItemId: number,
+): Promise<void> {
+  return apiDelete<void>(
+    `/api/work-items/${workItemId}/`,
+  )
+}
+
 export interface ApiReorderWorkItemInput {
   statusDefinitionId?: number | null
   beforeWorkItemId?: number | null

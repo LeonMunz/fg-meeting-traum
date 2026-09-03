@@ -37,6 +37,10 @@ import {
   resolveStatusDefinitionIdByCategory,
   resolveWorkItemStatusSelectValue,
 } from './workItemMapping'
+import {
+  WorkItemActionMenuTrigger,
+  WorkItemDeleteDialog,
+} from './workItemDelete'
 
 export type WorkItemFormInput = {
   title: string
@@ -79,6 +83,13 @@ type WorkItemDrawerProps = {
     workItemId: number,
     patch: ApiUpdateWorkItemInput,
   ) => Promise<void>
+  onDelete?: (workItemId: number) => Promise<void>
+  onRequestDelete?: (workItemId: number) => void
+  deleteDialogOpen?: boolean
+  isDeletingWorkItem?: boolean
+  deleteError?: string | null
+  onCancelDelete?: () => void
+  onConfirmDelete?: () => void
 }
 
 const typeOptions: Array<{
@@ -733,6 +744,7 @@ function getWorkItemCommentActionErrorMessage(
   return fallback
 }
 
+
 // Comments and History events are different typed sources, merged
 // presentation-side only — never combined into a fake backend event.
 type ActivityFeedItem =
@@ -797,6 +809,13 @@ export function WorkItemDrawer({
   onClose,
   onCreate,
   onPatch,
+  onDelete,
+  onRequestDelete,
+  deleteDialogOpen,
+  isDeletingWorkItem,
+  deleteError,
+  onCancelDelete,
+  onConfirmDelete,
 }: WorkItemDrawerProps) {
   if (!open) {
     return null
@@ -818,6 +837,13 @@ export function WorkItemDrawer({
         parentItems={parentItems}
         onClose={onClose}
         onPatch={onPatch}
+        onDelete={onDelete}
+        onRequestDelete={onRequestDelete}
+        deleteDialogOpen={deleteDialogOpen}
+        isDeletingWorkItem={isDeletingWorkItem}
+        deleteError={deleteError}
+        onCancelDelete={onCancelDelete}
+        onConfirmDelete={onConfirmDelete}
       />
     )
   }
@@ -1767,6 +1793,13 @@ function WorkItemInspector({
   parentItems,
   onClose,
   onPatch,
+  onDelete,
+  onRequestDelete,
+  deleteDialogOpen,
+  isDeletingWorkItem,
+  deleteError,
+  onCancelDelete,
+  onConfirmDelete,
 }: {
   projectName: string
   item: ApiWorkItem
@@ -1780,6 +1813,13 @@ function WorkItemInspector({
     workItemId: number,
     patch: ApiUpdateWorkItemInput,
   ) => Promise<void>
+  onDelete?: (workItemId: number) => Promise<void>
+  onRequestDelete?: (workItemId: number) => void
+  deleteDialogOpen?: boolean
+  isDeletingWorkItem?: boolean
+  deleteError?: string | null
+  onCancelDelete?: () => void
+  onConfirmDelete?: () => void
 }) {
   const [saveStatus, setSaveStatus] =
     useState<SaveStatus>('idle')
@@ -1788,6 +1828,25 @@ function WorkItemInspector({
   const savedTimeoutRef = useRef<
     ReturnType<typeof setTimeout> | null
   >(null)
+
+  // Deletion is a destructive, object-level action exposed from the
+  // drawer header. When the parent wires the shared page-level flow
+  // (onRequestDelete), the page renders the single confirmation dialog;
+  // otherwise the drawer keeps a self-contained fallback so it still
+  // works standalone (e.g. tests). Either way there is at most ONE
+  // dialog shown at a time.
+  const [
+    localDeleteDialogOpen,
+    setLocalDeleteDialogOpen,
+  ] = useState(false)
+  const [
+    localDeletingWorkItem,
+    setLocalDeletingWorkItem,
+  ] = useState(false)
+  const [
+    localDeleteWorkItemError,
+    setLocalDeleteWorkItemError,
+  ] = useState<string | null>(null)
 
   // Serializes every partial PATCH for this Work Item so requests are
   // sent (and settled) strictly in the order they were invoked. This is
@@ -1884,6 +1943,9 @@ function WorkItemInspector({
     setAssigneeQuery('')
     setSaveStatus('idle')
     setSaveError(null)
+    setLocalDeleteDialogOpen(false)
+    setLocalDeletingWorkItem(false)
+    setLocalDeleteWorkItemError(null)
   }, [item.id])
 
   useEffect(
@@ -2260,6 +2322,79 @@ function WorkItemInspector({
     () => buildActivityFeed(comments, historyEvents),
     [comments, historyEvents],
   )
+
+  // When the parent wires the shared page-level flow (onRequestDelete),
+  // the page owns the single confirmation dialog. Otherwise the drawer
+  // falls back to a self-contained dialog so it still works standalone.
+  const useSharedDelete = onRequestDelete != null
+
+  const effectiveDeleteOpen = useSharedDelete
+    ? deleteDialogOpen === true
+    : localDeleteDialogOpen
+  const effectiveDeleting = useSharedDelete
+    ? isDeletingWorkItem === true
+    : localDeletingWorkItem
+  const effectiveDeleteError = useSharedDelete
+    ? deleteError ?? null
+    : localDeleteWorkItemError
+
+  function requestDelete() {
+    if (useSharedDelete) {
+      onRequestDelete(item.id)
+      return
+    }
+
+    setLocalDeleteWorkItemError(null)
+    setLocalDeleteDialogOpen(true)
+  }
+
+  function cancelDelete() {
+    if (useSharedDelete) {
+      if (effectiveDeleting) {
+        return
+      }
+      onCancelDelete?.()
+      return
+    }
+
+    if (localDeletingWorkItem) {
+      return
+    }
+
+    setLocalDeleteDialogOpen(false)
+  }
+
+  async function confirmDelete() {
+    if (useSharedDelete) {
+      onConfirmDelete?.()
+      return
+    }
+
+    if (localDeletingWorkItem || onDelete == null) {
+      return
+    }
+
+    setLocalDeletingWorkItem(true)
+    setLocalDeleteWorkItemError(null)
+
+    try {
+      await onDelete(item.id)
+
+      // Success: close the dialog. The drawer closes itself because the
+      // parent removes the deleted item from the collection.
+      setLocalDeleteDialogOpen(false)
+    } catch (error) {
+      // Failure: keep the drawer and dialog open and surface the error.
+      setLocalDeleteWorkItemError(
+        getWorkItemCommentActionErrorMessage(
+          error,
+          'Work item could not be deleted.',
+        ),
+      )
+    } finally {
+      setLocalDeletingWorkItem(false)
+    }
+  }
 
   useEffect(() => {
     const handleKeyDown = (
@@ -2810,6 +2945,18 @@ function WorkItemInspector({
               </span>
             )}
 
+            {onDelete != null && (
+              <WorkItemActionMenuTrigger
+                label="Work item actions"
+                size="lg"
+                onAction={(action) => {
+                  if (action === 'delete') {
+                    requestDelete()
+                  }
+                }}
+              />
+            )}
+
             <button
               type="button"
               onClick={onClose}
@@ -2823,14 +2970,14 @@ function WorkItemInspector({
           </div>
         </header>
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-7 py-7">
+        <div className="flex min-h-0 flex-1 flex-col px-7 py-7">
           {readOnly && (
             <div className="mb-6 rounded-lg bg-surface-container-low px-4 py-3 text-sm text-on-surface-variant">
               This work item is read-only.
             </div>
           )}
 
-          <div className="space-y-7">
+          <div className="min-h-0 shrink-0 space-y-7 overflow-y-auto">
             <div>
               <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-on-surface-variant">
                 <span
@@ -3443,13 +3590,13 @@ function WorkItemInspector({
               </PropertyRow>
             </div>
 
-            <div className="border-t border-outline-variant pt-5">
-              <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-on-surface-variant">
+            <div className="mt-7 flex min-h-0 flex-1 flex-col border-t border-outline-variant pt-5">
+              <h3 className="mb-3 shrink-0 text-xs font-semibold uppercase tracking-wide text-on-surface-variant">
                 Activity
               </h3>
 
               {!readOnly && (
-                <div className="mb-4">
+                <div className="mb-4 min-h-0 shrink-0">
                   {!commentComposerExpanded ? (
                     <button
                       type="button"
@@ -3613,7 +3760,7 @@ function WorkItemInspector({
                 // Activity feed itself to anything querying by role.
                 <ul
                   aria-label="Activity"
-                  className="flex flex-col"
+                  className="max-h-[320px] min-h-0 flex-1 overflow-y-auto pr-1"
                 >
                   {activityFeed.map(
                     (entry, index) => {
@@ -3979,6 +4126,16 @@ function WorkItemInspector({
           </div>
         </div>
       </div>
+
+      {effectiveDeleteOpen && (
+        <WorkItemDeleteDialog
+          open={effectiveDeleteOpen}
+          deleting={effectiveDeleting}
+          error={effectiveDeleteError}
+          onCancel={cancelDelete}
+          onConfirm={() => void confirmDelete()}
+        />
+      )}
     </div>
   )
 }

@@ -730,6 +730,26 @@ Mandatory invariants:
 3. Cycles are forbidden.
 4. Cross-Project hierarchy is forbidden.
 
+### Deletion semantics
+
+A Work Item can be permanently deleted by an authorized actor (Project
+`owner`/`member` on the Work Item's own Project, non-archived Project).
+Deletion is server-authoritative and deny-by-default; a `viewer` and any
+user without Project access are rejected.
+
+Deleting a Work Item:
+
+- **Never deletes its Project** and never affects unrelated Work Items.
+- Removes Work-Item-owned dependent relations (assignees, label relations,
+  comments/activity, and the `MeetingItemWorkItem` origin/link rows).
+- **Does not cascade-delete children.** A parent's `parent` relationship is
+  `SET_NULL`, so deleting a parent leaves its children in place, now
+  unparented. Deleting a child never affects its parent.
+
+Deleting a Work Item that was created from a MeetingItem is one-way: it
+removes only the origin link and does **not** delete or mutate the
+originating Meeting, MeetingSection, or MeetingItem.
+
 ## 14. My Work
 
 My Work is not a separate task database.

@@ -90,3 +90,32 @@ describe('MeetingDetailPage status gating', () => {
     )
   })
 })
+
+describe('MeetingDetailPage persistent Meeting Notes', () => {
+  it('does not keep a second permanent frontend Note truth', () => {
+    expect(MEETING_DETAIL_SOURCE).not.toContain(
+      'temporaryNotes',
+    )
+    expect(MEETING_DETAIL_SOURCE).not.toContain(
+      'localStorage',
+    )
+  })
+
+  it('renders persisted Notes in Live and Completed', () => {
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      '(isLive || isCompleted) &&',
+    )
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'Notes',
+    )
+  })
+
+  it('gates Note authoring to Live meetings', () => {
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'Add note…',
+    )
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'createMeetingNote',
+    )
+  })
+})

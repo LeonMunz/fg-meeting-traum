@@ -16,6 +16,7 @@ import type {
   ApiMeetingItem,
   ApiProject,
   ApiProjectMembership,
+  ApiProjectWorkItemConfiguration,
   ApiWorkItem,
   ApiWorkItemTypeDefinition,
 } from '../../api/types'
@@ -24,6 +25,12 @@ type CreateMeetingWorkItemDialogProps = {
   open: boolean
   researchGroupId: number
   meetingItem: ApiMeetingItem | null
+  /** Optional Project Meeting project used to preselect the Project. */
+  defaultProjectId?: number | null
+  /** Prefill for the Work Item title (Note-derived heuristic). */
+  initialTitle?: string
+  /** Prefill for the Work Item description (Note content). */
+  initialDescription?: string
   onClose: () => void
   onCreated: (workItem: ApiWorkItem) => void
 }
@@ -68,6 +75,9 @@ export function CreateMeetingWorkItemDialog({
   open,
   researchGroupId,
   meetingItem,
+  defaultProjectId = null,
+  initialTitle = '',
+  initialDescription = '',
   onClose,
   onCreated,
 }: CreateMeetingWorkItemDialogProps) {
@@ -85,6 +95,18 @@ export function CreateMeetingWorkItemDialog({
 
   const [typeDefinitionId, setTypeDefinitionId] =
     useState<number | null>(null)
+
+  const [
+    statusDefinitions,
+    setStatusDefinitions,
+  ] = useState<
+    ApiProjectWorkItemConfiguration['statuses']
+  >([])
+
+  const [
+    statusDefinitionId,
+    setStatusDefinitionId,
+  ] = useState<number | null>(null)
 
   const [title, setTitle] =
     useState('')
@@ -115,10 +137,12 @@ export function CreateMeetingWorkItemDialog({
       return
     }
 
-    setTitle(meetingItem.title)
-    setDescription(meetingItem.notes)
+    setTitle(initialTitle || meetingItem.title)
+    setDescription(initialDescription || meetingItem.contextNotes)
     setTypeDefinitionId(null)
     setTypeDefinitions([])
+    setStatusDefinitions([])
+    setStatusDefinitionId(null)
     setDueDate('')
     setAssigneeIds([])
     setMemberships([])
@@ -147,7 +171,17 @@ export function CreateMeetingWorkItemDialog({
 
         setProjects(writableProjects)
 
-        if (writableProjects.length > 0) {
+        const preferred =
+          defaultProjectId != null
+            ? writableProjects.find(
+                (project) =>
+                  project.id === defaultProjectId,
+              )
+            : undefined
+
+        if (preferred) {
+          setProjectId(String(preferred.id))
+        } else if (writableProjects.length > 0) {
           setProjectId(
             String(writableProjects[0].id),
           )
@@ -175,6 +209,9 @@ export function CreateMeetingWorkItemDialog({
       cancelled = true
     }
   }, [
+    defaultProjectId,
+    initialDescription,
+    initialTitle,
     meetingItem,
     open,
     researchGroupId,
@@ -240,7 +277,9 @@ export function CreateMeetingWorkItemDialog({
   useEffect(() => {
     if (!open || !projectId) {
       setTypeDefinitions([])
+      setStatusDefinitions([])
       setTypeDefinitionId(null)
+      setStatusDefinitionId(null)
       return
     }
 
@@ -269,6 +308,13 @@ export function CreateMeetingWorkItemDialog({
             typeDefinition.active,
         )
 
+        const activeStatuses =
+          config.statuses.filter(
+            (statusDefinition) =>
+              statusDefinition.active,
+          )
+
+        setStatusDefinitions(activeStatuses)
         setTypeDefinitions(activeTypes)
 
         // The Type defaults to the first active type definition.
@@ -277,10 +323,21 @@ export function CreateMeetingWorkItemDialog({
             ? activeTypes[0].id
             : null,
         )
+
+        // The Status defaults to the first active status
+        // definition; switching Project always resets this, so
+        // no stale selection from a previous Project survives.
+        setStatusDefinitionId(
+          activeStatuses.length > 0
+            ? activeStatuses[0].id
+            : null,
+        )
       } catch (loadError) {
         if (!cancelled) {
           setTypeDefinitions([])
+          setStatusDefinitions([])
           setTypeDefinitionId(null)
+          setStatusDefinitionId(null)
           setError(
             getErrorMessage(
               loadError,
@@ -346,6 +403,11 @@ export function CreateMeetingWorkItemDialog({
     setError(null)
 
     try {
+      const numericStatusDefinitionId =
+        statusDefinitionId == null
+          ? null
+          : Number(statusDefinitionId)
+
       const workItem =
         await createWorkItemFromMeetingItem(
           meetingItem.id,
@@ -354,6 +416,16 @@ export function CreateMeetingWorkItemDialog({
             typeDefinitionId,
             title: title.trim(),
             description: description.trim(),
+            // Only pass a concrete status for the selected
+            // Project; a stale ID from a previous Project would
+            // be invalid.
+            ...(numericStatusDefinitionId != null &&
+            Number.isInteger(numericStatusDefinitionId)
+              ? {
+                  statusDefinitionId:
+                    numericStatusDefinitionId,
+                }
+              : {}),
             assigneeIds,
             dueDate:
               dueDate || null,
@@ -480,6 +552,39 @@ export function CreateMeetingWorkItemDialog({
               )}
             </select>
           </label>
+
+          {statusDefinitions.length > 0 && (
+            <label className="block">
+              <span className="mb-1.5 block text-sm font-medium text-on-surface">
+                Status
+              </span>
+
+              <select
+                value={
+                  statusDefinitionId == null
+                    ? ''
+                    : statusDefinitionId
+                }
+                onChange={(event) => {
+                  const next = Number(event.target.value)
+
+                  setStatusDefinitionId(
+                    Number.isInteger(next) ? next : null,
+                  )
+                }}
+                className="h-10 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none focus:border-primary"
+              >
+                {statusDefinitions.map((statusDefinition) => (
+                  <option
+                    key={statusDefinition.id}
+                    value={statusDefinition.id}
+                  >
+                    {statusDefinition.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
 
           <label className="block">
             <span className="mb-1.5 block text-sm font-medium text-on-surface">

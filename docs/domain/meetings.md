@@ -1323,6 +1323,79 @@ A decision remains historical even if the Topic later changes.
 
 ---
 
+## 32a. Meeting Note (implemented)
+
+A **Meeting Note** is a small, persistent discussion/protocol entry attached
+to exactly one `MeetingItem`. It is *not* a Work Item.
+
+### Canonical rule: Meeting Note != Work Item
+
+```text
+Meeting Note  ->  discussion / protocol context associated with a MeetingItem.
+Work Item     ->  canonical Project work (Project Board, My Work, etc.).
+```
+
+A Meeting Note never has a Project, status, or assignment. A separate
+`MeetingItem -> WorkItem` relation (Section 33) is the only link to durable
+project work.
+
+### Model
+
+```text
+MeetingNote
+- id
+- meeting_item   (exactly one owner; CASCADE on deletion)
+- author         (FK to the authenticated user; RESTRICT; not client-set)
+- content        (non-empty after strip)
+- created_at
+- updated_at
+```
+
+### Invariants
+
+- A Note belongs to exactly one `MeetingItem`.
+- The author is derived from the authenticated request; the client cannot
+  spoof it.
+- Empty / whitespace-only content is rejected.
+- Ordering is deterministic (`created_at`, `id`).
+- Deleting a `MeetingItem` or its `Meeting` removes owned Notes (CASCADE).
+- Deleting a Note removes only the Note: the `MeetingItem`, the `Meeting`,
+  and any linked Work Items are untouched.
+- Notes are occurrence-specific: a Note belongs to the concrete Meeting
+  occurrence, never to the Meeting Template.
+
+### Lifecycle visibility
+
+```text
+Upcoming   ->  no Note authoring; no Add note controls.
+Live       ->  persisted Notes visible; Add / Edit / Delete by write users.
+Completed  ->  persisted Notes visible under their original Agenda Item as
+               read-only protocol; no Add / Edit / Delete controls.
+```
+
+A Completed Meeting's Notes must survive a page reload.
+
+### Authoring authorization
+
+Note authoring reuses the canonical Meeting write model (Research Group
+admin for group Meetings; Project owner/member for Project Meetings). The
+server enforces this independently of frontend visibility, and Upcoming or
+Completed Meetings reject Note create / update / delete.
+
+### API
+
+```text
+GET    /api/meeting-items/{id}/notes/      list Notes (deterministic order)
+POST   /api/meeting-items/{id}/notes/      create Note
+PATCH  /api/meeting-notes/{id}/            update Note content
+DELETE /api/meeting-notes/{id}/            delete Note
+```
+
+Notes are also embedded in `GET /api/meetings/{id}/items/` (each item's
+`notes` array) so the Meeting Detail page does not N+1 load them.
+
+---
+
 ## 33. Meeting → Work Item (implemented)
 
 A Work Item created from a Meeting is **canonical Project work** — the same object shown in the Project Board, Project List, and My Work. A Meeting is not an alternative Work Item store.

@@ -1,7 +1,7 @@
 # FG Workspace — Current Implementation State
 
-**Checkpoint:** Meetings + Meeting Templates + configurable Project Work Items + Board ordering
-**Last verified:** 2026-09-02
+**Checkpoint:** Meetings + persistent Meeting Notes + Meeting Templates + configurable Project Work Items + Board ordering
+**Last verified:** 2026-09-03
 **Branch:** `feature/meeting-next`
 
 This document answers one question: *what is actually implemented in the
@@ -47,6 +47,7 @@ Markers:
 - **IMPLEMENTED** — Work Item comments and history/activity feed.
 - **IMPLEMENTED** — Project Board and Project List are views over the same canonical Work Items (no separate state).
 - **IMPLEMENTED** — persisted manual Board ordering via `board_position` (nullable).
+- **IMPLEMENTED** — Work Item deletion: `DELETE /api/work-items/{id}/` (server-side owner/member write authorization) permanently removes one Work Item and its Work-Item-owned dependents; children survive parent deletion as unparented (`parent` is `SET_NULL`); Meeting origin links are removed without touching the Meeting. The delete action is reachable from the Work Item drawer, Board card, and List row via a shared three-dot actions menu + confirmation dialog.
 - **IMPLEMENTED** — Board drag and drop: cross-column drag atomically updates status and position (`reposition_work_item`), with an explicit insertion anchor (`beforeWorkItemId`).
 - **IMPLEMENTED** — Board ↔ Editor status synchronization (Board column, Editor status, `statusDefinitionId`, and persisted state agree).
 
@@ -58,8 +59,10 @@ Markers:
 - **IMPLEMENTED** — MeetingItems belong to exactly one MeetingSection (NOT NULL).
 - **IMPLEMENTED** — lifecycle `upcoming → live → completed` with explicit Start / End / Reopen actions; `started_at` / `ended_at` set by the server.
 - **IMPLEMENTED** — Meeting participants (relational, scope-authorized); creator auto-added.
+- **IMPLEMENTED** — Meeting deletion: `DELETE /api/meetings/{id}/` permanently removes one occurrence and its Meeting-owned Sections, Items, Participants, and Work Item origin links. Server-side scoped write authorization (group admin / project owner+member, archived read-only). Canonical Work Items, Meeting Templates, and sibling occurrences are never deleted.
 - **IMPLEMENTED** — occurrence Section editing: add / rename / edit / hide / reorder (one-off Sections never touch the Template).
 - **IMPLEMENTED** — permission-filtered Meeting lists; group Meetings do not expose private Project data.
+- **IMPLEMENTED** — persistent `MeetingNote` owned by exactly one `MeetingItem`: canonical author from the authenticated request (not client-spoofable), non-empty content, deterministic ordering, CASCADE on MeetingItem/Meeting deletion. Add/Edit/Delete reuse the Meeting write model and are Live-only (Upcoming and Completed reject authoring); Completed Notes are read-only protocol that survive reload. Notes are embedded in the Meeting items list (no N+1). Meeting Note != Work Item (no Project/status/assignment).
 
 ## Meeting Templates
 
@@ -91,7 +94,7 @@ These appear in `docs/domain/meetings.md` as intended product direction but are 
 
 - `Topic` (durable cross-Meeting discussion subject).
 - `MeetingItem` `intent` (`inform`/`discuss`/`decide`), `origin` (`planned`/`spontaneous`), `decision_markdown`, and the `not_discussed`/`discussing`/`done`/`follow_up` item states (implemented state is `open`/`discussed`).
-- NoteEntry stream (per-note attribution) and `inform` acknowledgements.
+- The richer `NoteEntry` Markdown entry stream (rich editor) and `inform` acknowledgements. Basic persistent Meeting Notes (attribution, add/edit/delete) ARE implemented; see `docs/domain/meetings.md` §32a.
 - Follow-up / carry-forward and the richer live-meeting ceremony.
 - Moderator and moderator rotation.
 - Template default participants.

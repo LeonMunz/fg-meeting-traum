@@ -3,6 +3,7 @@ from rest_framework import serializers
 from .models import (
     Meeting,
     MeetingItem,
+    MeetingNote,
     MeetingSection,
     MeetingSeries,
     MeetingSeriesSection,
@@ -321,6 +322,61 @@ class CreateMeetingFromSeriesSerializer(serializers.Serializer):
     )
 
 
+class MeetingNoteSerializer(serializers.ModelSerializer):
+    """Presentation of one persistent MeetingNote.
+
+    Exposes the identity, owner MeetingItem, author display data,
+    content, and timestamps needed by the Meeting UI. The author is
+    never writable.
+    """
+
+    meetingItemId = serializers.IntegerField(
+        source="meeting_item_id",
+        read_only=True,
+    )
+    author = serializers.SerializerMethodField()
+    createdAt = serializers.DateTimeField(
+        source="created_at",
+        read_only=True,
+    )
+    updatedAt = serializers.DateTimeField(
+        source="updated_at",
+        read_only=True,
+    )
+
+    class Meta:
+        model = MeetingNote
+        fields = [
+            "id",
+            "meetingItemId",
+            "author",
+            "content",
+            "createdAt",
+            "updatedAt",
+        ]
+
+    def get_author(self, obj):
+        author = obj.author
+        return {
+            "id": author.pk,
+            "username": author.username,
+            "firstName": author.first_name,
+            "lastName": author.last_name,
+        }
+
+
+class MeetingNoteCreateSerializer(serializers.Serializer):
+    content = serializers.CharField(
+        allow_blank=False,
+    )
+
+
+class MeetingNotePatchSerializer(serializers.Serializer):
+    content = serializers.CharField(
+        allow_blank=False,
+    )
+
+
 class MeetingItemSerializer(serializers.ModelSerializer):
     meetingId = serializers.IntegerField(
         source="meeting_id",
@@ -330,7 +386,17 @@ class MeetingItemSerializer(serializers.ModelSerializer):
         source="meeting_section_id",
         read_only=True,
     )
+    contextNotes = serializers.CharField(
+        source="notes",
+        read_only=True,
+        allow_blank=True,
+    )
     workItemIds = serializers.SerializerMethodField()
+    notes = MeetingNoteSerializer(
+        source="note_relations",
+        many=True,
+        read_only=True,
+    )
     createdById = serializers.IntegerField(
         source="created_by_id",
         read_only=True,
@@ -351,10 +417,11 @@ class MeetingItemSerializer(serializers.ModelSerializer):
             "meetingId",
             "meetingSectionId",
             "title",
-            "notes",
+            "contextNotes",
             "position",
             "status",
             "workItemIds",
+            "notes",
             "createdById",
             "createdAt",
             "updatedAt",

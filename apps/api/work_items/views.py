@@ -29,6 +29,7 @@ from .services import (
     WorkItemDomainError,
     create_work_item,
     create_work_item_comment,
+    delete_work_item,
     delete_work_item_comment,
     update_work_item,
     update_work_item_comment,
@@ -300,6 +301,38 @@ class WorkItemDetailView(APIView):
 
         work_item.refresh_from_db()
         return Response(serialize_work_item(work_item))
+
+    def delete(self, request, work_item_id):
+        try:
+            work_item = WorkItem.objects.get(pk=work_item_id)
+        except WorkItem.DoesNotExist:
+            return Response(
+                {"error": "WorkItem not found"},
+                status=404,
+            )
+
+        # Check access through Project
+        result = _require_project_access(request, work_item.project_id)
+        if result is None:
+            return Response(
+                {"error": "WorkItem not found"},
+                status=404,
+            )
+        project, membership = result
+
+        # Viewer cannot delete
+        if membership.role == ProjectMembership.Role.VIEWER:
+            return Response(
+                {"error": "A viewer cannot delete WorkItems."},
+                status=403,
+            )
+
+        try:
+            delete_work_item(work_item=work_item, actor=request.user)
+        except WorkItemDomainError as exc:
+            return Response({"error": exc.message}, status=400)
+
+        return Response(status=204)
 
 
 

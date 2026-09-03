@@ -36,7 +36,7 @@ class WorkItem(models.Model):
     description = models.TextField(default="", blank=True)
     parent = models.ForeignKey(
         "self",
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
         related_name="children",
         null=True,
         blank=True,

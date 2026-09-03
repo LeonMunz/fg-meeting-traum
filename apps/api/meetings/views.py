@@ -15,6 +15,7 @@ from research_groups.models import (
 from .models import (
     Meeting,
     MeetingItem,
+    MeetingNote,
     MeetingParticipant,
     MeetingSection,
     MeetingSeries,
@@ -26,6 +27,9 @@ from .serializers import (
     MeetingItemCreateSerializer,
     MeetingItemPatchSerializer,
     MeetingItemSerializer,
+    MeetingNoteCreateSerializer,
+    MeetingNotePatchSerializer,
+    MeetingNoteSerializer,
     MeetingPatchSerializer,
     MeetingSectionCreateSerializer,
     MeetingSectionPatchSerializer,
@@ -47,19 +51,24 @@ from .services import (
     PROJECT_WRITE_ROLES,
     add_meeting_participant,
     create_meeting,
+    delete_meeting,
     create_meeting_from_series,
     create_meeting_item,
+    create_meeting_note,
     create_meeting_section,
     create_meeting_series,
     create_series_section,
     create_work_item_from_meeting_item,
+    delete_meeting_note,
     end_meeting,
+    list_meeting_item_notes,
     reopen_meeting,
     reorder_meeting_sections,
     reorder_series_sections,
     remove_meeting_participant,
     start_meeting,
     update_meeting,
+    update_meeting_note,
     update_meeting_section,
     update_meeting_series,
     update_meeting_item,
@@ -107,6 +116,8 @@ def _require_meeting_item_access(request, meeting_item_id):
             "meeting__research_group",
             "meeting__project",
             "created_by",
+        ).prefetch_related(
+            "note_relations__author",
         ).get(pk=meeting_item_id)
     except MeetingItem.DoesNotExist:
         return None
@@ -115,6 +126,26 @@ def _require_meeting_item_access(request, meeting_item_id):
         return None
 
     return item
+
+
+def _require_meeting_note_access(request, note_id):
+    try:
+        note = MeetingNote.objects.select_related(
+            "meeting_item",
+            "meeting_item__meeting",
+            "meeting_item__meeting__research_group",
+            "meeting_item__meeting__project",
+            "author",
+        ).get(pk=note_id)
+    except MeetingNote.DoesNotExist:
+        return None
+
+    if not _has_scoped_read_access(
+        request.user, note.meeting_item.meeting
+    ):
+        return None
+
+    return note
 
 
 def _require_meeting_series_access(request, series_id):
@@ -1018,6 +1049,30 @@ class MeetingDetailView(APIView):
             MeetingSerializer(meeting).data
         )
 
+    def delete(self, request, meeting_id):
+        meeting = _require_meeting_access(
+            request,
+            meeting_id,
+        )
+        if meeting is None:
+            return Response(
+                {"error": "Meeting not found"},
+                status=404,
+            )
+
+        if not _has_scoped_write_access(request.user, meeting):
+            return _mutation_forbidden_response()
+
+        try:
+            delete_meeting(meeting=meeting, actor=request.user)
+        except MeetingDomainError as exc:
+            return Response(
+                {"error": exc.message},
+                status=400,
+            )
+
+        return Response(status=204)
+
 
 class MeetingStartView(APIView):
     """POST /api/meetings/{id}/start — explicit upcoming -> live action."""
@@ -1242,6 +1297,7 @@ class MeetingItemListCreateView(APIView):
             )
             .prefetch_related(
                 "work_item_relations",
+                "note_relations__author",
             )
         )
 
@@ -1516,3 +1572,207 @@ class MeetingItemWorkItemCreateView(APIView):
             serialize_work_item(work_item),
             status=201,
         )
+
+
+class MeetingItemNoteListCreateView(APIView):
+    """GET/POST /api/meeting-items/{meeting_item_id}/notes/
+
+    GET: list the Notes owned by this MeetingItem (deterministic
+    order). Uses the same effective read access as the MeetingItem.
+
+    POST: create one persistent Note. Requires the existing Meeting
+    write authorization model and a Live Meeting (Upcoming and
+    Completed Meetings reject Note authoring).
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, meeting_item_id):
+        item = _require_meeting_item_access(
+            request,
+            meeting_item_id,
+        )
+        if item is None:
+            return Response(
+                {"error": "Meeting item not found"},
+                status=404,
+            )
+
+        notes = list_meeting_item_notes(
+            meeting_item=item,
+            user=request.user,
+        )
+
+        return Response(
+            MeetingNoteSerializer(
+                notes,
+                many=True,
+                context={"request": request},
+            ).data
+        )
+
+    def post(self, request, meeting_item_id):
+        item = _require_meeting_item_access(
+            request,
+            meeting_item_id,
+        )
+        if item is None:
+            return Response(
+                {"error": "Meeting item not found"},
+                status=404,
+            )
+
+        if not _has_scoped_write_access(request.user, item.meeting):
+            return _mutation_forbidden_response()
+
+        serializer = MeetingNoteCreateSerializer(
+            data=request.data,
+        )
+        if not serializer.is_valid():
+            return Response(
+                serializer.errors,
+                status=400,
+            )
+
+        try:
+            note = create_meeting_note(
+                meeting_item=item,
+                actor=request.user,
+                content=serializer.validated_data["content"],
+            )
+        except MeetingDomainError as exc:
+            return Response(
+                {"error": exc.message},
+                status=400,
+            )
+
+        return Response(
+            MeetingNoteSerializer(
+                note,
+                context={"request": request},
+            ).data,
+            status=201,
+        )
+
+
+class MeetingNoteDetailView(APIView):
+    """GET/PATCH/DELETE /api/meeting-notes/{note_id}/
+
+    Resolving the Note at all requires the same effective read access
+    as its parent MeetingItem (non-leaking 404). Editing or deleting
+    additionally requires the existing Meeting write authorization
+    and a Live Meeting.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, note_id):
+        note = _require_meeting_note_access(
+            request,
+            note_id,
+        )
+        if note is None:
+            return Response(
+                {"error": "Meeting note not found"},
+                status=404,
+            )
+
+        return Response(
+            MeetingNoteSerializer(
+                note,
+                context={"request": request},
+            ).data
+        )
+
+    def patch(self, request, note_id):
+        note = _require_meeting_note_access(
+            request,
+            note_id,
+        )
+        if note is None:
+            return Response(
+                {"error": "Meeting note not found"},
+                status=404,
+            )
+
+        if not _has_scoped_write_access(
+            request.user, note.meeting_item.meeting
+        ):
+            return _mutation_forbidden_response()
+
+        if any(
+            field in request.data
+            for field in [
+                "id",
+                "meetingItemId",
+                "meeting_item",
+                "author",
+                "createdAt",
+                "created_at",
+                "updatedAt",
+                "updated_at",
+            ]
+        ):
+            return Response(
+                {
+                    "error": (
+                        "Cannot directly change Meeting Note "
+                        "identity, author, or timestamps."
+                    )
+                },
+                status=400,
+            )
+
+        serializer = MeetingNotePatchSerializer(
+            data=request.data,
+        )
+        if not serializer.is_valid():
+            return Response(
+                serializer.errors,
+                status=400,
+            )
+
+        try:
+            note = update_meeting_note(
+                note=note,
+                actor=request.user,
+                content=serializer.validated_data["content"],
+            )
+        except MeetingDomainError as exc:
+            return Response(
+                {"error": exc.message},
+                status=400,
+            )
+
+        return Response(
+            MeetingNoteSerializer(
+                note,
+                context={"request": request},
+            ).data
+        )
+
+    def delete(self, request, note_id):
+        note = _require_meeting_note_access(
+            request,
+            note_id,
+        )
+        if note is None:
+            return Response(
+                {"error": "Meeting note not found"},
+                status=404,
+            )
+
+        if not _has_scoped_write_access(
+            request.user, note.meeting_item.meeting
+        ):
+            return _mutation_forbidden_response()
+
+        try:
+            delete_meeting_note(note=note, actor=request.user)
+        except MeetingDomainError as exc:
+            return Response(
+                {"error": exc.message},
+                status=400,
+            )
+
+        return Response(status=204)

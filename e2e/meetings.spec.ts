@@ -1232,3 +1232,539 @@ test(
     ).toBeVisible()
   },
 )
+
+test(
+  'Delete meeting requires confirmation and removes the Meeting',
+  async ({ page }) => {
+    await login(page, 'alex')
+
+    await page
+      .getByRole('link', {
+        name: /Meetings/,
+      })
+      .click()
+
+    await expect(page).toHaveURL(
+      /\/meetings\?group=\d+$/,
+    )
+
+    // --------------------------------------------------------
+    // 1. Create a Meeting.
+    // --------------------------------------------------------
+
+    await page
+      .getByRole('button', {
+        name: /New meeting/,
+      })
+      .click()
+
+    await page
+      .getByLabel('Title')
+      .fill('E2E Delete Meeting')
+
+    await page
+      .getByLabel('Date and time')
+      .fill('2030-02-03T09:00')
+
+    await page
+      .locator('form')
+      .getByRole('button', {
+        name: /Create meeting/,
+      })
+      .click()
+
+    await expect(
+      page.getByText('E2E Delete Meeting', {
+        exact: true,
+      }),
+    ).toBeVisible()
+
+    // --------------------------------------------------------
+    // 2. Open the Meeting detail.
+    // --------------------------------------------------------
+
+    const meetingRow = page
+      .getByRole('button')
+      .filter({ hasText: 'E2E Delete Meeting' })
+
+    await meetingRow.click()
+
+    await expect(page).toHaveURL(/\/meetings\/\d+$/)
+
+    await expect(
+      page.getByRole('heading', {
+        name: 'E2E Delete Meeting',
+        exact: true,
+      }),
+    ).toBeVisible()
+
+    // --------------------------------------------------------
+    // 3. Initiate Delete meeting, then cancel: the
+    //    Meeting must remain.
+    // --------------------------------------------------------
+
+    await page
+      .getByRole('button', {
+        name: 'Meeting actions',
+      })
+      .click()
+
+    await page
+      .getByRole('menuitem', {
+        name: 'Delete meeting',
+      })
+      .click()
+
+    const deleteDialog = page.getByRole('dialog', {
+      name: /Delete meeting\?/,
+    })
+
+    await expect(deleteDialog).toBeVisible()
+
+    await deleteDialog
+      .getByRole('button', {
+        name: 'Cancel',
+        exact: true,
+      })
+      .click()
+
+    await expect(deleteDialog).toHaveCount(0)
+
+    // Still on the Meeting detail page with the Meeting intact.
+    await expect(
+      page.getByRole('heading', {
+        name: 'E2E Delete Meeting',
+        exact: true,
+      }),
+    ).toBeVisible()
+
+    // --------------------------------------------------------
+    // 4. Initiate again and confirm the deletion.
+    // --------------------------------------------------------
+
+    await page
+      .getByRole('button', {
+        name: 'Meeting actions',
+      })
+      .click()
+
+    await page
+      .getByRole('menuitem', {
+        name: 'Delete meeting',
+      })
+      .click()
+
+    const confirmDialog = page.getByRole('dialog', {
+      name: /Delete meeting\?/,
+    })
+
+    await expect(confirmDialog).toBeVisible()
+
+    await confirmDialog
+      .getByRole('button', {
+        name: 'Delete meeting',
+        exact: true,
+      })
+      .click()
+
+    // --------------------------------------------------------
+    // 5. Successful deletion returns to the Meetings
+    //    overview, where the Meeting is absent.
+    // --------------------------------------------------------
+
+    await expect(page).toHaveURL(
+      /\/meetings(\?group=\d+)?$/,
+    )
+
+    await expect(
+      page.getByText('E2E Delete Meeting', {
+        exact: true,
+      }),
+    ).toHaveCount(0)
+  },
+)
+
+const NOTE_MEETING_TITLE =
+  'E2E Note Persistence Weekly'
+
+const NOTE_AGENDA_TITLE =
+  'E2E Note Agenda Item'
+
+const NOTE_CONTENT =
+  'E2E note: agree on release date.'
+
+const NOTE_EDITED_CONTENT =
+  'E2E note: release moved to Friday.'
+
+test(
+  'Meeting Notes persist across reload and lifecycle transition',
+  async ({ page }) => {
+    await login(page, 'alex')
+
+    // --------------------------------------------------------
+    // 1. Create a Meeting.
+    // --------------------------------------------------------
+
+    await page
+      .getByRole('link', {
+        name: /Meetings/,
+      })
+      .click()
+
+    await page
+      .getByRole('button', {
+        name: /New meeting/,
+      })
+      .click()
+
+    await page
+      .getByLabel('Title')
+      .fill(NOTE_MEETING_TITLE)
+
+    await page
+      .getByLabel('Date and time')
+      .fill('2030-03-01T10:00')
+
+    await page
+      .locator('form')
+      .getByRole('button', {
+        name: /Create meeting/,
+      })
+      .click()
+
+    const noteRow =
+      page
+        .getByRole('button')
+        .filter({
+          hasText: NOTE_MEETING_TITLE,
+        })
+
+    await noteRow.click()
+
+    await expect(page).toHaveURL(/\/meetings\/\d+$/)
+
+    // --------------------------------------------------------
+    // 2. Add an agenda item (upcoming).
+    // --------------------------------------------------------
+
+    await quickAddAgendaItem(
+      page,
+      NOTE_AGENDA_TITLE,
+    )
+
+    await expect(
+      page.getByText(NOTE_AGENDA_TITLE, {
+        exact: true,
+      }),
+    ).toBeVisible()
+
+    // Upcoming: no Add note control.
+    await expect(
+      page.getByRole('button', {
+        name: /Add note…/,
+      }),
+    ).toHaveCount(0)
+
+    // --------------------------------------------------------
+    // 3. Start the Meeting.
+    // --------------------------------------------------------
+
+    await page
+      .getByRole('button', {
+        name: 'Start meeting',
+      })
+      .click()
+
+    await expect(
+      page.getByRole('button', {
+        name: 'End meeting',
+      }),
+    ).toBeVisible()
+
+    // --------------------------------------------------------
+    // 4. Add a note to the agenda item.
+    // --------------------------------------------------------
+
+    await page
+      .getByRole('button', {
+        name: /Add note…/,
+      })
+      .click()
+
+    await page
+      .getByLabel(`Add note to ${NOTE_AGENDA_TITLE}`)
+      .fill(NOTE_CONTENT)
+
+    await page
+      .getByRole('button', {
+        name: /^Add note$/,
+        exact: true,
+      })
+      .click()
+
+    // The note is visible.
+    await expect(
+      page.getByText(NOTE_CONTENT, {
+        exact: true,
+      }),
+    ).toBeVisible()
+
+    // --------------------------------------------------------
+    // 5. Reload and verify the note persists.
+    // --------------------------------------------------------
+
+    await page.reload()
+
+    await expect(
+      page.getByText(NOTE_CONTENT, {
+        exact: true,
+      }),
+    ).toBeVisible()
+
+    // --------------------------------------------------------
+    // 6. Edit the note.
+    // --------------------------------------------------------
+
+    // Open the note actions menu. The trigger is a menu button
+    // rendered in a hover row; use getByRole with the label.
+    const noteActions = page.getByRole(
+      'button',
+      { name: /Note actions for/ },
+    )
+
+    await expect(noteActions).toHaveCount(1)
+    await noteActions.click()
+
+    await page
+      .getByRole('menuitem', {
+        name: 'Edit note',
+      })
+      .click()
+
+    await page
+      .getByLabel(`Edit note on ${NOTE_AGENDA_TITLE}`)
+      .fill(NOTE_EDITED_CONTENT)
+
+    await page
+      .getByRole('button', {
+        name: /^Save$/,
+        exact: true,
+      })
+      .click()
+
+    await expect(
+      page.getByText(NOTE_EDITED_CONTENT, {
+        exact: true,
+      }),
+    ).toBeVisible()
+
+    // --------------------------------------------------------
+    // 7. Reload and verify the edit persisted.
+    // --------------------------------------------------------
+
+    await page.reload()
+
+    await expect(
+      page.getByText(NOTE_EDITED_CONTENT, {
+        exact: true,
+      }),
+    ).toBeVisible()
+
+    await expect(
+      page.getByText(NOTE_CONTENT, {
+        exact: true,
+      }),
+    ).toHaveCount(0)
+
+    // --------------------------------------------------------
+    // 8. End the Meeting.
+    // --------------------------------------------------------
+
+    await page
+      .getByRole('button', {
+        name: 'End meeting',
+      })
+      .click()
+
+    await expect(
+      page.getByRole('button', {
+        name: 'Reopen meeting',
+      }),
+    ).toBeVisible()
+
+    // --------------------------------------------------------
+    // 9. Completed: the protocol shows the note and offers no
+    //    Add/Edit/Delete authoring controls.
+    // --------------------------------------------------------
+
+    await expect(
+      page.getByText(NOTE_EDITED_CONTENT, {
+        exact: true,
+      }),
+    ).toBeVisible()
+
+    await expect(
+      page.getByRole('button', {
+        name: /Add note…/,
+      }),
+    ).toHaveCount(0)
+
+    // No per-note "Edit note" menu is exposed in Completed.
+    await expect(
+      page.getByRole('button', {
+        name: /Note actions for/,
+      }),
+    ).toHaveCount(0)
+
+    // --------------------------------------------------------
+    // 10. Reload the Completed Meeting; the note is still
+    //     visible and still read-only.
+    // --------------------------------------------------------
+
+    await page.reload()
+
+    await expect(
+      page.getByText(NOTE_EDITED_CONTENT, {
+        exact: true,
+      }),
+    ).toBeVisible()
+
+    await expect(
+      page.getByRole('button', {
+        name: /Add note…/,
+      }),
+    ).toHaveCount(0)
+
+    await expect(
+      page.getByRole('button', {
+        name: /Note actions for/,
+      }),
+    ).toHaveCount(0)
+  },
+)
+
+test(
+  'Delete Note removes only the Note, not the agenda item',
+  async ({ page }) => {
+    await login(page, 'alex')
+
+    await page
+      .getByRole('link', {
+        name: /Meetings/,
+      })
+      .click()
+
+    await page
+      .getByRole('button', {
+        name: /New meeting/,
+      })
+      .click()
+
+    await page
+      .getByLabel('Title')
+      .fill('E2E Note Delete Weekly')
+
+    await page
+      .getByLabel('Date and time')
+      .fill('2030-03-02T10:00')
+
+    await page
+      .locator('form')
+      .getByRole('button', {
+        name: /Create meeting/,
+      })
+      .click()
+
+    const deleteRow =
+      page
+        .getByRole('button')
+        .filter({
+          hasText: 'E2E Note Delete Weekly',
+        })
+
+    await deleteRow.click()
+
+    await expect(page).toHaveURL(/\/meetings\/\d+$/)
+
+    await quickAddAgendaItem(
+      page,
+      'E2E Delete Agenda',
+    )
+
+    await page
+      .getByRole('button', {
+        name: 'Start meeting',
+      })
+      .click()
+
+    await expect(
+      page.getByRole('button', {
+        name: 'End meeting',
+      }),
+    ).toBeVisible()
+
+    const deleteNoteContent =
+      'E2E note to be deleted.'
+
+    await page
+      .getByRole('button', {
+        name: /Add note…/,
+      })
+      .click()
+
+    await page
+      .getByLabel('Add note to E2E Delete Agenda')
+      .fill(deleteNoteContent)
+
+    await page
+      .getByRole('button', {
+        name: /^Add note$/,
+        exact: true,
+      })
+      .click()
+
+    await expect(
+      page.getByText(deleteNoteContent, {
+        exact: true,
+      }),
+    ).toBeVisible()
+
+    // Open the note actions menu and select Delete note.
+    const noteActions = page.getByRole(
+      'button',
+      { name: /Note actions for/ },
+    )
+
+    await noteActions.click()
+
+    await page
+      .getByRole('menuitem', {
+        name: 'Delete note',
+      })
+      .click()
+
+    // Confirm through the destructive dialog.
+    await page
+      .getByRole('dialog', {
+        name: /Delete note\?/,
+      })
+      .getByRole('button', {
+        name: /Delete note/,
+      })
+      .click()
+
+    // The note is gone.
+    await expect(
+      page.getByText(deleteNoteContent, {
+        exact: true,
+      }),
+    ).toHaveCount(0)
+
+    // The agenda item itself is still present.
+    await expect(
+      page.getByText('E2E Delete Agenda', {
+        exact: true,
+      }),
+    ).toBeVisible()
+  },
+)

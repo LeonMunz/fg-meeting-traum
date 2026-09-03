@@ -15,6 +15,7 @@ import type {
   ApiCreateMeetingWorkItemInput,
   ApiMeeting,
   ApiMeetingItem,
+  ApiMeetingNote,
   ApiMeetingParticipant,
   ApiMeetingSection,
   ApiMeetingSeries,
@@ -64,6 +65,12 @@ export async function updateMeeting(
     `/api/meetings/${meetingId}/`,
     input,
   )
+}
+
+export async function deleteMeeting(
+  meetingId: number,
+): Promise<void> {
+  return apiDelete<void>(`/api/meetings/${meetingId}/`)
 }
 
 export async function startMeeting(
@@ -294,4 +301,41 @@ export async function reorderMeetingSections(
     `/api/meetings/${meetingId}/sections/reorder/`,
     input,
   )
+}
+
+
+/* ── Meeting Notes (persistent) ───────────────────────────────── */
+
+export async function listMeetingItemNotes(
+  meetingItemId: number,
+): Promise<ApiMeetingNote[]> {
+  return apiGet<ApiMeetingNote[]>(
+    `/api/meeting-items/${meetingItemId}/notes/`,
+  )
+}
+
+export async function createMeetingNote(
+  meetingItemId: number,
+  input: { content: string },
+): Promise<ApiMeetingNote> {
+  return apiPost<ApiMeetingNote>(
+    `/api/meeting-items/${meetingItemId}/notes/`,
+    input,
+  )
+}
+
+export async function updateMeetingNote(
+  noteId: number,
+  input: { content: string },
+): Promise<ApiMeetingNote> {
+  return apiPatch<ApiMeetingNote>(
+    `/api/meeting-notes/${noteId}/`,
+    input,
+  )
+}
+
+export async function deleteMeetingNote(
+  noteId: number,
+): Promise<void> {
+  return apiDelete<void>(`/api/meeting-notes/${noteId}/`)
 }

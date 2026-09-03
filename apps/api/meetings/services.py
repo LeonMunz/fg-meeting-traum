@@ -14,6 +14,7 @@ from .models import (
     Meeting,
     MeetingItem,
     MeetingItemWorkItem,
+    MeetingNote,
     MeetingParticipant,
     MeetingSection,
     MeetingSeries,
@@ -790,6 +791,29 @@ def reopen_meeting(*, meeting, actor):
     return meeting
 
 
+@transaction.atomic
+def delete_meeting(*, meeting, actor):
+    """Permanently delete one Meeting occurrence.
+
+    Uses the existing scoped Meeting write rule. Deletes the Meeting
+    together with its Meeting-owned dependents (Sections, Items,
+    Participants, MeetingItemWorkItem links) through the existing
+    relational CASCADE semantics.
+
+    Canonical Work Items linked from this Meeting are NOT owned by the
+    Meeting: deleting the Meeting removes only the origin links, never
+    the Work Items. A Meeting Template (MeetingSeries) and sibling
+    occurrences are independent records and are never touched.
+    """
+    _require_meeting_write_access(meeting=meeting, user=actor)
+
+    # Serialize against concurrent lifecycle transitions on this Meeting.
+    Meeting.objects.select_for_update().get(pk=meeting.pk)
+    meeting.refresh_from_db()
+
+    meeting.delete()
+
+
 def remove_meeting_participant(
     *,
     participant,
@@ -911,3 +935,93 @@ def create_work_item_from_meeting_item(
     )
 
     return work_item
+
+
+# ── Meeting Notes ────────────────────────────────────────────────
+
+
+def _require_note_write_access(*, meeting, user):
+    """Notes follow the existing Meeting write authorization model.
+
+    Upcoming Meetings have no discussion to note; Live Meetings are the
+    authoring surface. Completed Meetings are protocol: their Notes are
+    readable but no longer editable through the Meeting UI.
+    """
+    _require_meeting_write_access(meeting=meeting, user=user)
+
+    if meeting.status == Meeting.Status.COMPLETED:
+        raise MeetingDomainError(
+            "Notes cannot be added to a completed Meeting."
+        )
+
+    if meeting.status == Meeting.Status.UPCOMING:
+        raise MeetingDomainError(
+            "Notes cannot be added to an upcoming Meeting."
+        )
+
+
+def list_meeting_item_notes(*, meeting_item, user):
+    """Return the Notes for one MeetingItem, ordered deterministically.
+
+    Read access is enforced by the caller (the view resolves the item
+    through the scoped Meeting read rule); this helper is read-only.
+    """
+    return list(
+        MeetingNote.objects.filter(
+            meeting_item=meeting_item,
+        ).select_related("author")
+    )
+
+
+def create_meeting_note(*, meeting_item, actor, content):
+    """Create one persistent Note owned by a MeetingItem.
+
+    The author is always the authenticated actor; the client cannot
+    spoof it. Content must be non-empty after strip.
+    """
+    _require_note_write_access(
+        meeting=meeting_item.meeting, user=actor,
+    )
+
+    cleaned = (content or "").strip()
+    if not cleaned:
+        raise MeetingDomainError("Note content cannot be empty.")
+
+    with transaction.atomic():
+        note = MeetingNote.objects.create(
+            meeting_item=meeting_item,
+            author=actor,
+            content=cleaned,
+        )
+
+    return note
+
+
+def update_meeting_note(*, note, actor, content):
+    """Edit an existing Note's content.
+
+    Uses the Meeting write authorization model. The original author is
+    preserved.
+    """
+    _require_note_write_access(
+        meeting=note.meeting_item.meeting, user=actor,
+    )
+
+    cleaned = (content or "").strip()
+    if not cleaned:
+        raise MeetingDomainError("Note content cannot be empty.")
+
+    note.content = cleaned
+    note.save(update_fields=["content", "updated_at"])
+
+    return note
+
+
+def delete_meeting_note(*, note, actor):
+    """Delete one Note. Only the Note is removed; the MeetingItem,
+    the Meeting, and any linked Work Items are untouched."""
+    _require_note_write_access(
+        meeting=note.meeting_item.meeting, user=actor,
+    )
+
+    note.delete()

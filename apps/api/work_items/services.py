@@ -990,7 +990,41 @@ def delete_work_item_comment(
     comment.delete()
 
 
-# ── Board reordering ──
+# ── WorkItem deletion ──
+
+
+@transaction.atomic
+def delete_work_item(*, work_item: WorkItem, actor) -> None:
+    """Permanently delete one Work Item.
+
+    Reuses the exact same effective write-access rule as WorkItem
+    mutation (current ResearchGroupMembership + ProjectMembership with
+    role owner/member, non-archived Project), so a viewer — or anyone
+    who could not edit the Work Item — cannot delete it either.
+
+    Deletes the Work Item together with its Work-Item-owned dependents
+    through the existing relational CASCADE semantics:
+
+    - WorkItemAssignee rows
+    - WorkItemLabel rows
+    - WorkItemComment rows
+    - MeetingItemWorkItem origin/link rows
+
+    Deleting a Work Item MUST NOT delete the Project, Users, the
+    originating Meeting/MeetingItem content, Meeting Templates, or
+    unrelated Work Items:
+
+    - the Meeting -> Work Item origin link is one-way: deleting the
+      Work Item removes only the link, never the Meeting content;
+    - AuditEvent references use SET_NULL, so the historical record
+      survives (with work_item nulled) — the audit trail is preserved;
+    - children survive parent deletion and become unparented
+      (parent on_delete=SET_NULL).
+    """
+    project = work_item.project
+    _require_project_write_access(project, actor)
+
+    work_item.delete()
 
 
 def reposition_work_item(

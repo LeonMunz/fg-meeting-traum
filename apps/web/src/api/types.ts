@@ -312,15 +312,32 @@ export type ApiMeetingItemStatus =
   | 'open'
   | 'discussed'
 
+export interface ApiMeetingNoteAuthor {
+  id: number
+  username: string
+  firstName: string
+  lastName: string
+}
+
+export interface ApiMeetingNote {
+  id: number
+  meetingItemId: number
+  author: ApiMeetingNoteAuthor
+  content: string
+  createdAt: string
+  updatedAt: string
+}
+
 export interface ApiMeetingItem {
   id: number
   meetingId: number
   meetingSectionId: number
   title: string
-  notes: string
+  contextNotes: string
   position: number
   status: ApiMeetingItemStatus
   workItemIds: number[]
+  notes: ApiMeetingNote[]
   createdById: number
   createdAt: string
   updatedAt: string

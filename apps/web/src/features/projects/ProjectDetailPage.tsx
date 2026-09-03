@@ -28,6 +28,10 @@ import {
   type ProjectLifecycleAction,
 } from './ProjectLifecycleDialog'
 import type { WorkItemFormInput } from './WorkItemDrawer'
+import {
+  WorkItemActionMenuTrigger,
+  WorkItemDeleteDialog,
+} from './workItemDelete'
 import { ApiError } from '../../api/client'
 import {
   addProjectMembership,
@@ -57,6 +61,7 @@ import type {
 } from '../../api/types'
 import {
   createWorkItem,
+  deleteWorkItem,
   listProjectWorkItems,
   reorderWorkItem,
   updateWorkItem,
@@ -697,6 +702,22 @@ export function ProjectDetailPage() {
   ] = useState<WorkItemDrawerState | null>(
     null,
   )
+
+  // Single, page-level Work Item deletion confirmation. The selected item
+  // may originate from the drawer, a Board card, or a List row, but all
+  // three converge on this one dialog + `handleDeleteWorkItem` operation.
+  const [
+    workItemDeleteTarget,
+    setWorkItemDeleteTarget,
+  ] = useState<number | null>(null)
+  const [
+    isDeletingWorkItem,
+    setIsDeletingWorkItem,
+  ] = useState(false)
+  const [
+    deleteWorkItemError,
+    setDeleteWorkItemError,
+  ] = useState<string | null>(null)
   const [boardStatusDropError, setBoardStatusDropError] =
     useState<string | null>(null)
 
@@ -1937,6 +1958,77 @@ export function ProjectDetailPage() {
     }
   }
 
+  const handleDeleteWorkItem = async (
+    workItemId: number,
+  ) => {
+    if (isReadOnly) {
+      throw new Error(
+        isArchived
+          ? 'Archived Projects are read-only. Restore the Project first.'
+          : 'A viewer cannot delete Work Items.',
+      )
+    }
+
+    if (!Number.isInteger(workItemId)) {
+      throw new Error('Invalid Work Item ID.')
+    }
+
+    setIsDeletingWorkItem(true)
+    setDeleteWorkItemError(null)
+
+    try {
+      await deleteWorkItem(workItemId)
+    } catch (error) {
+      // Failure: keep the item visible and surface the error. The drawer
+      // (if it originated this delete) keeps itself open on a thrown
+      // error; Board/List keep the row/card visible because the
+      // collection is not mutated.
+      const message = getWorkItemErrorMessage(
+        error,
+        'Work item could not be deleted.',
+      )
+      setWorkItemsError(message)
+      setDeleteWorkItemError(message)
+      throw new Error(message)
+    }
+
+    // Success: drop the deleted item from the canonical collection.
+    // Removing it also closes the inspector if it was open: the open edit
+    // state no longer resolves to any Work Item, so the drawer unmounts.
+    setApiWorkItems((current) =>
+      current.filter((item) => item.id !== workItemId),
+    )
+    setWorkItemDeleteTarget(null)
+  }
+
+  const requestWorkItemDelete = (workItemId: number) => {
+    setDeleteWorkItemError(null)
+    setWorkItemDeleteTarget(workItemId)
+  }
+
+  const cancelWorkItemDelete = () => {
+    if (isDeletingWorkItem) {
+      return
+    }
+    setWorkItemDeleteTarget(null)
+  }
+
+  const confirmWorkItemDelete = async () => {
+    if (isDeletingWorkItem || workItemDeleteTarget == null) {
+      return
+    }
+
+    const targetId = workItemDeleteTarget
+
+    try {
+      await handleDeleteWorkItem(targetId)
+    } catch {
+      // Already surfaced via setDeleteWorkItemError / setWorkItemsError.
+    } finally {
+      setIsDeletingWorkItem(false)
+    }
+  }
+
   const handleWorkItemStatusDrop = async (
     workItemId: number,
     newStatus: DemoWorkItemStatus,
@@ -2388,6 +2480,7 @@ export function ProjectDetailPage() {
               })
             }
             onOpen={handleOpenWorkItem}
+            onRequestDelete={requestWorkItemDelete}
             selectedWorkItemId={
               selectedWorkItemId
             }
@@ -3105,8 +3198,22 @@ export function ProjectDetailPage() {
             }
             onCreate={handleCreateWorkItem}
             onPatch={handlePatchWorkItem}
+            onDelete={handleDeleteWorkItem}
+            onRequestDelete={requestWorkItemDelete}
           />
         </Suspense>
+      )}
+
+      {workItemDeleteTarget !== null && (
+        <WorkItemDeleteDialog
+          open={true}
+          deleting={isDeletingWorkItem}
+          error={deleteWorkItemError}
+          onCancel={cancelWorkItemDelete}
+          onConfirm={() =>
+            void confirmWorkItemDelete()
+          }
+        />
       )}
     </div>
   )
@@ -3231,6 +3338,7 @@ function ProjectWorkItemsPanel({
   readOnly,
   onCreate,
   onOpen,
+  onRequestDelete,
   selectedWorkItemId,
   onStatusDrop,
   statusDropError,
@@ -3242,6 +3350,7 @@ function ProjectWorkItemsPanel({
   readOnly: boolean
   onCreate: () => void
   onOpen: (item: DemoWorkItem) => void
+  onRequestDelete: (workItemId: number) => void
   selectedWorkItemId: string | null
   onStatusDrop: (
     workItemId: number,
@@ -3910,6 +4019,7 @@ function ProjectWorkItemsPanel({
                             }
                             readOnly={readOnly}
                             onOpen={onOpen}
+                            onRequestDelete={onRequestDelete}
                             onDragHandleStart={(itemId) =>
                               setDraggedItemId(itemId)
                             }
@@ -3940,6 +4050,8 @@ function ProjectWorkItemsPanel({
             selectedWorkItemId
           }
           onOpen={onOpen}
+          onRequestDelete={onRequestDelete}
+          readOnly={readOnly}
         />
       )}
     </section>
@@ -4019,6 +4131,7 @@ function WorkItemBoardCard({
   dragging,
   readOnly,
   onOpen,
+  onRequestDelete,
   onDragHandleStart,
   onDragHandleEnd,
 }: {
@@ -4027,6 +4140,7 @@ function WorkItemBoardCard({
   dragging: boolean
   readOnly: boolean
   onOpen: (item: DemoWorkItem) => void
+  onRequestDelete: (workItemId: number) => void
   onDragHandleStart: (itemId: string) => void
   onDragHandleEnd: () => void
 }) {
@@ -4111,6 +4225,30 @@ function WorkItemBoardCard({
                 · Blocked
               </span>
             )}
+
+            {!readOnly && (
+              // The trigger stops propagation (and pointer-down) so it
+              // never opens the card drawer and never starts a Board drag.
+              <div
+                onClick={(event) => event.stopPropagation()}
+                onPointerDown={(event) => event.stopPropagation()}
+                onDragStart={(event) => {
+                  event.preventDefault()
+                  event.stopPropagation()
+                }}
+                className="shrink-0"
+              >
+                <WorkItemActionMenuTrigger
+                  label="Work item actions"
+                  size="sm"
+                  onAction={(action) => {
+                    if (action === 'delete') {
+                      onRequestDelete(Number(item.id))
+                    }
+                  }}
+                />
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -4179,13 +4317,17 @@ function WorkItemsList({
   items,
   selectedWorkItemId,
   onOpen,
+  onRequestDelete,
+  readOnly,
 }: {
   items: DemoWorkItem[]
   selectedWorkItemId: string | null
   onOpen: (item: DemoWorkItem) => void
+  onRequestDelete: (workItemId: number) => void
+  readOnly: boolean
 }) {
   const gridColumns =
-    'grid-cols-[minmax(360px,560px)_130px_180px_110px]'
+    'grid-cols-[minmax(360px,560px)_130px_180px_110px_40px]'
 
   return (
     <div className="overflow-x-auto">
@@ -4211,6 +4353,8 @@ function WorkItemsList({
           <div className="text-[11px] font-normal text-on-surface-variant/75">
             Due
           </div>
+
+          <div aria-hidden="true" />
         </div>
 
         <div className="border-t border-outline-variant/40">
@@ -4299,6 +4443,33 @@ function WorkItemsList({
                   ].join(' ')}
                 >
                   {due.label}
+                </div>
+
+                <div className="flex justify-end pr-2">
+                  {!readOnly && (
+                    // Isolated from the row click so opening the menu
+                    // never opens the Work Item drawer.
+                    <div
+                      onClick={(event) =>
+                        event.stopPropagation()
+                      }
+                      onPointerDown={(event) =>
+                        event.stopPropagation()
+                      }
+                    >
+                      <WorkItemActionMenuTrigger
+                        label="Work item actions"
+                        size="sm"
+                        onAction={(action) => {
+                          if (action === 'delete') {
+                            onRequestDelete(
+                              Number(item.id),
+                            )
+                          }
+                        }}
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
             )

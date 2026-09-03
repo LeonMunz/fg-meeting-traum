@@ -277,6 +277,44 @@ class MeetingItem(models.Model):
         return self.title
 
 
+class MeetingNote(models.Model):
+    """A persistent discussion note attached to one MeetingItem.
+
+    A MeetingNote is protocol/diary context recorded *about* a MeetingItem
+    during a Live Meeting. It is NOT a Work Item: a MeetingNote has no
+    Project, no status, no assignment. A separate relation
+    (MeetingItem -> WorkItem) remains the canonical link to durable
+    project work.
+
+    Invariants:
+    - exactly one MeetingItem owner (CASCADE on deletion)
+    - author derived from the authenticated request, never client-supplied
+    - content is non-empty after strip
+    - ordering is deterministic (created_at, id) so the API is stable
+    """
+
+    meeting_item = models.ForeignKey(
+        MeetingItem,
+        on_delete=models.CASCADE,
+        related_name="note_relations",
+    )
+    author = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        related_name="authored_meeting_notes",
+    )
+    content = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "meetings_note"
+        ordering = ["created_at", "id"]
+
+    def __str__(self):
+        return f"Note by {self.author.username} on {self.meeting_item.title}"
+
+
 class MeetingItemWorkItem(models.Model):
     """Historical link from a Meeting item to a canonical WorkItem."""
 
