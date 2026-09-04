@@ -1,4 +1,4 @@
-from django.db import models, transaction
+from django.db import IntegrityError, models, transaction
 from django.utils import timezone
 from django.db.models import Max
 
@@ -882,6 +882,7 @@ def create_work_item_from_meeting_item(
     due_date=None,
     blocked_reason=None,
     label_definition_ids=None,
+    meeting_note=None,
 ):
     """Create a canonical WorkItem from a MeetingItem.
 
@@ -890,6 +891,14 @@ def create_work_item_from_meeting_item(
 
     A Meeting may only create work inside a Project belonging to the same
     Research Group.
+
+    When ``meeting_note`` is provided, the created WorkItem becomes the
+    primary WorkItem of that exact Note (Meeting -> MeetingItem ->
+    MeetingNote -> WorkItem traceability). The Note must belong to the
+    given MeetingItem, and a Note with an existing primary WorkItem is
+    rejected: the uniqueness is pre-checked here and also enforced by
+    the ``meeting_note`` unique constraint, so a repeated or concurrent
+    request cannot create a second primary link.
     """
     _require_meeting_write_access(meeting=meeting_item.meeting, user=actor)
 
@@ -908,6 +917,19 @@ def create_work_item_from_meeting_item(
         raise MeetingDomainError(
             "A project Meeting can only create work in its Project."
         )
+
+    if meeting_note is not None:
+        if meeting_note.meeting_item_id != meeting_item.pk:
+            raise MeetingDomainError(
+                "The Note does not belong to this Meeting item."
+            )
+
+        if MeetingItemWorkItem.objects.filter(
+            meeting_note=meeting_note,
+        ).exists():
+            raise MeetingDomainError(
+                "This Note already has a linked Work Item."
+            )
 
     try:
         work_item = create_work_item(
@@ -928,11 +950,19 @@ def create_work_item_from_meeting_item(
             exc.message
         ) from exc
 
-    MeetingItemWorkItem.objects.create(
-        meeting_item=meeting_item,
-        work_item=work_item,
-        created_by=actor,
-    )
+    try:
+        MeetingItemWorkItem.objects.create(
+            meeting_item=meeting_item,
+            work_item=work_item,
+            meeting_note=meeting_note,
+            created_by=actor,
+        )
+    except IntegrityError:
+        # The unique meeting_note constraint is the last line of
+        # defense against concurrent duplicate primary links.
+        raise MeetingDomainError(
+            "This Note already has a linked Work Item."
+        )
 
     return work_item
 

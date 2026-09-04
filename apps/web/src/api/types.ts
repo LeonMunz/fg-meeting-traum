@@ -152,6 +152,20 @@ export interface ApiWorkItem {
   createdAt: string
   updatedAt: string
   createdById: number
+  // Persisted Meeting source (Meeting -> MeetingItem -> MeetingNote)
+  // when this WorkItem was created from a Meeting Note. Only present
+  // (and non-null) when the requesting user can read that Meeting.
+  meetingOrigin: ApiWorkItemMeetingOrigin | null
+}
+
+export interface ApiWorkItemMeetingOrigin {
+  meetingId: number
+  meetingTitle: string
+  scheduledAt: string
+  meetingItemId: number
+  meetingItemTitle: string
+  noteId: number
+  noteContent: string
 }
 
 export interface ApiPersonalWorkItem extends ApiWorkItem {
@@ -326,6 +340,18 @@ export interface ApiMeetingNote {
   content: string
   createdAt: string
   updatedAt: string
+  // Primary WorkItem of this exact Note, when one exists and the
+  // current user can read its Project. null otherwise.
+  linkedWorkItem: ApiLinkedWorkItem | null
+}
+
+export interface ApiLinkedWorkItem {
+  id: number
+  title: string
+  projectId: number
+  projectName: string
+  statusName: string
+  assigneeNames: string[]
 }
 
 export interface ApiMeetingItem {
@@ -393,6 +419,10 @@ export interface ApiCreateMeetingWorkItemInput {
   dueDate?: string | null
   blockedReason?: string | null
   labelDefinitionIds?: number[]
+  // Exact persisted MeetingNote this WorkItem becomes primary for
+  // (one primary WorkItem per Note). Omitted for the plain
+  // MeetingItem -> WorkItem flow.
+  meetingNoteId?: number | null
 }
 
 

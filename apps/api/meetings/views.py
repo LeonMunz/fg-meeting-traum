@@ -1298,6 +1298,9 @@ class MeetingItemListCreateView(APIView):
             .prefetch_related(
                 "work_item_relations",
                 "note_relations__author",
+                "note_relations__work_item_relations__work_item__project",
+                "note_relations__work_item_relations__work_item__status_definition",
+                "note_relations__work_item_relations__work_item__assignee_relations__user",
             )
         )
 
@@ -1475,6 +1478,10 @@ class MeetingItemWorkItemCreateView(APIView):
 
     Create one canonical WorkItem from a MeetingItem and retain the
     historical MeetingItem -> WorkItem relationship.
+
+    When the payload carries ``meetingNoteId``, the WorkItem becomes
+    the primary WorkItem of that exact persisted MeetingNote (one
+    primary WorkItem per Note).
     """
 
     permission_classes = [IsAuthenticated]
@@ -1503,6 +1510,24 @@ class MeetingItemWorkItemCreateView(APIView):
             )
 
         data = serializer.validated_data
+
+        note = None
+        note_id = data.get("meetingNoteId")
+        if note_id is not None:
+            note = MeetingNote.objects.filter(
+                pk=note_id,
+                meeting_item=item,
+            ).first()
+            if note is None:
+                return Response(
+                    {
+                        "error": (
+                            "The Note does not belong to "
+                            "this Meeting item."
+                        )
+                    },
+                    status=400,
+                )
 
         membership = (
             ProjectMembership.objects
@@ -1561,6 +1586,7 @@ class MeetingItemWorkItemCreateView(APIView):
                     "labelDefinitionIds",
                     [],
                 ),
+                meeting_note=note,
             )
         except MeetingDomainError as exc:
             return Response(
@@ -1569,7 +1595,7 @@ class MeetingItemWorkItemCreateView(APIView):
             )
 
         return Response(
-            serialize_work_item(work_item),
+            serialize_work_item(work_item, user=request.user),
             status=201,
         )
 

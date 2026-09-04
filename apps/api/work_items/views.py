@@ -34,6 +34,7 @@ from .services import (
     update_work_item,
     update_work_item_comment,
     reposition_work_item,
+    resolve_work_item_meeting_origin,
 )
 
 
@@ -64,11 +65,19 @@ def _require_project_access(request, project_id):
     return membership.project, membership
 
 
-def serialize_work_item(work_item):
-    """Serialize a WorkItem to the API response shape."""
+def serialize_work_item(work_item, user=None):
+    """Serialize a WorkItem to the API response shape.
+
+    When ``user`` is provided, the response also carries
+    ``meetingOrigin`` — the persisted Meeting -> MeetingItem ->
+    MeetingNote source (when this WorkItem was created from a Note),
+    resolved through the source relation and permission-filtered so
+    Meeting content never leaks to users who cannot read that
+    Meeting.
+    """
     serializer = WorkItemSerializer(work_item)
     data = serializer.data
-    return {
+    result = {
         "id": data["id"],
         "projectId": data["projectId"],
         "title": data["title"],
@@ -88,6 +97,11 @@ def serialize_work_item(work_item):
         "boardPosition": data["boardPosition"],
         "labelDefinitionIds": data["labelDefinitionIds"],
     }
+    if user is not None:
+        result["meetingOrigin"] = (
+            resolve_work_item_meeting_origin(work_item, user)
+        )
+    return result
 
 
 # ── Project WorkItem List ──
@@ -129,7 +143,7 @@ class ProjectWorkItemListCreateView(APIView):
             "id",
         )
 
-        data = [serialize_work_item(wi) for wi in work_items]
+        data = [serialize_work_item(wi, user=request.user) for wi in work_items]
         return Response(data)
 
     def post(self, request, project_id):
@@ -188,7 +202,7 @@ class ProjectWorkItemListCreateView(APIView):
         except WorkItemDomainError as exc:
             return Response({"error": exc.message}, status=400)
 
-        return Response(serialize_work_item(wi), status=201)
+        return Response(serialize_work_item(wi, user=request.user), status=201)
 
 
 # ── WorkItem Detail (Read/Update) ──
@@ -225,7 +239,7 @@ class WorkItemDetailView(APIView):
                 status=404,
             )
 
-        return Response(serialize_work_item(work_item))
+        return Response(serialize_work_item(work_item, user=request.user))
 
     def patch(self, request, work_item_id):
         try:
@@ -300,7 +314,7 @@ class WorkItemDetailView(APIView):
             return Response({"error": exc.message}, status=400)
 
         work_item.refresh_from_db()
-        return Response(serialize_work_item(work_item))
+        return Response(serialize_work_item(work_item, user=request.user))
 
     def delete(self, request, work_item_id):
         try:
@@ -422,7 +436,7 @@ class WorkItemReorderView(APIView):
         except WorkItemDomainError as exc:
             return Response({"error": exc.message}, status=400)
 
-        return Response(serialize_work_item(repositioned))
+        return Response(serialize_work_item(repositioned, user=request.user))
 
 
 # ── WorkItem History (read-only) ──
@@ -722,7 +736,7 @@ class MyWorkView(APIView):
             .select_related("project", "created_by", "parent")
         )
 
-        data = [serialize_work_item(wi) for wi in work_items]
+        data = [serialize_work_item(wi, user=request.user) for wi in work_items]
         return Response(data)
 
 
@@ -807,7 +821,7 @@ class PersonalMyWorkView(APIView):
         data = []
 
         for work_item in work_items:
-            item = serialize_work_item(work_item)
+            item = serialize_work_item(work_item, user=request.user)
 
             item.update({
                 "projectName": work_item.project.name,

@@ -1,6 +1,6 @@
 # FG Workspace — Current Implementation State
 
-**Checkpoint:** Meetings + persistent Meeting Notes + Meeting Templates + configurable Project Work Items + Board ordering
+**Checkpoint:** Meetings + persistent Meeting Notes + Note → Work Item traceability + Meeting Templates + configurable Project Work Items + Board ordering
 **Last verified:** 2026-09-03
 **Branch:** `feature/meeting-next`
 
@@ -63,6 +63,8 @@ Markers:
 - **IMPLEMENTED** — occurrence Section editing: add / rename / edit / hide / reorder (one-off Sections never touch the Template).
 - **IMPLEMENTED** — permission-filtered Meeting lists; group Meetings do not expose private Project data.
 - **IMPLEMENTED** — persistent `MeetingNote` owned by exactly one `MeetingItem`: canonical author from the authenticated request (not client-spoofable), non-empty content, deterministic ordering, CASCADE on MeetingItem/Meeting deletion. Add/Edit/Delete reuse the Meeting write model and are Live-only (Upcoming and Completed reject authoring); Completed Notes are read-only protocol that survive reload. Notes are embedded in the Meeting items list (no N+1). Meeting Note != Work Item (no Project/status/assignment).
+- **IMPLEMENTED** — canonical Note → Work Item: the composer's `Create work item` persists the Note first and opens the Work Item dialog anchored to that exact persisted Note (never open simultaneously; failure keeps the draft). One primary WorkItem per Note, enforced by a unique constraint on `MeetingItemWorkItem.meeting_note` plus a transactional pre-check. Group Meetings require an explicit Project choice (no silent preselect); Project Meetings preselect their writable Project. Definition IDs are validated server-side against the selected Project. Deletion is safe both ways (Note/WorkItem/MeetingItem/Meeting deletion keeps the other side; only the link row disappears).
+- **IMPLEMENTED** — Linked work is rendered directly at the source Note (title, Project, assignees, status, permission-filtered) and opens the existing Work Item Inspector in place (Meeting context preserved); the Inspector shows `Created from` (Meeting, agenda item, source Note) resolved from the source relation. Unlinked Notes of Completed Meetings keep a quiet `Create work item` when the user can write the Meeting's scope.
 
 ## Meeting Templates
 
@@ -76,6 +78,7 @@ Markers:
 
 - **IMPLEMENTED** — a Work Item created from a MeetingItem is canonical Project work, linked via `MeetingItemWorkItem`.
 - **IMPLEMENTED** — target Project is required; Work Item definitions come from that Project; a Project Meeting can only create work in its own Project.
+- **IMPLEMENTED** — a Work Item created from a MeetingNote records the exact source Note on the same `MeetingItemWorkItem` link (Meeting → MeetingItem → MeetingNote → WorkItem); `meetingOrigin` is exposed on Work Item APIs and `linkedWorkItem` on Note APIs, each permission-filtered.
 
 ## My Work
 

@@ -878,6 +878,56 @@ def _require_project_write_access(project: Project, actor) -> None:
         raise WorkItemDomainError("A viewer cannot modify WorkItems.")
 
 
+def resolve_work_item_meeting_origin(work_item: WorkItem, user):
+    """Resolve the persisted Meeting source of a WorkItem, if any.
+
+    A WorkItem created from a MeetingNote carries exactly one source
+    link (MeetingItem + MeetingNote). The origin is only exposed when
+    the requesting user can read that Meeting, so Meeting content
+    never leaks through Work Item representations.
+    """
+    from meetings.models import Meeting
+
+    relation = (
+        work_item.meeting_item_relations
+        .filter(meeting_note__isnull=False)
+        .select_related(
+            "meeting_item",
+            "meeting_item__meeting",
+            "meeting_note",
+        )
+        .order_by("id")
+        .first()
+    )
+    if relation is None:
+        return None
+
+    meeting = relation.meeting_item.meeting
+
+    if not ResearchGroupMembership.objects.filter(
+        research_group_id=meeting.research_group_id,
+        user=user,
+    ).exists():
+        return None
+
+    if meeting.scope == Meeting.Scope.PROJECT:
+        if not ProjectMembership.objects.filter(
+            project_id=meeting.project_id,
+            user=user,
+        ).exists():
+            return None
+
+    return {
+        "meetingId": meeting.id,
+        "meetingTitle": meeting.title,
+        "scheduledAt": meeting.scheduled_at.isoformat(),
+        "meetingItemId": relation.meeting_item.id,
+        "meetingItemTitle": relation.meeting_item.title,
+        "noteId": relation.meeting_note.id,
+        "noteContent": relation.meeting_note.content,
+    }
+
+
 def set_assignees(
     *,
     work_item: WorkItem,

@@ -1644,6 +1644,621 @@ test(
 )
 
 test(
+  'Meeting Note creates canonical linked work at the exact Note',
+  async ({ page }) => {
+    const projectName =
+      'E2E Note Linked Work Project'
+
+    const meetingTitle =
+      'E2E Note Linked Weekly'
+
+    const agendaTitle =
+      'E2E Note Linked Agenda'
+
+    const noteContent =
+      'Check new quotation tomorrow'
+
+    // --------------------------------------------------------
+    // Alex creates a writable target Project.
+    // --------------------------------------------------------
+
+    await login(page, 'alex')
+    await openProjects(page)
+
+    await page
+      .getByRole('button', {
+        name: /New project/,
+      })
+      .click()
+
+    const createProjectDialog =
+      page.getByRole('dialog', {
+        name: 'Create project',
+      })
+
+    await expect(
+      createProjectDialog,
+    ).toBeVisible()
+
+    await createProjectDialog
+      .getByLabel('Project name')
+      .fill(projectName)
+
+    await createProjectDialog
+      .getByRole('button', {
+        name: /Create project/,
+      })
+      .click()
+
+    await expect(
+      page.getByText(projectName, {
+        exact: true,
+      }),
+    ).toBeVisible()
+
+    // --------------------------------------------------------
+    // Create and open a Research Group Meeting.
+    // --------------------------------------------------------
+
+    await page
+      .getByRole('link', {
+        name: /Meetings/,
+      })
+      .click()
+
+    await page
+      .getByRole('button', {
+        name: /New meeting/,
+      })
+      .click()
+
+    await page
+      .getByLabel('Title')
+      .fill(meetingTitle)
+
+    await page
+      .getByLabel('Date and time')
+      .fill('2030-04-01T10:00')
+
+    await page
+      .locator('form')
+      .getByRole('button', {
+        name: /Create meeting/,
+      })
+      .click()
+
+    const meetingRow =
+      page
+        .getByRole('button')
+        .filter({
+          hasText: meetingTitle,
+        })
+
+    await meetingRow.click()
+
+    await expect(page).toHaveURL(
+      /\/meetings\/\d+$/,
+    )
+
+    await quickAddAgendaItem(
+      page,
+      agendaTitle,
+    )
+
+    // --------------------------------------------------------
+    // Start the Meeting (Notes are Live-only).
+    // --------------------------------------------------------
+
+    await page
+      .getByRole('button', {
+        name: 'Start meeting',
+      })
+      .click()
+
+    await expect(
+      page.getByRole('button', {
+        name: 'End meeting',
+      }),
+    ).toBeVisible()
+
+    // --------------------------------------------------------
+    // Draft a Note and choose "Create work item". The Note is
+    // persisted FIRST; only then does the dialog open, anchored
+    // to that exact persisted Note.
+    // --------------------------------------------------------
+
+    await page
+      .getByRole('button', {
+        name: /Add note…/,
+      })
+      .click()
+
+    const noteInput = page.getByLabel(
+      `Add note to ${agendaTitle}`,
+    )
+
+    await noteInput.fill(noteContent)
+
+    await page
+      .getByRole('button', {
+        name: 'Create work item',
+      })
+      .click()
+
+    // The composer closed and the Note persisted.
+    await expect(
+      noteInput,
+    ).toHaveCount(0)
+
+    // Scope to this exact Agenda Item first: its title is the
+    // item heading, and the nearest ancestor <li> is the item
+    // row itself. Keeping the search inside the item excludes
+    // the Work Item dialog, which prefills the same Note content
+    // into its Title and Description fields.
+    const agendaItem = page
+      .getByRole('heading', {
+        name: agendaTitle,
+        exact: true,
+      })
+      .locator('xpath=ancestor::li[1]')
+
+    // Then the exact Note text within that Agenda Item, then the
+    // nearest Note row: every Linked-work assertion below stays
+    // on that exact Note.
+    const noteText = agendaItem
+      .getByText(
+        noteContent,
+        { exact: true },
+      )
+
+    const noteBlock = noteText
+      .locator('xpath=ancestor::li[1]')
+
+    await expect(
+      noteBlock,
+    ).toBeVisible()
+
+    const workItemDialog =
+      page.getByRole('dialog', {
+        name: 'Create work item',
+      })
+
+    await expect(
+      workItemDialog,
+    ).toBeVisible()
+
+    // Research Group Meeting: NO arbitrary Project is
+    // preselected; the user must choose explicitly.
+    await expect(
+      workItemDialog
+        .getByLabel('Project'),
+    ).toHaveValue('')
+
+    // Title + Description are prefilled from the exact Note.
+    await expect(
+      workItemDialog
+        .getByLabel('Title'),
+    ).toHaveValue(noteContent)
+
+    await expect(
+      workItemDialog
+        .getByLabel('Description'),
+    ).toHaveValue(noteContent)
+
+    // Choose the target Project explicitly.
+    await workItemDialog
+      .getByLabel('Project')
+      .selectOption({
+        label: projectName,
+      })
+
+    await workItemDialog
+      .getByRole('button', {
+        name: /Create work item/,
+      })
+      .click()
+
+    await expect(
+      workItemDialog,
+    ).not.toBeVisible()
+
+    // --------------------------------------------------------
+    // The Note remains visible; Linked work appears under
+    // that exact Note, and the default Create work item
+    // action for the Note disappears.
+    // --------------------------------------------------------
+
+    await expect(
+      noteBlock.locator(
+        'p.whitespace-pre-wrap',
+      ),
+    ).toHaveText(
+      noteContent,
+    )
+
+    await expect(
+      noteBlock.getByText(
+        'Linked work',
+        { exact: true },
+      ),
+    ).toBeVisible()
+
+    await expect(
+      noteBlock
+        .getByRole('button', {
+          name: /Open linked work item/,
+        }),
+    ).toBeVisible()
+
+    await expect(
+      page.getByRole('button', {
+        name: `Create work item from note: ${noteContent}`,
+      }),
+    ).toHaveCount(0)
+
+    // --------------------------------------------------------
+    // Click the linked Work Item: the existing Inspector
+    // opens in place without leaving the Meeting.
+    // --------------------------------------------------------
+
+    await noteBlock
+      .getByRole('button', {
+        name: /Open linked work item/,
+      })
+      .click()
+
+    const inspector =
+      page.getByRole('region', {
+        name: 'Work item',
+      })
+
+    await expect(
+      inspector,
+    ).toBeVisible()
+
+    // Source traceability is resolved from the source
+    // relation and shown in the Inspector.
+    await expect(
+      inspector.getByText(
+        'Created from',
+      ),
+    ).toBeVisible()
+
+    await expect(
+      inspector.getByText(
+        meetingTitle,
+      ),
+    ).toBeVisible()
+
+    await expect(
+      inspector.getByText(
+        agendaTitle,
+      ),
+    ).toBeVisible()
+
+    await expect(
+      inspector.getByText(
+        'Source note',
+      ),
+    ).toBeVisible()
+
+    await expect(
+      inspector
+        .locator(
+          'p.whitespace-pre-wrap',
+        ),
+    ).toHaveText(
+      noteContent,
+    )
+
+    // --------------------------------------------------------
+    // Close the Inspector; the same Meeting context
+    // remains.
+    // --------------------------------------------------------
+
+    await page
+      .getByRole('button', {
+        name: 'Close work item',
+      })
+      .click()
+
+    await expect(
+      inspector,
+    ).not.toBeVisible()
+
+    await expect(
+      page.getByRole('heading', {
+        name: meetingTitle,
+      }),
+    ).toBeVisible()
+
+    await expect(
+      noteBlock.locator(
+        'p.whitespace-pre-wrap',
+      ),
+    ).toHaveText(
+        noteContent,
+    )
+
+    await expect(page).toHaveURL(
+      /\/meetings\/\d+$/,
+    )
+
+    // --------------------------------------------------------
+    // Complete the Meeting: linked work stays visible,
+    // Notes remain read-only.
+    // --------------------------------------------------------
+
+    await page
+      .getByRole('button', {
+        name: 'End meeting',
+      })
+      .click()
+
+    await expect(
+      page.getByRole('button', {
+        name: 'Reopen meeting',
+      }),
+    ).toBeVisible()
+
+    await expect(
+      noteBlock.getByText(
+        'Linked work',
+        { exact: true },
+      ),
+    ).toBeVisible()
+
+    await expect(
+      page.getByRole('button', {
+        name: /Add note…/,
+      }),
+    ).toHaveCount(0)
+
+    await expect(
+      page.getByRole('button', {
+        name: /Add note$/,
+      }),
+    ).toHaveCount(0)
+
+    // No per-note Edit/Delete menu in Completed.
+    await expect(
+      page.getByRole('button', {
+        name: /Note actions for/,
+      }),
+    ).toHaveCount(0)
+
+    // --------------------------------------------------------
+    // Reload: Note + Linked work persist.
+    // --------------------------------------------------------
+
+    await page.reload()
+
+    await expect(
+      page.getByRole('button', {
+        name: 'Reopen meeting',
+      }),
+    ).toBeVisible()
+
+    await expect(
+      noteBlock.locator(
+        'p.whitespace-pre-wrap',
+      ),
+    ).toHaveText(
+      noteContent,
+    )
+
+    await expect(
+      noteBlock.getByText(
+        'Linked work',
+        { exact: true },
+      ),
+    ).toBeVisible()
+
+    await expect(
+      page.getByRole('button', {
+        name: `Create work item from note: ${noteContent}`,
+      }),
+    ).toHaveCount(0)
+  },
+)
+
+test(
+  'Project Meeting preselects its writable Project for Note work',
+  async ({ page }) => {
+    const projectName =
+      'E2E Project Meeting Work Project'
+
+    const meetingTitle =
+      'E2E Project Meeting Work'
+
+    const agendaTitle =
+      'E2E PM Agenda'
+
+    const noteContent =
+      'Prepare the budget sheet'
+
+    // Alex creates the target Project.
+    await login(page, 'alex')
+    await openProjects(page)
+
+    await page
+      .getByRole('button', {
+        name: /New project/,
+      })
+      .click()
+
+    const createProjectDialog =
+      page.getByRole('dialog', {
+        name: 'Create project',
+      })
+
+    await createProjectDialog
+      .getByLabel('Project name')
+      .fill(projectName)
+
+    await createProjectDialog
+      .getByRole('button', {
+        name: /Create project/,
+      })
+      .click()
+
+    await expect(
+      page.getByText(projectName, {
+        exact: true,
+      }),
+    ).toBeVisible()
+
+    // Create a Project Meeting for that Project.
+    await page
+      .getByRole('link', {
+        name: /Meetings/,
+      })
+      .click()
+
+    await page
+      .getByRole('button', {
+        name: /New meeting/,
+      })
+      .click()
+
+    const newMeetingDialog =
+      page.getByRole('dialog', {
+        name: 'New meeting',
+      })
+
+    await newMeetingDialog
+      .getByLabel('Project')
+      .selectOption({
+        label: projectName,
+      })
+
+    await newMeetingDialog
+      .getByLabel('Title')
+      .fill(meetingTitle)
+
+    await newMeetingDialog
+      .getByLabel('Date and time')
+      .fill('2030-05-02T09:00')
+
+    await page
+      .locator('form')
+      .getByRole('button', {
+        name: /Create meeting/,
+      })
+      .click()
+
+    const meetingRow =
+      page
+        .getByRole('button')
+        .filter({
+          hasText: meetingTitle,
+        })
+
+    await meetingRow.click()
+
+    await expect(page).toHaveURL(
+      /\/meetings\/\d+$/,
+    )
+
+    await quickAddAgendaItem(
+      page,
+      agendaTitle,
+    )
+
+    await page
+      .getByRole('button', {
+        name: 'Start meeting',
+      })
+      .click()
+
+    // Add a persisted Note.
+    await page
+      .getByRole('button', {
+        name: /Add note…/,
+      })
+      .click()
+
+    await page
+      .getByLabel(`Add note to ${agendaTitle}`)
+      .fill(noteContent)
+
+    await page
+      .getByRole('button', {
+        name: /^Add note$/,
+        exact: true,
+      })
+      .click()
+
+    // The saved Note's <p> is the only element whose full text
+    // equals the Note content. Its parent <li> is the Note row
+    // itself: the outer Agenda Item <li> only contains the Note
+    // as descendant content, so every assertion below is scoped
+    // to that exact Note.
+    const noteBlock = page
+      .getByText(
+        noteContent,
+        { exact: true },
+      )
+      .locator('xpath=..')
+
+    // Open the Note-anchored work dialog from the persisted
+    // Note.
+    await noteBlock
+      .getByRole('button', {
+        name: `Create work item from note: ${noteContent}`,
+      })
+      .click()
+
+    const workItemDialog =
+      page.getByRole('dialog', {
+        name: 'Create work item',
+      })
+
+    await expect(
+      workItemDialog,
+    ).toBeVisible()
+
+    // The Meeting's own writable Project is preselected.
+    await expect(
+      workItemDialog
+        .getByLabel('Project')
+        .locator('option:checked'),
+    ).toHaveText(
+      projectName,
+    )
+
+    await workItemDialog
+      .getByRole('button', {
+        name: /Create work item/,
+      })
+      .click()
+
+    await expect(
+      workItemDialog,
+    ).not.toBeVisible()
+
+    // Linked work appears under the exact Note in the
+    // Meeting's own Project.
+    await expect(
+      noteBlock.getByText(
+        'Linked work',
+      ),
+    ).toBeVisible()
+
+    await expect(
+      noteBlock.getByText(
+        projectName,
+      ),
+    ).toBeVisible()
+
+    await expect(
+      page.getByRole('button', {
+        name: `Create work item from note: ${noteContent}`,
+      }),
+    ).toHaveCount(0)
+  },
+)
+test(
   'Delete Note removes only the Note, not the agenda item',
   async ({ page }) => {
     await login(page, 'alex')

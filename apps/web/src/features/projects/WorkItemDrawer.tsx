@@ -205,6 +205,23 @@ function formatHistoryShortDate(isoDate: string): string {
   }).format(new Date(year, month - 1, day))
 }
 
+function formatMeetingOriginDate(
+  isoDateTime: string,
+): string {
+  const date = new Date(
+    isoDateTime,
+  )
+
+  if (Number.isNaN(date.getTime())) {
+    return isoDateTime
+  }
+
+  return new Intl.DateTimeFormat('en', {
+    month: 'short',
+    day: 'numeric',
+  }).format(date)
+}
+
 function formatHistoryRelativeTime(
   isoDateTime: string,
 ): string {
@@ -3075,6 +3092,54 @@ function WorkItemInspector({
                 </div>
               )}
             </div>
+
+            {item.meetingOrigin != null && (
+              <div className="rounded-lg border border-outline-variant/70 bg-surface-container-low/50 px-4 py-3">
+                <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-on-surface-variant">
+                  <span
+                    aria-hidden="true"
+                    className="material-symbols-outlined text-[15px]"
+                  >
+                    meeting_room
+                  </span>
+
+                  <span>Created from</span>
+                </div>
+
+                <div className="mt-2 text-sm text-on-surface">
+                  {
+                    item.meetingOrigin
+                      .meetingTitle
+                  }
+
+                  <span className="text-on-surface-variant">
+                    {' · '}
+                    {formatMeetingOriginDate(
+                      item.meetingOrigin
+                        .scheduledAt,
+                    )}
+                  </span>
+                </div>
+
+                <div className="mt-1 text-xs text-on-surface-variant">
+                  {
+                    item.meetingOrigin
+                      .meetingItemTitle
+                  }
+                </div>
+
+                <div className="mt-2 text-xs font-medium text-on-surface-variant">
+                  Source note
+                </div>
+
+                <p className="mt-1 whitespace-pre-wrap text-sm text-on-surface">
+                  {
+                    item.meetingOrigin
+                      .noteContent
+                  }
+                </p>
+              </div>
+            )}
 
             <div>
               <span className="mb-1.5 block text-sm font-medium text-on-surface">

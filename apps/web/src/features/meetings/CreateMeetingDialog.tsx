@@ -235,10 +235,18 @@ export function CreateMeetingDialog({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 px-4">
-      <div className="w-full max-w-lg overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest shadow-xl">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="create-meeting-title"
+        className="w-full max-w-lg overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest shadow-xl"
+      >
         <form onSubmit={handleSubmit}>
           <div className="border-b border-outline-variant px-6 py-5">
-            <h2 className="text-lg font-semibold text-on-surface">
+            <h2
+              id="create-meeting-title"
+              className="text-lg font-semibold text-on-surface"
+            >
               New meeting
             </h2>
 
@@ -273,12 +281,17 @@ export function CreateMeetingDialog({
               </select>
             </label>
 
-            <label className="block">
-              <span className="mb-1.5 block text-sm font-medium text-on-surface">
+            <div>
+              <label
+                htmlFor="create-meeting-project"
+                className="mb-1.5 block text-sm font-medium text-on-surface"
+              >
                 Project
-              </span>
+              </label>
 
               <select
+                id="create-meeting-project"
+                aria-describedby="create-meeting-project-help"
                 value={projectId}
                 onChange={(event) => {
                   setProjectId(event.target.value)
@@ -298,12 +311,15 @@ export function CreateMeetingDialog({
                 ))}
               </select>
 
-              <span className="mt-1.5 block text-xs text-on-surface-variant">
+              <p
+                id="create-meeting-project-help"
+                className="mt-1.5 text-xs text-on-surface-variant"
+              >
                 {scope === 'project'
                   ? 'This will be a Project Meeting.'
                   : 'This will be a Research Group Meeting.'}
-              </span>
-            </label>
+              </p>
+            </div>
 
             <label className="block">
               <span className="mb-1.5 block text-sm font-medium text-on-surface">

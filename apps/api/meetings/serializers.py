@@ -1,5 +1,7 @@
 from rest_framework import serializers
 
+from projects.models import ProjectMembership
+
 from .models import (
     Meeting,
     MeetingItem,
@@ -328,6 +330,12 @@ class MeetingNoteSerializer(serializers.ModelSerializer):
     Exposes the identity, owner MeetingItem, author display data,
     content, and timestamps needed by the Meeting UI. The author is
     never writable.
+
+    ``linkedWorkItem`` exposes the primary WorkItem of this exact Note
+    (when one exists) as a compact, permission-filtered summary: the
+    summary is only returned when the requesting user can read the
+    WorkItem's Project, so private Project work never leaks through
+    Meeting views.
     """
 
     meetingItemId = serializers.IntegerField(
@@ -335,6 +343,7 @@ class MeetingNoteSerializer(serializers.ModelSerializer):
         read_only=True,
     )
     author = serializers.SerializerMethodField()
+    linkedWorkItem = serializers.SerializerMethodField()
     createdAt = serializers.DateTimeField(
         source="created_at",
         read_only=True,
@@ -350,6 +359,7 @@ class MeetingNoteSerializer(serializers.ModelSerializer):
             "id",
             "meetingItemId",
             "author",
+            "linkedWorkItem",
             "content",
             "createdAt",
             "updatedAt",
@@ -362,6 +372,47 @@ class MeetingNoteSerializer(serializers.ModelSerializer):
             "username": author.username,
             "firstName": author.first_name,
             "lastName": author.last_name,
+        }
+
+    def get_linkedWorkItem(self, obj):
+        relation = (
+            obj.work_item_relations
+            .select_related(
+                "work_item",
+                "work_item__project",
+                "work_item__status_definition",
+            )
+            .order_by("id")
+            .first()
+        )
+        if relation is None:
+            return None
+
+        work_item = relation.work_item
+        request = self.context.get("request")
+        if request is not None:
+            has_project_access = ProjectMembership.objects.filter(
+                project_id=work_item.project_id,
+                user=request.user,
+            ).exists()
+            if not has_project_access:
+                return None
+
+        return {
+            "id": work_item.id,
+            "title": work_item.title,
+            "projectId": work_item.project_id,
+            "projectName": work_item.project.name,
+            "statusName": work_item.status_definition.name,
+            "assigneeNames": [
+                assignee.user.get_full_name()
+                or assignee.user.username
+                for assignee in (
+                    work_item.assignee_relations
+                    .select_related("user")
+                    .order_by("id")
+                )
+            ],
         }
 
 
@@ -480,6 +531,11 @@ class MeetingWorkItemCreateSerializer(serializers.Serializer):
     title = serializers.CharField(
         max_length=255,
         allow_blank=False,
+    )
+    meetingNoteId = serializers.IntegerField(
+        min_value=1,
+        required=False,
+        allow_null=True,
     )
     description = serializers.CharField(
         required=False,

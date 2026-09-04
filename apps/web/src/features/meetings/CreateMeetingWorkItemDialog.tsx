@@ -13,7 +13,9 @@ import {
   listProjects,
 } from '../../api/projects'
 import type {
+  ApiLinkedWorkItem,
   ApiMeetingItem,
+  ApiMeetingNote,
   ApiProject,
   ApiProjectMembership,
   ApiProjectWorkItemConfiguration,
@@ -21,18 +23,41 @@ import type {
   ApiWorkItemTypeDefinition,
 } from '../../api/types'
 
+/** Deterministic concise title suggestion from a Meeting Note:
+ * the first meaningful line, capped. No LLM/API dependency. */
+function suggestTitleFromNote(
+  content: string,
+) {
+  const line =
+    content
+      .split('\n')
+      .map((candidate) =>
+        candidate.trim(),
+      )
+      .find(Boolean) ?? ''
+
+  return line.length > 80
+    ? `${line.slice(0, 80)}…`
+    : line
+}
+
 type CreateMeetingWorkItemDialogProps = {
   open: boolean
   researchGroupId: number
   meetingItem: ApiMeetingItem | null
-  /** Optional Project Meeting project used to preselect the Project. */
+  /** Project named by a Project Meeting, preselected when it is
+   * writable. For Research Group Meetings this stays null and the
+   * Project intentionally starts unselected. */
   defaultProjectId?: number | null
-  /** Prefill for the Work Item title (Note-derived heuristic). */
-  initialTitle?: string
-  /** Prefill for the Work Item description (Note content). */
-  initialDescription?: string
+  /** The exact persisted MeetingNote this WorkItem becomes primary
+   * for. When set, title/description prefill from the Note content
+   * and the payload carries `meetingNoteId`. */
+  sourceNote?: ApiMeetingNote | null
   onClose: () => void
-  onCreated: (workItem: ApiWorkItem) => void
+  onCreated: (
+    workItem: ApiWorkItem,
+    linkedWorkItem: ApiLinkedWorkItem | null,
+  ) => void
 }
 
 function getErrorMessage(
@@ -76,8 +101,7 @@ export function CreateMeetingWorkItemDialog({
   researchGroupId,
   meetingItem,
   defaultProjectId = null,
-  initialTitle = '',
-  initialDescription = '',
+  sourceNote = null,
   onClose,
   onCreated,
 }: CreateMeetingWorkItemDialogProps) {
@@ -126,6 +150,9 @@ export function CreateMeetingWorkItemDialog({
   const [loadingMembers, setLoadingMembers] =
     useState(false)
 
+  const [loadingConfig, setLoadingConfig] =
+    useState(false)
+
   const [submitting, setSubmitting] =
     useState(false)
 
@@ -137,8 +164,21 @@ export function CreateMeetingWorkItemDialog({
       return
     }
 
-    setTitle(initialTitle || meetingItem.title)
-    setDescription(initialDescription || meetingItem.contextNotes)
+    // Prefill from the exact source Note when this flow is anchored
+    // to one; otherwise fall back to the agenda item's own fields.
+    const sourceContent =
+      sourceNote?.content ?? ''
+
+    setTitle(
+      sourceNote
+        ? suggestTitleFromNote(sourceContent)
+        : meetingItem.title,
+    )
+    setDescription(
+      sourceNote
+        ? sourceContent
+        : meetingItem.contextNotes,
+    )
     setTypeDefinitionId(null)
     setTypeDefinitions([])
     setStatusDefinitions([])
@@ -171,6 +211,10 @@ export function CreateMeetingWorkItemDialog({
 
         setProjects(writableProjects)
 
+        // Only preselect the Project when the Meeting itself names
+        // one (a Project Meeting) and it is writable. Research Group
+        // Meetings intentionally start with NO Project selected —
+        // the user must explicitly choose a writable Project.
         const preferred =
           defaultProjectId != null
             ? writableProjects.find(
@@ -181,10 +225,6 @@ export function CreateMeetingWorkItemDialog({
 
         if (preferred) {
           setProjectId(String(preferred.id))
-        } else if (writableProjects.length > 0) {
-          setProjectId(
-            String(writableProjects[0].id),
-          )
         }
       } catch (loadError) {
         if (!cancelled) {
@@ -210,11 +250,10 @@ export function CreateMeetingWorkItemDialog({
     }
   }, [
     defaultProjectId,
-    initialDescription,
-    initialTitle,
     meetingItem,
     open,
     researchGroupId,
+    sourceNote,
   ])
 
   useEffect(() => {
@@ -280,6 +319,7 @@ export function CreateMeetingWorkItemDialog({
       setStatusDefinitions([])
       setTypeDefinitionId(null)
       setStatusDefinitionId(null)
+      setLoadingConfig(false)
       return
     }
 
@@ -289,6 +329,16 @@ export function CreateMeetingWorkItemDialog({
     if (!Number.isInteger(numericProjectId)) {
       return
     }
+
+    // A fresh or switched Project: drop the previous Project's
+    // definitions immediately so a stale Type/Status id can never
+    // be submitted, and keep Create disabled until this Project's
+    // configuration has loaded.
+    setTypeDefinitions([])
+    setStatusDefinitions([])
+    setTypeDefinitionId(null)
+    setStatusDefinitionId(null)
+    setLoadingConfig(true)
 
     let cancelled = false
 
@@ -324,13 +374,18 @@ export function CreateMeetingWorkItemDialog({
             : null,
         )
 
-        // The Status defaults to the first active status
-        // definition; switching Project always resets this, so
-        // no stale selection from a previous Project survives.
+        // The Status defaults to the Project's canonical default
+        // (is_default), falling back to the first active status.
+        // Switching Project always resets this, so no stale
+        // selection from a previous Project survives.
+        const defaultStatus =
+          activeStatuses.find(
+            (statusDefinition) =>
+              statusDefinition.isDefault,
+          ) ?? activeStatuses[0]
+
         setStatusDefinitionId(
-          activeStatuses.length > 0
-            ? activeStatuses[0].id
-            : null,
+          defaultStatus ? defaultStatus.id : null,
         )
       } catch (loadError) {
         if (!cancelled) {
@@ -344,6 +399,10 @@ export function CreateMeetingWorkItemDialog({
               'Work item options could not be loaded.',
             ),
           )
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingConfig(false)
         }
       }
     }
@@ -364,6 +423,19 @@ export function CreateMeetingWorkItemDialog({
       ),
     [memberships],
   )
+
+  // Local validation for the state where Create is disabled by
+  // design: the Project is selected and its configuration has
+  // finished loading, but it offers no valid Type definition, so
+  // a Work Item cannot be created. Explains it instead of leaving
+  // a silently inert button.
+  const typeValidationError =
+    projectId !== '' &&
+    !loadingProjects &&
+    !loadingConfig &&
+    typeDefinitionId == null
+      ? 'Select a valid project and type before creating a work item.'
+      : null
 
   if (!open || !meetingItem) {
     return null
@@ -429,8 +501,63 @@ export function CreateMeetingWorkItemDialog({
             assigneeIds,
             dueDate:
               dueDate || null,
+            // Anchor the created WorkItem to the exact persisted
+            // source Note (one primary WorkItem per Note).
+            meetingNoteId:
+              sourceNote?.id ?? null,
           },
         )
+
+      // Build the compact linked-work summary shown directly at the
+      // source Note after creation.
+      const linkedProject = projects.find(
+        (project) =>
+          project.id ===
+            numericProjectId,
+      )
+
+      const linkedStatus =
+        statusDefinitionId != null
+          ? statusDefinitions.find(
+              (statusDefinition) =>
+                statusDefinition.id ===
+                  statusDefinitionId,
+            )
+          : undefined
+
+      const linkedAssigneeNames =
+        assigneeIds
+          .map((assigneeId) =>
+            memberships.find(
+              (membership) =>
+                membership.user.id ===
+                  assigneeId,
+            ),
+          )
+          .filter(
+            (membership):
+              membership is
+                ApiProjectMembership =>
+              membership != null,
+          )
+          .map(getPersonName)
+
+      const linkedWorkItem:
+        ApiLinkedWorkItem | null =
+        linkedProject != null
+          ? {
+              id: workItem.id,
+              title: workItem.title,
+              projectId: linkedProject.id,
+              projectName:
+                linkedProject.name,
+              statusName:
+                linkedStatus?.name ??
+                '',
+              assigneeNames:
+                linkedAssigneeNames,
+            }
+          : null
 
       // A Project page opened in another tab (or still mounted in
       // this SPA) must pick up the new canonical WorkItem without
@@ -441,7 +568,10 @@ export function CreateMeetingWorkItemDialog({
         }),
       )
 
-      onCreated(workItem)
+      onCreated(
+        workItem,
+        linkedWorkItem,
+      )
       onClose()
     } catch (submitError) {
       setError(
@@ -460,13 +590,13 @@ export function CreateMeetingWorkItemDialog({
       role="dialog"
       aria-modal="true"
       aria-labelledby="meeting-work-item-title"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 px-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 px-4 py-4"
     >
       <form
         onSubmit={handleSubmit}
-        className="w-full max-w-xl overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest shadow-xl"
+        className="flex max-h-[min(52rem,calc(100dvh-2rem))] w-full max-w-xl flex-col overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest shadow-xl"
       >
-        <div className="border-b border-outline-variant px-6 py-5">
+        <div className="shrink-0 border-b border-outline-variant px-6 py-5">
           <h2
             id="meeting-work-item-title"
             className="text-lg font-semibold text-on-surface"
@@ -479,7 +609,7 @@ export function CreateMeetingWorkItemDialog({
           </p>
         </div>
 
-        <div className="space-y-5 px-6 py-5">
+        <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5">
           <label className="block">
             <span className="mb-1.5 block text-sm font-medium text-on-surface">
               Project
@@ -505,14 +635,20 @@ export function CreateMeetingWorkItemDialog({
                     : 'No writable projects available'}
                 </option>
               ) : (
-                projects.map((project) => (
+                <>
+                  <option value="">
+                    Select a project…
+                  </option>
+
+                  {projects.map((project) => (
                   <option
                     key={project.id}
                     value={project.id}
                   >
                     {project.name}
                   </option>
-                ))
+                ))}
+                </>
               )}
             </select>
           </label>
@@ -692,16 +828,17 @@ export function CreateMeetingWorkItemDialog({
           </label>
         </div>
 
-        {error && (
-          <div
-            role="alert"
-            className="border-t border-error/20 bg-error-container/35 px-6 py-3 text-sm text-error"
-          >
-            {error}
-          </div>
-        )}
+        <div className="shrink-0 border-t border-outline-variant bg-surface-container-low/45">
+          {(error ?? typeValidationError) && (
+            <div
+              role="alert"
+              className="px-6 pt-3 text-sm text-error"
+            >
+              {error ?? typeValidationError}
+            </div>
+          )}
 
-        <div className="flex justify-end gap-3 border-t border-outline-variant bg-surface-container-low/45 px-6 py-4">
+          <div className="flex justify-end gap-3 px-6 py-4">
           <button
             type="button"
             disabled={submitting}
@@ -716,7 +853,9 @@ export function CreateMeetingWorkItemDialog({
             disabled={
               submitting ||
               loadingProjects ||
+              loadingConfig ||
               !projectId ||
+              typeDefinitionId == null ||
               !title.trim()
             }
             className="inline-flex h-9 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-45"
@@ -729,6 +868,7 @@ export function CreateMeetingWorkItemDialog({
               ? 'Creating…'
               : 'Create work item'}
           </button>
+          </div>
         </div>
       </form>
     </div>

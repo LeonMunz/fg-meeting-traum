@@ -1,7 +1,9 @@
 import {
   useCallback,
   useEffect,
+  lazy,
   useMemo,
+  Suspense,
   useRef,
   useState,
 } from 'react'
@@ -36,10 +38,27 @@ import {
 import {
   getProject,
   listResearchGroupMembers,
+  getProjectWorkItemConfiguration,
+  listProjectMemberships,
 } from '../../api/projects'
+import {
+  getWorkItem,
+  listProjectWorkItems,
+  updateWorkItem,
+} from '../../api/work-items'
 import { useResearchGroup } from '../research-group/useResearchGroup'
 import { useSession } from '../../api/useSession'
 import { CreateMeetingWorkItemDialog } from './CreateMeetingWorkItemDialog'
+
+// The Work Item Inspector is the same shared drawer the Project
+// page uses; keep it out of the initial Meeting bundle.
+const WorkItemDrawer = lazy(() =>
+  import('../projects/WorkItemDrawer').then(
+    (module) => ({
+      default: module.WorkItemDrawer,
+    }),
+  ),
+)
 
 import type {
   ApiMeeting,
@@ -48,7 +67,12 @@ import type {
   ApiMeetingParticipant,
   ApiMeetingSection,
   ApiResearchGroupMember,
+  ApiLinkedWorkItem,
+  ApiProject,
+  ApiProjectWorkItemConfiguration,
+  ApiUpdateWorkItemInput,
   ApiWorkItem,
+  ApiWorkItemType,
 } from '../../api/types'
 import { useSyncResearchGroupContext } from '../research-group/useSyncResearchGroupContext'
 
@@ -472,14 +496,60 @@ export function MeetingDetailPage() {
     pendingDeleteNote,
     setPendingDeleteNote,
   ] = useState<ApiMeetingNote | null>(null)
+  // The exact persisted MeetingNote the Work Item dialog is anchored
+  // to (null for the plain MeetingItem flow).
   const [
-    noteWorkItemDraft,
-    setNoteWorkItemDraft,
-  ] = useState<string | null>(null)
+    noteWorkItemNote,
+    setNoteWorkItemNote,
+  ] = useState<ApiMeetingNote | null>(null)
   const [
-    noteWorkItemProjectId,
-    setNoteWorkItemProjectId,
+    justLinkedNoteId,
+    setJustLinkedNoteId,
   ] = useState<number | null>(null)
+
+  // ── Linked work item inspector (shared WorkItemDrawer) ─────
+  const [
+    inspectorWorkItemId,
+    setInspectorWorkItemId,
+  ] = useState<number | null>(null)
+  const [
+    inspectorItem,
+    setInspectorItem,
+  ] = useState<ApiWorkItem | null>(null)
+  const [
+    inspectorProject,
+    setInspectorProject,
+  ] = useState<ApiProject | null>(null)
+  const [
+    inspectorConfiguration,
+    setInspectorConfiguration,
+  ] = useState<
+    ApiProjectWorkItemConfiguration | null
+  >(null)
+  const [
+    inspectorAssignees,
+    setInspectorAssignees,
+  ] = useState<
+    Array<{
+      id: string
+      name: string
+      initials: string
+    }>
+  >([])
+  const [
+    inspectorParentItems,
+    setInspectorParentItems,
+  ] = useState<
+    Array<{
+      id: string
+      title: string
+      type: ApiWorkItemType
+    }>
+  >([])
+  const [
+    inspectorLoading,
+    setInspectorLoading,
+  ] = useState(false)
   const quickAddInputRef =
     useRef<HTMLInputElement>(null)
 
@@ -1395,49 +1465,122 @@ export function MeetingDetailPage() {
     })()
   }
 
+  // Opens the Work Item dialog anchored to the exact persisted
+  // Note. React batches these updates, so the inline composer (if
+  // open) closes in the same commit that the dialog opens — the two
+  // surfaces never coexist.
   const openNoteWorkItem = (
     item: ApiMeetingItem,
-    content: string,
+    note: ApiMeetingNote,
   ) => {
-    const trimmed = content.trim()
-    if (!trimmed) {
+    setNoteComposerItemId(null)
+    setNoteDraftContent('')
+    setNoteWorkItemNote(note)
+    setWorkItemSource(item)
+  }
+
+  // "Create work item" inside the inline composer: persist the Note
+  // FIRST. Only a successfully persisted Note becomes the Work Item
+  // source; on failure the draft stays in the composer with a local
+  // error and no dialog opens.
+  const submitNoteThenCreateWorkItem = async (
+    item: ApiMeetingItem,
+  ) => {
+    const trimmed = noteDraftContent.trim()
+    if (!trimmed || creatingNoteItemId != null) {
       return
     }
 
-    const firstLine = trimmed
-      .split('\n')
-      .map((line) => line.trim())
-      .find(Boolean) ?? trimmed
+    setCreatingNoteItemId(item.id)
+    setActionError(null)
 
-    // React batches these updates, so the inline composer closes in
-    // the same commit that opens the work item dialog — they never
-    // coexist as active layers.
-    setNoteComposerItemId(null)
-    setNoteDraftContent('')
-    setNoteWorkItemDraft(
-      firstLine.length > 80
-        ? `${firstLine.slice(0, 80)}…`
-        : firstLine,
-    )
-    setNoteWorkItemProjectId(meeting?.projectId ?? null)
-    setWorkItemSource(item)
+    try {
+      const created = await createMeetingNote(
+        item.id,
+        { content: trimmed },
+      )
+
+      updateItemNotes(
+        item.id,
+        [...(item.notes ?? []), created],
+      )
+      openNoteWorkItem(item, created)
+    } catch (error) {
+      // Preserve the draft so the user can retry without re-typing.
+      setActionError(
+        getErrorMessage(
+          error,
+          'Note could not be added.',
+        ),
+      )
+    } finally {
+      setCreatingNoteItemId(null)
+    }
   }
 
   const handleNoteWorkItemCreated = (
     workItem: ApiWorkItem,
+    linkedWorkItem: ApiLinkedWorkItem | null,
   ) => {
-    if (noteWorkItemDraft != null) {
-      setNoteWorkItemDraft(null)
+    const sourceItem = workItemSource
+    const sourceNote = noteWorkItemNote
+    setWorkItemSource(null)
+    setNoteWorkItemNote(null)
+
+    if (sourceItem == null) {
+      return
     }
-    setNoteWorkItemProjectId(null)
-    handleWorkItemCreated(workItem)
+
+    setItems((current) =>
+      current.map((item) =>
+        item.id === sourceItem.id
+          ? {
+              ...item,
+              workItemIds: [
+                ...new Set([
+                  ...item.workItemIds,
+                  workItem.id,
+                ]),
+              ],
+              notes: (item.notes ?? []).map(
+                (note) =>
+                  note.id === sourceNote?.id &&
+                  linkedWorkItem != null
+                    ? {
+                        ...note,
+                        linkedWorkItem,
+                      }
+                    : note,
+              ),
+            }
+          : item,
+      ),
+    )
+
+    if (sourceNote != null) {
+      setJustLinkedNoteId(sourceNote.id)
+    }
   }
 
-  const closeNoteWorkItemDialog = () => {
-    setNoteWorkItemDraft(null)
-    setNoteWorkItemProjectId(null)
+  const closeWorkItemDialog = () => {
+    setNoteWorkItemNote(null)
     setWorkItemSource(null)
   }
+
+  // The short "Work item created" state fades once the linked work
+  // representation is visible.
+  useEffect(() => {
+    if (justLinkedNoteId == null) {
+      return
+    }
+
+    const timeout = setTimeout(
+      () => setJustLinkedNoteId(null),
+      3000,
+    )
+
+    return () => clearTimeout(timeout)
+  }, [justLinkedNoteId])
 
   const handleWorkItemCreated = (
     workItem: ApiWorkItem,
@@ -1465,6 +1608,140 @@ export function MeetingDetailPage() {
       ),
     )
   }
+
+  // ── Linked work item: open the shared Inspector in place ─────
+  // The Inspector opens over the Meeting without navigating away,
+  // so the Meeting context (scroll position, open composer state)
+  // is preserved and closing returns to the same view.
+  const openLinkedWorkInspector = (
+    linked: ApiLinkedWorkItem,
+  ) => {
+    if (inspectorLoading) {
+      return
+    }
+
+    setInspectorWorkItemId(linked.id)
+    setInspectorItem(null)
+    setInspectorProject(null)
+    setInspectorConfiguration(null)
+    setInspectorAssignees([])
+    setInspectorParentItems([])
+    setInspectorLoading(true)
+    setActionError(null)
+
+    void (async () => {
+      try {
+        const [
+          workItem,
+          project,
+          configuration,
+          memberships,
+          projectWorkItems,
+        ] = await Promise.all([
+          getWorkItem(linked.id),
+          getProject(linked.projectId),
+          getProjectWorkItemConfiguration(
+            linked.projectId,
+          ),
+          listProjectMemberships(
+            linked.projectId,
+          ),
+          listProjectWorkItems(
+            linked.projectId,
+          ),
+        ])
+
+        setInspectorItem(workItem)
+        setInspectorProject(project)
+        setInspectorConfiguration(
+          configuration,
+        )
+        setInspectorAssignees(
+          memberships
+            .filter(
+              (membership) =>
+                membership.role ===
+                  'owner' ||
+                membership.role ===
+                  'member',
+            )
+            .map((membership) => {
+              const fullName =
+                [
+                  membership
+                    .user.firstName,
+                  membership
+                    .user.lastName,
+                ]
+                  .filter(Boolean)
+                  .join(' ')
+                  .trim()
+
+              return {
+                id: String(
+                  membership.user.id,
+                ),
+                name:
+                  fullName ||
+                  membership
+                    .user.username,
+                initials:
+                  getInitials(
+                    membership.user,
+                  ),
+              }
+            }),
+        )
+        setInspectorParentItems(
+          projectWorkItems.map(
+            (workItem) => ({
+              id: String(
+                workItem.id,
+              ),
+              title:
+                workItem.title,
+              type:
+                workItem.type ??
+                'task',
+            }),
+          ),
+        )
+      } catch (error) {
+        setActionError(
+          getErrorMessage(
+            error,
+            'Work item could not be opened.',
+          ),
+        )
+        closeLinkedWorkInspector()
+      } finally {
+        setInspectorLoading(false)
+      }
+    })()
+  }
+
+  const closeLinkedWorkInspector = () => {
+    setInspectorWorkItemId(null)
+    setInspectorItem(null)
+    setInspectorProject(null)
+    setInspectorConfiguration(null)
+    setInspectorAssignees([])
+    setInspectorParentItems([])
+  }
+
+  const handleInspectorPatch =
+    async (
+      workItemId: number,
+      patch: ApiUpdateWorkItemInput,
+    ) => {
+      const updated =
+        await updateWorkItem(
+          workItemId,
+          patch,
+        )
+
+      setInspectorItem(updated)
+    }
 
   if (loading) {
     return (
@@ -1523,6 +1800,17 @@ export function MeetingDetailPage() {
   const canPrepare = isUpcoming && canManageLifecycle
   const canEditParticipants =
     canPrepare && !structureEditing
+  // A persisted, unlinked Note may become a Work Item while the
+  // Meeting is Live, and still after it is Completed — as long as
+  // the current user can write the Meeting's scope (any member for
+  // a group Meeting; owner/member for a project Meeting). The
+  // action never edits the Note itself.
+  const canCreateWorkFromNote =
+    !isUpcoming &&
+    (meeting.scope === 'group'
+      ? true
+      : projectRole === 'owner' ||
+        projectRole === 'member')
 
   return (
     <div className="mx-auto w-full max-w-5xl px-6 py-8 lg:px-8 lg:py-10 xl:px-10">
@@ -2256,10 +2544,10 @@ export function MeetingDetailPage() {
                                                   !noteDraftContent.trim()
                                                 }
                                                 onClick={() =>
-                                                  openNoteWorkItem(
-                                                    item,
-                                                    noteDraftContent,
-                                                  )
+                                                  void
+                                                    submitNoteThenCreateWorkItem(
+                                                      item,
+                                                    )
                                                 }
                                                 className="h-8 rounded-lg px-2 text-xs font-medium text-on-surface-variant outline-none transition hover:bg-surface-container-high hover:text-on-surface focus-visible:ring-2 focus-visible:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-45"
                                               >
@@ -2397,25 +2685,95 @@ export function MeetingDetailPage() {
                                                         )}
                                                       </p>
 
-                                                      {isLive && (
-                                                        <div className="mt-0.5 flex items-center justify-end gap-1 opacity-0 transition group-hover/note:opacity-100 focus-within:opacity-100">
-                                                          <button
-                                                            type="button"
-                                                            onClick={() =>
-                                                              openNoteWorkItem(
-                                                                item,
-                                                                note.content,
-                                                              )
-                                                            }
-                                                            aria-label={`Create work item from note: ${note.content}`}
-                                                            title="Create work item"
-                                                            className="rounded-md p-1 text-on-surface-variant/50 outline-none transition hover:bg-surface-container-high hover:text-on-surface-variant focus-visible:text-primary focus-visible:ring-2 focus-visible:ring-primary/40"
-                                                          >
-                                                            <span aria-hidden="true" className="material-symbols-outlined text-[15px]">
-                                                              add_task
-                                                            </span>
-                                                          </button>
+                                                      {/* Linked work:
+                                                          calm, contextual, and
+                                                          directly at the exact
+                                                          source Note. */}
+                                                      {(() => {
+                                                        const linked =
+                                                          note.linkedWorkItem
 
+                                                        if (
+                                                          linked ==
+                                                          null
+                                                        ) {
+                                                          return null
+                                                        }
+
+                                                        return (
+                                                          <div className="mt-1.5 rounded-lg border border-outline-variant/70 bg-surface-container-low/60 px-2.5 py-2">
+                                                            <p className="text-[11px] font-medium text-on-surface-variant">
+                                                              Linked work
+                                                            </p>
+
+                                                            <button
+                                                              type="button"
+                                                              onClick={() =>
+                                                                openLinkedWorkInspector(
+                                                                  linked,
+                                                                )
+                                                              }
+                                                              aria-label={`Open linked work item: ${linked.title}`}
+                                                              className="mt-1 flex w-full items-start gap-2 rounded-md text-left outline-none transition hover:bg-surface-container-high/60 focus-visible:ring-2 focus-visible:ring-primary/40"
+                                                            >
+                                                              <span aria-hidden="true" className="material-symbols-outlined mt-px text-[16px] text-on-surface-variant">
+                                                                check_box_outline_blank
+                                                              </span>
+
+                                                              <span className="min-w-0 flex-1">
+                                                                <span className="block truncate text-sm text-on-surface">
+                                                                  {linked.title}
+                                                                </span>
+
+                                                                <span className="block truncate text-[11px] text-on-surface-variant">
+                                                                  {linked.projectName}
+                                                                  {' · '}
+                                                                  {linked.assigneeNames.length > 0
+                                                                    ? linked.assigneeNames.join(', ')
+                                                                    : 'Unassigned'}
+                                                                  {' · '}
+                                                                  {linked.statusName}
+                                                                </span>
+                                                              </span>
+                                                            </button>
+
+                                                            {justLinkedNoteId ===
+                                                            note.id && (
+                                                              <p role="status" className="mt-1 text-[11px] font-medium text-primary">
+                                                                Work item created
+                                                              </p>
+                                                            )}
+                                                          </div>
+                                                        )
+                                                      })()}
+
+                                                      {(isLive ||
+                                                      (canCreateWorkFromNote &&
+                                                      note.linkedWorkItem ==
+                                                      null)) && (
+                                                        <div className="mt-0.5 flex items-center justify-end gap-1 opacity-0 transition group-hover/note:opacity-100 focus-within:opacity-100">
+                                                          {canCreateWorkFromNote &&
+                                                          note.linkedWorkItem ==
+                                                            null && (
+                                                            <button
+                                                              type="button"
+                                                              onClick={() =>
+                                                                openNoteWorkItem(
+                                                                  item,
+                                                                  note,
+                                                                )
+                                                              }
+                                                              aria-label={`Create work item from note: ${note.content}`}
+                                                              title="Create work item"
+                                                              className="rounded-md p-1 text-on-surface-variant/50 outline-none transition hover:bg-surface-container-high hover:text-on-surface-variant focus-visible:text-primary focus-visible:ring-2 focus-visible:ring-primary/40"
+                                                            >
+                                                              <span aria-hidden="true" className="material-symbols-outlined text-[15px]">
+                                                                add_task
+                                                              </span>
+                                                            </button>
+                                                          )}
+
+                                                          {isLive && (
                                                           <MenuTrigger
                                                             label={`Note actions for ${note.content}`}
                                                           >
@@ -2455,6 +2813,7 @@ export function MeetingDetailPage() {
                                                               </>
                                                             )}
                                                           </MenuTrigger>
+                                                          )}
                                                         </div>
                                                       )}
                                                     </>
@@ -2819,28 +3178,80 @@ export function MeetingDetailPage() {
         open={workItemSource != null}
         researchGroupId={meeting.researchGroupId}
         meetingItem={workItemSource}
-        defaultProjectId={noteWorkItemProjectId}
-        initialTitle={noteWorkItemDraft ?? ''}
-        initialDescription={
-          noteWorkItemDraft != null
-            ? workItemSource
-              ? (workItemSource.notes ?? []).map(
-                  (note) => note.content,
-                ).join('\n\n')
-              : ''
-            : ''
+        defaultProjectId={
+          meeting.projectId ?? null
         }
+        sourceNote={noteWorkItemNote}
         onClose={
-          noteWorkItemDraft != null
-            ? closeNoteWorkItemDialog
-            : () => setWorkItemSource(null)
+          closeWorkItemDialog
         }
         onCreated={
-          noteWorkItemDraft != null
+          noteWorkItemNote != null
             ? handleNoteWorkItemCreated
             : handleWorkItemCreated
         }
       />
+
+      {/* Shared Work Item Inspector, opened in place over the
+          Meeting (no navigation, context preserved). */}
+      {inspectorWorkItemId != null && (
+        inspectorItem != null &&
+        !inspectorLoading ? (
+          <Suspense fallback={null}>
+            <WorkItemDrawer
+              open={true}
+              mode="edit"
+              projectName={
+                inspectorProject
+                  ?.name ??
+                ''
+              }
+              item={inspectorItem}
+              readOnly={
+                inspectorProject
+                  ?.currentUserRole ===
+                'viewer'
+              }
+              currentUserId={
+                user ? user.id : null
+              }
+              workItemConfiguration={
+                inspectorConfiguration
+              }
+              assignees={
+                inspectorAssignees
+              }
+              parentItems={
+                inspectorParentItems
+              }
+              onClose={
+                closeLinkedWorkInspector
+              }
+              onCreate={
+                async () => {
+                  // Creation is handled by the dialog; the
+                  // Inspector opened from a Meeting is edit-only.
+                  throw new Error(
+                    'Create is not available here.',
+                  )
+                }
+              }
+              onPatch={
+                handleInspectorPatch
+              }
+            />
+          </Suspense>
+        ) : (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
+            <div className="flex items-center gap-2 rounded-xl border border-outline-variant bg-surface-container-lowest px-5 py-4 text-sm text-on-surface-variant shadow-xl">
+              <span aria-hidden="true" className="material-symbols-outlined animate-spin text-[18px]">
+                refresh
+              </span>
+              Opening work item…
+            </div>
+          </div>
+        )
+      )}
     </div>
   )
 }

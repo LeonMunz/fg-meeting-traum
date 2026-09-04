@@ -316,7 +316,15 @@ class MeetingNote(models.Model):
 
 
 class MeetingItemWorkItem(models.Model):
-    """Historical link from a Meeting item to a canonical WorkItem."""
+    """Historical link from a Meeting item to a canonical WorkItem.
+
+    When the WorkItem was created from a persisted MeetingNote, the
+    link also records that exact Note (``meeting_note``), giving
+    canonical Meeting -> MeetingItem -> MeetingNote -> WorkItem
+    traceability. A Note has at most one primary WorkItem, enforced
+    by the ``meeting_note`` unique constraint; links without a Note
+    (plain MeetingItem origin) are unaffected.
+    """
 
     meeting_item = models.ForeignKey(
         MeetingItem,
@@ -327,6 +335,13 @@ class MeetingItemWorkItem(models.Model):
         WorkItem,
         on_delete=models.CASCADE,
         related_name="meeting_item_relations",
+    )
+    meeting_note = models.ForeignKey(
+        MeetingNote,
+        on_delete=models.CASCADE,
+        related_name="work_item_relations",
+        null=True,
+        blank=True,
     )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -341,7 +356,11 @@ class MeetingItemWorkItem(models.Model):
             models.UniqueConstraint(
                 fields=["meeting_item", "work_item"],
                 name="meetings_item_work_item_unique_pair",
-            )
+            ),
+            models.UniqueConstraint(
+                fields=["meeting_note"],
+                name="meetings_item_work_item_unique_note",
+            ),
         ]
 
     def __str__(self):

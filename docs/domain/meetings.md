@@ -1336,8 +1336,9 @@ Work Item     ->  canonical Project work (Project Board, My Work, etc.).
 ```
 
 A Meeting Note never has a Project, status, or assignment. A separate
-`MeetingItem -> WorkItem` relation (Section 33) is the only link to durable
-project work.
+`MeetingItem -> WorkItem` relation (Sections 33/34) is the only link to
+durable project work. A Note may have exactly one **primary** WorkItem
+created from it (MVP), recorded on that same relation (Section 34).
 
 ### Model
 
@@ -1361,6 +1362,9 @@ MeetingNote
 - Deleting a `MeetingItem` or its `Meeting` removes owned Notes (CASCADE).
 - Deleting a Note removes only the Note: the `MeetingItem`, the `Meeting`,
   and any linked Work Items are untouched.
+- Deleting a Note whose primary WorkItem exists removes only the Note and
+  the link row; the WorkItem is untouched (and vice versa: deleting the
+  WorkItem leaves the Note).
 - Notes are occurrence-specific: a Note belongs to the concrete Meeting
   occurrence, never to the Meeting Template.
 
@@ -1374,6 +1378,33 @@ Completed  ->  persisted Notes visible under their original Agenda Item as
 ```
 
 A Completed Meeting's Notes must survive a page reload.
+
+### Creating work from a Note (implemented)
+
+The live composer's `Create work item` action first **persists the
+Note**. Only if persistence succeeds does the Work Item creation UI open,
+anchored to that exact persisted Note; on failure the draft is preserved
+and no (unpersisted) source relation is implied. The inline composer and
+the Work Item creation UI are never open simultaneously.
+
+A persisted Note without a primary WorkItem offers a quiet contextual
+`Create work item` that operates on **only that Note** — never on all
+Notes of the Agenda Item and never on `contextNotes`. This remains
+available for an unlinked Note of a Completed Meeting when the current
+user can write the Meeting's scope; the action never edits the Note.
+
+Once a Note has its primary WorkItem, the `Create work item` action for
+that Note disappears and is replaced by the **Linked work**
+representation rendered directly at the source Note (calm, contextual,
+canonical data: title, Project, assignees, status). Clicking it opens the
+existing Work Item Inspector in place — no navigation, Meeting context
+preserved.
+
+**One primary WorkItem per Note (MVP).** Uniqueness is enforced by the
+database (unique constraint on the link) and re-checked in the creation
+transaction, so repeated or concurrent requests cannot create a second
+primary WorkItem for the same Note. "+ Add another work item" is not part
+of the MVP.
 
 ### Authoring authorization
 
@@ -1400,8 +1431,11 @@ Notes are also embedded in `GET /api/meetings/{id}/items/` (each item's
 
 A Work Item created from a Meeting is **canonical Project work** — the same object shown in the Project Board, Project List, and My Work. A Meeting is not an alternative Work Item store.
 
-Central flow:
+Creation works from a MeetingItem (the agenda flow) or from the exact
+persisted MeetingNote of that item (the Note flow, Section 32a). Both use
+the same canonical Work Item service and the same target-Project rules.
 
+Central flow:
 ```text
 MeetingItem
     ↓
@@ -1417,6 +1451,28 @@ Due date optional
     ↓
 Create
 ```
+
+### Prefill from the exact Note
+
+Description is the full MeetingNote content. Title is a deterministic,
+concise suggestion (first meaningful line, capped); no LLM or external
+API. The user may edit every field before creation.
+
+### Project selection
+
+- **Project Meeting**: the Meeting's Project is preselected when it is
+  writable by the current user.
+- **Research Group Meeting**: NO Project is silently preselected; the
+  Project starts unselected and the user must explicitly choose one.
+- Only Projects where the current user may create Work Items
+  (owner/member, not archived) are offered.
+- Changing the Project reloads its Type/Status/Label definitions and
+  clears selections that are invalid in the new Project; canonical
+  defaults (e.g. the Project's default Status) apply only where the
+  domain defines them.
+- The server validates every submitted Definition ID against the selected
+  Project (same-Project configuration invariant); frontend validation is
+  not authoritative.
 
 ### Live Quick Create
 
@@ -1462,25 +1518,36 @@ Do not invent a type mapping if the Project configuration cannot provide one.
 ## 34. Work Item origin (implemented)
 
 Creating a Work Item from a MeetingItem records the origin in a
-`MeetingItemWorkItem` link table:
+`MeetingItemWorkItem` link table. When the Work Item was created from a
+persisted MeetingNote, the same link also records that exact Note:
 
 ```text
 MeetingItemWorkItem
 
 meeting_item_id
 work_item_id
+meeting_note_id      (nullable)
 created_by_id
 created_at
 ```
 
 Constraint: `UNIQUE(meeting_item_id, work_item_id)`.
+Constraint: `UNIQUE(meeting_note_id)` — one primary WorkItem per Note.
 
 Meaning:
 
 > This Work Item was created from this concrete MeetingItem.
+> When `meeting_note_id` is set: this Work Item is the primary WorkItem
+> of this concrete MeetingNote (Meeting → MeetingItem → MeetingNote →
+> WorkItem).
 
 This relation is historical provenance.
 
+The Work Item detail/list API exposes the resolved source as
+`meetingOrigin` (Meeting, Agenda item title, source Note content) to
+users who can read that Meeting, and the Meeting items list exposes the
+Note's primary WorkItem as `linkedWorkItem` to users who can read its
+Project. Neither field leaks objects across those boundaries.
 ---
 
 ## 35. Later Work Item discussions
