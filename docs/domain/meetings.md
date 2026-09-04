@@ -801,13 +801,50 @@ updated_at
 
 ```ts
 type MeetingItemStatus =
-  | "open"
-  | "discussed"
+  | "not_discussed"
+  | "discussing"
+  | "done"
+  | "follow_up"
 ```
 
-The current model uses a simple open/discussed status, not the richer
-`not_discussed / discussing / done / follow_up` lifecycle from the product
-concept.
+The canonical Live MeetingItem state machine is implemented:
+
+- **At most one `discussing` item per Meeting** (enforced by a
+  database conditional uniqueness constraint plus transactional
+  server-side logic).
+- **The current item is derived** from
+  `status === "discussing"`. There is no
+  `Meeting.currentMeetingItemId` column.
+- **Focus is navigation, not completion.** Focusing a
+  `not_discussed` item makes it `discussing` and returns the
+  previously `discussing` item to `not_discussed`; it never
+  completes the previous item.
+- **Done / Follow-up advance deterministically.** Closing the
+  current item (`done` or `follow_up`) advances to the next
+  `not_discussed` item **after** the resolved item in canonical
+  agenda order (`Section.position`, then `MeetingItem.position`,
+  spanning section boundaries), wrapping once to the beginning if
+  no open item exists after it. `done` / `follow_up` items are
+  never selected, and the resolved item is never reselected; when
+  no `not_discussed` items remain, the Meeting has no current
+  item.
+- **Start** (`upcoming -> live`) selects the first `not_discussed`
+  item in canonical agenda order as the current item; a Meeting
+  without items goes Live with no current item.
+- **End** (`live -> completed`) is rejected while any item is
+  `discussing` and never auto-completes an item; `not_discussed`
+  items may remain when the Meeting ends.
+- **Reopen** (`completed -> live`) preserves `started_at`, clears
+  `ended_at`, and — if no current item exists and `not_discussed`
+  items remain — makes the first of them the current item.
+  `done` / `follow_up` items are never changed.
+
+Status mutations only happen through the explicit domain actions
+(`start`, `focus`, `done`, `follow-up`, `end`, `reopen`); the
+generic MeetingItem PATCH rejects `status`.
+
+A legacy data migration maps the former statuses:
+`open -> not_discussed`, `discussed -> done`.
 
 ### Intended but not yet implemented
 
@@ -818,7 +855,8 @@ in the current model:
 - `origin` (`planned / spontaneous`),
 - `decision_markdown`,
 - a linked `Topic`,
-- `follow_up` / carry-forward state.
+- durable follow-up carry-forward (the `follow_up` status exists;
+  carry-forward is not yet an action).
 
 Creating an item requires only a title (plus its Section).
 

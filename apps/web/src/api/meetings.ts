@@ -163,6 +163,33 @@ export async function updateMeetingItem(
   )
 }
 
+export async function focusMeetingItem(
+  meetingItemId: number,
+): Promise<ApiMeetingItem> {
+  return apiPost<ApiMeetingItem>(
+    `/api/meeting-items/${meetingItemId}/focus`,
+    {},
+  )
+}
+
+export async function markMeetingItemDone(
+  meetingItemId: number,
+): Promise<ApiMeetingItem> {
+  return apiPost<ApiMeetingItem>(
+    `/api/meeting-items/${meetingItemId}/done`,
+    {},
+  )
+}
+
+export async function markMeetingItemFollowUp(
+  meetingItemId: number,
+): Promise<ApiMeetingItem> {
+  return apiPost<ApiMeetingItem>(
+    `/api/meeting-items/${meetingItemId}/follow-up`,
+    {},
+  )
+}
+
 export async function createWorkItemFromMeetingItem(
   meetingItemId: number,
   input: ApiCreateMeetingWorkItemInput,

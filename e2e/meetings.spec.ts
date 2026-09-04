@@ -19,41 +19,49 @@ export async function quickAddAgendaItem(
   title: string,
   sectionName = 'Agenda',
 ) {
-  const section = page.locator('section[aria-label]').filter({
-    has: page.getByRole('heading', {
-      name: sectionName,
-      exact: true,
-    }),
-  })
+  // The Meeting Section's accessible name is the section heading
+  // text; scoping by the exact section text targets that one
+  // section (no other element carries the section name).
+  const section = page
+    .locator('section')
+    .filter({ hasText: sectionName })
 
-  // The quick-add trigger is the '+ Add item' / 'Add first item'
-  // button inside the section (label depends on whether it is empty).
-  // Exact match avoids the section menu's icon-only button.
+  const input = page.getByLabel(`Add item to ${sectionName}`)
+
+  // The inline composer stays open after a successful submit (its
+  // input is cleared for the next item). If it is already open for
+  // this exact section, reuse it; otherwise open it via the
+  // 'Add item' / 'Add first item' trigger (the trigger is hidden
+  // while the composer is open).
   const addButton = section
     .getByRole('button', { name: 'Add item', exact: true })
-    .or(section.getByRole('button', { name: 'Add first item', exact: true }))
+    .or(
+      section.getByRole('button', {
+        name: 'Add first item',
+        exact: true,
+      }),
+    )
 
-  const input = page.getByLabel(
-    `Add item to ${sectionName}`,
-  )
-
-  await addButton.scrollIntoViewIfNeeded()
-
-  await addButton.click()
-
-  await input.waitFor({ state: 'visible' })
+  if (await input.isVisible().catch(() => false)) {
+    // Composer already open: use it directly.
+  } else {
+    await addButton.scrollIntoViewIfNeeded()
+    await addButton.click()
+    await input.waitFor({ state: 'visible' })
+  }
 
   await input.fill(title)
 
   // The quick-add form's submit is 'Add'; scope it to the form so the
   // participant panel's separate 'Add' button is never matched.
-  await page
-    .locator('[data-quick-add-form]')
-    .getByRole('button', {
-      name: 'Add',
-      exact: true,
-    })
+  await section
+    .getByRole('button', { name: 'Add', exact: true })
     .click()
+
+  // The newly created item title is visible inside this section.
+  await expect(
+    section.getByText(title, { exact: true }),
+  ).toBeVisible()
 }
 
 const MEETING_TITLE =
@@ -276,17 +284,22 @@ test(
       page.getByRole('button', { name: 'End meeting' }),
     ).toBeVisible()
 
-    // Discussing happens in the live state (the redesigned
-    // Meeting Detail only exposes the discussed toggle while
-    // live).
+    // On Start the single item becomes the current (discussing)
+    // item. Close it with the canonical Done action.
+    await expect(
+      agendaItem.getByRole('button', {
+        name: `Mark ${AGENDA_TITLE} as done`,
+      }),
+    ).toBeVisible()
+
     await agendaItem
       .getByRole('button', {
-        name: `Mark ${AGENDA_TITLE} as discussed`,
+        name: `Mark ${AGENDA_TITLE} as done`,
       })
       .click()
 
     await expect(
-      agendaItem.locator('span', { hasText: 'Discussed' }).last(),
+      agendaItem.locator('span', { hasText: 'Done' }).last(),
     ).toBeVisible()
 
     // --------------------------------------------------------
@@ -325,7 +338,7 @@ test(
         })
 
     await expect(
-      persistedAgendaItem.locator('span', { hasText: 'Discussed' }).last(),
+      persistedAgendaItem.locator('span', { hasText: 'Done' }).last(),
     ).toBeVisible()
 
     await expect(
@@ -1577,8 +1590,28 @@ test(
     ).toHaveCount(0)
 
     // --------------------------------------------------------
-    // 8. End the Meeting.
+    // 8. Resolve the current (discussing) item, then End.
+    //    The canonical End action rejects while an item is still
+    //    discussing, so the item is explicitly marked done.
     // --------------------------------------------------------
+
+    const noteAgendaItem = page
+      .locator('li')
+      .filter({
+        has: page.getByText(NOTE_AGENDA_TITLE, {
+          exact: true,
+        }),
+      })
+
+    await noteAgendaItem
+      .getByRole('button', {
+        name: `Mark ${NOTE_AGENDA_TITLE} as done`,
+      })
+      .click()
+
+    await expect(
+      noteAgendaItem.locator('span', { hasText: 'Done' }).last(),
+    ).toBeVisible()
 
     await page
       .getByRole('button', {
@@ -1985,9 +2018,28 @@ test(
     )
 
     // --------------------------------------------------------
-    // Complete the Meeting: linked work stays visible,
-    // Notes remain read-only.
+    // Complete the Meeting: the current item is explicitly
+    // resolved (canonical End rejects while discussing), linked
+    // work stays visible, Notes remain read-only.
     // --------------------------------------------------------
+
+    const doneAgendaItem = page
+      .locator('li')
+      .filter({
+        has: page.getByText(agendaTitle, {
+          exact: true,
+        }),
+      })
+
+    await doneAgendaItem
+      .getByRole('button', {
+        name: `Mark ${agendaTitle} as done`,
+      })
+      .click()
+
+    await expect(
+      doneAgendaItem.locator('span', { hasText: 'Done' }).last(),
+    ).toBeVisible()
 
     await page
       .getByRole('button', {
@@ -2381,5 +2433,212 @@ test(
         exact: true,
       }),
     ).toBeVisible()
+  },
+)
+
+test(
+  'Live MeetingItem state machine end-to-end flow',
+  async ({ page }) => {
+    // --------------------------------------------------------
+    // Alex creates a real Meeting with 3 agenda items.
+    // --------------------------------------------------------
+
+    await login(page, 'alex')
+
+    await page
+      .getByRole('link', {
+        name: /Meetings/,
+      })
+      .click()
+
+    await page
+      .getByRole('button', {
+        name: /New meeting/,
+      })
+      .click()
+
+    await page
+      .getByLabel('Title')
+      .fill('E2E Live State Machine')
+
+    await page
+      .getByLabel('Date and time')
+      .fill('2030-02-03T09:00')
+
+    await page
+      .locator('form')
+      .getByRole('button', {
+        name: /Create meeting/,
+      })
+      .click()
+
+    await expect(
+      page.getByText('E2E Live State Machine', { exact: true }),
+    ).toBeVisible()
+
+    const meetingRow = page
+      .getByRole('button')
+      .filter({ hasText: 'E2E Live State Machine' })
+    await meetingRow.click()
+
+    await expect(page).toHaveURL(/\/meetings\/\d+$/)
+
+    // Add 3 agenda items.
+    const titles = ['Alpha', 'Beta', 'Gamma']
+    for (const title of titles) {
+      await quickAddAgendaItem(page, title)
+      await expect(
+        page.getByText(title, { exact: true }),
+      ).toBeVisible()
+    }
+
+    const item = (title: string) =>
+      page
+        .locator('li')
+        .filter({
+          has: page.getByText(title, { exact: true }),
+        })
+
+    // --------------------------------------------------------
+    // Start: the first item becomes current (discussing).
+    // --------------------------------------------------------
+
+    await page
+      .getByRole('button', { name: 'Start meeting' })
+      .click()
+
+    await expect(
+      page.getByRole('button', { name: 'End meeting' }),
+    ).toBeVisible()
+
+    await expect(
+      item('Alpha')
+        .getByRole('button', { name: 'Mark Alpha as done' }),
+    ).toBeVisible()
+    await expect(
+      item('Alpha').locator('span', { hasText: 'Current' }).last(),
+    ).toBeVisible()
+
+    // --------------------------------------------------------
+    // Focus the second item (Beta).
+    // --------------------------------------------------------
+
+    await item('Beta')
+      .getByRole('button', { name: 'Focus Beta' })
+      .click()
+
+    await expect(
+      item('Beta').locator('span', { hasText: 'Current' }).last(),
+    ).toBeVisible()
+    await expect(
+      item('Alpha')
+        .getByRole('button', { name: 'Focus Alpha' }),
+    ).toBeVisible()
+
+    // --------------------------------------------------------
+    // Done Beta -> next (Gamma) becomes current.
+    // --------------------------------------------------------
+
+    await item('Beta')
+      .getByRole('button', { name: 'Mark Beta as done' })
+      .click()
+
+    await expect(
+      item('Beta').locator('span', { hasText: 'Done' }).last(),
+    ).toBeVisible()
+    await expect(
+      item('Gamma').locator('span', { hasText: 'Current' }).last(),
+    ).toBeVisible()
+
+    // --------------------------------------------------------
+    // Follow up Gamma -> Gamma follow_up; the only remaining
+    // not_discussed item (Alpha) becomes current.
+    // --------------------------------------------------------
+
+    await item('Gamma')
+      .getByRole('button', { name: 'Mark Gamma as follow-up' })
+      .click()
+
+    await expect(
+      item('Gamma').locator('span', { hasText: 'Follow-up' }).last(),
+    ).toBeVisible()
+    await expect(
+      item('Alpha').locator('span', { hasText: 'Current' }).last(),
+    ).toBeVisible()
+
+    // --------------------------------------------------------
+    // Reload proves persistence of all item states: Alpha is
+    // already current, Beta stays done, Gamma stays follow-up.
+    // --------------------------------------------------------
+
+    await page.reload()
+
+    await expect(
+      item('Alpha').locator('span', { hasText: 'Current' }).last(),
+    ).toBeVisible()
+    await expect(
+      item('Beta').locator('span', { hasText: 'Done' }).last(),
+    ).toBeVisible()
+    await expect(
+      item('Gamma').locator('span', { hasText: 'Follow-up' }).last(),
+    ).toBeVisible()
+
+    // --------------------------------------------------------
+    // End is rejected while a current item exists: with Alpha
+    // still current, End must fail and the Meeting stays live.
+    // --------------------------------------------------------
+
+    await page
+      .getByRole('button', { name: 'End meeting' })
+      .click()
+
+    // The End action is rejected visibly; the Meeting stays live
+    // with the current item still discussing.
+    await expect(
+      page.getByRole('alert'),
+    ).toBeVisible()
+    await expect(
+      page.getByRole('button', { name: 'End meeting' }),
+    ).toBeVisible()
+    await expect(
+      item('Alpha').locator('span', { hasText: 'Current' }).last(),
+    ).toBeVisible()
+    await expect(
+      page.getByRole('button', { name: 'Start meeting' }),
+    ).toBeHidden()
+
+    // --------------------------------------------------------
+    // Finish the final current item, then End succeeds.
+    // --------------------------------------------------------
+
+    await item('Alpha')
+      .getByRole('button', { name: 'Mark Alpha as done' })
+      .click()
+
+    await expect(
+      item('Alpha').locator('span', { hasText: 'Done' }).last(),
+    ).toBeVisible()
+    await expect(
+      item('Alpha').locator('span', { hasText: 'Current' }).last(),
+    ).toHaveCount(0)
+    await expect(
+      page
+        .locator('li')
+        .getByRole('span', { name: 'Current', exact: true }),
+    ).toHaveCount(0)
+
+    await page
+      .getByRole('button', { name: 'End meeting' })
+      .click()
+
+    await expect(
+      page.getByRole('button', { name: 'Reopen meeting' }),
+    ).toBeVisible()
+
+    // Canonical completed-state signal: the live lifecycle
+    // control is gone, while the Completed action replaces it.
+    await expect(
+      page.getByRole('button', { name: 'End meeting' }),
+    ).toBeHidden()
   },
 )

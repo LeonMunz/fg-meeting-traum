@@ -234,8 +234,10 @@ class MeetingItem(models.Model):
     """One ordered discussion / agenda item inside a Meeting."""
 
     class Status(models.TextChoices):
-        OPEN = "open", "Open"
-        DISCUSSED = "discussed", "Discussed"
+        NOT_DISCUSSED = "not_discussed", "Not discussed"
+        DISCUSSING = "discussing", "Discussing"
+        DONE = "done", "Done"
+        FOLLOW_UP = "follow_up", "Follow-up"
 
     meeting = models.ForeignKey(
         Meeting,
@@ -253,7 +255,7 @@ class MeetingItem(models.Model):
     status = models.CharField(
         max_length=16,
         choices=Status.choices,
-        default=Status.OPEN,
+        default=Status.NOT_DISCUSSED,
     )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -270,7 +272,12 @@ class MeetingItem(models.Model):
             models.UniqueConstraint(
                 fields=["meeting_section", "position"],
                 name="meetings_item_unique_section_position",
-            )
+            ),
+            models.UniqueConstraint(
+                condition=models.Q(status="discussing"),
+                fields=["meeting"],
+                name="meetings_item_single_discussing_per_meeting",
+            ),
         ]
 
     def __str__(self):

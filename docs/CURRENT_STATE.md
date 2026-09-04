@@ -58,6 +58,7 @@ Markers:
 - **IMPLEMENTED** — standalone Meetings get a real default `Agenda` Section.
 - **IMPLEMENTED** — MeetingItems belong to exactly one MeetingSection (NOT NULL).
 - **IMPLEMENTED** — lifecycle `upcoming → live → completed` with explicit Start / End / Reopen actions; `started_at` / `ended_at` set by the server.
+- **IMPLEMENTED** — canonical Live MeetingItem state machine: statuses `not_discussed` / `discussing` / `done` / `follow_up`; at most one `discussing` item per Meeting (conditional unique constraint + transactional logic); current item derived from `status === "discussing"` (no `Meeting.currentMeetingItemId`). Explicit actions `POST /api/meeting-items/{id}/focus|done|follow-up` (Live-only; Focus is navigation, Done/Follow-up advance to the next `not_discussed` item after the resolved item in `Section.position`, `MeetingItem.position` order, wrapping once to the beginning). Start selects the first `not_discussed` item; End is rejected while any item is `discussing` and never auto-completes; Reopen may focus the first remaining `not_discussed` item. Generic MeetingItem PATCH rejects `status`. Legacy data migration maps `open -> not_discussed`, `discussed -> done` (meetings migrations 0009/0010).
 - **IMPLEMENTED** — Meeting participants (relational, scope-authorized); creator auto-added.
 - **IMPLEMENTED** — Meeting deletion: `DELETE /api/meetings/{id}/` permanently removes one occurrence and its Meeting-owned Sections, Items, Participants, and Work Item origin links. Server-side scoped write authorization (group admin / project owner+member, archived read-only). Canonical Work Items, Meeting Templates, and sibling occurrences are never deleted.
 - **IMPLEMENTED** — occurrence Section editing: add / rename / edit / hide / reorder (one-off Sections never touch the Template).
@@ -96,9 +97,9 @@ Markers:
 These appear in `docs/domain/meetings.md` as intended product direction but are **NOT IMPLEMENTED** in the current code:
 
 - `Topic` (durable cross-Meeting discussion subject).
-- `MeetingItem` `intent` (`inform`/`discuss`/`decide`), `origin` (`planned`/`spontaneous`), `decision_markdown`, and the `not_discussed`/`discussing`/`done`/`follow_up` item states (implemented state is `open`/`discussed`).
+- `MeetingItem` `intent` (`inform`/`discuss`/`decide`), `origin` (`planned`/`spontaneous`), `decision_markdown`. (The `not_discussed`/`discussing`/`done`/`follow_up` item states ARE implemented; see above.)
 - The richer `NoteEntry` Markdown entry stream (rich editor) and `inform` acknowledgements. Basic persistent Meeting Notes (attribution, add/edit/delete) ARE implemented; see `docs/domain/meetings.md` §32a.
-- Follow-up / carry-forward and the richer live-meeting ceremony.
+- Durable follow-up carry-forward (the `follow_up` status exists; carry-forward as an action is not implemented) and the richer live-meeting ceremony (Agenda | Current Item UI).
 - Moderator and moderator rotation.
 - Template default participants.
 - A separate Work Item **discussion** link (distinct from the origin link).

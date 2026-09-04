@@ -323,8 +323,10 @@ export interface ApiAddMeetingParticipantInput {
 }
 
 export type ApiMeetingItemStatus =
-  | 'open'
-  | 'discussed'
+  | 'not_discussed'
+  | 'discussing'
+  | 'done'
+  | 'follow_up'
 
 export interface ApiMeetingNoteAuthor {
   id: number
@@ -378,7 +380,6 @@ export interface ApiCreateMeetingItemInput {
 export interface ApiUpdateMeetingItemInput {
   title?: string
   notes?: string
-  status?: ApiMeetingItemStatus
 }
 
 export interface ApiWorkItemTypeDefinition {

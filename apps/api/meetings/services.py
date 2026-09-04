@@ -123,6 +123,43 @@ def _require_scoped_write_access(
         )
 
 
+def _require_live_meeting(*, meeting):
+    if meeting.status != Meeting.Status.LIVE:
+        raise MeetingDomainError(
+            "This action is only available during a Live Meeting."
+        )
+
+
+def _ordered_not_discussed_items(*, meeting):
+    """Items in canonical agenda order: Section.position, then item
+    position (item position is unique within a section), then id."""
+    return (
+        MeetingItem.objects
+        .filter(
+            meeting=meeting,
+            status=MeetingItem.Status.NOT_DISCUSSED,
+        )
+        .select_related("meeting_section")
+        .order_by(
+            "meeting_section__position",
+            "meeting_section__id",
+            "position",
+            "id",
+        )
+    )
+
+
+def _select_first_not_discussed_for_meeting(*, meeting):
+    first = _ordered_not_discussed_items(meeting=meeting).first()
+    if first is None:
+        return None
+
+    first.status = MeetingItem.Status.DISCUSSING
+    first.save(update_fields=["status", "updated_at"])
+    return first
+
+
+
 def _require_series_write_access(*, meeting_series, user):
     _require_scoped_write_access(
         research_group=meeting_series.research_group,
@@ -735,6 +772,11 @@ def start_meeting(*, meeting, actor):
     meeting.started_at = timezone.now()
     meeting.save(update_fields=["status", "started_at", "updated_at"])
 
+    # The first not_discussed item in canonical agenda order becomes
+    # the current item. A Meeting without items goes Live with no
+    # current item.
+    _select_first_not_discussed_for_meeting(meeting=meeting)
+
     return meeting
 
 
@@ -755,6 +797,15 @@ def end_meeting(*, meeting, actor):
     if meeting.status != Meeting.Status.LIVE:
         raise MeetingDomainError(
             "Only a live Meeting can be ended."
+        )
+
+    if MeetingItem.objects.filter(
+        meeting=meeting,
+        status=MeetingItem.Status.DISCUSSING,
+    ).exists():
+        raise MeetingDomainError(
+            "A Live Meeting cannot be ended while an item is "
+            "still being discussed."
         )
 
     meeting.status = Meeting.Status.COMPLETED
@@ -787,6 +838,20 @@ def reopen_meeting(*, meeting, actor):
     meeting.status = Meeting.Status.LIVE
     meeting.ended_at = None
     meeting.save(update_fields=["status", "ended_at", "updated_at"])
+
+    # If no current item remains and not_discussed items are left,
+    # the first one in canonical agenda order becomes the current
+    # item. done / follow_up items are never changed.
+    current = (
+        MeetingItem.objects
+        .filter(
+            meeting=meeting,
+            status=MeetingItem.Status.DISCUSSING,
+        )
+        .exists()
+    )
+    if not current:
+        _select_first_not_discussed_for_meeting(meeting=meeting)
 
     return meeting
 
@@ -830,8 +895,14 @@ def update_meeting_item(
     actor,
     title=None,
     notes=None,
-    status=None,
 ):
+    """Update only the free-form MeetingItem fields.
+
+    Status transitions are exclusively driven by the canonical
+    domain actions (start / focus / done / follow-up / reopen);
+    a generic PATCH must never bypass the Live MeetingItem state
+    machine, so ``status`` is not an accepted field here.
+    """
     _require_meeting_write_access(meeting=meeting_item.meeting, user=actor)
 
     update_fields = []
@@ -849,14 +920,6 @@ def update_meeting_item(
         meeting_item.notes = notes.strip()
         update_fields.append("notes")
 
-    if status is not None:
-        if status not in MeetingItem.Status.values:
-            raise MeetingDomainError(
-                "Invalid Meeting item status."
-            )
-        meeting_item.status = status
-        update_fields.append("status")
-
     if update_fields:
         update_fields.append("updated_at")
         meeting_item.save(
@@ -864,6 +927,218 @@ def update_meeting_item(
         )
 
     return meeting_item
+
+
+# ── Live MeetingItem state machine ───────────────────────────────
+
+
+@transaction.atomic
+def focus_meeting_item(*, meeting_item, actor):
+    """Make one not_discussed item the current item of a Live Meeting.
+
+    Only valid while the Meeting is Live and the selected item is
+    ``not_discussed``. The previously discussing item (if any)
+    returns to ``not_discussed``; the selected item becomes
+    ``discussing``. Focusing is navigation: it never implies the
+    previous item was completed. At most one item is discussing per
+    Meeting, enforced transactionally and by the database
+    conditional uniqueness constraint.
+    """
+    meeting = meeting_item.meeting
+    _require_meeting_write_access(meeting=meeting, user=actor)
+    _require_live_meeting(meeting=meeting)
+
+    # Serialize against concurrent focus/done/follow-up/end actions
+    # on this Meeting.
+    Meeting.objects.select_for_update().get(pk=meeting.pk)
+    meeting.refresh_from_db()
+    _require_live_meeting(meeting=meeting)
+
+    meeting_item.refresh_from_db()
+    if meeting_item.status != MeetingItem.Status.NOT_DISCUSSED:
+        raise MeetingDomainError(
+            "Only a not_discussed item can be focused."
+        )
+
+    previous = (
+        MeetingItem.objects
+        .filter(
+            meeting=meeting,
+            status=MeetingItem.Status.DISCUSSING,
+        )
+        .exclude(pk=meeting_item.pk)
+        .first()
+    )
+    if previous is not None:
+        previous.status = MeetingItem.Status.NOT_DISCUSSED
+        previous.save(update_fields=["status", "updated_at"])
+
+    try:
+        meeting_item.status = MeetingItem.Status.DISCUSSING
+        meeting_item.save(update_fields=["status", "updated_at"])
+    except IntegrityError:
+        # The conditional uniqueness constraint is the last line of
+        # defense against concurrent double focus.
+        raise MeetingDomainError(
+            "This Meeting already has a different item being "
+            "discussed."
+        )
+
+    return meeting_item
+
+
+def _close_current_item(*, meeting, closed_status):
+    """Close the current discussing item with ``closed_status``.
+
+    The caller must hold the Meeting row lock. Raises when the
+    Meeting has no current item.
+    """
+    current = (
+        MeetingItem.objects
+        .filter(
+            meeting=meeting,
+            status=MeetingItem.Status.DISCUSSING,
+        )
+        .select_for_update()
+        .first()
+    )
+    if current is None:
+        raise MeetingDomainError(
+            "Only the current item of a Live Meeting can be "
+            "closed."
+        )
+
+    current.status = closed_status
+    current.save(update_fields=["status", "updated_at"])
+    return current
+
+
+def _ordered_meeting_items(*, meeting):
+    """All of the Meeting's items in canonical agenda order:
+    Section.position, then item position (unique within a section),
+    then id."""
+    return (
+        MeetingItem.objects
+        .filter(meeting=meeting)
+        .select_related("meeting_section")
+        .order_by(
+            "meeting_section__position",
+            "meeting_section__id",
+            "position",
+            "id",
+        )
+    )
+
+
+def _advance_to_next_not_discussed(*, meeting, resolved_pk):
+    """Advance the current item to the next open item after the one
+    that was just resolved.
+
+    The successor is the first ``not_discussed`` item strictly AFTER
+    ``resolved_pk`` in canonical agenda order (which spans section
+    boundaries). If none exists after it, the search wraps once to
+    the beginning and selects the first remaining ``not_discussed``
+    item before it. ``done`` / ``follow_up`` items are never
+    selected, and the resolved item itself is never reselected.
+    When no ``not_discussed`` items remain, the Meeting has no
+    current item.
+    """
+    order = [
+        item.pk
+        for item in _ordered_meeting_items(meeting=meeting)
+    ]
+    try:
+        index = order.index(resolved_pk)
+    except ValueError:
+        # Defensive: the resolved item must be part of the Meeting.
+        index = -1
+
+    n = len(order)
+    for offset in range(1, n + 1):
+        candidate_pk = order[(index + offset) % n]
+        candidate = (
+            MeetingItem.objects
+            .filter(
+                pk=candidate_pk,
+                status=MeetingItem.Status.NOT_DISCUSSED,
+            )
+            .first()
+        )
+        if candidate is not None:
+            candidate.status = MeetingItem.Status.DISCUSSING
+            candidate.save(update_fields=["status", "updated_at"])
+            return candidate
+
+    return None
+
+
+@transaction.atomic
+def mark_meeting_item_done(*, meeting_item, actor):
+    """Mark the current discussing item as done.
+
+    Only the current item of a Live Meeting may be marked done. The
+    next not_discussed item in canonical agenda order becomes the
+    current item; when none remains, the Meeting has no current
+    item.
+    """
+    meeting = meeting_item.meeting
+    _require_meeting_write_access(meeting=meeting, user=actor)
+    _require_live_meeting(meeting=meeting)
+
+    Meeting.objects.select_for_update().get(pk=meeting.pk)
+    meeting.refresh_from_db()
+    _require_live_meeting(meeting=meeting)
+
+    current = _close_current_item(
+        meeting=meeting,
+        closed_status=MeetingItem.Status.DONE,
+    )
+    if current.pk != meeting_item.pk:
+        raise MeetingDomainError(
+            "Only the current item of a Live Meeting can be "
+            "marked done."
+        )
+
+    _advance_to_next_not_discussed(
+        meeting=meeting,
+        resolved_pk=current.pk,
+    )
+    return current
+
+
+@transaction.atomic
+def mark_meeting_item_follow_up(*, meeting_item, actor):
+    """Mark the current discussing item as follow_up.
+
+    Only the current item of a Live Meeting may be marked as a
+    follow-up. The next not_discussed item in canonical agenda order
+    becomes the current item; when none remains, the Meeting has no
+    current item. Durable carry-forward is a separate future
+    concern.
+    """
+    meeting = meeting_item.meeting
+    _require_meeting_write_access(meeting=meeting, user=actor)
+    _require_live_meeting(meeting=meeting)
+
+    Meeting.objects.select_for_update().get(pk=meeting.pk)
+    meeting.refresh_from_db()
+    _require_live_meeting(meeting=meeting)
+
+    current = _close_current_item(
+        meeting=meeting,
+        closed_status=MeetingItem.Status.FOLLOW_UP,
+    )
+    if current.pk != meeting_item.pk:
+        raise MeetingDomainError(
+            "Only the current item of a Live Meeting can be "
+            "marked as a follow-up."
+        )
+
+    _advance_to_next_not_discussed(
+        meeting=meeting,
+        resolved_pk=current.pk,
+    )
+    return current
 
 
 

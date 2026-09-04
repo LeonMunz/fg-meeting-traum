@@ -20,15 +20,26 @@ describe('MeetingDetailPage lifecycle semantics', () => {
 })
 
 describe('MeetingDetailPage status-aware content', () => {
-  it('does not render "Mark discussed" as a permanent agenda control', () => {
+  it('does not render the legacy open/discussed toggle', () => {
     expect(MEETING_DETAIL_SOURCE).not.toContain(
-      'Mark discussed',
+      'item.status === "open"',
+    )
+    expect(MEETING_DETAIL_SOURCE).not.toContain(
+      'item.status === "discussed"',
     )
   })
 
-  it('renders a quiet "Discussed" state for protocol rows', () => {
+  it('derives the current item from the discussing status', () => {
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'Discussed',
+      'item.status === "discussing"',
+    )
+  })
+
+  it('exposes canonical Focus, Done and Follow-up actions', () => {
+    expect(MEETING_DETAIL_SOURCE).toContain('handleFocusItem')
+    expect(MEETING_DETAIL_SOURCE).toContain('handleDoneItem')
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'handleFollowUpItem',
     )
   })
 })

@@ -55,6 +55,9 @@ from .services import (
     create_meeting_from_series,
     create_meeting_item,
     create_meeting_note,
+    focus_meeting_item,
+    mark_meeting_item_done,
+    mark_meeting_item_follow_up,
     create_meeting_section,
     create_meeting_series,
     create_series_section,
@@ -1448,13 +1451,24 @@ class MeetingItemDetailView(APIView):
 
         data = serializer.validated_data
 
+        if "status" in request.data:
+            return Response(
+                {
+                    "error": (
+                        "Meeting item status is driven by the "
+                        "Live Meeting actions (start, focus, "
+                        "done, follow-up)."
+                    )
+                },
+                status=400,
+            )
+
         try:
             update_meeting_item(
                 meeting_item=item,
                 actor=request.user,
                 title=data.get("title"),
                 notes=data.get("notes"),
-                status=data.get("status"),
             )
         except MeetingDomainError as exc:
             return Response(
@@ -1597,6 +1611,101 @@ class MeetingItemWorkItemCreateView(APIView):
         return Response(
             serialize_work_item(work_item, user=request.user),
             status=201,
+        )
+
+
+def _run_meeting_item_action(request, item, action):
+    """Shared handler for canonical Live MeetingItem actions.
+
+    Enforces the existing Meeting write authorization and returns
+    the updated canonical MeetingItem.
+    """
+    if not _has_scoped_write_access(request.user, item.meeting):
+        return _mutation_forbidden_response()
+
+    try:
+        updated = action(meeting_item=item, actor=request.user)
+    except MeetingDomainError as exc:
+        return Response({"error": exc.message}, status=400)
+
+    return Response(
+        MeetingItemSerializer(
+            updated,
+            context={"request": request},
+        ).data
+    )
+
+
+class MeetingItemFocusView(APIView):
+    """POST /api/meeting-items/{id}/focus — make the selected
+    not_discussed item the current item of a Live Meeting."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, meeting_item_id):
+        item = _require_meeting_item_access(
+            request,
+            meeting_item_id,
+        )
+        if item is None:
+            return Response(
+                {"error": "Meeting item not found"},
+                status=404,
+            )
+
+        return _run_meeting_item_action(
+            request,
+            item,
+            focus_meeting_item,
+        )
+
+
+class MeetingItemDoneView(APIView):
+    """POST /api/meeting-items/{id}/done — mark the current item
+    done and advance to the next not_discussed item."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, meeting_item_id):
+        item = _require_meeting_item_access(
+            request,
+            meeting_item_id,
+        )
+        if item is None:
+            return Response(
+                {"error": "Meeting item not found"},
+                status=404,
+            )
+
+        return _run_meeting_item_action(
+            request,
+            item,
+            mark_meeting_item_done,
+        )
+
+
+class MeetingItemFollowUpView(APIView):
+    """POST /api/meeting-items/{id}/follow-up — mark the current
+    item as a follow-up and advance to the next not_discussed
+    item."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, meeting_item_id):
+        item = _require_meeting_item_access(
+            request,
+            meeting_item_id,
+        )
+        if item is None:
+            return Response(
+                {"error": "Meeting item not found"},
+                status=404,
+            )
+
+        return _run_meeting_item_action(
+            request,
+            item,
+            mark_meeting_item_follow_up,
         )
 
 

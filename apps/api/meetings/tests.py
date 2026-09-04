@@ -345,7 +345,7 @@ class MeetingDomainTest(TestCase):
             ).exists()
         )
 
-    def test_meeting_item_can_be_marked_discussed(self):
+    def test_meeting_item_can_be_updated(self):
         meeting = self.create_default_meeting()
 
         item = create_meeting_item(
@@ -358,7 +358,6 @@ class MeetingDomainTest(TestCase):
         update_meeting_item(
             meeting_item=item,
             actor=self.chris,
-            status=MeetingItem.Status.DISCUSSED,
             notes="Reviewed by the group.",
         )
 
@@ -366,7 +365,7 @@ class MeetingDomainTest(TestCase):
 
         self.assertEqual(
             item.status,
-            MeetingItem.Status.DISCUSSED,
+            MeetingItem.Status.NOT_DISCUSSED,
         )
         self.assertEqual(
             item.notes,

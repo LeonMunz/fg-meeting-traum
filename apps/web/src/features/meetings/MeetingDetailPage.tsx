@@ -23,10 +23,13 @@ import {
   deleteMeeting,
   deleteMeetingNote,
   endMeeting,
+  focusMeetingItem,
   getMeeting,
   listMeetingItems,
   listMeetingParticipants,
   listMeetingSections,
+  markMeetingItemDone,
+  markMeetingItemFollowUp,
   reorderMeetingSections,
   reopenMeeting,
   removeMeetingParticipant,
@@ -683,6 +686,23 @@ export function MeetingDetailPage() {
     }
   }, [meetingId])
 
+  // Refresh only the agenda item collection after a server-side
+  // transition that mutates MeetingItem rows (Start / Reopen /
+  // Focus / Done / Follow-up all change one or more items). Keeps
+  // the local items in sync without a full page reload or scroll
+  // reset.
+  const refreshItems = useCallback(async () => {
+    if (meetingId == null) {
+      return
+    }
+    try {
+      setItems(await listMeetingItems(meetingId))
+    } catch {
+      // The action that triggered the refresh succeeded on the
+      // server; the next full load recovers the canonical list.
+    }
+  }, [meetingId])
+
   useEffect(() => {
     void loadMeeting()
   }, [loadMeeting])
@@ -1169,39 +1189,56 @@ export function MeetingDetailPage() {
     }
   }
 
-  const handleToggleItemStatus = async (
-    item: ApiMeetingItem,
-  ) => {
-    if (updatingItemId != null) {
-      return
-    }
-
+  const handleFocusItem = async (item: ApiMeetingItem) => {
+    if (updatingItemId != null) return
     setUpdatingItemId(item.id)
     setActionError(null)
-
     try {
-      const updated = await updateMeetingItem(
-        item.id,
-        {
-          status:
-            item.status === 'open'
-              ? 'discussed'
-              : 'open',
-        },
+      await focusMeetingItem(item.id)
+      // Focus changes the previous item and the target; refresh the
+      // whole collection.
+      await refreshItems()
+    } catch (error) {
+      setActionError(
+        getErrorMessage(error, 'Agenda item could not be focused.'),
       )
+    } finally {
+      setUpdatingItemId(null)
+    }
+  }
 
-      setItems((current) =>
-        current.map((candidate) =>
-          candidate.id === updated.id
-            ? updated
-            : candidate,
-        ),
+  const handleDoneItem = async (item: ApiMeetingItem) => {
+    if (updatingItemId != null) return
+    setUpdatingItemId(item.id)
+    setActionError(null)
+    try {
+      await markMeetingItemDone(item.id)
+      // Done changes the closed item and advances the next one;
+      // refresh the whole collection.
+      await refreshItems()
+    } catch (error) {
+      setActionError(
+        getErrorMessage(error, 'Agenda item could not be marked done.'),
       )
+    } finally {
+      setUpdatingItemId(null)
+    }
+  }
+
+  const handleFollowUpItem = async (item: ApiMeetingItem) => {
+    if (updatingItemId != null) return
+    setUpdatingItemId(item.id)
+    setActionError(null)
+    try {
+      await markMeetingItemFollowUp(item.id)
+      // Follow-up changes the closed item and advances the next
+      // one; refresh the whole collection.
+      await refreshItems()
     } catch (error) {
       setActionError(
         getErrorMessage(
           error,
-          'Agenda item could not be updated.',
+          'Agenda item could not be marked as follow-up.',
         ),
       )
     } finally {
@@ -1225,6 +1262,10 @@ export function MeetingDetailPage() {
       const updated = await startMeeting(meeting.id)
 
       setMeeting(updated)
+      // Start may select the first agenda item as the current
+      // (discussing) item; refresh the collection so the UI shows
+      // it immediately.
+      await refreshItems()
     } catch (error) {
       setActionError(
         getErrorMessage(
@@ -1281,6 +1322,9 @@ export function MeetingDetailPage() {
       const updated = await reopenMeeting(meeting.id)
 
       setMeeting(updated)
+      // Reopen may select the first remaining not_discussed item
+      // as the current item; refresh the collection.
+      await refreshItems()
     } catch (error) {
       setActionError(
         getErrorMessage(
@@ -2457,8 +2501,9 @@ export function MeetingDetailPage() {
                                     <h4
                                       className={[
                                         'text-sm font-medium',
-                                        item.status === 'discussed' &&
-                                        isCompleted
+                                        (item.status === 'done' ||
+                                          item.status === 'follow_up') &&
+                                        !isLive
                                           ? 'text-on-surface-variant'
                                           : 'text-on-surface',
                                       ].join(' ')}
@@ -2466,12 +2511,30 @@ export function MeetingDetailPage() {
                                       {item.title}
                                     </h4>
 
-                                    {item.status === 'discussed' && (
+                                    {item.status === 'discussing' && (
+                                      <span className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-primary">
+                                        <span aria-hidden="true" className="material-symbols-outlined text-[13px]">
+                                          radio_button_checked
+                                        </span>
+                                        Current
+                                      </span>
+                                    )}
+
+                                    {item.status === 'done' && (
                                       <span className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-on-surface-variant">
                                         <span aria-hidden="true" className="material-symbols-outlined text-[13px]">
                                           check_circle
                                         </span>
-                                        Discussed
+                                        Done
+                                      </span>
+                                    )}
+
+                                    {item.status === 'follow_up' && (
+                                      <span className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-on-surface-variant">
+                                        <span aria-hidden="true" className="material-symbols-outlined text-[13px]">
+                                          follow_up
+                                        </span>
+                                        Follow-up
                                       </span>
                                     )}
                                   </div>
@@ -2848,29 +2911,67 @@ export function MeetingDetailPage() {
                                   )}
                                 </div>
 
-                                {/* Live: keep the discussed toggle available */}
+                                {/* Live: canonical state machine actions.
+                                    The current (discussing) item can be
+                                    closed with Done or Follow-up; any
+                                    not_discussed item can be focused. */}
                                 {isLive && canManageLifecycle && (
-                                  <button
-                                    type="button"
-                                    disabled={
-                                      updatingItemId === item.id
-                                    }
-                                    onClick={() =>
-                                      void handleToggleItemStatus(item)
-                                    }
-                                    aria-label={
-                                      item.status === 'discussed'
-                                        ? `Mark ${item.title} as open`
-                                        : `Mark ${item.title} as discussed`
-                                    }
-                                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-on-surface-variant transition hover:bg-surface-container-high disabled:opacity-45"
-                                  >
-                                    <span aria-hidden="true" className="material-symbols-outlined text-[18px]">
-                                      {item.status === 'discussed'
-                                        ? 'check_circle'
-                                        : 'radio_button_unchecked'}
-                                    </span>
-                                  </button>
+                                  <span className="flex shrink-0 items-center gap-2">
+                                    {item.status === 'not_discussed' && (
+                                      <button
+                                        type="button"
+                                        disabled={
+                                          updatingItemId === item.id
+                                        }
+                                        onClick={() =>
+                                          void handleFocusItem(item)
+                                        }
+                                        aria-label={`Focus ${item.title}`}
+                                        title="Focus"
+                                        className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg text-on-surface-variant transition hover:bg-surface-container-high disabled:opacity-45"
+                                      >
+                                        <span aria-hidden="true" className="material-symbols-outlined text-[18px]">
+                                          radio_button_checked
+                                        </span>
+                                      </button>
+                                    )}
+                                    {item.status === 'discussing' && (
+                                      <>
+                                        <button
+                                          type="button"
+                                          disabled={
+                                            updatingItemId === item.id
+                                          }
+                                          onClick={() =>
+                                            void handleDoneItem(item)
+                                          }
+                                          aria-label={`Mark ${item.title} as done`}
+                                          title="Done"
+                                          className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg text-on-surface-variant transition hover:bg-surface-container-high disabled:opacity-45"
+                                        >
+                                          <span aria-hidden="true" className="material-symbols-outlined text-[18px]">
+                                            check_circle
+                                          </span>
+                                        </button>
+                                        <button
+                                          type="button"
+                                          disabled={
+                                            updatingItemId === item.id
+                                          }
+                                          onClick={() =>
+                                            void handleFollowUpItem(item)
+                                          }
+                                          aria-label={`Mark ${item.title} as follow-up`}
+                                          title="Follow up"
+                                          className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg text-on-surface-variant transition hover:bg-surface-container-high disabled:opacity-45"
+                                        >
+                                          <span aria-hidden="true" className="material-symbols-outlined text-[18px]">
+                                            follow_up
+                                          </span>
+                                        </button>
+                                      </>
+                                    )}
+                                  </span>
                                 )}
 
                                 {/* Upcoming: secondary actions on hover/focus */}
@@ -2924,9 +3025,10 @@ export function MeetingDetailPage() {
 
                     {/* Inline quick-add: the inline form opens for any
                         section (empty or not); the trigger label and
-                        emphasis adapt to the empty case. */}
-                    {canPrepare &&
-                      (creatingSectionId === section.id ? (
+                        emphasis adapt to the empty case. Spontaneous
+                        items remain creatable while the Meeting is
+                        Live. */}
+                    {creatingSectionId === section.id ? (
                         <form
                           data-quick-add-form={section.id}
                           onSubmit={(e) => {
@@ -3015,7 +3117,7 @@ export function MeetingDetailPage() {
                             ? 'Add first item'
                             : 'Add item'}
                         </button>
-                      ))}
+                    )}
 
                   </div>
                 </section>

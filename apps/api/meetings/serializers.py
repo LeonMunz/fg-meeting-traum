@@ -505,6 +505,9 @@ class MeetingItemCreateSerializer(serializers.Serializer):
 
 
 class MeetingItemPatchSerializer(serializers.Serializer):
+    # ``status`` is intentionally NOT part of the generic PATCH
+    # contract: Live MeetingItem status is driven exclusively by the
+    # canonical domain actions (start / focus / done / follow-up).
     title = serializers.CharField(
         max_length=255,
         allow_blank=False,
@@ -513,10 +516,6 @@ class MeetingItemPatchSerializer(serializers.Serializer):
     notes = serializers.CharField(
         required=False,
         allow_blank=True,
-    )
-    status = serializers.ChoiceField(
-        choices=MeetingItem.Status.choices,
-        required=False,
     )
 
 

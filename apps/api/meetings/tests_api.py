@@ -770,7 +770,7 @@ class MeetingApiTest(TestCase):
             "Rewrite introduction",
         )
         self.assertEqual(data["position"], 0)
-        self.assertEqual(data["status"], "open")
+        self.assertEqual(data["status"], "not_discussed")
         self.assertEqual(data["workItemIds"], [])
 
     def test_group_member_can_list_meeting_items(self):
@@ -826,7 +826,6 @@ class MeetingApiTest(TestCase):
             {
                 "title": "Updated discussion",
                 "notes": "Agreed.",
-                "status": "discussed",
             },
             format="json",
         )
@@ -848,7 +847,39 @@ class MeetingApiTest(TestCase):
         )
         self.assertEqual(
             item.status,
-            MeetingItem.Status.DISCUSSED,
+            MeetingItem.Status.NOT_DISCUSSED,
+        )
+
+    def test_meeting_item_status_cannot_be_set_via_generic_patch(self):
+        meeting = self.create_default_meeting()
+
+        item = create_meeting_item(
+            meeting=meeting,
+            meeting_section=MeetingSection.objects.get(meeting=meeting),
+            actor=self.alex,
+            title="Discussion",
+        )
+
+        self.login(self.chris)
+
+        response = self.client.patch(
+            f"/api/meeting-items/{item.pk}/",
+            {
+                "status": "discussing",
+            },
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+        item.refresh_from_db()
+
+        self.assertEqual(
+            item.status,
+            MeetingItem.Status.NOT_DISCUSSED,
         )
 
     def test_invalid_meeting_item_status_is_rejected(self):
