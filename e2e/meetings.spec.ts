@@ -284,23 +284,77 @@ test(
       page.getByRole('button', { name: 'End meeting' }),
     ).toBeVisible()
 
-    // On Start the single item becomes the current (discussing)
-    // item. Close it with the canonical Done action.
+    // Live shell: Start has already made the single item
+    // the current (discussing) item. It is listed in the
+    // Agenda rail with its accessible status and titled in
+    // the Current Item workspace.
+    const agendaSection = page
+      .getByRole('navigation', { name: 'Agenda' })
+
+    const currentAgendaItem = agendaSection
+      .locator('li')
+      .filter({
+        has: page.getByText(AGENDA_TITLE, {
+          exact: true,
+        }),
+      })
+
+    // Current item: no Focus button (only not_discussed
+    // items are focusable), accessible status is exposed.
     await expect(
-      agendaItem.getByRole('button', {
-        name: `Mark ${AGENDA_TITLE} as done`,
+      currentAgendaItem.getByRole('button', {
+        name: `Focus ${AGENDA_TITLE}`,
+      }),
+    ).toHaveCount(0)
+
+    // The status hint is sr-only text inside the row: it is
+    // attached to the DOM (read by screen readers) but visually
+    // hidden, so assert the exact text is attached.
+    await expect(
+      currentAgendaItem
+        .getByText('Discussing now', { exact: true }),
+    ).toBeAttached()
+
+    // The current item is shown as the Current Item heading.
+    const workspace = page.getByRole('main', {
+      name: 'Current item',
+    })
+
+    await expect(
+      workspace.getByRole('heading', {
+        name: AGENDA_TITLE,
+        exact: true,
       }),
     ).toBeVisible()
 
-    await agendaItem
+    // Close it with the canonical Done action, now offered by
+    // the Current Item workspace.
+    await page
       .getByRole('button', {
         name: `Mark ${AGENDA_TITLE} as done`,
       })
       .click()
 
     await expect(
-      agendaItem.locator('span', { hasText: 'Done' }).last(),
-    ).toBeVisible()
+      page.getByRole('button', {
+        name: `Mark ${AGENDA_TITLE} as done`,
+      }),
+    ).toHaveCount(0)
+
+    // The item stays in the Agenda rail, resolved. Its status
+    // hint is sr-only text: assert the exact text is attached.
+    await expect(
+      currentAgendaItem
+        .getByText('Completed', { exact: true }),
+    ).toBeAttached()
+
+    // With no unresolved items, the workspace shows the calm
+    // no-current-item state.
+    await expect(
+      page.getByRole('main', {
+        name: 'Current item',
+      }),
+    ).toContainText('No current item')
 
     // --------------------------------------------------------
     // Reload proves all Meeting state persisted.
@@ -315,35 +369,65 @@ test(
       }),
     ).toBeVisible()
 
-    // Participant persists (avatar in the participant bar).
-    await expect(
-      page.getByTitle('Alex Dev'),
-    ).toBeVisible()
+    // Participant state persists across the reload. While Live the
+    // participants bar (avatar chips) is intentionally hidden, so the
+    // persisted participant set is represented by the header metadata
+    // count: Alex (creator) + Chris (added before Start).
+    //
+    // The count renders as <span>{n}</span>{' '}{plural}, i.e. three
+    // separate text nodes, so an exact single-node match fails. A
+    // regex on the metadata <span> (the only element whose text spans
+    // "N participants") matches reliably. Scope to the <header> that
+    // wraps the meeting title so this is not a page-global match.
+    const header = page
+      .getByRole('heading', { name: MEETING_TITLE, exact: true })
+      .locator('xpath=ancestor::header[1]')
 
     await expect(
-      page.getByText(
-        AGENDA_TITLE,
-        { exact: true },
-      ),
+      header.getByText(/2 participants/),
     ).toBeVisible()
 
-    const persistedAgendaItem =
-      page
-        .locator('li')
-        .filter({
-          has: page.getByText(
-            AGENDA_TITLE,
-            { exact: true },
-          ),
-        })
+    // The Meeting was NOT ended in this flow, so it is still
+    // LIVE and still uses the Live Agenda | Current Item shell
+    // after the reload. The agenda item persists in the Agenda
+    // rail, resolved, and the workspace shows the no-current-
+    // item state.
+    const persistedAgenda = page.getByRole('navigation', {
+      name: 'Agenda',
+    })
 
+    const persistedItem = persistedAgenda
+      .locator('li')
+      .filter({
+        has: page.getByText(AGENDA_TITLE, {
+          exact: true,
+        }),
+      })
+
+    // The exact agenda item title persists in the rail.
     await expect(
-      persistedAgendaItem.locator('span', { hasText: 'Done' }).last(),
+      persistedItem
+        .getByText(AGENDA_TITLE, { exact: true }),
     ).toBeVisible()
 
+    // The resolved status is the sr-only "Completed" hint
+    // attached to that item.
+    await expect(
+      persistedItem
+        .getByText('Completed', { exact: true }),
+    ).toBeAttached()
+
+    // The Meeting is still Live (End meeting is available), and
+    // there is no current item to discuss.
     await expect(
       page.getByRole('button', { name: 'End meeting' }),
     ).toBeVisible()
+
+    await expect(
+      page.getByRole('main', {
+        name: 'Current item',
+      }),
+    ).toContainText('No current item')
   },
 )
 
@@ -1595,7 +1679,28 @@ test(
     //    discussing, so the item is explicitly marked done.
     // --------------------------------------------------------
 
+    // Done lives in the Current Item workspace (it was
+    // deliberately moved out of the Agenda rows).
+    const noteWorkspace = page.getByRole('main', {
+      name: 'Current item',
+    })
+
+    await expect(
+      noteWorkspace.getByRole('heading', {
+        name: NOTE_AGENDA_TITLE,
+        exact: true,
+      }),
+    ).toBeVisible()
+
+    await noteWorkspace
+      .getByRole('button', {
+        name: `Mark ${NOTE_AGENDA_TITLE} as done`,
+      })
+      .click()
+
+    // The Agenda rail now shows the item as resolved.
     const noteAgendaItem = page
+      .getByRole('navigation', { name: 'Agenda' })
       .locator('li')
       .filter({
         has: page.getByText(NOTE_AGENDA_TITLE, {
@@ -1603,15 +1708,18 @@ test(
         }),
       })
 
-    await noteAgendaItem
-      .getByRole('button', {
-        name: `Mark ${NOTE_AGENDA_TITLE} as done`,
-      })
-      .click()
-
     await expect(
-      noteAgendaItem.locator('span', { hasText: 'Done' }).last(),
+      noteAgendaItem
+        .getByText('Completed', { exact: true }),
     ).toBeVisible()
+
+    // No Done action remains anywhere (workspace switched
+    // to the no-current-item state).
+    await expect(
+      page.getByRole('button', {
+        name: `Mark ${NOTE_AGENDA_TITLE} as done`,
+      }),
+    ).toHaveCount(0)
 
     await page
       .getByRole('button', {
@@ -1823,28 +1931,27 @@ test(
       noteInput,
     ).toHaveCount(0)
 
-    // Scope to this exact Agenda Item first: its title is the
-    // item heading, and the nearest ancestor <li> is the item
-    // row itself. Keeping the search inside the item excludes
-    // the Work Item dialog, which prefills the same Note content
-    // into its Title and Description fields.
-    const agendaItem = page
-      .getByRole('heading', {
+    // The current item's title is shown as the Current Item
+    // heading while Live (and as an h4 in the Protocol after
+    // the Meeting ends), so assert it by role without coupling
+    // to one layout.
+    await expect(
+      page.getByRole('heading', {
         name: agendaTitle,
         exact: true,
-      })
-      .locator('xpath=ancestor::li[1]')
+      }),
+    ).toBeVisible()
 
-    // Then the exact Note text within that Agenda Item, then the
-    // nearest Note row: every Linked-work assertion below stays
-    // on that exact Note.
-    const noteText = agendaItem
-      .getByText(
-        noteContent,
-        { exact: true },
-      )
-
-    const noteBlock = noteText
+    // The persisted Note content is unique on the page (the
+    // Work Item dialog was just dismissed; the dialog fields
+    // prefilled this exact string are no longer in the tree).
+    // The nearest ancestor <li> of the Note text is the Note
+    // row itself, in BOTH the Live Current Item workspace and
+    // the classic Protocol layout. Scoping to that exact
+    // <li> keeps every Linked-work assertion below tied to
+    // this exact Note (never a page-global Work Item match).
+    const noteBlock = page
+      .getByText(noteContent, { exact: true })
       .locator('xpath=ancestor::li[1]')
 
     await expect(
@@ -2023,23 +2130,39 @@ test(
     // work stays visible, Notes remain read-only.
     // --------------------------------------------------------
 
-    const doneAgendaItem = page
-      .locator('li')
-      .filter({
-        has: page.getByText(agendaTitle, {
-          exact: true,
-        }),
-      })
+    // Resolve the current item from the Current Item
+    // workspace (Done no longer lives in the Agenda rows).
+    const liveWorkspace = page.getByRole('main', {
+      name: 'Current item',
+    })
 
-    await doneAgendaItem
+    await liveWorkspace
       .getByRole('button', {
         name: `Mark ${agendaTitle} as done`,
       })
       .click()
 
     await expect(
-      doneAgendaItem.locator('span', { hasText: 'Done' }).last(),
-    ).toBeVisible()
+      page.getByRole('button', {
+        name: `Mark ${agendaTitle} as done`,
+      }),
+    ).toHaveCount(0)
+
+    // The Agenda rail now shows the item as resolved. Its
+    // accessible name carries the "Completed" status hint.
+    const doneAgendaItem = page
+      .getByRole('navigation', { name: 'Agenda' })
+      .locator('li')
+      .filter({
+        has: page.getByText(agendaTitle, { exact: true }),
+      })
+
+    // The status hint is sr-only text: assert the exact text
+    // is attached within the resolved agenda item.
+    await expect(
+      doneAgendaItem
+        .getByText('Completed', { exact: true }),
+    ).toBeAttached()
 
     await page
       .getByRole('button', {
@@ -2427,9 +2550,31 @@ test(
       }),
     ).toHaveCount(0)
 
-    // The agenda item itself is still present.
+    // The agenda item itself is still present. Its title
+    // correctly appears in BOTH panes (Agenda rail + Current
+    // Item heading), so scope each assertion explicitly.
+    const deleteAgenda = page.getByRole('navigation', {
+      name: 'Agenda',
+    })
+
     await expect(
-      page.getByText('E2E Delete Agenda', {
+      deleteAgenda
+        .locator('li')
+        .filter({
+          has: page.getByText('E2E Delete Agenda', {
+            exact: true,
+          }),
+        })
+        .getByText('E2E Delete Agenda', { exact: true }),
+    ).toBeVisible()
+
+    const deleteWorkspace = page.getByRole('main', {
+      name: 'Current item',
+    })
+
+    await expect(
+      deleteWorkspace.getByRole('heading', {
+        name: 'E2E Delete Agenda',
         exact: true,
       }),
     ).toBeVisible()
@@ -2483,7 +2628,7 @@ test(
 
     await expect(page).toHaveURL(/\/meetings\/\d+$/)
 
-    // Add 3 agenda items.
+    // Add 3 agenda items (upcoming layout).
     const titles = ['Alpha', 'Beta', 'Gamma']
     for (const title of titles) {
       await quickAddAgendaItem(page, title)
@@ -2492,15 +2637,38 @@ test(
       ).toBeVisible()
     }
 
-    const item = (title: string) =>
-      page
-        .locator('li')
-        .filter({
-          has: page.getByText(title, { exact: true }),
-        })
+    // Live shell: the Agenda rail lists every item with its
+    // accessible status; the Current Item workspace shows the
+    // current item. These locators are used below.
+    const agenda = page.getByRole('navigation', {
+      name: 'Agenda',
+    })
+    const workspace = page.getByRole('main', {
+      name: 'Current item',
+    })
+
+    const agendaItem = (title: string) =>
+      agenda.locator('li').filter({
+        has: page.getByText(title, { exact: true }),
+      })
+
+    // The Agenda rail exposes each item's status through an
+    // sr-only text hint, so the symbol alone is never the only
+    // signal. The hint is a child sr-only text node (attached to
+    // the DOM, read by screen readers, visually hidden), so
+    // assert the exact text is attached within the item.
+    const itemHasStatus = async (
+      title: string,
+      status: string,
+    ) => {
+      await expect(
+        agendaItem(title).getByText(status, { exact: true }),
+      ).toBeAttached()
+    }
 
     // --------------------------------------------------------
-    // Start: the first item becomes current (discussing).
+    // Start: the first item becomes current (discussing) and
+    // the Live shell takes over the layout.
     // --------------------------------------------------------
 
     await page
@@ -2512,26 +2680,32 @@ test(
     ).toBeVisible()
 
     await expect(
-      item('Alpha')
-        .getByRole('button', { name: 'Mark Alpha as done' }),
-    ).toBeVisible()
+      page.getByRole('main', { name: 'Current item' }),
+    ).toContainText('Alpha')
+
+    await itemHasStatus('Alpha', 'Discussing now')
+
+    // The Done action lives in the Current Item workspace.
     await expect(
-      item('Alpha').locator('span', { hasText: 'Current' }).last(),
+      page.getByRole('button', { name: 'Mark Alpha as done' }),
     ).toBeVisible()
 
     // --------------------------------------------------------
-    // Focus the second item (Beta).
+    // Focus the second item (Beta) from the Agenda rail.
     // --------------------------------------------------------
 
-    await item('Beta')
+    await agendaItem('Beta')
       .getByRole('button', { name: 'Focus Beta' })
       .click()
 
     await expect(
-      item('Beta').locator('span', { hasText: 'Current' }).last(),
-    ).toBeVisible()
+      workspace,
+    ).toContainText('Beta')
+
+    await itemHasStatus('Beta', 'Discussing now')
+    await itemHasStatus('Alpha', 'Open')
     await expect(
-      item('Alpha')
+      agendaItem('Alpha')
         .getByRole('button', { name: 'Focus Alpha' }),
     ).toBeVisible()
 
@@ -2539,32 +2713,34 @@ test(
     // Done Beta -> next (Gamma) becomes current.
     // --------------------------------------------------------
 
-    await item('Beta')
+    await page
       .getByRole('button', { name: 'Mark Beta as done' })
       .click()
 
     await expect(
-      item('Beta').locator('span', { hasText: 'Done' }).last(),
-    ).toBeVisible()
-    await expect(
-      item('Gamma').locator('span', { hasText: 'Current' }).last(),
-    ).toBeVisible()
+      workspace,
+    ).toContainText('Gamma')
+
+    await itemHasStatus('Beta', 'Completed')
+    await itemHasStatus('Gamma', 'Discussing now')
 
     // --------------------------------------------------------
     // Follow up Gamma -> Gamma follow_up; the only remaining
     // not_discussed item (Alpha) becomes current.
     // --------------------------------------------------------
 
-    await item('Gamma')
-      .getByRole('button', { name: 'Mark Gamma as follow-up' })
+    await page
+      .getByRole('button', {
+        name: 'Mark Gamma as follow-up',
+      })
       .click()
 
     await expect(
-      item('Gamma').locator('span', { hasText: 'Follow-up' }).last(),
-    ).toBeVisible()
-    await expect(
-      item('Alpha').locator('span', { hasText: 'Current' }).last(),
-    ).toBeVisible()
+      workspace,
+    ).toContainText('Alpha')
+
+    await itemHasStatus('Gamma', 'Resolved with follow-up')
+    await itemHasStatus('Alpha', 'Discussing now')
 
     // --------------------------------------------------------
     // Reload proves persistence of all item states: Alpha is
@@ -2573,15 +2749,12 @@ test(
 
     await page.reload()
 
+    await itemHasStatus('Alpha', 'Discussing now')
+    await itemHasStatus('Beta', 'Completed')
+    await itemHasStatus('Gamma', 'Resolved with follow-up')
     await expect(
-      item('Alpha').locator('span', { hasText: 'Current' }).last(),
-    ).toBeVisible()
-    await expect(
-      item('Beta').locator('span', { hasText: 'Done' }).last(),
-    ).toBeVisible()
-    await expect(
-      item('Gamma').locator('span', { hasText: 'Follow-up' }).last(),
-    ).toBeVisible()
+      workspace,
+    ).toContainText('Alpha')
 
     // --------------------------------------------------------
     // End is rejected while a current item exists: with Alpha
@@ -2600,9 +2773,10 @@ test(
     await expect(
       page.getByRole('button', { name: 'End meeting' }),
     ).toBeVisible()
+    await itemHasStatus('Alpha', 'Discussing now')
     await expect(
-      item('Alpha').locator('span', { hasText: 'Current' }).last(),
-    ).toBeVisible()
+      workspace,
+    ).toContainText('Alpha')
     await expect(
       page.getByRole('button', { name: 'Start meeting' }),
     ).toBeHidden()
@@ -2611,21 +2785,26 @@ test(
     // Finish the final current item, then End succeeds.
     // --------------------------------------------------------
 
-    await item('Alpha')
+    await page
       .getByRole('button', { name: 'Mark Alpha as done' })
       .click()
 
+    await itemHasStatus('Alpha', 'Completed')
+    // Alpha is no longer announced as discussing.
     await expect(
-      item('Alpha').locator('span', { hasText: 'Done' }).last(),
-    ).toBeVisible()
+      agendaItem('Alpha').getByText('Discussing now', {
+        exact: true,
+      }),
+    ).toHaveCount(0)
+
+    // All items resolved: the workspace no longer offers a
+    // Done action and shows the no-current-item state.
     await expect(
-      item('Alpha').locator('span', { hasText: 'Current' }).last(),
+      page.getByRole('button', { name: 'Mark Alpha as done' }),
     ).toHaveCount(0)
     await expect(
-      page
-        .locator('li')
-        .getByRole('span', { name: 'Current', exact: true }),
-    ).toHaveCount(0)
+      workspace,
+    ).toContainText('No current item')
 
     await page
       .getByRole('button', { name: 'End meeting' })
