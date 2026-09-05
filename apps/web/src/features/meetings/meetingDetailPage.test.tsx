@@ -286,9 +286,13 @@ describe('MeetingDetailPage Live Meeting shell', () => {
       'isLive && noteComposerItemId !== liveCurrentItem.id',
     )
     // Per-note Edit/Delete menu is Live-only, as before the
-    // refactor.
+    // refactor. (Matched against the stable transpiled call
+    // shape, not a hardcoded esbuild import index.)
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'isLive && /* @__PURE__ */ (0,__vite_ssr_import_10__.jsxDEV)(MenuTrigger',
+      'isLive && /* @__PURE__ */ (0,',
+    )
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      '.jsxDEV)(MenuTrigger',
     )
     // The Current Item workspace must not render a composer,
     // edit mode, trigger, or note menu behind

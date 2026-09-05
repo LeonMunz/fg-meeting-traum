@@ -53,6 +53,17 @@ import { useResearchGroup } from '../research-group/useResearchGroup'
 import { useSession } from '../../api/useSession'
 import { CreateMeetingWorkItemDialog } from './CreateMeetingWorkItemDialog'
 import { agendaStatusMeta } from './agendaStatus'
+import { CompletedMeetingRecap } from './CompletedMeetingRecap'
+import {
+  completedOutcomeCountParts,
+  formatMeetingDate as sharedFormatMeetingDate,
+  formatMeetingDateCompact,
+  formatMeetingDurationCompact,
+  formatNoteTime as sharedFormatNoteTime,
+  getPersonName as sharedGetPersonName,
+  itemResultingWork,
+  meetingDurationMinutes,
+} from './shared'
 
 // The Work Item Inspector is the same shared drawer the Project
 // page uses; keep it out of the initial Meeting bundle.
@@ -73,6 +84,7 @@ import type {
   ApiResearchGroupMember,
   ApiLinkedWorkItem,
   ApiProject,
+  ApiProjectMembership,
   ApiProjectWorkItemConfiguration,
   ApiUpdateWorkItemInput,
   ApiWorkItem,
@@ -109,30 +121,11 @@ function getErrorMessage(
 }
 
 function formatMeetingDate(value: string) {
-  const date = new Date(value)
-
-  if (Number.isNaN(date.getTime())) {
-    return value
-  }
-
-  return new Intl.DateTimeFormat('en', {
-    dateStyle: 'full',
-    timeStyle: 'short',
-  }).format(date)
+  return sharedFormatMeetingDate(value)
 }
 
 function formatNoteTime(value: string) {
-  const date = new Date(value)
-
-  if (Number.isNaN(date.getTime())) {
-    return value
-  }
-
-  return new Intl.DateTimeFormat('en', {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).format(date)
+  return sharedFormatNoteTime(value)
 }
 
 function getPersonName(person: {
@@ -140,15 +133,7 @@ function getPersonName(person: {
   lastName: string
   username: string
 }) {
-  const fullName = [
-    person.firstName,
-    person.lastName,
-  ]
-    .filter(Boolean)
-    .join(' ')
-    .trim()
-
-  return fullName || person.username
+  return sharedGetPersonName(person)
 }
 
 function getInitials(person: {
@@ -1776,6 +1761,179 @@ export function MeetingDetailPage() {
     setInspectorParentItems([])
   }
 
+  // ── Completed recap: hydrate canonical display data for every
+  // Work Item originating from this Meeting (direct
+  // MeetingItem -> Work Item links + Note-linked primary Work
+  // Items). The Meeting items API only carries Work Item IDs for
+  // direct links, so the existing per-Work Item API resolves the
+  // current title / Project / status / assignees. Only runs for
+  // Completed Meetings; one in-flight guard per id set.
+  const [
+    recapWorkById,
+    setRecapWorkById,
+  ] = useState<Map<number, ApiLinkedWorkItem>>(
+    () => new Map(),
+  )
+
+  useEffect(() => {
+    if (meeting?.status !== 'completed') {
+      setRecapWorkById(new Map())
+      return
+    }
+
+    const ids = new Map<number, ApiLinkedWorkItem>()
+
+    // Note-linked Work already carries a full display payload.
+    for (const item of items) {
+      for (const note of item.notes ?? []) {
+        if (note.linkedWorkItem != null) {
+          ids.set(
+            note.linkedWorkItem.id,
+            note.linkedWorkItem,
+          )
+        }
+      }
+    }
+
+    // Direct item links only carry IDs; hydrate the missing
+    // ones through the existing Work Item API.
+    const missing: number[] = []
+    for (const item of items) {
+      for (const id of item.workItemIds) {
+        if (!ids.has(id)) {
+          missing.push(id)
+        }
+      }
+    }
+
+    const uniqueMissing = [...new Set(missing)]
+    if (uniqueMissing.length === 0) {
+      setRecapWorkById(ids)
+      return
+    }
+
+    let cancelled = false
+
+    void (async () => {
+      // 1. Resolve every Work Item (one request per unique id).
+      const workItems: ApiWorkItem[] = []
+      for (const id of uniqueMissing) {
+        try {
+          workItems.push(await getWorkItem(id))
+        } catch {
+          // A Work Item that can no longer be read (deleted or
+          // access revoked) simply does not render a row; never
+          // fabricate display data.
+        }
+        if (cancelled) {
+          return
+        }
+      }
+
+      if (cancelled) {
+        return
+      }
+
+      if (workItems.length === 0) {
+        if (!cancelled) {
+          setRecapWorkById(new Map(ids))
+        }
+        return
+      }
+
+      // 2. Resolve Project data once per distinct Project
+      // (project name, assignee names, canonical Work Item
+      // configuration). The configuration is the canonical
+      // source for the status name (statusDefinitionId ->
+      // definition name), never the legacy fixed string.
+      const projectIds = [
+        ...new Set(workItems.map((item) => item.projectId)),
+      ]
+      const projectData = new Map<
+        number,
+        {
+          project: ApiProject | null
+          memberships: ApiProjectMembership[]
+          configuration: ApiProjectWorkItemConfiguration | null
+        }
+      >()
+
+      await Promise.all(
+        projectIds.map(async (projectId) => {
+          const [project, memberships, configuration] =
+            await Promise.all([
+              getProject(projectId).catch(() => null),
+              listProjectMemberships(projectId).catch(
+                () => [],
+              ),
+              getProjectWorkItemConfiguration(
+                projectId,
+              ).catch(() => null),
+            ])
+
+          projectData.set(projectId, {
+            project,
+            memberships,
+            configuration,
+          })
+        }),
+      )
+
+      if (cancelled) {
+        return
+      }
+
+      // 3. Assemble the display rows.
+      for (const workItem of workItems) {
+        const data =
+          projectData.get(workItem.projectId)
+        if (data == null) {
+          continue
+        }
+
+        const assigneeNames = data.memberships
+          .filter((membership) =>
+            workItem.assigneeIds.includes(
+              membership.user.id,
+            ),
+          )
+          .map((membership) => {
+            const fullName = [
+              membership.user.firstName,
+              membership.user.lastName,
+            ]
+              .filter(Boolean)
+              .join(' ')
+              .trim()
+
+            return fullName || membership.user.username
+          })
+
+        const statusDefinition = data.configuration?.statuses.find(
+          (definition) =>
+            definition.id === workItem.statusDefinitionId,
+        )
+
+        ids.set(workItem.id, {
+          id: workItem.id,
+          title: workItem.title,
+          projectId: workItem.projectId,
+          projectName: data.project?.name ?? '',
+          statusName: statusDefinition?.name ?? '',
+          assigneeNames,
+        })
+      }
+
+      if (!cancelled) {
+        setRecapWorkById(new Map(ids))
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [meeting?.status, items])
+
   const handleInspectorPatch =
     async (
       workItemId: number,
@@ -1886,6 +2044,94 @@ export function MeetingDetailPage() {
     (item) => item.status === 'not_discussed',
   ).length
 
+  // Completed recap header fragment: calm historical identity
+  // (title + small Completed indicator, date/time, Meeting type,
+  // participant count, reliable duration). Rendered inside the
+  // shared <header> so the back nav + lifecycle controls stay
+  // identical across all Meeting states.
+  // Duration label for the Completed header: only when both
+  // timestamps exist and the computed duration is reliable.
+  const completedDurationLabel = (() => {
+    if (!isCompleted) {
+      return null
+    }
+
+    return formatMeetingDurationCompact(
+      meetingDurationMinutes(
+        meeting.startedAt,
+        meeting.endedAt,
+      ),
+    )
+  })()
+
+  // Non-zero outcome counts (Resulting work union + follow-ups),
+  // rendered once, directly beneath the header metadata.
+  const completedOutcomeCounts = (() => {
+    if (!isCompleted) {
+      return []
+    }
+
+    const workIds = new Set<number>()
+
+    for (const item of sortedItems) {
+      for (const linked of itemResultingWork(
+        item,
+        recapWorkById,
+      )) {
+        workIds.add(linked.id)
+      }
+    }
+
+    return completedOutcomeCountParts({
+      workItems: workIds.size,
+      followUps: sortedItems.filter(
+        (item) => item.status === 'follow_up',
+      ).length,
+    })
+  })()
+
+
+  const completedRecapHeader = isCompleted && (
+    <>
+      <h1 className="min-w-0 break-words text-2xl font-semibold tracking-tight text-on-surface">
+        {meeting.title}
+      </h1>
+
+      <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-on-surface-variant">
+        <span aria-hidden="true" className="material-symbols-outlined text-[14px]">
+          check_circle
+        </span>
+        Completed
+      </span>
+    </>
+  )
+
+  const completedRecapMetaLine = isCompleted && (
+    <p className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-sm text-on-surface-variant">
+      <span>{formatMeetingDateCompact(meeting.scheduledAt)}</span>
+      {completedDurationLabel != null && (
+        <>
+          <span aria-hidden="true">·</span>
+          <span>{completedDurationLabel}</span>
+        </>
+      )}
+      <span aria-hidden="true">·</span>
+      <span>
+        {meeting.scope === 'project'
+          ? 'Project Meeting'
+          : 'Research Group Meeting'}
+      </span>
+      <span aria-hidden="true">·</span>
+      <span>
+        {participants.length}{' '}
+        {participants.length === 1
+          ? 'participant'
+          : 'participants'}
+      </span>
+    </p>
+  )
+
+
   return (
     <div className="mx-auto w-full max-w-5xl px-6 py-8 lg:px-8 lg:py-10 xl:px-10">
       {/* Header */}
@@ -1904,10 +2150,13 @@ export function MeetingDetailPage() {
 
       <header className="mt-4 flex flex-wrap items-start justify-between gap-x-8 gap-y-4">
         <div className="min-w-0 flex-1">
-          <h1 className="truncate text-3xl font-semibold tracking-tight text-on-surface">
-            {meeting.title}
-          </h1>
+          {(completedRecapHeader || null) ?? (
+            <h1 className="truncate text-3xl font-semibold tracking-tight text-on-surface">
+              {meeting.title}
+            </h1>
+          )}
 
+          {(completedRecapMetaLine || null) ?? (
           <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm text-on-surface-variant">
             <span className="inline-flex items-center gap-1.5">
               <span aria-hidden="true" className="material-symbols-outlined text-[17px]">
@@ -1937,6 +2186,14 @@ export function MeetingDetailPage() {
                 : 'participants'}
             </span>
           </div>
+          )}
+
+          {isCompleted &&
+            completedOutcomeCounts.length > 0 && (
+              <p className="mt-1.5 text-[13px] text-on-surface-variant">
+                {completedOutcomeCounts.join(' · ')}
+              </p>
+            )}
         </div>
 
         <div className="flex shrink-0 items-center gap-2.5">
@@ -1949,23 +2206,14 @@ export function MeetingDetailPage() {
             </span>
           )}
 
-          {isCompleted && (
-            <span className="inline-flex items-center gap-1.5 text-sm font-medium text-on-surface-variant">
-              <span aria-hidden="true" className="material-symbols-outlined text-[18px]">
-                check_circle
-              </span>
-              Completed
-            </span>
-          )}
-
           {isCompleted && canManageLifecycle && (
             <button
               type="button"
               disabled={updatingMeeting}
               onClick={() => void handleReopenMeeting()}
-              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-outline-variant bg-surface-container-lowest px-3.5 text-sm font-medium text-on-surface outline-none transition hover:border-primary/40 hover:bg-surface-container-low focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-60"
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[13px] font-medium text-on-surface-variant outline-none transition hover:bg-surface-container-low/60 hover:text-on-surface focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-60"
             >
-              <span aria-hidden="true" className="material-symbols-outlined text-[18px]">
+              <span aria-hidden="true" className="material-symbols-outlined text-[16px]">
                 replay
               </span>
               Reopen meeting
@@ -2030,8 +2278,9 @@ export function MeetingDetailPage() {
       )}
 
       {/* Participants — compact context surface. Hidden while Live
-          because the header metadata line already shows the count. */}
-      {!isLive && (
+          and Completed because the header metadata line already
+          shows the count. */}
+      {!isLive && !isCompleted && (
       <div className="mt-6 flex flex-wrap items-center gap-3 border-b border-outline-variant pb-5">
         <div className="flex -space-x-1.5">
           {sortedParticipants.slice(0, 6).map((participant) => (
@@ -2186,9 +2435,10 @@ export function MeetingDetailPage() {
         </div>
       )}
 
-      {/* Content heading — the Live shell carries its own
-          structure and does not repeat a "Discussion" heading. */}
-      {!isLive && (
+      {/* Content heading — the Live shell and the Completed
+          recap carry their own structure and do not repeat a
+          content heading. */}
+      {!isLive && !isCompleted && (
       <div className="mt-8 flex items-end justify-between gap-6">
         <div>
           <h2 className="text-lg font-semibold text-on-surface">
@@ -2923,6 +3173,15 @@ export function MeetingDetailPage() {
             )}
           </main>
         </div>
+      ) : isCompleted ? (
+      /* Completed: calm read-first recap + protocol. */
+      <CompletedMeetingRecap
+        sortedSections={sortedSections}
+        sortedItems={sortedItems}
+        itemsBySection={itemsBySection}
+        workById={recapWorkById}
+        onOpenLinkedWork={openLinkedWorkInspector}
+      />
       ) : (
       /* Agenda / Protocol */
       <div className="mt-6">

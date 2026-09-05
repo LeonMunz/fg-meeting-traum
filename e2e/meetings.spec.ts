@@ -2178,7 +2178,7 @@ test(
 
     await expect(
       noteBlock.getByText(
-        'Linked work',
+        'Resulting work',
         { exact: true },
       ),
     ).toBeVisible()
@@ -2203,7 +2203,7 @@ test(
     ).toHaveCount(0)
 
     // --------------------------------------------------------
-    // Reload: Note + Linked work persist.
+    // Reload: Note + Resulting work persist.
     // --------------------------------------------------------
 
     await page.reload()
@@ -2224,7 +2224,7 @@ test(
 
     await expect(
       noteBlock.getByText(
-        'Linked work',
+        'Resulting work',
         { exact: true },
       ),
     ).toBeVisible()
