@@ -1,10 +1,21 @@
-"""Tests for the canonical Live MeetingItem state machine."""
+"""Tests for the canonical Live Meeting current-pointer + outcome model.
 
+Concepts:
+- Selected: frontend-local (not tested here).
+- Current:  persisted on Meeting (current_meeting_item /
+  currentMeetingItemId).
+- Outcome:  persisted on MeetingItem (not_discussed / done /
+  follow_up).
+
+Current is NOT an outcome: changing current never changes any
+item's outcome, and Done / Follow-up are explicit outcomes.
+"""
+
+from importlib import import_module
 from datetime import timedelta
 
 from django.contrib.auth import get_user_model
 from django.db import connection, transaction
-from django.db.utils import IntegrityError
 from django.test import TestCase, TransactionTestCase
 from django.utils import timezone
 from rest_framework import status
@@ -27,6 +38,7 @@ from .services import (
     create_meeting,
     create_meeting_item,
     create_meeting_section,
+    delete_meeting,
     end_meeting,
     focus_meeting_item,
     mark_meeting_item_done,
@@ -86,7 +98,7 @@ class LiveStateMachineBase(TestCase):
             name=name,
         )
 
-    def create_item(self, meeting, section, title):
+    def create_item(self, meeting, section, title, outcome=None):
         return create_meeting_item(
             meeting=meeting,
             meeting_section=section,
@@ -94,16 +106,24 @@ class LiveStateMachineBase(TestCase):
             title=title,
         )
 
+    def set_outcome(self, item, outcome):
+        item.outcome = outcome
+        item.save(update_fields=["outcome", "updated_at"])
+
     def start(self, meeting):
         return start_meeting(meeting=meeting, actor=self.alex)
 
+    def current_id(self, meeting):
+        meeting.refresh_from_db()
+        return meeting.current_meeting_item_id
+
     def current(self, meeting):
+        pk = self.current_id(meeting)
+        if pk is None:
+            return None
         return (
             MeetingItem.objects
-            .filter(
-                meeting=meeting,
-                status=MeetingItem.Status.DISCUSSING,
-            )
+            .filter(pk=pk)
             .first()
         )
 
@@ -111,15 +131,15 @@ class LiveStateMachineBase(TestCase):
         meeting.refresh_from_db()
         return meeting.status
 
-    def item_status(self, item):
+    def item_outcome(self, item):
         item.refresh_from_db()
-        return item.status
+        return item.outcome
 
 
 class LiveStateMachineDomainTest(LiveStateMachineBase):
     # ── Start ────────────────────────────────────────────────────
 
-    def test_start_selects_first_item_in_canonical_order(self):
+    def test_start_picks_first_not_discussed_item_as_current(self):
         meeting = self.create_meeting()
         section_a = MeetingSection.objects.get(meeting=meeting)
         section_b = self.create_section(meeting, "Decisions")
@@ -134,55 +154,136 @@ class LiveStateMachineDomainTest(LiveStateMachineBase):
             self.meeting_status(meeting),
             Meeting.Status.LIVE,
         )
-        current = self.current(meeting)
-        self.assertIsNotNone(current)
-        self.assertEqual(current, a1)
-        self.assertNotEqual(current, b1)
-        self.assertNotEqual(current, a2)
+        self.assertEqual(self.current_id(meeting), a1.pk)
 
-    def test_start_without_items_goes_live_without_current(self):
+    def test_start_does_not_change_outcomes(self):
         meeting = self.create_meeting()
+        section = MeetingSection.objects.get(meeting=meeting)
+        a = self.create_item(meeting, section, "A")
+        b = self.create_item(meeting, section, "B")
+        self.set_outcome(b, MeetingItem.Outcome.DONE)
+
         self.start(meeting)
+
+        self.assertEqual(self.current_id(meeting), a.pk)
         self.assertEqual(
-            self.meeting_status(meeting),
-            Meeting.Status.LIVE,
+            self.item_outcome(a),
+            MeetingItem.Outcome.NOT_DISCUSSED,
         )
-        self.assertIsNone(self.current(meeting))
+        self.assertEqual(
+            self.item_outcome(b),
+            MeetingItem.Outcome.DONE,
+        )
 
-    # ── Focus ────────────────────────────────────────────────────
+    def test_start_without_not_discussed_items_goes_live_without_current(self):
+        meeting = self.create_meeting()
+        section = MeetingSection.objects.get(meeting=meeting)
+        a = self.create_item(meeting, section, "A")
+        self.set_outcome(a, MeetingItem.Outcome.DONE)
 
-    def test_focus_transition(self):
+        self.start(meeting)
+
+        self.assertIsNone(self.current_id(meeting))
+        self.assertEqual(
+            self.item_outcome(a), MeetingItem.Outcome.DONE
+        )
+
+    def test_start_preserves_valid_existing_current_item(self):
+        meeting = self.create_meeting()
+        section = MeetingSection.objects.get(meeting=meeting)
+        a = self.create_item(meeting, section, "A")
+        b = self.create_item(meeting, section, "B")
+
+        meeting.current_meeting_item = b
+        meeting.save(update_fields=["current_meeting_item_id"])
+
+        self.start(meeting)
+
+        self.assertEqual(self.current_id(meeting), b.pk)
+
+    # ── Focus / make current ─────────────────────────────────────
+
+    def test_focus_accepted_for_not_discussed(self):
         meeting = self.create_meeting()
         section = MeetingSection.objects.get(meeting=meeting)
         a = self.create_item(meeting, section, "A")
         b = self.create_item(meeting, section, "B")
 
         self.start(meeting)
-        self.assertEqual(self.current(meeting), a)
+        self.assertEqual(self.current_id(meeting), a.pk)
 
         focus_meeting_item(meeting_item=b, actor=self.alex)
+        self.assertEqual(self.current_id(meeting), b.pk)
         self.assertEqual(
-            self.item_status(b), MeetingItem.Status.DISCUSSING
+            self.item_outcome(b), MeetingItem.Outcome.NOT_DISCUSSED
         )
-        self.assertEqual(
-            self.item_status(a), MeetingItem.Status.NOT_DISCUSSED
-        )
-        self.assertEqual(self.current(meeting), b)
 
-    def test_focus_rejected_when_item_not_not_discussed(self):
+    def test_focus_accepted_for_done(self):
         meeting = self.create_meeting()
         section = MeetingSection.objects.get(meeting=meeting)
         a = self.create_item(meeting, section, "A")
         b = self.create_item(meeting, section, "B")
+        self.set_outcome(a, MeetingItem.Outcome.DONE)
+
+        self.start(meeting)
+        self.assertEqual(self.current_id(meeting), b.pk)
+
+        focus_meeting_item(meeting_item=a, actor=self.alex)
+        self.assertEqual(self.current_id(meeting), a.pk)
+        self.assertEqual(
+            self.item_outcome(a), MeetingItem.Outcome.DONE
+        )
+
+    def test_focus_accepted_for_follow_up(self):
+        meeting = self.create_meeting()
+        section = MeetingSection.objects.get(meeting=meeting)
+        a = self.create_item(meeting, section, "A")
+        b = self.create_item(meeting, section, "B")
+        self.set_outcome(a, MeetingItem.Outcome.FOLLOW_UP)
+
+        self.start(meeting)
+        self.assertEqual(self.current_id(meeting), b.pk)
+
+        focus_meeting_item(meeting_item=a, actor=self.alex)
+        self.assertEqual(self.current_id(meeting), a.pk)
+        self.assertEqual(
+            self.item_outcome(a), MeetingItem.Outcome.FOLLOW_UP
+        )
+
+    def test_focus_does_not_change_target_outcome(self):
+        meeting = self.create_meeting()
+        section = MeetingSection.objects.get(meeting=meeting)
+        a = self.create_item(meeting, section, "A")
+        b = self.create_item(meeting, section, "B")
+        self.set_outcome(b, MeetingItem.Outcome.FOLLOW_UP)
 
         self.start(meeting)
         focus_meeting_item(meeting_item=b, actor=self.alex)
 
-        with self.assertRaises(MeetingDomainError):
-            focus_meeting_item(meeting_item=b, actor=self.alex)
-
         self.assertEqual(
-            self.item_status(b), MeetingItem.Status.DISCUSSING
+            self.item_outcome(b), MeetingItem.Outcome.FOLLOW_UP
+        )
+
+    def test_switching_current_does_not_change_previous_outcome(self):
+        """B (current) -> A (done): B keeps not_discussed, A keeps
+        done. No implicit reopening, no implicit completion."""
+        meeting = self.create_meeting()
+        section = MeetingSection.objects.get(meeting=meeting)
+        a = self.create_item(meeting, section, "A")
+        b = self.create_item(meeting, section, "B")
+        self.set_outcome(a, MeetingItem.Outcome.DONE)
+
+        self.start(meeting)
+        self.assertEqual(self.current_id(meeting), b.pk)
+
+        focus_meeting_item(meeting_item=a, actor=self.alex)
+
+        self.assertEqual(self.current_id(meeting), a.pk)
+        self.assertEqual(
+            self.item_outcome(a), MeetingItem.Outcome.DONE
+        )
+        self.assertEqual(
+            self.item_outcome(b), MeetingItem.Outcome.NOT_DISCUSSED
         )
 
     def test_focus_rejected_outside_live(self):
@@ -193,24 +294,9 @@ class LiveStateMachineDomainTest(LiveStateMachineBase):
         with self.assertRaises(MeetingDomainError):
             focus_meeting_item(meeting_item=a, actor=self.alex)
 
-    def test_at_most_one_discussing_per_meeting(self):
-        meeting = self.create_meeting()
-        section = MeetingSection.objects.get(meeting=meeting)
-        a = self.create_item(meeting, section, "A")
-        b = self.create_item(meeting, section, "B")
-
-        self.start(meeting)
-        focus_meeting_item(meeting_item=b, actor=self.alex)
-
-        count = MeetingItem.objects.filter(
-            meeting=meeting,
-            status=MeetingItem.Status.DISCUSSING,
-        ).count()
-        self.assertEqual(count, 1)
-
     # ── Done ─────────────────────────────────────────────────────
 
-    def test_done_advances_to_deterministic_next_item(self):
+    def test_done_on_current_sets_done_and_advances(self):
         meeting = self.create_meeting()
         section = MeetingSection.objects.get(meeting=meeting)
         a = self.create_item(meeting, section, "A")
@@ -218,54 +304,88 @@ class LiveStateMachineDomainTest(LiveStateMachineBase):
         c = self.create_item(meeting, section, "C")
 
         self.start(meeting)
-        self.assertEqual(self.current(meeting), a)
+        self.assertEqual(self.current_id(meeting), a.pk)
 
         mark_meeting_item_done(meeting_item=a, actor=self.alex)
         self.assertEqual(
-            self.item_status(a), MeetingItem.Status.DONE
+            self.item_outcome(a), MeetingItem.Outcome.DONE
         )
-        self.assertEqual(self.current(meeting), b)
+        self.assertEqual(self.current_id(meeting), b.pk)
 
         mark_meeting_item_done(meeting_item=b, actor=self.alex)
-        self.assertEqual(self.current(meeting), c)
+        self.assertEqual(
+            self.item_outcome(b), MeetingItem.Outcome.DONE
+        )
+        self.assertEqual(self.current_id(meeting), c.pk)
 
         mark_meeting_item_done(meeting_item=c, actor=self.alex)
-        self.assertIsNone(self.current(meeting))
+        self.assertIsNone(self.current_id(meeting))
 
-    def test_done_non_current_rejected(self):
+    def test_done_on_non_current_sets_done_and_keeps_current(self):
         meeting = self.create_meeting()
         section = MeetingSection.objects.get(meeting=meeting)
         a = self.create_item(meeting, section, "A")
         b = self.create_item(meeting, section, "B")
 
         self.start(meeting)
-        self.assertEqual(self.current(meeting), a)
+        self.assertEqual(self.current_id(meeting), a.pk)
 
-        with self.assertRaises(MeetingDomainError):
-            mark_meeting_item_done(meeting_item=b, actor=self.alex)
+        mark_meeting_item_done(meeting_item=b, actor=self.alex)
+        self.assertEqual(
+            self.item_outcome(b), MeetingItem.Outcome.DONE
+        )
+        self.assertEqual(self.current_id(meeting), a.pk)
+
+    def test_done_does_not_require_current(self):
+        meeting = self.create_meeting()
+        section = MeetingSection.objects.get(meeting=meeting)
+        a = self.create_item(meeting, section, "A")
+        b = self.create_item(meeting, section, "B")
+
+        self.start(meeting)
+
+        # No error: Done is valid on the non-current item.
+        mark_meeting_item_done(meeting_item=b, actor=self.alex)
+        self.assertEqual(
+            self.item_outcome(b), MeetingItem.Outcome.DONE
+        )
+
+    def test_done_on_previously_follow_up_item(self):
+        meeting = self.create_meeting()
+        section = MeetingSection.objects.get(meeting=meeting)
+        a = self.create_item(meeting, section, "A")
+        b = self.create_item(meeting, section, "B")
+        self.set_outcome(a, MeetingItem.Outcome.FOLLOW_UP)
+
+        self.start(meeting)
+        self.assertEqual(self.current_id(meeting), b.pk)
+
+        focus_meeting_item(meeting_item=a, actor=self.alex)
+        mark_meeting_item_done(meeting_item=a, actor=self.alex)
 
         self.assertEqual(
-            self.item_status(b), MeetingItem.Status.NOT_DISCUSSED
+            self.item_outcome(a), MeetingItem.Outcome.DONE
         )
+        self.assertEqual(self.current_id(meeting), b.pk)
 
     # ── Follow-up ────────────────────────────────────────────────
 
-    def test_follow_up_advances_to_deterministic_next_item(self):
+    def test_follow_up_on_current_sets_follow_up_and_advances(self):
         meeting = self.create_meeting()
         section = MeetingSection.objects.get(meeting=meeting)
         a = self.create_item(meeting, section, "A")
         b = self.create_item(meeting, section, "B")
 
         self.start(meeting)
-        self.assertEqual(self.current(meeting), a)
+        self.assertEqual(self.current_id(meeting), a.pk)
 
         mark_meeting_item_follow_up(meeting_item=a, actor=self.alex)
         self.assertEqual(
-            self.item_status(a), MeetingItem.Status.FOLLOW_UP
+            self.item_outcome(a), MeetingItem.Outcome.FOLLOW_UP
         )
-        self.assertEqual(self.current(meeting), b)
+        self.assertEqual(self.current_id(meeting), b.pk)
 
-    def test_follow_up_non_current_rejected(self):
+    def test_follow_up_on_non_current_keeps_current(self):
         meeting = self.create_meeting()
         section = MeetingSection.objects.get(meeting=meeting)
         a = self.create_item(meeting, section, "A")
@@ -273,51 +393,83 @@ class LiveStateMachineDomainTest(LiveStateMachineBase):
 
         self.start(meeting)
 
-        with self.assertRaises(MeetingDomainError):
-            mark_meeting_item_follow_up(
-                meeting_item=b, actor=self.alex
-            )
+        mark_meeting_item_follow_up(meeting_item=b, actor=self.alex)
         self.assertEqual(
-            self.item_status(b), MeetingItem.Status.NOT_DISCUSSED
+            self.item_outcome(b), MeetingItem.Outcome.FOLLOW_UP
         )
+        self.assertEqual(self.current_id(meeting), a.pk)
+
+    def test_done_does_not_move_current_when_non_current_resolved(self):
+        """A current, B done (non-current): current stays A even
+        though A is followed by nothing else."""
+        meeting = self.create_meeting()
+        section = MeetingSection.objects.get(meeting=meeting)
+        a = self.create_item(meeting, section, "A")
+        b = self.create_item(meeting, section, "B")
+
+        self.start(meeting)
+        self.assertEqual(self.current_id(meeting), a.pk)
+
+        mark_meeting_item_done(meeting_item=b, actor=self.alex)
+        # Resolving B leaves no not_discussed items, but current was
+        # A: the pointer is left unchanged.
+        self.assertEqual(self.current_id(meeting), a.pk)
 
     # ── End ──────────────────────────────────────────────────────
 
-    def test_end_rejected_while_discussing(self):
+    def test_end_succeeds_with_non_null_current_pointer(self):
         meeting = self.create_meeting()
         section = MeetingSection.objects.get(meeting=meeting)
         a = self.create_item(meeting, section, "A")
 
         self.start(meeting)
-        self.assertEqual(self.current(meeting), a)
-
-        with self.assertRaises(MeetingDomainError):
-            end_meeting(meeting=meeting, actor=self.alex)
-
-        self.assertEqual(
-            self.meeting_status(meeting), Meeting.Status.LIVE
-        )
-
-    def test_end_succeeds_with_undiscussed_but_no_discussing(self):
-        meeting = self.create_meeting()
-        section = MeetingSection.objects.get(meeting=meeting)
-        a = self.create_item(meeting, section, "A")
-        b = self.create_item(meeting, section, "B")
-
-        self.start(meeting)
-        mark_meeting_item_done(meeting_item=a, actor=self.alex)
-        mark_meeting_item_done(meeting_item=b, actor=self.alex)
-        self.assertIsNone(self.current(meeting))
+        self.assertEqual(self.current_id(meeting), a.pk)
 
         end_meeting(meeting=meeting, actor=self.alex)
         self.assertEqual(
             self.meeting_status(meeting), Meeting.Status.COMPLETED
         )
 
+    def test_end_clears_current(self):
+        meeting = self.create_meeting()
+        section = MeetingSection.objects.get(meeting=meeting)
+        a = self.create_item(meeting, section, "A")
+
+        self.start(meeting)
+        self.assertEqual(self.current_id(meeting), a.pk)
+
+        end_meeting(meeting=meeting, actor=self.alex)
+        self.assertIsNone(self.current_id(meeting))
+        # Ending never changes outcomes.
+        self.assertEqual(
+            self.item_outcome(a), MeetingItem.Outcome.NOT_DISCUSSED
+        )
+
+    def test_end_allows_remaining_not_discussed_items(self):
+        meeting = self.create_meeting()
+        section = MeetingSection.objects.get(meeting=meeting)
+        a = self.create_item(meeting, section, "A")
+        b = self.create_item(meeting, section, "B")
+
+        self.start(meeting)
+        mark_meeting_item_done(meeting_item=a, actor=self.alex)
+        self.assertEqual(self.current_id(meeting), b.pk)
+
+        end_meeting(meeting=meeting, actor=self.alex)
+        self.assertEqual(
+            self.meeting_status(meeting), Meeting.Status.COMPLETED
+        )
+        self.assertEqual(
+            self.item_outcome(b), MeetingItem.Outcome.NOT_DISCUSSED
+        )
+
     # ── Reopen ───────────────────────────────────────────────────
 
     def test_reopen_preserves_started_at_and_clears_ended_at(self):
         meeting = self.create_meeting()
+        section = MeetingSection.objects.get(meeting=meeting)
+        a = self.create_item(meeting, section, "A")
+
         self.start(meeting)
         meeting.refresh_from_db()
         started_at = meeting.started_at
@@ -331,7 +483,7 @@ class LiveStateMachineDomainTest(LiveStateMachineBase):
         self.assertEqual(meeting.started_at, started_at)
         self.assertIsNone(meeting.ended_at)
 
-    def test_reopen_selects_first_not_discussed_when_none_current(self):
+    def test_reopen_selects_first_remaining_not_discussed_when_current_null(self):
         meeting = self.create_meeting()
         section = MeetingSection.objects.get(meeting=meeting)
         a = self.create_item(meeting, section, "A")
@@ -339,29 +491,174 @@ class LiveStateMachineDomainTest(LiveStateMachineBase):
 
         self.start(meeting)
         mark_meeting_item_done(meeting_item=a, actor=self.alex)
-        self.assertEqual(self.current(meeting), b)
-        mark_meeting_item_follow_up(meeting_item=b, actor=self.alex)
-        self.assertIsNone(self.current(meeting))
+        self.assertEqual(self.current_id(meeting), b.pk)
+        mark_meeting_item_done(meeting_item=b, actor=self.alex)
+        self.assertIsNone(self.current_id(meeting))
+        end_meeting(meeting=meeting, actor=self.alex)
+
+        # Re-leave one item not_discussed by adding a new one.
+        c = self.create_item(meeting, section, "C")
+
+        reopen_meeting(meeting=meeting, actor=self.alex)
+        meeting.refresh_from_db()
+        self.assertEqual(meeting.status, Meeting.Status.LIVE)
+        self.assertEqual(self.current_id(meeting), c.pk)
+        self.assertEqual(
+            self.item_outcome(a), MeetingItem.Outcome.DONE
+        )
+        self.assertEqual(
+            self.item_outcome(b), MeetingItem.Outcome.DONE
+        )
+
+    def test_reopen_with_no_remaining_not_discussed_leaves_current_null(self):
+        meeting = self.create_meeting()
+        section = MeetingSection.objects.get(meeting=meeting)
+        a = self.create_item(meeting, section, "A")
+        b = self.create_item(meeting, section, "B")
+
+        self.start(meeting)
+        mark_meeting_item_done(meeting_item=a, actor=self.alex)
+        mark_meeting_item_done(meeting_item=b, actor=self.alex)
+        self.assertIsNone(self.current_id(meeting))
         end_meeting(meeting=meeting, actor=self.alex)
 
         reopen_meeting(meeting=meeting, actor=self.alex)
         meeting.refresh_from_db()
         self.assertEqual(meeting.status, Meeting.Status.LIVE)
-        self.assertIsNone(self.current(meeting))
+        self.assertIsNone(self.current_id(meeting))
+
+    def test_reopen_does_not_mutate_outcomes(self):
+        meeting = self.create_meeting()
+        section = MeetingSection.objects.get(meeting=meeting)
+        a = self.create_item(meeting, section, "A")
+        b = self.create_item(meeting, section, "B")
+
+        self.start(meeting)
+        mark_meeting_item_follow_up(meeting_item=a, actor=self.alex)
+        end_meeting(meeting=meeting, actor=self.alex)
+
+        reopen_meeting(meeting=meeting, actor=self.alex)
         self.assertEqual(
-            self.item_status(a), MeetingItem.Status.DONE
+            self.item_outcome(a), MeetingItem.Outcome.FOLLOW_UP
         )
         self.assertEqual(
-            self.item_status(b), MeetingItem.Status.FOLLOW_UP
+            self.item_outcome(b), MeetingItem.Outcome.NOT_DISCUSSED
         )
 
+    # ── Current may point to resolved items ──────────────────────
+
+    def test_current_may_point_to_done_item(self):
+        meeting = self.create_meeting()
+        section = MeetingSection.objects.get(meeting=meeting)
+        a = self.create_item(meeting, section, "A")
+        b = self.create_item(meeting, section, "B")
+        self.set_outcome(a, MeetingItem.Outcome.DONE)
+
+        self.start(meeting)
+        focus_meeting_item(meeting_item=a, actor=self.alex)
+
+        self.assertEqual(self.current_id(meeting), a.pk)
+        self.assertEqual(
+            self.item_outcome(a), MeetingItem.Outcome.DONE
+        )
+
+    def test_current_may_point_to_follow_up_item(self):
+        meeting = self.create_meeting()
+        section = MeetingSection.objects.get(meeting=meeting)
+        a = self.create_item(meeting, section, "A")
+        b = self.create_item(meeting, section, "B")
+        self.set_outcome(a, MeetingItem.Outcome.FOLLOW_UP)
+
+        self.start(meeting)
+        focus_meeting_item(meeting_item=a, actor=self.alex)
+
+        self.assertEqual(self.current_id(meeting), a.pk)
+        self.assertEqual(
+            self.item_outcome(a), MeetingItem.Outcome.FOLLOW_UP
+        )
+
+    # ── Spontaneous item creation ────────────────────────────────
+
+    def test_new_item_stays_not_discussed_and_does_not_replace_current(self):
+        meeting = self.create_meeting()
+        section = MeetingSection.objects.get(meeting=meeting)
+        a = self.create_item(meeting, section, "A")
+        b = self.create_item(meeting, section, "B")
+
+        self.start(meeting)
+        self.assertEqual(self.current_id(meeting), a.pk)
+
+        c = self.create_item(meeting, section, "C")
+
+        self.assertEqual(
+            self.item_outcome(c), MeetingItem.Outcome.NOT_DISCUSSED
+        )
+        self.assertEqual(self.current_id(meeting), a.pk)
+
+    # ── Deletion ─────────────────────────────────────────────────
+
+    def test_deleting_current_item_clears_current(self):
+        meeting = self.create_meeting()
+        section = MeetingSection.objects.get(meeting=meeting)
+        a = self.create_item(meeting, section, "A")
+        b = self.create_item(meeting, section, "B")
+
+        self.start(meeting)
+        self.assertEqual(self.current_id(meeting), a.pk)
+
+        a.delete()
+
+        self.assertIsNone(self.current_id(meeting))
+        # Deletion never implicitly reselects another item.
+        self.assertEqual(
+            self.item_outcome(b), MeetingItem.Outcome.NOT_DISCUSSED
+        )
+
+    # ── Cross-Meeting current assignment ─────────────────────────
+
+    def test_cross_meeting_focus_rejected(self):
+        meeting = self.create_meeting(title="M1")
+        other = self.create_meeting(title="M2")
+        section = MeetingSection.objects.get(meeting=meeting)
+        other_section = MeetingSection.objects.get(meeting=other)
+
+        a = self.create_item(meeting, section, "A")
+        foreign = self.create_item(other, other_section, "Foreign")
+
+        self.start(meeting)
+        self.assertEqual(self.current_id(meeting), a.pk)
+
+        with self.assertRaises(MeetingDomainError):
+            focus_meeting_item(meeting_item=foreign, actor=self.alex)
+
+        self.assertEqual(self.current_id(meeting), a.pk)
+
+    def test_cross_meeting_done_rejected(self):
+        meeting = self.create_meeting(title="M1")
+        other = self.create_meeting(title="M2")
+        section = MeetingSection.objects.get(meeting=meeting)
+        other_section = MeetingSection.objects.get(meeting=other)
+
+        a = self.create_item(meeting, section, "A")
+        foreign = self.create_item(other, other_section, "Foreign")
+
+        self.start(meeting)
+
+        with self.assertRaises(MeetingDomainError):
+            mark_meeting_item_done(meeting_item=foreign, actor=self.alex)
+
+        self.assertEqual(
+            self.item_outcome(foreign),
+            MeetingItem.Outcome.NOT_DISCUSSED,
+        )
+        self.assertEqual(self.current_id(meeting), a.pk)
 
     # ── Deterministic successor advancement (Done / Follow-up) ──
 
     def test_done_advances_to_successor_after_skipped_item(self):
-        """Case A: with Alpha open and Beta current, Done Beta must
-        select Gamma (the next open item AFTER Beta), not the global
-        first open item (Alpha)."""
+        """With Alpha open and Beta current, Done Beta must select
+        Gamma (the next not_discussed item AFTER Beta), not the
+        global first open item (Alpha)."""
         meeting = self.create_meeting()
         section = MeetingSection.objects.get(meeting=meeting)
         alpha = self.create_item(meeting, section, "Alpha")
@@ -369,30 +666,29 @@ class LiveStateMachineDomainTest(LiveStateMachineBase):
         gamma = self.create_item(meeting, section, "Gamma")
 
         self.start(meeting)
-        self.assertEqual(self.current(meeting), alpha)
+        self.assertEqual(self.current_id(meeting), alpha.pk)
 
         focus_meeting_item(meeting_item=beta, actor=self.alex)
         self.assertEqual(
-            self.item_status(alpha),
-            MeetingItem.Status.NOT_DISCUSSED,
+            self.item_outcome(alpha),
+            MeetingItem.Outcome.NOT_DISCUSSED,
         )
-        self.assertEqual(self.current(meeting), beta)
+        self.assertEqual(self.current_id(meeting), beta.pk)
 
         mark_meeting_item_done(meeting_item=beta, actor=self.alex)
         self.assertEqual(
-            self.item_status(beta), MeetingItem.Status.DONE
+            self.item_outcome(beta), MeetingItem.Outcome.DONE
         )
-        # Successor after Beta is Gamma — not Alpha.
-        self.assertEqual(self.current(meeting), gamma)
+        self.assertEqual(self.current_id(meeting), gamma.pk)
         self.assertEqual(
-            self.item_status(alpha),
-            MeetingItem.Status.NOT_DISCUSSED,
+            self.item_outcome(alpha),
+            MeetingItem.Outcome.NOT_DISCUSSED,
         )
 
     def test_follow_up_wraps_to_beginning_when_no_successor(self):
-        """Case B: with Alpha open and Gamma current (Beta done),
-        Follow-up Gamma must wrap to Alpha, the first remaining
-        not_discussed item at the beginning."""
+        """With Alpha open and Gamma current (Beta done), Follow-up
+        Gamma must wrap to Alpha, the first remaining not_discussed
+        item at the beginning."""
         meeting = self.create_meeting()
         section = MeetingSection.objects.get(meeting=meeting)
         alpha = self.create_item(meeting, section, "Alpha")
@@ -402,18 +698,15 @@ class LiveStateMachineDomainTest(LiveStateMachineBase):
         self.start(meeting)
         focus_meeting_item(meeting_item=beta, actor=self.alex)
         mark_meeting_item_done(meeting_item=beta, actor=self.alex)
-        self.assertEqual(self.current(meeting), gamma)
+        self.assertEqual(self.current_id(meeting), gamma.pk)
 
         mark_meeting_item_follow_up(meeting_item=gamma, actor=self.alex)
         self.assertEqual(
-            self.item_status(gamma), MeetingItem.Status.FOLLOW_UP
+            self.item_outcome(gamma), MeetingItem.Outcome.FOLLOW_UP
         )
-        # Wrap: the only remaining not_discussed item is Alpha.
-        self.assertEqual(self.current(meeting), alpha)
+        self.assertEqual(self.current_id(meeting), alpha.pk)
 
     def test_done_resolving_last_open_item_clears_current(self):
-        """Case C: when no not_discussed items remain after
-        resolution, the Meeting has no current item."""
         meeting = self.create_meeting()
         section = MeetingSection.objects.get(meeting=meeting)
         alpha = self.create_item(meeting, section, "Alpha")
@@ -426,21 +719,12 @@ class LiveStateMachineDomainTest(LiveStateMachineBase):
         mark_meeting_item_follow_up(
             meeting_item=gamma, actor=self.alex
         )
-        self.assertEqual(self.current(meeting), alpha)
+        self.assertEqual(self.current_id(meeting), alpha.pk)
 
         mark_meeting_item_done(meeting_item=alpha, actor=self.alex)
-        self.assertIsNone(self.current(meeting))
-        self.assertEqual(
-            MeetingItem.objects.filter(
-                meeting=meeting,
-                status=MeetingItem.Status.DISCUSSING,
-            ).count(),
-            0,
-        )
+        self.assertIsNone(self.current_id(meeting))
 
     def test_successor_crosses_section_boundary(self):
-        """Case D: the item at the end of Section A advances to the
-        first open item in Section B in canonical order."""
         meeting = self.create_meeting()
         section_a = MeetingSection.objects.get(meeting=meeting)
         section_b = self.create_section(meeting, "Decisions")
@@ -450,21 +734,17 @@ class LiveStateMachineDomainTest(LiveStateMachineBase):
         b1 = self.create_item(meeting, section_b, "B1")
 
         self.start(meeting)
-        self.assertEqual(self.current(meeting), a1)
+        self.assertEqual(self.current_id(meeting), a1.pk)
 
         focus_meeting_item(meeting_item=a2, actor=self.alex)
         mark_meeting_item_done(meeting_item=a2, actor=self.alex)
-        # A2 is last in Section A; the successor is B1 in Section B.
-        self.assertEqual(self.current(meeting), b1)
+        self.assertEqual(self.current_id(meeting), b1.pk)
         self.assertEqual(
-            self.item_status(a1),
-            MeetingItem.Status.NOT_DISCUSSED,
+            self.item_outcome(a1),
+            MeetingItem.Outcome.NOT_DISCUSSED,
         )
 
     def test_successor_wraps_across_sections_to_first_open(self):
-        """Case D (wrap): resolving the last item of the whole
-        agenda wraps to the first remaining open item, which may be
-        in an earlier section."""
         meeting = self.create_meeting()
         section_a = MeetingSection.objects.get(meeting=meeting)
         section_b = self.create_section(meeting, "Decisions")
@@ -474,17 +754,16 @@ class LiveStateMachineDomainTest(LiveStateMachineBase):
         b1 = self.create_item(meeting, section_b, "B1")
 
         self.start(meeting)
+        self.assertEqual(self.current_id(meeting), a1.pk)
+
         focus_meeting_item(meeting_item=a2, actor=self.alex)
         mark_meeting_item_done(meeting_item=a2, actor=self.alex)
-        self.assertEqual(self.current(meeting), b1)
+        self.assertEqual(self.current_id(meeting), b1.pk)
 
         mark_meeting_item_done(meeting_item=b1, actor=self.alex)
-        # B1 was last in canonical order; wrap to A1 (A2 done).
-        self.assertEqual(self.current(meeting), a1)
+        self.assertEqual(self.current_id(meeting), a1.pk)
 
     def test_successor_never_selects_resolved_items(self):
-        """Case E: done / follow_up items are never selected as the
-        successor, even when they sit between open items."""
         meeting = self.create_meeting()
         section = MeetingSection.objects.get(meeting=meeting)
         a = self.create_item(meeting, section, "A")
@@ -493,31 +772,27 @@ class LiveStateMachineDomainTest(LiveStateMachineBase):
 
         self.start(meeting)
 
-        # A done, C follow_up, B the only open item.
-        a.status = MeetingItem.Status.DONE
-        a.save(update_fields=["status", "updated_at"])
-        c.status = MeetingItem.Status.FOLLOW_UP
-        c.save(update_fields=["status", "updated_at"])
+        # A done, C follow_up, B the only not_discussed item.
+        self.set_outcome(a, MeetingItem.Outcome.DONE)
+        self.set_outcome(c, MeetingItem.Outcome.FOLLOW_UP)
 
         focus_meeting_item(meeting_item=b, actor=self.alex)
-        self.assertEqual(self.current(meeting), b)
+        self.assertEqual(self.current_id(meeting), b.pk)
 
-        # Resolving B leaves no open items: the done (A) and
-        # follow_up (C) items must never be selected.
         mark_meeting_item_done(meeting_item=b, actor=self.alex)
-        self.assertIsNone(self.current(meeting))
+        self.assertIsNone(self.current_id(meeting))
         self.assertEqual(
-            self.item_status(a), MeetingItem.Status.DONE
+            self.item_outcome(a), MeetingItem.Outcome.DONE
         )
         self.assertEqual(
-            self.item_status(c), MeetingItem.Status.FOLLOW_UP
+            self.item_outcome(c), MeetingItem.Outcome.FOLLOW_UP
         )
 
 
 class LiveStateMachineIsolationTest(LiveStateMachineBase):
     """Project Meeting write isolation: a viewer cannot drive the
-    Live MeetingItem state machine; a group Meeting remains open
-    to group members."""
+    Live Meeting current/outcome actions; a group Meeting remains
+    open to group members."""
 
     def setUp(self):
         super().setUp()
@@ -563,7 +838,7 @@ class LiveStateMachineIsolationTest(LiveStateMachineBase):
         start_meeting(meeting=meeting, actor=self.alex)
 
         focus_meeting_item(meeting_item=b, actor=self.chris)
-        self.assertEqual(self.current(meeting), b)
+        self.assertEqual(self.current_id(meeting), b.pk)
 
         with self.assertRaises(MeetingDomainError):
             focus_meeting_item(meeting_item=a, actor=self.laura)
@@ -576,10 +851,10 @@ class LiveStateMachineIsolationTest(LiveStateMachineBase):
 
         start_meeting(meeting=meeting, actor=self.alex)
         focus_meeting_item(meeting_item=b, actor=self.chris)
-        self.assertEqual(self.current(meeting), b)
+        self.assertEqual(self.current_id(meeting), b.pk)
         mark_meeting_item_done(meeting_item=b, actor=self.chris)
         self.assertEqual(
-            self.item_status(b), MeetingItem.Status.DONE
+            self.item_outcome(b), MeetingItem.Outcome.DONE
         )
 
 
@@ -597,6 +872,42 @@ class LiveStateMachineAPITest(LiveStateMachineBase):
         ]
         return meeting, items
 
+    def test_meeting_exposes_current_meeting_item_id(self):
+        meeting, items = self._group_meeting_with_items()
+        start_meeting(meeting=meeting, actor=self.alex)
+        self.client.force_login(self.chris)
+
+        resp = self.client.get(f"/api/meetings/{meeting.pk}/")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            resp.json()["currentMeetingItemId"], items[0].pk
+        )
+
+    def test_meeting_item_exposes_outcome_never_discussing(self):
+        meeting, items = self._group_meeting_with_items()
+        start_meeting(meeting=meeting, actor=self.alex)
+        self.client.force_login(self.chris)
+
+        resp = self.client.get(
+            f"/api/meeting-items/{items[0].pk}/"
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        data = resp.json()
+        self.assertNotIn("status", data)
+        self.assertNotIn("discussing", data.get("outcome"))
+        self.assertEqual(data["outcome"], "not_discussed")
+
+        list_resp = self.client.get(
+            f"/api/meetings/{meeting.pk}/items/"
+        )
+        self.assertEqual(list_resp.status_code, status.HTTP_200_OK)
+        for row in list_resp.json():
+            self.assertNotIn("status", row)
+            self.assertIn(
+                row["outcome"],
+                ("not_discussed", "done", "follow_up"),
+            )
+
     def test_focus_endpoint(self):
         meeting, items = self._group_meeting_with_items()
         start_meeting(meeting=meeting, actor=self.alex)
@@ -608,8 +919,11 @@ class LiveStateMachineAPITest(LiveStateMachineBase):
         )
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertEqual(
-            self.item_status(items[1]),
-            MeetingItem.Status.DISCUSSING,
+            self.current_id(meeting), items[1].pk
+        )
+        self.assertEqual(
+            self.item_outcome(items[1]),
+            MeetingItem.Outcome.NOT_DISCUSSED,
         )
 
     def test_done_endpoint(self):
@@ -623,11 +937,10 @@ class LiveStateMachineAPITest(LiveStateMachineBase):
         )
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertEqual(
-            self.item_status(items[0]), MeetingItem.Status.DONE
+            self.item_outcome(items[0]), MeetingItem.Outcome.DONE
         )
         self.assertEqual(
-            self.item_status(items[1]),
-            MeetingItem.Status.DISCUSSING,
+            self.current_id(meeting), items[1].pk
         )
 
     def test_follow_up_endpoint(self):
@@ -641,15 +954,14 @@ class LiveStateMachineAPITest(LiveStateMachineBase):
         )
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertEqual(
-            self.item_status(items[0]),
-            MeetingItem.Status.FOLLOW_UP,
+            self.item_outcome(items[0]),
+            MeetingItem.Outcome.FOLLOW_UP,
         )
         self.assertEqual(
-            self.item_status(items[1]),
-            MeetingItem.Status.DISCUSSING,
+            self.current_id(meeting), items[1].pk
         )
 
-    def test_end_rejected_while_discussing_via_api(self):
+    def test_end_succeeds_with_current_pointer_via_api(self):
         meeting, items = self._group_meeting_with_items()
         start_meeting(meeting=meeting, actor=self.alex)
         self.client.force_login(self.chris)
@@ -658,10 +970,11 @@ class LiveStateMachineAPITest(LiveStateMachineBase):
             f"/api/meetings/{meeting.pk}/end",
             {}, format="json",
         )
-        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertEqual(
-            self.meeting_status(meeting), Meeting.Status.LIVE
+            self.meeting_status(meeting), Meeting.Status.COMPLETED
         )
+        self.assertIsNone(self.current_id(meeting))
 
     def test_non_member_cannot_focus(self):
         meeting, items = self._group_meeting_with_items()
@@ -713,12 +1026,15 @@ class LiveStateMachineAPITest(LiveStateMachineBase):
 
 
 class LiveStateMachineConcurrencyTest(TransactionTestCase):
-    """The database conditional uniqueness constraint is the last
-    line of defense against concurrent double focus."""
+    """All Live actions lock the Meeting row: concurrent
+    make-current operations must not leave contradictory state."""
 
     def setUp(self):
         self.alex = User.objects.create_user(
             username="conc-alex", password="Pass1!",
+        )
+        self.chris = User.objects.create_user(
+            username="conc-chris", password="Pass1!",
         )
         self.group = ResearchGroup.objects.create(
             name="Conc Group", created_by=self.alex,
@@ -728,9 +1044,14 @@ class LiveStateMachineConcurrencyTest(TransactionTestCase):
             user=self.alex,
             role=ResearchGroupMembership.Role.ADMIN,
         )
+        ResearchGroupMembership.objects.create(
+            research_group=self.group,
+            user=self.chris,
+            role=ResearchGroupMembership.Role.MEMBER,
+        )
         self.scheduled_at = timezone.now() + timedelta(days=1)
 
-    def test_database_constraint_enforces_single_discussing(self):
+    def test_concurrent_focus_leaves_single_consistent_current(self):
         meeting = create_meeting(
             research_group=self.group,
             actor=self.alex,
@@ -751,131 +1072,234 @@ class LiveStateMachineConcurrencyTest(TransactionTestCase):
             title="B",
         )
 
-        a.status = MeetingItem.Status.DISCUSSING
-        a.save(update_fields=["status", "updated_at"])
+        start_meeting(meeting=meeting, actor=self.alex)
 
-        with self.assertRaises(IntegrityError):
-            with transaction.atomic():
-                b.status = MeetingItem.Status.DISCUSSING
-                b.save(update_fields=["status", "updated_at"])
+        # Simulate two concurrent make-current operations by
+        # executing them in nested transactions that both lock the
+        # Meeting row (serialized). Whichever commits last wins; the
+        # final state must point at exactly one of a / b and no
+        # item outcome may have changed.
+        with transaction.atomic():
+            focus_meeting_item(meeting_item=b, actor=self.alex)
+
+        meeting.refresh_from_db()
+        self.assertEqual(meeting.current_meeting_item_id, b.pk)
+        self.assertEqual(
+            MeetingItem.objects.get(pk=a.pk).outcome,
+            MeetingItem.Outcome.NOT_DISCUSSED,
+        )
+        self.assertEqual(
+            MeetingItem.objects.get(pk=b.pk).outcome,
+            MeetingItem.Outcome.NOT_DISCUSSED,
+        )
+
+        # A second concurrent focus on the other item simply
+        # re-points current; outcomes stay untouched.
+        with transaction.atomic():
+            focus_meeting_item(meeting_item=a, actor=self.chris)
+
+        meeting.refresh_from_db()
+        self.assertEqual(meeting.current_meeting_item_id, a.pk)
+        self.assertEqual(
+            MeetingItem.objects.get(pk=b.pk).outcome,
+            MeetingItem.Outcome.NOT_DISCUSSED,
+        )
+        self.assertEqual(
+            MeetingItem.objects.get(pk=a.pk).outcome,
+            MeetingItem.Outcome.NOT_DISCUSSED,
+        )
 
 
-class MigrationMappingTest(TestCase):
-    """Exercise the real 0010 data-mapping function.
+class MigrationMappingTest(TransactionTestCase):
+    """Exercise the real 0011 data-mapping function.
 
-    Builds the historical project state right after 0009 (via the
-    real migration graph), seeds legacy rows through that
-    historical state's models, and then invokes the actual
-    ``map_legacy_statuses`` RunPython function with that state's
-    apps registry. No mapping logic is duplicated here.
+    Follows the established legacy-migration test pattern (see
+    ``tests_meeting_sections.LegacyMigrationTest``): the pre-0011
+    data (a legacy ``status`` column) is emulated on the final
+    schema through a temporary column, and the real
+    ``map_discussing_to_current_and_outcome`` RunPython function is
+    invoked directly. The mapping reads ``status`` through raw
+    SQL so it runs against exactly the emulated data shape; the
+    historical model state (which carried ``status`` as a real
+    model field) is not reconstructable in this schema. No mapping
+    semantics are duplicated here — the meeting/item selection and
+    outcome conversion run from the migration module itself.
     """
 
-    @classmethod
-    def setUpClass(cls):
-        super().setUpClass()
-        from django.db.migrations.executor import MigrationExecutor
-
-        executor = MigrationExecutor(connection)
-        cls.project_state = executor.loader.project_state(
-            ("meetings", "0009_alter_meetingitem_status_and_more")
+    def _seed_rows(self):
+        """Insert a Meeting + 4 items in the pre-0011 data shape
+        (``status`` values)."""
+        from django.contrib.auth import get_user_model
+        from research_groups.models import (
+            ResearchGroup,
+            ResearchGroupMembership,
+        )
+        from .models import (
+            Meeting,
+            MeetingSection,
         )
 
-    def setUp(self):
-        self.apps = self.project_state.apps
-
-    def _seed_legacy_rows(self):
-        """Insert legacy rows using the historical (0009) state
-        models so the migration runs against exactly the pre-0010
-        schema. All fields are passed explicitly: historical state
-        models do not evaluate ``related`` defaults."""
-        from django.utils import timezone as _tz
-
-        user_model = self.apps.get_model("accounts", "User")
-        group_model = self.apps.get_model("research_groups", "ResearchGroup")
-        meeting_model = self.apps.get_model("meetings", "Meeting")
-        section_model = self.apps.get_model(
-            "meetings", "MeetingSection"
+        now = timezone.now()
+        alex = get_user_model().objects.create_user(
+            username="legacy-0011-alex", password="Pass1!",
         )
-        item_model = self.apps.get_model("meetings", "MeetingItem")
-
-        creator = user_model.objects.create_user(
-            username="legacy-mapping-creator",
-            password="Pass1!",
+        group = ResearchGroup.objects.create(
+            name="Legacy 0011 Group",
+            created_by=alex,
         )
-        group = group_model.objects.create(
-            name="Legacy Mapping Group",
-            created_by=creator,
+        ResearchGroupMembership.objects.create(
+            research_group=group,
+            user=alex,
+            role=ResearchGroupMembership.Role.ADMIN,
         )
-        legacy_meeting = meeting_model.objects.create(
+        meeting = Meeting.objects.create(
             research_group=group,
             scope="group",
-            title="Legacy Weekly",
-            scheduled_at=_tz.now(),
-            status="upcoming",
-            created_by=creator,
+            title="Legacy 0011 Weekly",
+            scheduled_at=now,
+            status="live",
+            created_by=alex,
         )
-        legacy_section = section_model.objects.create(
-            meeting=legacy_meeting,
+        section = MeetingSection.objects.create(
+            meeting=meeting,
             name="Agenda",
             position=0,
         )
-
-        open_item = item_model.objects.create(
-            meeting=legacy_meeting,
-            meeting_section=legacy_section,
-            title="Legacy open",
-            position=0,
-            status="open",
-            created_by=creator,
-        )
-        discussed_item = item_model.objects.create(
-            meeting=legacy_meeting,
-            meeting_section=legacy_section,
-            title="Legacy discussed",
-            position=1,
-            status="discussed",
-            created_by=creator,
-        )
-        return open_item, discussed_item
+        with connection.schema_editor(atomic=False) as editor:
+            editor.execute(
+                "ALTER TABLE meetings_item ADD COLUMN IF NOT EXISTS"
+                " status TEXT"
+            )
+        with connection.cursor() as cursor:
+            for position, title, legacy_status in [
+                (0, "Legacy not_discussed", "not_discussed"),
+                (1, "Legacy discussing", "discussing"),
+                (2, "Legacy done", "done"),
+                (3, "Legacy follow_up", "follow_up"),
+            ]:
+                cursor.execute(
+                    "INSERT INTO meetings_item (title, notes, position,"
+                    " outcome, status, created_at, updated_at,"
+                    " meeting_id, meeting_section_id, created_by_id)"
+                    " VALUES (%s, '', %s, 'not_discussed', %s, %s, %s,"
+                    " %s, %s, %s)",
+                    [
+                        title, position, legacy_status,
+                        now.isoformat(), now.isoformat(),
+                        meeting.pk, section.pk, alex.pk,
+                    ],
+                )
+        pks = {}
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT id, title FROM meetings_item"
+            )
+            for pk, title in cursor.fetchall():
+                pks[title] = pk
+        return meeting, pks
 
     def _run_migration(self):
-        from importlib import import_module
+        """Invoke the real 0011 RunPython mapping.
 
-        migration = import_module(
-            "meetings.migrations"
-            ".0010_meetingitem_status_data_mapping"
+        The migration function resolves models through the passed
+        apps registry; here the live registry is used (same
+        concrete table), and the legacy ``status`` column is read
+        through the model's ``_base_manager`` raw-SQL escape
+        hatch: the function's ORM ``F("status")``/``Q`` reads are
+        re-expressed by temporarily adding the field to the model
+        metadata for the duration of the call.
+        """
+        import importlib
+
+        from django.db import models as django_models
+
+        from .models import MeetingItem
+
+        status_field = django_models.CharField(
+            max_length=16,
+            blank=True,
         )
-        migration.map_legacy_statuses(self.apps, None)
-
-    def _final_status(self, pk):
-        return (
-            MeetingItem.objects.get(pk=pk).status
+        # Temporarily expose the legacy column on the model so the
+        # real mapping function's F()/Q() references resolve.
+        status_field.contribute_to_class(
+            MeetingItem, "status"
         )
+        try:
+            migration = importlib.import_module(
+                "meetings.migrations"
+                ".0011_current_item_and_outcome"
+            )
+            from django.apps import apps as django_apps
 
-    def test_open_maps_to_not_discussed(self):
-        open_item, _ = self._seed_legacy_rows()
+            with connection.schema_editor(
+                atomic=False
+            ) as editor:
+                migration.map_discussing_to_current_and_outcome(
+                    django_apps, editor
+                )
+        finally:
+            MeetingItem._meta.local_fields = [
+                f for f in MeetingItem._meta.local_fields
+                if f.name != "status"
+            ]
+            MeetingItem._meta.fields_map.pop("status", None)
+            # Rebuild every cached field view of the model; the
+            # emulated field was contributed to the live model class,
+            # so plain dict surgery is not enough.
+            MeetingItem._meta._expire_cache()
+            MeetingItem._meta._get_fields_cache = {}
+            delattr(MeetingItem, "status")
+            # Drop the emulated legacy column.
+            with connection.schema_editor(
+                atomic=False
+            ) as editor:
+                editor.execute(
+                    "ALTER TABLE meetings_item"
+                    " DROP COLUMN IF EXISTS status"
+                )
+
+    def test_discussing_maps_to_current_plus_not_discussed(self):
+        meeting, pks = self._seed_rows()
         self._run_migration()
+
+        meeting.refresh_from_db()
         self.assertEqual(
-            self._final_status(open_item.pk),
+            meeting.current_meeting_item_id,
+            pks["Legacy discussing"],
+        )
+        self.assertEqual(
+            MeetingItem.objects.get(
+                pk=pks["Legacy discussing"]
+            ).outcome,
             "not_discussed",
         )
 
-    def test_discussed_maps_to_done(self):
-        _, discussed_item = self._seed_legacy_rows()
+    def test_existing_outcomes_are_preserved(self):
+        meeting, pks = self._seed_rows()
         self._run_migration()
+
+        outcomes = {
+            i.pk: i.outcome
+            for i in MeetingItem.objects.all()
+        }
         self.assertEqual(
-            self._final_status(discussed_item.pk),
-            "done",
+            outcomes[pks["Legacy not_discussed"]],
+            "not_discussed",
+        )
+        self.assertEqual(outcomes[pks["Legacy done"]], "done")
+        self.assertEqual(
+            outcomes[pks["Legacy follow_up"]],
+            "follow_up",
         )
 
-    def test_mapping_covers_exactly_the_documented_pair(self):
-        open_item, discussed_item = self._seed_legacy_rows()
+    def test_meeting_without_discussing_item_keeps_current_null(self):
+        meeting, pks = self._seed_rows()
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM meetings_item "
+                "WHERE title = 'Legacy discussing'"
+            )
         self._run_migration()
-        self.assertEqual(
-            self._final_status(open_item.pk),
-            MeetingItem.Status.NOT_DISCUSSED,
-        )
-        self.assertEqual(
-            self._final_status(discussed_item.pk),
-            MeetingItem.Status.DONE,
-        )
+
+        meeting.refresh_from_db()
+        self.assertIsNone(meeting.current_meeting_item_id)

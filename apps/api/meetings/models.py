@@ -137,6 +137,18 @@ class Meeting(models.Model):
         choices=Status.choices,
         default=Status.UPCOMING,
     )
+    # The official agenda item the group is currently discussing.
+    # Persisted on the Meeting: "current" is NOT a MeetingItem
+    # outcome, and deleting the referenced item clears it (SET_NULL).
+    # A Meeting can reference at most one current item; the service
+    # layer guarantees the referenced item belongs to this Meeting.
+    current_meeting_item = models.OneToOneField(
+        "MeetingItem",
+        on_delete=models.SET_NULL,
+        related_name="+",
+        null=True,
+        blank=True,
+    )
     started_at = models.DateTimeField(null=True, blank=True)
     ended_at = models.DateTimeField(null=True, blank=True)
     created_by = models.ForeignKey(
@@ -233,9 +245,8 @@ class MeetingParticipant(models.Model):
 class MeetingItem(models.Model):
     """One ordered discussion / agenda item inside a Meeting."""
 
-    class Status(models.TextChoices):
+    class Outcome(models.TextChoices):
         NOT_DISCUSSED = "not_discussed", "Not discussed"
-        DISCUSSING = "discussing", "Discussing"
         DONE = "done", "Done"
         FOLLOW_UP = "follow_up", "Follow-up"
 
@@ -252,10 +263,10 @@ class MeetingItem(models.Model):
     title = models.CharField(max_length=255)
     notes = models.TextField(default="", blank=True)
     position = models.PositiveIntegerField()
-    status = models.CharField(
+    outcome = models.CharField(
         max_length=16,
-        choices=Status.choices,
-        default=Status.NOT_DISCUSSED,
+        choices=Outcome.choices,
+        default=Outcome.NOT_DISCUSSED,
     )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -272,11 +283,6 @@ class MeetingItem(models.Model):
             models.UniqueConstraint(
                 fields=["meeting_section", "position"],
                 name="meetings_item_unique_section_position",
-            ),
-            models.UniqueConstraint(
-                condition=models.Q(status="discussing"),
-                fields=["meeting"],
-                name="meetings_item_single_discussing_per_meeting",
             ),
         ]
 

@@ -534,13 +534,30 @@ project_id NULLABLE
 series_id NULLABLE          # internal MeetingSeries (Meeting Template)
 title
 status
-scheduled_at
+current_meeting_item_id NULLABLE
 started_at NULLABLE
 ended_at NULLABLE
 created_by_id
 created_at
 updated_at
 ```
+
+`current_meeting_item_id` (exposed in the API as
+`currentMeetingItemId`) is the Meeting's persisted **current item**:
+the agenda item the Meeting officially points at while Live.
+
+- It is a `OneToOne` reference to exactly one `MeetingItem` of the
+  same Meeting (a service-layer invariant), `NULL` when there is no
+  current item.
+- The referenced item may have **any** outcome
+  (`not_discussed`, `done`, `follow_up`): "current" is not an
+  outcome, and changing current never mutates any item's outcome.
+- Deleting the referenced item clears the pointer
+  (`SET_NULL`); deleting the Meeting removes both.
+- A frontend-only **Selected** concept (free navigation of the
+  agenda rail) is intentionally NOT part of this model: it is
+  frontend-local, not persisted, and the corresponding Live UI is
+  not implemented yet.
 
 Status:
 
@@ -788,7 +805,7 @@ meeting_section_id NOT NULL
 title
 notes
 position
-status
+outcome
 created_by_id
 created_at
 updated_at
@@ -797,54 +814,85 @@ updated_at
 `position` is unique within a Section. Items are ordered by
 `position`, then `id`.
 
-### Status (implemented)
+### Current item and outcome (implemented)
+
+Two distinct, persisted concepts:
+
+- **Current** lives on the `Meeting`
+  (`current_meeting_item_id`, API: `currentMeetingItemId`). It
+  identifies the agenda item the Meeting officially points at. It
+  may reference an item whose outcome is `not_discussed`, `done`,
+  or `follow_up`.
+- **Outcome** lives on the `MeetingItem` (`outcome`, API:
+  `outcome`). It is the only persisted per-item state.
 
 ```ts
-type MeetingItemStatus =
+type MeetingItemOutcome =
   | "not_discussed"
-  | "discussing"
   | "done"
   | "follow_up"
 ```
 
-The canonical Live MeetingItem state machine is implemented:
+`"discussing"` is **not** an outcome. It exists only as legacy
+history (former item status) and must not be introduced as
+canonical behavior.
 
-- **At most one `discussing` item per Meeting** (enforced by a
-  database conditional uniqueness constraint plus transactional
-  server-side logic).
-- **The current item is derived** from
-  `status === "discussing"`. There is no
-  `Meeting.currentMeetingItemId` column.
-- **Focus is navigation, not completion.** Focusing a
-  `not_discussed` item makes it `discussing` and returns the
-  previously `discussing` item to `not_discussed`; it never
-  completes the previous item.
-- **Done / Follow-up advance deterministically.** Closing the
-  current item (`done` or `follow_up`) advances to the next
+Canonical semantics:
+
+- **Changing current never mutates any outcome, and resolving an
+  outcome never implicitly changes current except via the
+  documented advance rule.**
+- **Focus / make-current** (`POST /api/meeting-items/{id}/focus`)
+  is Live-only navigation. It accepts an item of **any** outcome
+  and changes only `currentMeetingItemId`; it never completes or
+  reopens the previously current item.
+- **Done / Follow-up** (`POST /api/meeting-items/{id}/done`,
+  `POST /api/meeting-items/{id}/follow-up`) are Live-only
+  explicit outcome mutations and do **not** require the target to
+  be current. A previously `done` item may later become
+  `follow_up` explicitly (and vice versa). When the resolved item
+  **is** the current item, current advances to the next
   `not_discussed` item **after** the resolved item in canonical
   agenda order (`Section.position`, then `MeetingItem.position`,
   spanning section boundaries), wrapping once to the beginning if
   no open item exists after it. `done` / `follow_up` items are
-  never selected, and the resolved item is never reselected; when
-  no `not_discussed` items remain, the Meeting has no current
-  item.
-- **Start** (`upcoming -> live`) selects the first `not_discussed`
-  item in canonical agenda order as the current item; a Meeting
-  without items goes Live with no current item.
-- **End** (`live -> completed`) is rejected while any item is
-  `discussing` and never auto-completes an item; `not_discussed`
-  items may remain when the Meeting ends.
+  never selected as current by the advance rule, and the resolved
+  item is never reselected; when no `not_discussed` items remain,
+  current becomes `null`. When the resolved item is **not**
+  current, current stays unchanged.
+- **Start** (`upcoming -> live`) sets current to the first
+  `not_discussed` item in canonical agenda order **only if no
+  valid current item exists** (an already-set, still-valid
+  pointer is preserved; a Meeting without items goes Live with no
+  current item). Starting never mutates any outcome.
+- **End** (`live -> completed`) is never blocked by the current
+  pointer: remaining `not_discussed` items are allowed, and End
+  clears `currentMeetingItemId`. End never mutates any outcome.
 - **Reopen** (`completed -> live`) preserves `started_at`, clears
-  `ended_at`, and — if no current item exists and `not_discussed`
-  items remain — makes the first of them the current item.
-  `done` / `follow_up` items are never changed.
+  `ended_at`, and — only if current is `null` and `not_discussed`
+  items remain — sets current to the first of them. Reopen never
+  mutates any outcome.
+- **A newly created item** (including a spontaneous item) gets
+  outcome `not_discussed` and does **not** automatically become
+  current.
+- **Deleting the current item** clears the pointer
+  (`SET_NULL`), leaving the Meeting without a current item.
 
-Status mutations only happen through the explicit domain actions
-(`start`, `focus`, `done`, `follow-up`, `end`, `reopen`); the
-generic MeetingItem PATCH rejects `status`.
+Outcome mutations only happen through the explicit domain actions
+(`focus`, `done`, `follow-up`); the generic MeetingItem PATCH
+rejects both the new `outcome` field and the legacy `status`
+field.
 
-A legacy data migration maps the former statuses:
-`open -> not_discussed`, `discussed -> done`.
+Legacy data migrations (historical background; superseded by
+0011): 0009/0010 mapped the former statuses
+`open -> not_discussed`, `discussed -> done` (and introduced
+`not_discussed`/`discussing`/`done`/`follow_up`). Migration 0011
+removed the `status` column and introduced `outcome` plus the
+persisted current pointer, mapping every legacy `discussing` row
+to: the Meeting's `current_meeting_item` (the first such item per
+Meeting) and outcome `not_discussed`; `done` / `follow_up` /
+`not_discussed` rows kept their value. The old
+discussing-only conditional unique constraint was removed.
 
 ### Intended but not yet implemented
 
@@ -1728,12 +1776,13 @@ Meeting records a new `ended_at`.
 ### What is and is not enforced
 
 - The implemented lifecycle is **only** the upcoming/live/completed state
-  machine above. There is no rule that blocks ending while an item is
-  `discussing`, because the implemented `MeetingItem` status is the simpler
-  `open`/`discussed` pair (see Section 17).
-- The richer live-meeting controls from the product concept (active-item
-  mode, `discussing`/`done`/`follow_up` item states, per-item completion
-  before end) are not implemented.
+  machine above. Ending a Meeting is **not** blocked by the current
+  pointer: remaining `not_discussed` items are allowed, and End clears
+  `currentMeetingItemId` (see Section 17).
+- The richer live-meeting ceremony from the product concept (Agenda |
+  Current Item split UI, moderator and moderator rotation, frontend-local
+  **Selected** free navigation of the agenda rail, per-item `intent` and
+  `origin`) is not implemented.
 
 ---
 
@@ -2238,9 +2287,9 @@ Move to section…
 16. Meeting lifecycle transitions (start/end/reopen) are guarded and serialized per Meeting.
 
 > Intended invariants that depend on not-yet-implemented concepts (Topic
-> state, `discussing`/`follow_up` item states, NoteEntry streams, spontaneous
-> origin) are described in the relevant sections and are not current
-> guarantees.
+> state, per-item `intent`/`origin`, NoteEntry streams, moderator rotation,
+> frontend-local Selected navigation) are described in the relevant sections
+> and are not current guarantees.
 
 ---
 

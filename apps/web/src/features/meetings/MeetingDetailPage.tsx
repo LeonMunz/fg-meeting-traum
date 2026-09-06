@@ -687,6 +687,25 @@ export function MeetingDetailPage() {
     }
   }, [meetingId])
 
+  // Re-read the Meeting row after a server-side transition that
+  // may have moved the persisted current pointer
+  // (currentMeetingItemId). The Live item action endpoints
+  // return only the updated MeetingItem, so the pointer is
+  // obtainable here only from a fresh Meeting read. Awaited after
+  // refreshItems (never racing it), so the final state always
+  // reflects the post-action server truth.
+  const refreshMeeting = useCallback(async () => {
+    if (meetingId == null) {
+      return
+    }
+    try {
+      setMeeting(await getMeeting(meetingId))
+    } catch {
+      // The action that triggered the refresh succeeded on the
+      // server; the next full load recovers the canonical row.
+    }
+  }, [meetingId])
+
   useEffect(() => {
     void loadMeeting()
   }, [loadMeeting])
@@ -1183,9 +1202,11 @@ export function MeetingDetailPage() {
     setActionError(null)
     try {
       await focusMeetingItem(item.id)
-      // Focus changes the previous item and the target; refresh the
-      // whole collection.
+      // Focus moves the persisted current pointer; the action
+      // response carries only the item, so re-read the Meeting for
+      // the fresh currentMeetingItemId and refresh the collection.
       await refreshItems()
+      await refreshMeeting()
     } catch (error) {
       setActionError(
         getErrorMessage(error, 'Agenda item could not be focused.'),
@@ -1201,9 +1222,11 @@ export function MeetingDetailPage() {
     setActionError(null)
     try {
       await markMeetingItemDone(item.id)
-      // Done changes the closed item and advances the next one;
-      // refresh the whole collection.
+      // Done mutates the item's outcome and, when the item was
+      // current, advances the persisted current pointer; re-read
+      // the Meeting and refresh the collection.
       await refreshItems()
+      await refreshMeeting()
     } catch (error) {
       setActionError(
         getErrorMessage(error, 'Agenda item could not be marked done.'),
@@ -1219,9 +1242,11 @@ export function MeetingDetailPage() {
     setActionError(null)
     try {
       await markMeetingItemFollowUp(item.id)
-      // Follow-up changes the closed item and advances the next
-      // one; refresh the whole collection.
+      // Follow-up mutates the item's outcome and, when the item
+      // was current, advances the persisted current pointer;
+      // re-read the Meeting and refresh the collection.
       await refreshItems()
+      await refreshMeeting()
     } catch (error) {
       setActionError(
         getErrorMessage(
@@ -1251,8 +1276,7 @@ export function MeetingDetailPage() {
 
       setMeeting(updated)
       // Start may select the first agenda item as the current
-      // (discussing) item; refresh the collection so the UI shows
-      // it immediately.
+      // item; refresh the collection so the UI shows it immediately.
       await refreshItems()
     } catch (error) {
       setActionError(
@@ -2017,10 +2041,13 @@ export function MeetingDetailPage() {
       : projectRole === 'owner' ||
         projectRole === 'member')
 
-  // A Live Meeting derives its current item from the canonical
-  // discussing status; there is never a separate current-item ID.
+  // A Live Meeting's current item is persisted on the Meeting
+  // (currentMeetingItemId); "current" is not an item outcome.
   const liveCurrentItem = isLive
-    ? sortedItems.find((item) => item.status === 'discussing') ?? null
+    ? sortedItems.find(
+        (item) =>
+          item.id === meeting.currentMeetingItemId,
+      ) ?? null
     : null
 
   const liveCurrentSection =
@@ -2041,7 +2068,7 @@ export function MeetingDetailPage() {
       : 0
 
   const liveOpenItemCount = sortedItems.filter(
-    (item) => item.status === 'not_discussed',
+    (item) => item.outcome === 'not_discussed',
   ).length
 
   // Completed recap header fragment: calm historical identity
@@ -2085,7 +2112,7 @@ export function MeetingDetailPage() {
     return completedOutcomeCountParts({
       workItems: workIds.size,
       followUps: sortedItems.filter(
-        (item) => item.status === 'follow_up',
+        (item) => item.outcome === 'follow_up',
       ).length,
     })
   })()
@@ -2566,19 +2593,38 @@ export function MeetingDetailPage() {
                         <ul className="mt-1 space-y-0.5">
                           {sectionItems.map((item) => {
                             const statusMeta =
-                              agendaStatusMeta(item.status)
+                              agendaStatusMeta(item.outcome)
 
                             const rowClass = [
                               'flex w-full items-start gap-2 rounded-md py-1.5 pl-2.5 pr-2 text-left outline-none transition',
-                              item.status === 'discussing'
+                              item.id === meeting.currentMeetingItemId
                                 ? 'border-l-2 border-primary bg-primary/5'
                                 : 'border-l-2 border-transparent hover:bg-surface-container-low/70',
                             ].join(' ')
 
                             return (
                               <li key={item.id}>
-                                {item.status ===
-                                'not_discussed' ? (
+                                {item.id ===
+                                meeting.currentMeetingItemId ? (
+                                  <div
+                                    className={rowClass}
+                                  >
+                                    <span
+                                      aria-hidden="true"
+                                      className="mt-px w-4 shrink-0 pl-0.5 text-center text-[13px] leading-5 text-primary"
+                                    >
+                                      {statusMeta.symbol}
+                                    </span>
+
+                                    <span className="min-w-0 flex-1 break-words text-sm leading-5 font-medium text-on-surface">
+                                      {item.title}
+                                    </span>
+
+                                    <span className="sr-only">
+                                      Current
+                                    </span>
+                                  </div>
+                                ) : (
                                   <button
                                     type="button"
                                     disabled={
@@ -2606,35 +2652,6 @@ export function MeetingDetailPage() {
                                       {statusMeta.hint}
                                     </span>
                                   </button>
-                                ) : (
-                                  <div className={rowClass}>
-                                    <span
-                                      aria-hidden="true"
-                                      className={[
-                                        'mt-px w-4 shrink-0 pl-0.5 text-center text-[13px] leading-5',
-                                        item.status === 'discussing'
-                                          ? 'text-primary'
-                                          : 'text-on-surface-variant',
-                                      ].join(' ')}
-                                    >
-                                      {statusMeta.symbol}
-                                    </span>
-
-                                    <span
-                                      className={[
-                                        'min-w-0 flex-1 break-words text-sm leading-5',
-                                        item.status === 'discussing'
-                                          ? 'font-medium text-on-surface'
-                                          : 'text-on-surface-variant',
-                                      ].join(' ')}
-                                    >
-                                      {item.title}
-                                    </span>
-
-                                    <span className="sr-only">
-                                      {statusMeta.hint}
-                                    </span>
-                                  </div>
                                 )}
                               </li>
                             )
@@ -3460,8 +3477,8 @@ export function MeetingDetailPage() {
                                     <h4
                                       className={[
                                         'text-sm font-medium',
-                                        (item.status === 'done' ||
-                                          item.status === 'follow_up') &&
+                                        (item.outcome === 'done' ||
+                                          item.outcome === 'follow_up') &&
                                         !isLive
                                           ? 'text-on-surface-variant'
                                           : 'text-on-surface',
@@ -3470,7 +3487,7 @@ export function MeetingDetailPage() {
                                       {item.title}
                                     </h4>
 
-                                    {item.status === 'done' && (
+                                    {item.outcome === 'done' && (
                                       <span className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-on-surface-variant">
                                         <span aria-hidden="true" className="material-symbols-outlined text-[13px]">
                                           check_circle
@@ -3479,7 +3496,7 @@ export function MeetingDetailPage() {
                                       </span>
                                     )}
 
-                                    {item.status === 'follow_up' && (
+                                    {item.outcome === 'follow_up' && (
                                       <span className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-on-surface-variant">
                                         <span aria-hidden="true" className="material-symbols-outlined text-[13px]">
                                           follow_up
@@ -3861,13 +3878,15 @@ export function MeetingDetailPage() {
                                   )}
                                 </div>
 
-                                {/* Live: canonical state machine actions.
-                                    The current (discussing) item can be
-                                    closed with Done or Follow-up; any
-                                    not_discussed item can be focused. */}
+                                {/* Live: canonical actions.
+                                    The current item (persisted on the
+                                    Meeting) can be closed with Done or
+                                    Follow-up; any non-current item can
+                                    be focused. */}
                                 {isLive && canManageLifecycle && (
                                   <span className="flex shrink-0 items-center gap-2">
-                                    {item.status === 'not_discussed' && (
+                                    {item.id !==
+                                      meeting.currentMeetingItemId && (
                                       <button
                                         type="button"
                                         disabled={
@@ -3885,7 +3904,8 @@ export function MeetingDetailPage() {
                                         </span>
                                       </button>
                                     )}
-                                    {item.status === 'discussing' && (
+                                    {item.id ===
+                                      meeting.currentMeetingItemId && (
                                       <>
                                         <button
                                           type="button"

@@ -120,7 +120,7 @@ export function CompletedMeetingOutcomes({
 
   const workItems = [...resultingWork.values()]
   const followUps = items.filter(
-    (item) => item.status === 'follow_up',
+    (item) => item.outcome === 'follow_up',
   )
 
   const hasContent =
@@ -268,7 +268,7 @@ export function CompletedMeetingProtocol({
                               {item.title}
                             </h4>
 
-                            {item.status ===
+                            {item.outcome ===
                               'not_discussed' && (
                               <span className="ml-auto inline-flex shrink-0 items-center gap-1 text-xs font-medium text-on-surface-variant">
                                 <span
@@ -281,7 +281,7 @@ export function CompletedMeetingProtocol({
                               </span>
                             )}
 
-                            {item.status ===
+                            {item.outcome ===
                               'follow_up' && (
                               <span className="ml-auto inline-flex shrink-0 items-center gap-1 text-xs font-medium text-on-surface-variant">
                                 <span aria-hidden="true">↻</span>

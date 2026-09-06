@@ -770,7 +770,8 @@ class MeetingApiTest(TestCase):
             "Rewrite introduction",
         )
         self.assertEqual(data["position"], 0)
-        self.assertEqual(data["status"], "not_discussed")
+        self.assertEqual(data["outcome"], "not_discussed")
+        self.assertNotIn("status", data)
         self.assertEqual(data["workItemIds"], [])
 
     def test_group_member_can_list_meeting_items(self):
@@ -846,11 +847,14 @@ class MeetingApiTest(TestCase):
             "Agreed.",
         )
         self.assertEqual(
-            item.status,
-            MeetingItem.Status.NOT_DISCUSSED,
+            item.outcome,
+            MeetingItem.Outcome.NOT_DISCUSSED,
         )
 
     def test_meeting_item_status_cannot_be_set_via_generic_patch(self):
+        """Legacy compatibility: the removed `status`/`discussing`
+        contract is rejected by the generic PATCH, so old clients
+        cannot reintroduce the pre-0011 status field."""
         meeting = self.create_default_meeting()
 
         item = create_meeting_item(
@@ -878,8 +882,40 @@ class MeetingApiTest(TestCase):
         item.refresh_from_db()
 
         self.assertEqual(
-            item.status,
-            MeetingItem.Status.NOT_DISCUSSED,
+            item.outcome,
+            MeetingItem.Outcome.NOT_DISCUSSED,
+        )
+
+    def test_meeting_item_outcome_cannot_be_set_via_generic_patch(self):
+        meeting = self.create_default_meeting()
+
+        item = create_meeting_item(
+            meeting=meeting,
+            meeting_section=MeetingSection.objects.get(meeting=meeting),
+            actor=self.alex,
+            title="Discussion",
+        )
+
+        self.login(self.chris)
+
+        response = self.client.patch(
+            f"/api/meeting-items/{item.pk}/",
+            {
+                "outcome": "done",
+            },
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+        item.refresh_from_db()
+
+        self.assertEqual(
+            item.outcome,
+            MeetingItem.Outcome.NOT_DISCUSSED,
         )
 
     def test_invalid_meeting_item_status_is_rejected(self):

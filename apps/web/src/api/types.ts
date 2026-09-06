@@ -286,6 +286,7 @@ export interface ApiMeeting {
   startedAt: string | null
   endedAt: string | null
   status: ApiMeetingStatus
+  currentMeetingItemId: number | null
   participantIds: number[]
   createdById: number
   createdAt: string
@@ -322,9 +323,8 @@ export interface ApiAddMeetingParticipantInput {
   userId: number
 }
 
-export type ApiMeetingItemStatus =
+export type ApiMeetingItemOutcome =
   | 'not_discussed'
-  | 'discussing'
   | 'done'
   | 'follow_up'
 
@@ -363,7 +363,7 @@ export interface ApiMeetingItem {
   title: string
   contextNotes: string
   position: number
-  status: ApiMeetingItemStatus
+  outcome: ApiMeetingItemOutcome
   workItemIds: number[]
   notes: ApiMeetingNote[]
   createdById: number

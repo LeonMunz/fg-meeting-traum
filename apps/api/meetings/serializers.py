@@ -244,6 +244,11 @@ class MeetingSerializer(serializers.ModelSerializer):
         read_only=True,
         allow_null=True,
     )
+    currentMeetingItemId = serializers.IntegerField(
+        source="current_meeting_item_id",
+        read_only=True,
+        allow_null=True,
+    )
     participantIds = serializers.SerializerMethodField()
     createdById = serializers.IntegerField(
         source="created_by_id",
@@ -271,6 +276,7 @@ class MeetingSerializer(serializers.ModelSerializer):
             "startedAt",
             "endedAt",
             "status",
+            "currentMeetingItemId",
             "participantIds",
             "createdById",
             "createdAt",
@@ -470,7 +476,7 @@ class MeetingItemSerializer(serializers.ModelSerializer):
             "title",
             "contextNotes",
             "position",
-            "status",
+            "outcome",
             "workItemIds",
             "notes",
             "createdById",
@@ -505,9 +511,9 @@ class MeetingItemCreateSerializer(serializers.Serializer):
 
 
 class MeetingItemPatchSerializer(serializers.Serializer):
-    # ``status`` is intentionally NOT part of the generic PATCH
-    # contract: Live MeetingItem status is driven exclusively by the
-    # canonical domain actions (start / focus / done / follow-up).
+    # ``outcome`` is intentionally NOT part of the generic PATCH
+    # contract: Live MeetingItem outcomes are driven exclusively by
+    # the canonical domain actions (start / focus / done / follow-up).
     title = serializers.CharField(
         max_length=255,
         allow_blank=False,

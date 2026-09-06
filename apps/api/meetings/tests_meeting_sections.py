@@ -578,15 +578,22 @@ class LegacyMigrationTest(TransactionTestCase):
     """
 
     _FK = ('"meetings_item_meeting_section_id_fkey"')
+    _MEETING_FK = ('"meetings_meeting_current_meeting_item_id_fkey"')
 
     def _drop_item_fk(self):
-        # Drop the FK, NOT NULL constraint, and the final unique constraint so
-        # flat (NULL-section) legacy items can be inserted despite the final
-        # schema.
+        # Drop the FKs, NOT NULL constraint, and the final unique
+        # constraint so flat (NULL-section) legacy items can be
+        # inserted despite the final schema. The Meeting
+        # current-pointer FK is dropped because deleting a Meeting
+        # below would otherwise be blocked by the referencing row.
         with connection.schema_editor(atomic=False) as editor:
             editor.execute(
                 'ALTER TABLE "meetings_item" DROP CONSTRAINT IF EXISTS '
                 '"meetings_item_meeting_section_id_fkey";'
+            )
+            editor.execute(
+                'ALTER TABLE "meetings_meeting" DROP CONSTRAINT IF EXISTS '
+                '"meetings_meeting_current_meeting_item_id_fkey";'
             )
             editor.execute(
                 'ALTER TABLE "meetings_item" DROP CONSTRAINT IF EXISTS '
@@ -672,19 +679,19 @@ class LegacyMigrationTest(TransactionTestCase):
                 ["Legacy item A1", "Legacy item A2", "Legacy item A3"]
             ):
                 cursor.execute(
-                    "INSERT INTO meetings_item (title, notes, position, status,"
-                    " created_at, updated_at, meeting_id, meeting_section_id,"
-                    " created_by_id) VALUES (%s, '', %s, 'open', %s, %s, %s, NULL,"
-                    " %s)",
+                    "INSERT INTO meetings_item (title, notes, position,"
+                    " outcome, created_at, updated_at, meeting_id,"
+                    " meeting_section_id, created_by_id) VALUES"
+                    " (%s, '', %s, 'not_discussed', %s, %s, %s, NULL, %s)",
                     [title, position, now.isoformat(), now.isoformat(),
                      meeting_a.pk, alex.pk],
                 )
             for position, title in enumerate(["Orphan item B1", "Orphan item B2"]):
                 cursor.execute(
-                    "INSERT INTO meetings_item (title, notes, position, status,"
-                    " created_at, updated_at, meeting_id, meeting_section_id,"
-                    " created_by_id) VALUES (%s, '', %s, 'open', %s, %s, %s, NULL,"
-                    " %s)",
+                    "INSERT INTO meetings_item (title, notes, position,"
+                    " outcome, created_at, updated_at, meeting_id,"
+                    " meeting_section_id, created_by_id) VALUES"
+                    " (%s, '', %s, 'not_discussed', %s, %s, %s, NULL, %s)",
                     [title, position, now.isoformat(), now.isoformat(),
                      meeting_b.pk, alex.pk],
                 )
@@ -715,6 +722,17 @@ class LegacyMigrationTest(TransactionTestCase):
                 'ALTER TABLE "meetings_item" ADD CONSTRAINT '
                 '"meetings_item_unique_section_position" UNIQUE '
                 '("meeting_section_id", "position");'
+            )
+            # Restore the Meeting current-pointer FK (referenced by
+            # meetings_meeting.current_meeting_item_id).
+            editor.execute(
+                'ALTER TABLE "meetings_meeting" DROP CONSTRAINT IF EXISTS '
+                '"meetings_meeting_current_meeting_item_id_fkey";'
+            )
+            editor.execute(
+                'ALTER TABLE "meetings_meeting" ADD CONSTRAINT '
+                '"meetings_meeting_current_meeting_item_id_fkey" FOREIGN KEY '
+                '("current_meeting_item_id") REFERENCES "meetings_item" ("id");'
             )
 
     def test_legacy_items_get_valid_sections_and_final_not_null(self):

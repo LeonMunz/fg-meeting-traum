@@ -364,8 +364,8 @@ class MeetingDomainTest(TestCase):
         item.refresh_from_db()
 
         self.assertEqual(
-            item.status,
-            MeetingItem.Status.NOT_DISCUSSED,
+            item.outcome,
+            MeetingItem.Outcome.NOT_DISCUSSED,
         )
         self.assertEqual(
             item.notes,

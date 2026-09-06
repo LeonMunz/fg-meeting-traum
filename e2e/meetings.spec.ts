@@ -284,10 +284,11 @@ test(
       page.getByRole('button', { name: 'End meeting' }),
     ).toBeVisible()
 
-    // Live shell: Start has already made the single item
-    // the current (discussing) item. It is listed in the
-    // Agenda rail with its accessible status and titled in
-    // the Current Item workspace.
+    // Live shell: Start has already made the single item the
+    // current item (persisted on the Meeting). The current row
+    // shows the sr-only "Current" indicator INSTEAD of its
+    // outcome hint, so "Open" is only observable once the item
+    // is no longer current.
     const agendaSection = page
       .getByRole('navigation', { name: 'Agenda' })
 
@@ -299,20 +300,21 @@ test(
         }),
       })
 
-    // Current item: no Focus button (only not_discussed
-    // items are focusable), accessible status is exposed.
+    // Current item: it is the persisted current item (no Focus
+    // button is offered for it) and the Current indicator is
+    // exposed.
     await expect(
       currentAgendaItem.getByRole('button', {
         name: `Focus ${AGENDA_TITLE}`,
       }),
     ).toHaveCount(0)
 
-    // The status hint is sr-only text inside the row: it is
+    // The Current indicator is sr-only text inside the row: it is
     // attached to the DOM (read by screen readers) but visually
     // hidden, so assert the exact text is attached.
     await expect(
       currentAgendaItem
-        .getByText('Discussing now', { exact: true }),
+        .getByText('Current', { exact: true }),
     ).toBeAttached()
 
     // The current item is shown as the Current Item heading.
@@ -1674,9 +1676,10 @@ test(
     ).toHaveCount(0)
 
     // --------------------------------------------------------
-    // 8. Resolve the current (discussing) item, then End.
-    //    The canonical End action rejects while an item is still
-    //    discussing, so the item is explicitly marked done.
+    // 8. Resolve the current item explicitly (Done is an
+    //    explicit outcome mutation), then End. End is never
+    //    blocked by the current pointer, but resolving the item
+    //    keeps the flow canonical.
     // --------------------------------------------------------
 
     // Done lives in the Current Item workspace (it was
@@ -2126,8 +2129,8 @@ test(
 
     // --------------------------------------------------------
     // Complete the Meeting: the current item is explicitly
-    // resolved (canonical End rejects while discussing), linked
-    // work stays visible, Notes remain read-only.
+    // resolved (End is never blocked by the current pointer),
+    // linked work stays visible, Notes remain read-only.
     // --------------------------------------------------------
 
     // Resolve the current item from the Current Item
@@ -2582,10 +2585,13 @@ test(
 )
 
 test(
-  'Live MeetingItem state machine end-to-end flow',
+  'Live Meeting current pointer and outcome end-to-end flow',
   async ({ page }) => {
     // --------------------------------------------------------
-    // Alex creates a real Meeting with 3 agenda items.
+    // Alex creates a real Meeting with three agenda items in
+    // the default Agenda section. Cross-section advance is
+    // covered by backend ordering tests; this E2E exercises the
+    // persisted Current-vs-Outcome contract within one section.
     // --------------------------------------------------------
 
     await login(page, 'alex')
@@ -2604,7 +2610,7 @@ test(
 
     await page
       .getByLabel('Title')
-      .fill('E2E Live State Machine')
+      .fill('E2E Live Current And Outcome')
 
     await page
       .getByLabel('Date and time')
@@ -2618,28 +2624,33 @@ test(
       .click()
 
     await expect(
-      page.getByText('E2E Live State Machine', { exact: true }),
+      page.getByText('E2E Live Current And Outcome', { exact: true }),
     ).toBeVisible()
 
     const meetingRow = page
       .getByRole('button')
-      .filter({ hasText: 'E2E Live State Machine' })
+      .filter({ hasText: 'E2E Live Current And Outcome' })
     await meetingRow.click()
 
     await expect(page).toHaveURL(/\/meetings\/\d+$/)
 
-    // Add 3 agenda items (upcoming layout).
-    const titles = ['Alpha', 'Beta', 'Gamma']
-    for (const title of titles) {
-      await quickAddAgendaItem(page, title)
+    // Add three agenda items to the default Agenda section.
+    for (const title of ['Alpha', 'Beta', 'Omega']) {
+      await quickAddAgendaItem(page, title, 'Agenda')
       await expect(
         page.getByText(title, { exact: true }),
       ).toBeVisible()
     }
 
-    // Live shell: the Agenda rail lists every item with its
-    // accessible status; the Current Item workspace shows the
-    // current item. These locators are used below.
+    // --------------------------------------------------------
+    // Live shell locators.
+    //
+    // "Current" is NOT an item outcome: it is the agenda item the
+    // Meeting officially points at (persisted on the Meeting).
+    // All rail assertions are scoped to the Agenda navigation so
+    // Current Item workspace text never interferes.
+    // --------------------------------------------------------
+
     const agenda = page.getByRole('navigation', {
       name: 'Agenda',
     })
@@ -2652,23 +2663,30 @@ test(
         has: page.getByText(title, { exact: true }),
       })
 
-    // The Agenda rail exposes each item's status through an
-    // sr-only text hint, so the symbol alone is never the only
-    // signal. The hint is a child sr-only text node (attached to
-    // the DOM, read by screen readers, visually hidden), so
-    // assert the exact text is attached within the item.
-    const itemHasStatus = async (
+    const itemHasOutcome = async (
       title: string,
-      status: string,
+      hint: string,
     ) => {
       await expect(
-        agendaItem(title).getByText(status, { exact: true }),
+        agendaItem(title).getByText(hint, { exact: true }),
       ).toBeAttached()
     }
 
+    const itemIsCurrent = async (title: string) => {
+      await expect(
+        agendaItem(title).getByText('Current', { exact: true }),
+      ).toBeAttached()
+    }
+
+    const itemIsNotCurrent = async (title: string) => {
+      await expect(
+        agendaItem(title).getByText('Current', { exact: true }),
+      ).toHaveCount(0)
+    }
+
     // --------------------------------------------------------
-    // Start: the first item becomes current (discussing) and
-    // the Live shell takes over the layout.
+    // Start: the first not_discussed item (Alpha) becomes
+    // current. Starting never mutates outcomes.
     // --------------------------------------------------------
 
     await page
@@ -2680,18 +2698,21 @@ test(
     ).toBeVisible()
 
     await expect(
-      page.getByRole('main', { name: 'Current item' }),
+      workspace,
     ).toContainText('Alpha')
 
-    await itemHasStatus('Alpha', 'Discussing now')
-
-    // The Done action lives in the Current Item workspace.
-    await expect(
-      page.getByRole('button', { name: 'Mark Alpha as done' }),
-    ).toBeVisible()
+    await itemIsCurrent('Alpha')
+    await itemIsNotCurrent('Beta')
+    await itemIsNotCurrent('Omega')
+    // NOTE: the current row shows the "Current" indicator INSTEAD
+    // of its outcome hint, so "Open" is only observable once the
+    // item is no longer current (asserted after Focus below).
 
     // --------------------------------------------------------
-    // Focus the second item (Beta) from the Agenda rail.
+    // Focus (make-current) is navigation: it moves the current
+    // pointer only and never implicitly completes the previous
+    // item. Alpha becomes non-current and MUST now expose "Open"
+    // (proving Focus did not mutate Alpha's outcome).
     // --------------------------------------------------------
 
     await agendaItem('Beta')
@@ -2702,15 +2723,15 @@ test(
       workspace,
     ).toContainText('Beta')
 
-    await itemHasStatus('Beta', 'Discussing now')
-    await itemHasStatus('Alpha', 'Open')
-    await expect(
-      agendaItem('Alpha')
-        .getByRole('button', { name: 'Focus Alpha' }),
-    ).toBeVisible()
+    await itemIsCurrent('Beta')
+    await itemIsNotCurrent('Alpha')
+    await itemHasOutcome('Alpha', 'Open')
+    // Beta is current: its outcome hint is not rendered yet.
 
     // --------------------------------------------------------
-    // Done Beta -> next (Gamma) becomes current.
+    // Done is an explicit outcome mutation: Beta becomes
+    // "Completed"; because Beta WAS current, the pointer
+    // advances to the next not_discussed item (Omega).
     // --------------------------------------------------------
 
     await page
@@ -2719,92 +2740,83 @@ test(
 
     await expect(
       workspace,
-    ).toContainText('Gamma')
+    ).toContainText('Omega')
 
-    await itemHasStatus('Beta', 'Completed')
-    await itemHasStatus('Gamma', 'Discussing now')
+    await itemHasOutcome('Beta', 'Completed')
+    await itemIsCurrent('Omega')
+    await itemIsNotCurrent('Alpha')
+    await itemHasOutcome('Alpha', 'Open')
 
     // --------------------------------------------------------
-    // Follow up Gamma -> Gamma follow_up; the only remaining
-    // not_discussed item (Alpha) becomes current.
+    // Focusing a non-current item (Alpha) changes only the
+    // current pointer: Beta keeps its Completed outcome and the
+    // formerly current item (Omega), now non-current, exposes
+    // "Open" — switching current never mutates any existing
+    // outcome.
+    // --------------------------------------------------------
+
+    await agendaItem('Alpha')
+      .getByRole('button', { name: 'Focus Alpha' })
+      .click()
+
+    await expect(
+      workspace,
+    ).toContainText('Alpha')
+
+    await itemIsCurrent('Alpha')
+    await itemIsNotCurrent('Omega')
+    // Alpha is current again: outcome hint not rendered yet.
+    await itemHasOutcome('Beta', 'Completed')
+    await itemHasOutcome('Omega', 'Open')
+
+    // --------------------------------------------------------
+    // Follow-up is an explicit outcome mutation on the CURRENT
+    // item: Alpha becomes "Resolved with follow-up" and the
+    // pointer advances to the next not_discussed item (Omega),
+    // so another not_discussed item can remain current.
     // --------------------------------------------------------
 
     await page
       .getByRole('button', {
-        name: 'Mark Gamma as follow-up',
+        name: 'Mark Alpha as follow-up',
       })
       .click()
 
     await expect(
       workspace,
-    ).toContainText('Alpha')
+    ).toContainText('Omega')
 
-    await itemHasStatus('Gamma', 'Resolved with follow-up')
-    await itemHasStatus('Alpha', 'Discussing now')
+    await itemIsCurrent('Omega')
+    // Alpha is no longer current: its outcome hint is rendered
+    // and shows the explicit follow-up outcome.
+    await itemHasOutcome('Alpha', 'Resolved with follow-up')
 
     // --------------------------------------------------------
-    // Reload proves persistence of all item states: Alpha is
-    // already current, Beta stays done, Gamma stays follow-up.
+    // Reload preserves the persisted current pointer AND all
+    // item outcomes: Omega is current, Alpha follow-up, Beta
+    // done.
     // --------------------------------------------------------
 
     await page.reload()
 
-    await itemHasStatus('Alpha', 'Discussing now')
-    await itemHasStatus('Beta', 'Completed')
-    await itemHasStatus('Gamma', 'Resolved with follow-up')
     await expect(
       workspace,
-    ).toContainText('Alpha')
+    ).toContainText('Omega')
+
+    await itemIsCurrent('Omega')
+    await itemIsNotCurrent('Alpha')
+    await itemHasOutcome('Alpha', 'Resolved with follow-up')
+    await itemHasOutcome('Beta', 'Completed')
 
     // --------------------------------------------------------
-    // End is rejected while a current item exists: with Alpha
-    // still current, End must fail and the Meeting stays live.
+    // End is NEVER blocked by the current pointer: with Omega
+    // still current (and Omega's outcome still Open), End
+    // succeeds — remaining not_discussed items are allowed in
+    // the Completed state. (The pointer is cleared server-side
+    // on End; that persisted state is not yet observable in the
+    // completed UI, so it is covered by the backend contract
+    // tests.)
     // --------------------------------------------------------
-
-    await page
-      .getByRole('button', { name: 'End meeting' })
-      .click()
-
-    // The End action is rejected visibly; the Meeting stays live
-    // with the current item still discussing.
-    await expect(
-      page.getByRole('alert'),
-    ).toBeVisible()
-    await expect(
-      page.getByRole('button', { name: 'End meeting' }),
-    ).toBeVisible()
-    await itemHasStatus('Alpha', 'Discussing now')
-    await expect(
-      workspace,
-    ).toContainText('Alpha')
-    await expect(
-      page.getByRole('button', { name: 'Start meeting' }),
-    ).toBeHidden()
-
-    // --------------------------------------------------------
-    // Finish the final current item, then End succeeds.
-    // --------------------------------------------------------
-
-    await page
-      .getByRole('button', { name: 'Mark Alpha as done' })
-      .click()
-
-    await itemHasStatus('Alpha', 'Completed')
-    // Alpha is no longer announced as discussing.
-    await expect(
-      agendaItem('Alpha').getByText('Discussing now', {
-        exact: true,
-      }),
-    ).toHaveCount(0)
-
-    // All items resolved: the workspace no longer offers a
-    // Done action and shows the no-current-item state.
-    await expect(
-      page.getByRole('button', { name: 'Mark Alpha as done' }),
-    ).toHaveCount(0)
-    await expect(
-      workspace,
-    ).toContainText('No current item')
 
     await page
       .getByRole('button', { name: 'End meeting' })
@@ -2813,11 +2825,31 @@ test(
     await expect(
       page.getByRole('button', { name: 'Reopen meeting' }),
     ).toBeVisible()
-
-    // Canonical completed-state signal: the live lifecycle
-    // control is gone, while the Completed action replaces it.
     await expect(
       page.getByRole('button', { name: 'End meeting' }),
     ).toBeHidden()
+    await expect(
+      page.getByRole('button', { name: 'Start meeting' }),
+    ).toBeHidden()
+
+    // --------------------------------------------------------
+    // Reopen: current was null after End, so Reopen sets it to
+    // the first remaining not_discussed item (Omega); prior
+    // done / follow-up outcomes remain unchanged.
+    // --------------------------------------------------------
+
+    await page
+      .getByRole('button', { name: 'Reopen meeting' })
+      .click()
+
+    await expect(
+      workspace,
+    ).toContainText('Omega')
+
+    await itemIsCurrent('Omega')
+    // Omega is current again: its outcome hint is not rendered
+    // while current. Prior outcomes are untouched.
+    await itemHasOutcome('Alpha', 'Resolved with follow-up')
+    await itemHasOutcome('Beta', 'Completed')
   },
 )

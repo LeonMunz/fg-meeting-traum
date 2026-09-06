@@ -182,7 +182,7 @@ function makeItem(
     title: 'GPU procurement',
     contextNotes: '',
     position: 10,
-    status: 'done',
+    outcome: 'not_discussed',
     workItemIds: [],
     notes: [],
     createdById: 1,
@@ -218,6 +218,7 @@ const meeting: ApiMeeting = {
   startedAt: '2026-08-27T09:31:00Z',
   endedAt: '2026-08-27T10:20:00Z',
   status: 'completed',
+  currentMeetingItemId: null,
   participantIds: [1, 2],
   createdById: 1,
   createdAt: '2026-08-20T09:00:00Z',
@@ -384,7 +385,7 @@ function renderRecap(
 describe('Completed recap content', () => {
   it('renders the Outcomes and Protocol regions, with Outcomes before Protocol', () => {
     const item = makeItem({
-      status: 'follow_up',
+      outcome: 'follow_up',
       title: 'Sample holder issue',
     })
     renderRecap({ sortedItems: [item] })
@@ -653,7 +654,7 @@ describe('Completed Meeting single header (page level)', () => {
 
   it('renders Outcomes before Protocol', async () => {
     const item = makeItem({
-      status: 'follow_up',
+      outcome: 'follow_up',
       title: 'Sample holder issue',
     })
     renderCompletedPage([item])
@@ -703,7 +704,7 @@ describe('Completed Meeting single header (page level)', () => {
   it('shows non-zero outcome counts once in the header', async () => {
     const linked = makeLinked()
     const workItem = makeItem({
-      status: 'done',
+      outcome: 'not_discussed',
       notes: [
         makeNote({ linkedWorkItem: linked }),
       ],
@@ -711,7 +712,7 @@ describe('Completed Meeting single header (page level)', () => {
     const followUpItem = makeItem({
       id: 4,
       title: 'Sample holder issue',
-      status: 'follow_up',
+      outcome: 'follow_up',
     })
     renderCompletedPage([workItem, followUpItem])
 
@@ -737,7 +738,7 @@ describe('Completed Meeting single header (page level)', () => {
     const linked = makeLinked()
     const item = makeItem({
       title: 'GPU procurement',
-      status: 'done',
+      outcome: 'not_discussed',
       notes: [
         makeNote({
           linkedWorkItem: linked,
@@ -777,7 +778,7 @@ describe('Completed Meeting single header (page level)', () => {
     // differently. The recap row must show the definition name.
     const hydratedItem = makeWorkItem()
     const item = makeItem({
-      status: 'done',
+      outcome: 'not_discussed',
       workItemIds: [21],
     })
     mockDirectWorkHydration(hydratedItem)
@@ -955,7 +956,7 @@ describe('Meeting page heading semantics', () => {
 
   it('Completed still renders Outcomes before Protocol', async () => {
     const item = makeItem({
-      status: 'follow_up',
+      outcome: 'follow_up',
       title: 'Sample holder issue',
     })
     renderMeetingPage('completed', [item])
@@ -978,7 +979,7 @@ describe('Meeting page heading semantics', () => {
 
 describe('Outcomes', () => {
   it('renders no Outcomes region when there is no outcome content', () => {
-    const item = makeItem({ status: 'done' })
+    const item = makeItem({ outcome: 'done' })
     renderRecap({ sortedItems: [item] })
 
     expect(
@@ -994,7 +995,7 @@ describe('Outcomes', () => {
   it('aggregates Note-linked Work into Resulting work with its current status', () => {
     const linked = makeLinked()
     const item = makeItem({
-      status: 'done',
+      outcome: 'not_discussed',
       notes: [
         makeNote({ linkedWorkItem: linked }),
       ],
@@ -1025,7 +1026,7 @@ describe('Outcomes', () => {
       assigneeNames: [],
     })
     const item = makeItem({
-      status: 'done',
+      outcome: 'not_discussed',
       workItemIds: [21],
     })
     renderRecap({
@@ -1049,7 +1050,7 @@ describe('Outcomes', () => {
   it('deduplicates the same Work Item reachable through Note and direct item links', () => {
     const linked = makeLinked()
     const item = makeItem({
-      status: 'done',
+      outcome: 'not_discussed',
       workItemIds: [linked.id],
       notes: [
         makeNote({ linkedWorkItem: linked }),
@@ -1072,7 +1073,7 @@ describe('Outcomes', () => {
 
   it('does not fabricate rows for direct links without hydrated display data', () => {
     const item = makeItem({
-      status: 'done',
+      outcome: 'not_discussed',
       workItemIds: [99],
     })
     renderRecap({ sortedItems: [item] })
@@ -1088,7 +1089,7 @@ describe('Outcomes', () => {
     const linked = makeLinked()
     const onOpenLinkedWork = vi.fn()
     const item = makeItem({
-      status: 'done',
+      outcome: 'not_discussed',
       notes: [
         makeNote({ linkedWorkItem: linked }),
       ],
@@ -1125,7 +1126,7 @@ describe('Outcomes', () => {
     const item = makeItem({
       id: 4,
       title: 'Sample holder issue',
-      status: 'follow_up',
+      outcome: 'follow_up',
     })
     renderRecap({ sortedItems: [item] })
 
@@ -1143,7 +1144,7 @@ describe('Outcomes', () => {
   it('keeps outcome counts out of the recap content (header owns them)', () => {
     const linked = makeLinked()
     const workItem = makeItem({
-      status: 'done',
+      outcome: 'not_discussed',
       notes: [
         makeNote({ linkedWorkItem: linked }),
       ],
@@ -1151,7 +1152,7 @@ describe('Outcomes', () => {
     const followUpItem = makeItem({
       id: 4,
       title: 'Sample holder issue',
-      status: 'follow_up',
+      outcome: 'follow_up',
     })
     const { container } = renderRecap({
       sortedItems: [workItem, followUpItem],
@@ -1171,7 +1172,7 @@ describe('Outcomes', () => {
   it('never renders a Decisions subsection (no canonical source exists)', () => {
     const linked = makeLinked()
     const item = makeItem({
-      status: 'follow_up',
+      outcome: 'follow_up',
       notes: [
         makeNote({
           linkedWorkItem: linked,
@@ -1195,7 +1196,7 @@ describe('Outcomes', () => {
 
 describe('Protocol', () => {
   it('does not show a redundant Done badge on ordinary completed items', () => {
-    const item = makeItem({ status: 'done' })
+    const item = makeItem({ outcome: 'done' })
     renderRecap({ sortedItems: [item] })
 
     expect(
@@ -1212,7 +1213,7 @@ describe('Protocol', () => {
     const item = makeItem({
       id: 5,
       title: 'Tech News',
-      status: 'not_discussed',
+      outcome: 'not_discussed',
     })
     renderRecap({ sortedItems: [item] })
 
@@ -1227,7 +1228,7 @@ describe('Protocol', () => {
     const item = makeItem({
       id: 4,
       title: 'Sample holder issue',
-      status: 'follow_up',
+      outcome: 'follow_up',
     })
     renderRecap({ sortedItems: [item] })
 
@@ -1402,7 +1403,7 @@ describe('Protocol', () => {
       name: 'KVP',
       position: 20,
     })
-    const filled = makeItem({ status: 'done' })
+    const filled = makeItem({ outcome: 'done' })
     render(
       <CompletedMeetingRecap
         sortedSections={[makeSection(), empty]}
@@ -1445,12 +1446,12 @@ describe('Protocol', () => {
     const item = makeItem({
       id: 4,
       title: 'Sample holder issue',
-      status: 'follow_up',
+      outcome: 'follow_up',
     })
     const notDiscussed = makeItem({
       id: 5,
       title: 'Tech News',
-      status: 'not_discussed',
+      outcome: 'not_discussed',
       position: 20,
     })
     const { container } = renderRecap({
@@ -1466,13 +1467,13 @@ describe('Protocol', () => {
   it('uses calm document-style labels, not uppercase UI labels', () => {
     const linked = makeLinked()
     const workItem = makeItem({
-      status: 'done',
+      outcome: 'not_discussed',
       notes: [makeNote({ linkedWorkItem: linked })],
     })
     const followUpItem = makeItem({
       id: 4,
       title: 'Sample holder issue',
-      status: 'follow_up',
+      outcome: 'follow_up',
     })
     const { container } = renderRecap({
       sortedItems: [workItem, followUpItem],
@@ -1504,7 +1505,7 @@ describe('Protocol', () => {
       assigneeNames: [],
     })
     const item = makeItem({
-      status: 'done',
+      outcome: 'not_discussed',
       workItemIds: [21],
     })
     renderRecap({

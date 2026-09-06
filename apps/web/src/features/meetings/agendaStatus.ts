@@ -1,22 +1,19 @@
 // Shared, presentation-only mapping of the canonical Live
-// MeetingItem statuses to their Agenda-rail representation: a
+// MeetingItem outcomes to their Agenda-rail representation: a
 // stable symbol plus accessible text (the symbol alone is never
 // the only signal).
-export type AgendaItemStatus =
+//
+// "current" is NOT an outcome: the current item is the one whose id
+// matches Meeting.currentMeetingItemId.
+export type AgendaItemOutcome =
   | 'not_discussed'
-  | 'discussing'
   | 'done'
   | 'follow_up'
 
 export const AGENDA_STATUS_META: Record<
-  AgendaItemStatus,
+  AgendaItemOutcome,
   { symbol: string; label: string; hint: string }
 > = {
-  discussing: {
-    symbol: '●',
-    label: 'Discussing',
-    hint: 'Discussing now',
-  },
   done: {
     symbol: '✓',
     label: 'Done',
@@ -35,7 +32,7 @@ export const AGENDA_STATUS_META: Record<
 }
 
 export function agendaStatusMeta(
-  status: AgendaItemStatus,
+  outcome: AgendaItemOutcome,
 ) {
-  return AGENDA_STATUS_META[status]
+  return AGENDA_STATUS_META[outcome]
 }

@@ -30,9 +30,13 @@ describe('MeetingDetailPage status-aware content', () => {
     )
   })
 
-  it('derives the current item from the discussing status', () => {
+  it('derives the current item from the persisted Meeting pointer', () => {
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'item.status === "discussing"',
+      'item.id === meeting.currentMeetingItemId',
+    )
+    // Outcome is the only persisted MeetingItem state.
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'item.outcome',
     )
   })
 
@@ -160,13 +164,9 @@ describe('MeetingDetailPage Live Meeting shell', () => {
     )
   })
 
-  it('derives the current item from the canonical discussing status', () => {
+  it('derives the current item from the persisted Meeting pointer', () => {
     expect(MEETING_DETAIL_SOURCE).toContain(
-      "sortedItems.find((item) => item.status === \"discussing\")",
-    )
-    // The current item is always derived; it is never persisted.
-    expect(MEETING_DETAIL_SOURCE).not.toContain(
-      'currentMeetingItemId',
+      'meeting.currentMeetingItemId',
     )
   })
 
@@ -179,11 +179,10 @@ describe('MeetingDetailPage Live Meeting shell', () => {
     )
   })
 
-  it('renders all four MeetingItem states with symbol and accessible text', () => {
-    // Every status exposes a symbol AND an accessible text label,
-    // so the symbol alone is never the only signal.
-    expect(AGENDA_STATUS_META.discussing.symbol).toBe('●')
-    expect(AGENDA_STATUS_META.discussing.label).toBe('Discussing')
+  it('renders every MeetingItem outcome with symbol and accessible text', () => {
+    // Every outcome exposes a symbol AND an accessible text label,
+    // so the symbol alone is never the only signal. "Discussing"
+    // is not an outcome; current is derived from the Meeting.
     expect(AGENDA_STATUS_META.done.symbol).toBe('✓')
     expect(AGENDA_STATUS_META.done.label).toBe('Done')
     expect(AGENDA_STATUS_META.follow_up.symbol).toBe('↻')
@@ -221,7 +220,7 @@ describe('MeetingDetailPage Live Meeting shell', () => {
       'void handleFocusItem(item)',
     )
     expect(MEETING_DETAIL_SOURCE).toContain(
-      "item.status === \"not_discussed\"",
+      'item.id !== meeting.currentMeetingItemId',
     )
   })
 
@@ -441,16 +440,19 @@ describe('MeetingDetailPage Live visual polish', () => {
     expect(MEETING_DETAIL_SOURCE).toContain(
       'border-l-2 border-primary bg-primary/5',
     )
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'item.id === meeting.currentMeetingItemId',
+    )
   })
 
   it('never renders raw internal status tokens as visible text', () => {
     // Guard against leaking enum/internal identifiers like
     // FOLLOW_UP into the UI.
     expect(MEETING_DETAIL_SOURCE).not.toContain(
-      '{liveCurrentItem.status}',
+      '{liveCurrentItem.outcome}',
     )
     expect(MEETING_DETAIL_SOURCE).not.toContain(
-      "{item.status}",
+      "{item.outcome}",
     )
     expect(MEETING_DETAIL_SOURCE).not.toContain(
       'FOLLOW_UP',

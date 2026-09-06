@@ -1451,11 +1451,11 @@ class MeetingItemDetailView(APIView):
 
         data = serializer.validated_data
 
-        if "status" in request.data:
+        if "status" in request.data or "outcome" in request.data:
             return Response(
                 {
                     "error": (
-                        "Meeting item status is driven by the "
+                        "Meeting item outcome is driven by the "
                         "Live Meeting actions (start, focus, "
                         "done, follow-up)."
                     )
@@ -1638,7 +1638,7 @@ def _run_meeting_item_action(request, item, action):
 
 class MeetingItemFocusView(APIView):
     """POST /api/meeting-items/{id}/focus — make the selected
-    not_discussed item the current item of a Live Meeting."""
+    item the current item of a Live Meeting (any outcome)."""
 
     permission_classes = [IsAuthenticated]
 
@@ -1661,8 +1661,9 @@ class MeetingItemFocusView(APIView):
 
 
 class MeetingItemDoneView(APIView):
-    """POST /api/meeting-items/{id}/done — mark the current item
-    done and advance to the next not_discussed item."""
+    """POST /api/meeting-items/{id}/done — set the item's outcome
+    to done; when it was current, advance to the next
+    not_discussed item."""
 
     permission_classes = [IsAuthenticated]
 
@@ -1685,9 +1686,9 @@ class MeetingItemDoneView(APIView):
 
 
 class MeetingItemFollowUpView(APIView):
-    """POST /api/meeting-items/{id}/follow-up — mark the current
-    item as a follow-up and advance to the next not_discussed
-    item."""
+    """POST /api/meeting-items/{id}/follow-up — set the item's
+    outcome to follow_up; when it was current, advance to the next
+    not_discussed item."""
 
     permission_classes = [IsAuthenticated]
 
