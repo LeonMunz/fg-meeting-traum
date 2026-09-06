@@ -2883,10 +2883,16 @@ export function MeetingDetailPage() {
                   )}
                 </p>
 
-                {/* "Return to current": shown only while the user is
-                    viewing a non-current item. Purely local navigation —
+                {/* Shown only while the user is viewing a non-current
+                    item. "Return to current" is purely local navigation —
                     it re-points selection at the Meeting's actual current
-                    item and never mutates the domain. */}
+                    item and never mutates the domain. "Make current" is
+                    the deliberate, domain-mutating alternative: it calls
+                    the canonical Focus action so the VIEWED item becomes
+                    the persisted current item. The Focus contract accepts
+                    an item of any outcome, so availability here mirrors
+                    the domain rule: the user may write the Meeting and
+                    the viewed item is not already current. */}
                 {!liveSelectionIsCurrent && (
                   <div className="mt-3 flex items-center gap-2">
                     <button
@@ -2899,6 +2905,40 @@ export function MeetingDetailPage() {
                       </span>
                       Return to current
                     </button>
+
+                    {canManageLifecycle && (
+                      <button
+                        type="button"
+                        disabled={
+                          updatingItemId ===
+                          liveSelectedItem!.id
+                        }
+                        onClick={() =>
+                          void handleFocusItem(
+                            liveSelectedItem!,
+                          )
+                        }
+                        aria-label={`Make ${liveSelectedItem!.title} current`}
+                        title="Make this item the meeting's current item"
+                        className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm font-medium text-on-surface outline-none transition hover:border-primary/40 hover:bg-surface-container-low focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-60"
+                      >
+                        {updatingItemId ===
+                        liveSelectedItem!.id ? (
+                          <span aria-hidden="true" className="material-symbols-outlined animate-spin text-[16px]">
+                            refresh
+                          </span>
+                        ) : (
+                          <span aria-hidden="true" className="material-symbols-outlined text-[16px]">
+                            center_focus_strong
+                          </span>
+                        )}
+                        {updatingItemId ===
+                        liveSelectedItem!.id
+                          ? 'Making current…'
+                          : 'Make current'}
+                      </button>
+                    )}
+
                     <span className="sr-only">
                       You are viewing a different item than the meeting's
                       current item.

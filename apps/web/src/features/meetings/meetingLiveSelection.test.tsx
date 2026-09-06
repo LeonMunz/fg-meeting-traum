@@ -282,11 +282,11 @@ afterEach(() => {
 
 describe('Live Meeting selection (decoupled from current)', () => {
 
-  it('offers no Focus / make-current control on any Live agenda row', async () => {
-    // The "Make current" interaction is deliberately deferred: in
-    // this slice, selecting a row is pure UI navigation and NO
-    // Focus (or equivalent make-current) affordance may exist in
-    // the Live Meeting UI.
+  it('offers no per-row Focus / make-current control on any Live agenda row', async () => {
+    // The explicit "Make current" affordance lives in the
+    // selected-item detail context — never on an agenda row.
+    // Rows are selection-only, even while browsing a non-current
+    // item (where the detail-pane "Make current" action exists).
     const fake = new FakeLiveMeeting(
       makeMeeting({ currentMeetingItemId: 2 }),
       BASE_ITEMS,
@@ -294,17 +294,19 @@ describe('Live Meeting selection (decoupled from current)', () => {
     renderLivePage(fake)
     await waitForLive()
 
-    // No Focus control anywhere in the Live shell (rows or
-    // workspace), even while browsing a non-current item.
+    // No Focus control anywhere in the agenda rail.
     expect(
-      screen.queryByRole('button', { name: /Focus / }),
+      within(agenda()).queryByRole('button', { name: /Focus / }),
     ).toBeNull()
     expect(
-      screen.queryByRole('button', {
-        name: /make current/i,
+      within(agenda()).queryByRole('button', {
+        name: 'Make Alpha current',
       }),
     ).toBeNull()
 
+    // Browsing to a non-current item: the detail pane now offers
+    // the explicit "Make current" action, but the RAIL itself
+    // still carries no make-current control.
     fireEvent.click(selectRow('Alpha'))
     await waitFor(() => {
       expect(
@@ -312,13 +314,383 @@ describe('Live Meeting selection (decoupled from current)', () => {
       ).toHaveTextContent('Alpha')
     })
     expect(
-      screen.queryByRole('button', { name: /Focus / }),
+      screen.getByRole('button', {
+        name: 'Make Alpha current',
+      }),
+    ).toBeTruthy()
+    expect(
+      within(agenda()).queryByRole('button', {
+        name: 'Make Alpha current',
+      }),
     ).toBeNull()
 
-    // Browsing never triggered the Focus API either.
+    // Browsing itself never triggered the Focus API.
     expect(
       vi.mocked(meetingsApi.focusMeetingItem),
     ).not.toHaveBeenCalled()
+  })
+
+  it('shows Make current only while a non-current item is selected, and hides it for the current item', async () => {
+    const fake = new FakeLiveMeeting(
+      makeMeeting({ currentMeetingItemId: 2 }),
+      BASE_ITEMS,
+    )
+    renderLivePage(fake)
+    await waitForLive()
+
+    // Selected === current (Beta): no "Make current", no
+    // "Return to current"; the normal Current lifecycle
+    // controls are visible.
+    expect(
+      screen.queryByRole('button', {
+        name: 'Make Beta current',
+      }),
+    ).toBeNull()
+    expect(
+      screen.queryByRole('button', {
+        name: 'Return to current',
+      }),
+    ).toBeNull()
+    expect(
+      screen.getByRole('button', { name: 'Mark Beta as done' }),
+    ).toBeTruthy()
+
+    // Select a non-current item: both the navigation-only
+    // "Return to current" and the domain-mutating "Make current"
+    // become visible, and the current-item lifecycle controls
+    // (Done / Follow up) do NOT operate on the viewed item.
+    fireEvent.click(selectRow('Alpha'))
+    await waitFor(() => {
+      expect(
+        screen.getByRole('main', { name: 'Agenda item' }),
+      ).toHaveTextContent('Alpha')
+    })
+    expect(
+      screen.getByRole('button', { name: 'Return to current' }),
+    ).toBeTruthy()
+    expect(
+      screen.getByRole('button', {
+        name: 'Make Alpha current',
+      }),
+    ).toBeTruthy()
+    expect(
+      screen.queryByRole('button', { name: 'Mark Alpha as done' }),
+    ).toBeNull()
+    expect(
+      screen.queryByRole('button', {
+        name: 'Mark Alpha as follow-up',
+      }),
+    ).toBeNull()
+
+    // The Make-current availability mirrors the existing Focus
+    // contract, which accepts an item of ANY outcome: it is
+    // offered for the completed item Alpha as well.
+    fireEvent.click(selectRow('Omega'))
+    await waitFor(() => {
+      expect(
+        screen.getByRole('main', { name: 'Agenda item' }),
+      ).toHaveTextContent('Omega')
+    })
+    expect(
+      screen.getByRole('button', {
+        name: 'Make Omega current',
+      }),
+    ).toBeTruthy()
+
+    // Browsing alone never mutated anything.
+    expect(
+      vi.mocked(meetingsApi.focusMeetingItem),
+    ).not.toHaveBeenCalled()
+  })
+
+  it('Make current on a non-current item invokes the canonical Focus action once and converges selection and current', async () => {
+    const fake = new FakeLiveMeeting(
+      makeMeeting({ currentMeetingItemId: 2 }),
+      BASE_ITEMS,
+    )
+
+    // Server effect of Focus on Alpha: the persisted current
+    // pointer moves to Alpha; Focus never mutates any outcome,
+    // so Alpha stays done and Beta stays not_discussed.
+    vi.mocked(
+      meetingsApi.focusMeetingItem,
+    ).mockImplementation((id: number) => {
+      fake.meeting = {
+        ...fake.meeting,
+        currentMeetingItemId: id,
+      }
+      return Promise.resolve(
+        fake.items.find((item) => item.id === id)!,
+      )
+    })
+
+    renderLivePage(fake)
+    await waitForLive()
+
+    // Browse to the completed non-current item Alpha.
+    fireEvent.click(selectRow('Alpha'))
+    await waitFor(() => {
+      expect(
+        screen.getByRole('main', { name: 'Agenda item' }),
+      ).toHaveTextContent('Alpha')
+    })
+
+    // Click "Make current" — the domain mutation acts on the
+    // SELECTED item (not the current one).
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Make Alpha current',
+      }),
+    )
+
+    // The canonical Focus action is invoked exactly once, for
+    // the selected item only.
+    await waitFor(() => {
+      expect(
+        vi.mocked(meetingsApi.focusMeetingItem),
+      ).toHaveBeenCalledTimes(1)
+      expect(
+        vi.mocked(meetingsApi.focusMeetingItem),
+      ).toHaveBeenCalledWith(1)
+    })
+
+    // Current moved to Alpha: the rail's "Current" indicator
+    // follows, the Selected-vs-Current divergence is gone, and
+    // both the "Return to current" and "Make current" actions
+    // disappear once selected === current.
+    await waitFor(() => {
+      expect(rowCurrent('Alpha')).toBeTruthy()
+    })
+    expect(
+      itemRow('Alpha').queryByText('Selected', { exact: true }),
+    ).toBeNull()
+    expect(
+      screen.queryByRole('button', {
+        name: 'Return to current',
+      }),
+    ).toBeNull()
+    expect(
+      screen.queryByRole('button', {
+        name: 'Make Alpha current',
+      }),
+    ).toBeNull()
+
+    // The selection remains on Alpha and the normal Current
+    // lifecycle controls are exposed again.
+    expect(
+      selectRow('Alpha').getAttribute('aria-pressed'),
+    ).toBe('true')
+    expect(
+      screen.getByRole('button', { name: 'Mark Alpha as done' }),
+    ).toBeTruthy()
+    expect(
+      screen.getByRole('button', {
+        name: 'Mark Alpha as follow-up',
+      }),
+    ).toBeTruthy()
+
+    // Focus never mutated an outcome: Alpha stays resolved
+    // (done), Beta stays open.
+    expect(
+      itemRow('Alpha').getByText('Completed', { exact: true }),
+    ).toBeTruthy()
+    expect(
+      itemRow('Beta').getByText('Open', { exact: true }),
+    ).toBeTruthy()
+  })
+
+  it('Make current on an open non-current item follows the same contract', async () => {
+    const fake = new FakeLiveMeeting(
+      makeMeeting({ currentMeetingItemId: 2 }),
+      BASE_ITEMS,
+    )
+
+    vi.mocked(
+      meetingsApi.focusMeetingItem,
+    ).mockImplementation((id: number) => {
+      fake.meeting = {
+        ...fake.meeting,
+        currentMeetingItemId: id,
+      }
+      return Promise.resolve(
+        fake.items.find((item) => item.id === id)!,
+      )
+    })
+
+    renderLivePage(fake)
+    await waitForLive()
+
+    // Browse to the open non-current item Omega (id 3).
+    fireEvent.click(selectRow('Omega'))
+    await waitFor(() => {
+      expect(
+        screen.getByRole('main', { name: 'Agenda item' }),
+      ).toHaveTextContent('Omega')
+    })
+
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Make Omega current',
+      }),
+    )
+
+    // Focus acts on the selected item (Omega), exactly once.
+    await waitFor(() => {
+      expect(
+        vi.mocked(meetingsApi.focusMeetingItem),
+      ).toHaveBeenCalledWith(3)
+    })
+    expect(
+      vi.mocked(meetingsApi.focusMeetingItem),
+    ).toHaveBeenCalledTimes(1)
+
+    // Selected and Current converge on Omega.
+    await waitFor(() => {
+      expect(rowCurrent('Omega')).toBeTruthy()
+    })
+    expect(
+      screen.queryByRole('button', {
+        name: 'Return to current',
+      }),
+    ).toBeNull()
+    expect(
+      screen.queryByRole('button', {
+        name: 'Make Omega current',
+      }),
+    ).toBeNull()
+    // Focus never changed Omega's outcome: it remains open.
+    expect(
+      itemRow('Omega').getByText('Open', { exact: true }),
+    ).toBeTruthy()
+  })
+
+  it('a rejected Make current keeps selection and current and surfaces the existing action error', async () => {
+    const fake = new FakeLiveMeeting(
+      makeMeeting({ currentMeetingItemId: 2 }),
+      BASE_ITEMS,
+    )
+
+    // Simulate a domain rejection (e.g., an invariant the
+    // Focus contract enforces): the call fails, the server
+    // state is untouched.
+    vi.mocked(
+      meetingsApi.focusMeetingItem,
+    ).mockRejectedValue(
+      new Error('The meeting is no longer live.'),
+    )
+
+    renderLivePage(fake)
+    await waitForLive()
+
+    // Browse to a non-current item, then attempt Make current.
+    fireEvent.click(selectRow('Alpha'))
+    await waitFor(() => {
+      expect(
+        screen.getByRole('main', { name: 'Agenda item' }),
+      ).toHaveTextContent('Alpha')
+    })
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Make Alpha current',
+      }),
+    )
+
+    // The failure is surfaced through the existing Live
+    // Meeting action-error treatment.
+    await waitFor(() => {
+      expect(
+        screen.getByRole('alert').textContent,
+      ).toContain('The meeting is no longer live.')
+    })
+
+    // Selection and Current are both preserved: the user is
+    // still viewing Alpha, the actual current is still Beta,
+    // and the divergence controls remain available.
+    expect(
+      selectRow('Alpha').getAttribute('aria-pressed'),
+    ).toBe('true')
+    expect(rowCurrent('Beta')).toBeTruthy()
+    expect(
+      screen.getByRole('button', {
+        name: 'Return to current',
+      }),
+    ).toBeTruthy()
+    expect(
+      screen.getByRole('button', { name: 'Make Alpha current' }),
+    ).toBeTruthy()
+  })
+
+  it('Make current is not double-submitted while the first attempt is pending', async () => {
+    const fake = new FakeLiveMeeting(
+      makeMeeting({ currentMeetingItemId: 2 }),
+      BASE_ITEMS,
+    )
+
+    let resolveFocus: (
+      item: ApiMeetingItem,
+    ) => void = () => {
+      return undefined
+    }
+    vi.mocked(
+      meetingsApi.focusMeetingItem,
+    ).mockImplementation(
+      (id: number) =>
+        new Promise<ApiMeetingItem>((resolve) => {
+          resolveFocus = () =>
+            resolve(
+              fake.items.find((item) => item.id === id)!,
+            )
+        }),
+    )
+
+    renderLivePage(fake)
+    await waitForLive()
+
+    fireEvent.click(selectRow('Alpha'))
+    await waitFor(() => {
+      expect(
+        screen.getByRole('main', { name: 'Agenda item' }),
+      ).toHaveTextContent('Alpha')
+    })
+
+    // First click starts the Focus call; the button is now
+    // pending and disabled.
+    const makeCurrent = screen.getByRole('button', {
+      name: 'Make Alpha current',
+    })
+    fireEvent.click(makeCurrent)
+
+    expect(
+      vi.mocked(meetingsApi.focusMeetingItem),
+    ).toHaveBeenCalledTimes(1)
+    expect(
+      screen.getByRole('button', {
+        name: 'Make Alpha current',
+      }),
+    ).toBeDisabled()
+
+    // A second click while pending does not resubmit.
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Make Alpha current' }),
+    )
+    expect(
+      vi.mocked(meetingsApi.focusMeetingItem),
+    ).toHaveBeenCalledTimes(1)
+
+    // Completing the pending call moves the persisted current
+    // pointer (server state) and converges selection and
+    // current on Alpha.
+    fake.meeting = { ...fake.meeting, currentMeetingItemId: 1 }
+    resolveFocus(makeItem({ id: 1 }))
+
+    await waitFor(() => {
+      expect(rowCurrent('Alpha')).toBeTruthy()
+    })
+    expect(
+      screen.queryByRole('button', {
+        name: 'Make Alpha current',
+      }),
+    ).toBeNull()
   })
 
   it('initializes the selection to the actual current item', async () => {

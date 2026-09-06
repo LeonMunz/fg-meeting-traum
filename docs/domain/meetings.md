@@ -567,9 +567,14 @@ the agenda item the Meeting officially points at while Live.
   lifecycle action (Start / Done / Follow-up / Reopen), a
   following selection moves with it, while an explicit selection
   is preserved unless the selected item disappears. A deliberate
-  "Make current" action for a selected non-current item is NOT
-  implemented yet (the Focus API itself is implemented; see
-  Section 17).
+  "Make current" action IS implemented in the selected-item
+  detail context (never on an agenda row): while viewing a
+  non-current item, a user with Meeting write access can
+  explicitly make that item the persisted current item via the
+  canonical Focus API (any outcome is accepted; the outcome is
+  never mutated); after success the local selection and the
+  persisted current pointer converge. The Focus API itself is
+  implemented as described in Section 17.
 
 Status:
 

@@ -2726,8 +2726,11 @@ test(
     // --------------------------------------------------------
     // Selection is local navigation: browsing Beta (non-current)
     // shows its content in the detail pane WITHOUT moving the
-    // current pointer, and the Live rail offers no Focus /
-    // make-current control in this slice.
+    // current pointer. The agenda rail itself offers no Focus /
+    // make-current control — rows are selection-only. While a
+    // non-current item is selected, the detail context exposes
+    // the explicit "Make current" action (domain mutation) next
+    // to the navigation-only "Return to current".
     // --------------------------------------------------------
 
     await expect(
@@ -2745,42 +2748,55 @@ test(
     await itemIsNotCurrent('Beta')
     await itemIsNotCurrent('Omega')
 
-    // Return to current restores the selection only.
-    await page
-      .getByRole('button', { name: 'Return to current' })
-      .click()
+    // Selected-vs-Current diverge, and the explicit,
+    // distinguishable actions are both available: "Make current"
+    // (domain mutation) and "Return to current" (navigation).
     await expect(
-      workspace,
-    ).toContainText('Alpha')
+      page.getByRole('button', { name: 'Make Beta current' }),
+    ).toBeVisible()
     await expect(
       page.getByRole('button', { name: 'Return to current' }),
+    ).toBeVisible()
+    // No per-row make-current control on the Beta row itself.
+    await expect(
+      agendaItem('Beta').getByRole('button', {
+        name: /make current/i,
+      }),
     ).toHaveCount(0)
 
-    // --------------------------------------------------------
-    // Done is an explicit outcome mutation: Alpha becomes
-    // "Completed"; because Alpha WAS current, the pointer
-    // advances to the next not_discussed item (Beta) via the
-    // server-side advance rule.
-    // --------------------------------------------------------
-
+    // "Make current" is the canonical Focus action: it moves the
+    // persisted current pointer to the SELECTED item (Beta)
+    // without mutating any outcome, and Selected and Current
+    // converge (both divergence actions disappear).
     await page
-      .getByRole('button', { name: 'Mark Alpha as done' })
+      .getByRole('button', { name: 'Make Beta current' })
       .click()
 
     await expect(
       workspace,
     ).toContainText('Beta')
 
-    await itemHasOutcome('Alpha', 'Completed')
     await itemIsCurrent('Beta')
+    await itemIsNotCurrent('Alpha')
     await itemIsNotCurrent('Omega')
-    await itemIsNotCurrent('Delta')
-    // Beta is current: its outcome hint is not rendered yet.
+    await expect(
+      page.getByRole('button', { name: 'Return to current' }),
+    ).toHaveCount(0)
+    await expect(
+      page.getByRole('button', { name: 'Make Beta current' }),
+    ).toHaveCount(0)
+    // Focus never mutates outcomes: Beta stays open, and the
+    // current-item lifecycle controls are available again.
+    await itemHasOutcome('Beta', 'Open')
+    await expect(
+      page.getByRole('button', { name: 'Mark Beta as done' }),
+    ).toBeVisible()
 
     // --------------------------------------------------------
     // Done is an explicit outcome mutation: Beta becomes
-    // "Completed"; because Beta WAS current, the pointer
-    // advances to the next not_discussed item (Omega).
+    // "Completed"; because Beta WAS current (via Make current),
+    // the pointer advances to the next not_discussed item
+    // (Omega) via the server-side advance rule.
     // --------------------------------------------------------
 
     await page
