@@ -1089,4 +1089,167 @@ describe('Live Meeting selection (decoupled from current)', () => {
       ),
     ).toHaveBeenCalledTimes(1)
   })
+
+  it('a following selection that resolves the LAST open item enters the no-current state', async () => {
+    // Edge: one open item is Current, the user is following it,
+    // Done resolves it, no not_discussed item remains, so Current
+    // becomes null. The following selection must follow Current
+    // into null (Selected -> null) and the detail pane renders the
+    // calm no-current state — it must NOT resurrect the resolved
+    // item, and "Return to current" must not be offered (there is
+    // no current item to return to).
+    const single = makeItem({
+      id: 1,
+      title: 'Only',
+      position: 0,
+    })
+    const fake = new FakeLiveMeeting(
+      makeMeeting({ currentMeetingItemId: 1 }),
+      [single],
+    )
+
+    // Server effect of Done on the current (and only) item:
+    // outcome done, pointer null (no not_discussed items remain).
+    vi.mocked(
+      meetingsApi.markMeetingItemDone,
+    ).mockImplementation((id: number) => {
+      fake.items = fake.items.map((item) =>
+        item.id === id
+          ? { ...item, outcome: 'done' as const }
+          : item,
+      )
+      fake.meeting = {
+        ...fake.meeting,
+        currentMeetingItemId: null,
+      }
+      return Promise.resolve(
+        fake.items.find((item) => item.id === id)!,
+      )
+    })
+
+    renderLivePage(fake)
+    await waitForLive()
+
+    // The user is following the current item.
+    expect(
+      selectRow('Only').getAttribute('aria-pressed'),
+    ).toBe('true')
+
+    fireEvent.click(
+      workspace().getByRole('button', {
+        name: 'Mark Only as done',
+      }),
+    )
+
+    // Current advanced to null; the following selection followed
+    // it into null: the detail pane shows the no-current state.
+    await waitFor(() => {
+      expect(
+        screen.getByRole('main', { name: 'Agenda item' }),
+      ).toHaveTextContent('No current item')
+    })
+    // The resolved item is NOT resurrected as the viewed item.
+    expect(
+      screen.queryByRole('heading', {
+        name: 'Only',
+      }),
+    ).toBeNull()
+    // No current to return to: the navigation affordance is gone.
+    expect(
+      screen.queryByRole('button', {
+        name: 'Return to current',
+      }),
+    ).toBeNull()
+    // The rail shows the resolved outcome on the only row.
+    expect(itemRow('Only').getByText('Completed', { exact: true })).toBeTruthy()
+    // No row is marked current anymore.
+    expect(
+      screen.queryAllByText('Current', { exact: true }),
+    ).toHaveLength(0)
+  })
+
+  it('Make current is still offered while viewing an item with no current item', async () => {
+    // Edge: Current is null (e.g. after End cleared the pointer… or
+    // after the last open item was resolved) while the user has
+    // explicitly navigated to an item. The "Make current" escape
+    // hatch must remain available for that viewed item (the Focus
+    // contract accepts any outcome and needs no existing current),
+    // while "Return to current" is absent: a navigation action
+    // with no target must not be presented as actionable.
+    const items = [
+      makeItem({ id: 1, title: 'Alpha', position: 0, outcome: 'done' }),
+      makeItem({ id: 2, title: 'Beta', position: 1, outcome: 'done' }),
+    ]
+    const fake = new FakeLiveMeeting(
+      makeMeeting({ currentMeetingItemId: null }),
+      items,
+    )
+
+    renderLivePage(fake)
+    await waitForLive()
+
+    // Fresh load with no current: the detail pane is the calm
+    // no-current state.
+    expect(
+      screen.getByRole('main', { name: 'Agenda item' }),
+    ).toHaveTextContent('No current item')
+
+    // Explicitly browse the resolved Beta.
+    fireEvent.click(selectRow('Beta'))
+    await waitFor(() => {
+      expect(
+        screen.getByRole('heading', {
+          name: 'Beta',
+        }),
+      ).toBeVisible()
+    })
+
+    // Divergence from (nonexistent) current: Make current is the
+    // deliberate escape hatch and stays offered for the viewed
+    // item.
+    const makeCurrent = screen.getByRole('button', {
+      name: 'Make Beta current',
+    })
+    expect(makeCurrent).toBeVisible()
+
+    // But there is no current to return to.
+    expect(
+      screen.queryByRole('button', {
+        name: 'Return to current',
+      }),
+    ).toBeNull()
+
+    // Clicking Make current calls the canonical Focus action once
+    // (no outcome mutation) and the pointer converges on Beta.
+    vi.mocked(
+      meetingsApi.focusMeetingItem,
+    ).mockImplementation(async (id: number) => {
+      fake.meeting = {
+        ...fake.meeting,
+        currentMeetingItemId: id,
+      }
+      return fake.items.find((item) => item.id === id)!
+    })
+    fireEvent.click(makeCurrent)
+
+    await waitFor(() => {
+      expect(
+        vi.mocked(meetingsApi.focusMeetingItem),
+      ).toHaveBeenCalledTimes(1)
+    })
+    await waitFor(() => {
+      expect(rowCurrent('Beta')).toBeTruthy()
+    })
+    // Selection and current converged: the divergence hint is gone.
+    expect(
+      screen.queryByRole('button', {
+        name: 'Return to current',
+      }),
+    ).toBeNull()
+    expect(
+      screen.queryByRole('button', {
+        name: 'Make Beta current',
+      }),
+    ).toBeNull()
+  })
 })

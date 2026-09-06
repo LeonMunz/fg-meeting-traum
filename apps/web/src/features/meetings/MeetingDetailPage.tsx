@@ -1241,8 +1241,17 @@ export function MeetingDetailPage() {
     currentItems: ApiMeetingItem[] | null,
   ) => {
     setSelectedItemId((prev) => {
+      // A following selection tracks the freshly-read current
+      // pointer exactly — including a null pointer (no current
+      // item remains). `newCurrentId` is always taken from the
+      // server response or the post-action re-read, never from the
+      // render-closure `meeting` (which may still hold the
+      // pre-action pointer when the caller updates it in the same
+      // batch).
       const resolvedCurrent =
-        newCurrentId ?? meeting?.currentMeetingItemId ?? null
+        wasFollowing
+          ? newCurrentId
+          : newCurrentId ?? meeting?.currentMeetingItemId ?? null
       if (wasFollowing) {
         return resolvedCurrent
       }
@@ -2152,12 +2161,17 @@ export function MeetingDetailPage() {
   // Live Meeting: the item the user is currently VIEWING (local,
   // decoupled from "current"). Falls back to the current item when
   // the explicit selection is unset or the item no longer exists.
+  // When the Meeting has NO current item (e.g. the last open item
+  // was just resolved while the user was following it), there is
+  // nothing to fall back to: the detail pane renders the calm
+  // no-current state instead of resurrecting a resolved item.
   const liveSelectedItem = isLive
     ? sortedItems.find(
         (item) => item.id === selectedItemId,
       ) ??
-      liveCurrentItem ??
-      null
+      (meeting?.currentMeetingItemId != null
+        ? liveCurrentItem ?? null
+        : null)
     : null
 
   const liveSelectedSection =
@@ -2886,14 +2900,17 @@ export function MeetingDetailPage() {
                 {/* Shown only while the user is viewing a non-current
                     item. "Return to current" is purely local navigation —
                     it re-points selection at the Meeting's actual current
-                    item and never mutates the domain. "Make current" is
-                    the deliberate, domain-mutating alternative: it calls
-                    the canonical Focus action so the VIEWED item becomes
-                    the persisted current item. The Focus contract accepts
-                    an item of any outcome, so availability here mirrors
-                    the domain rule: the user may write the Meeting and
-                    the viewed item is not already current. */}
-                {!liveSelectionIsCurrent && (
+                    item and never mutates the domain; it is offered
+                    only while a current item actually exists to
+                    return to. "Make current" is the deliberate,
+                    domain-mutating alternative: it calls the canonical
+                    Focus action so the VIEWED item becomes the persisted
+                    current item. The Focus contract accepts an item of
+                    any outcome, so availability here mirrors the domain
+                    rule: the user may write the Meeting and the viewed
+                    item is not already current. */}
+                {!liveSelectionIsCurrent &&
+                  liveCurrentItem != null && (
                   <div className="mt-3 flex items-center gap-2">
                     <button
                       type="button"
@@ -2906,6 +2923,58 @@ export function MeetingDetailPage() {
                       Return to current
                     </button>
 
+                    {canManageLifecycle && (
+                      <button
+                        type="button"
+                        disabled={
+                          updatingItemId ===
+                          liveSelectedItem!.id
+                        }
+                        onClick={() =>
+                          void handleFocusItem(
+                            liveSelectedItem!,
+                          )
+                        }
+                        aria-label={`Make ${liveSelectedItem!.title} current`}
+                        title="Make this item the meeting's current item"
+                        className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm font-medium text-on-surface outline-none transition hover:border-primary/40 hover:bg-surface-container-low focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-60"
+                      >
+                        {updatingItemId ===
+                        liveSelectedItem!.id ? (
+                          <span aria-hidden="true" className="material-symbols-outlined animate-spin text-[16px]">
+                            refresh
+                          </span>
+                        ) : (
+                          <span aria-hidden="true" className="material-symbols-outlined text-[16px]">
+                            center_focus_strong
+                          </span>
+                        )}
+                        {updatingItemId ===
+                        liveSelectedItem!.id
+                          ? 'Making current…'
+                          : 'Make current'}
+                      </button>
+                    )}
+
+                    <span className="sr-only">
+                      You are viewing a different item than the meeting's
+                      current item.
+                    </span>
+                  </div>
+                )}
+
+                {/* No current item exists, but the user is still
+                    viewing one (e.g. after the last open item was
+                    resolved while following current). The divergence
+                    hint is still true — the viewed item is NOT the
+                    current item (there is none) — so "Make current"
+                    remains the deliberate escape hatch, while
+                    "Return to current" is not offered: a navigation
+                    action with no target must not be presented as
+                    actionable. */}
+                {!liveSelectionIsCurrent &&
+                  liveCurrentItem == null && (
+                  <div className="mt-3 flex items-center gap-2">
                     {canManageLifecycle && (
                       <button
                         type="button"

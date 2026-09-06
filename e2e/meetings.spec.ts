@@ -2719,9 +2719,10 @@ test(
     await itemIsCurrent('Alpha')
     await itemIsNotCurrent('Beta')
     await itemIsNotCurrent('Omega')
-    // NOTE: the current row shows the "Current" indicator INSTEAD
-    // of its outcome hint, so "Open" is only observable once the
-    // item is no longer current (asserted after Focus below).
+    // The current row shows the "Current" indicator ALONGSIDE its
+    // outcome hint: Alpha is current AND still open (Start never
+    // mutates outcomes).
+    await itemHasOutcome('Alpha', 'Open')
 
     // --------------------------------------------------------
     // Selection is local navigation: browsing Beta (non-current)
@@ -2779,6 +2780,9 @@ test(
     await itemIsCurrent('Beta')
     await itemIsNotCurrent('Alpha')
     await itemIsNotCurrent('Omega')
+    // Focus away never completes the previous current item:
+    // Alpha is non-current and still open.
+    await itemHasOutcome('Alpha', 'Open')
     await expect(
       page.getByRole('button', { name: 'Return to current' }),
     ).toHaveCount(0)
@@ -2812,9 +2816,12 @@ test(
     await itemIsNotCurrent('Alpha')
     await itemIsNotCurrent('Delta')
     await itemHasOutcome('Alpha', 'Open')
+    // The advance rule selected a still-open successor: Omega is
+    // current AND open.
+    await itemHasOutcome('Omega', 'Open')
 
     // --------------------------------------------------------
-    // Browsing Alpha (completed, non-current) is selection-only:
+    // Browsing Alpha (open, non-current) is selection-only:
     // the pointer stays on Omega and no outcome changes. The
     // resolution actions are hidden while a non-current item is
     // viewed, so the user returns to current first.
@@ -2829,7 +2836,10 @@ test(
     await itemIsCurrent('Omega')
     await itemIsNotCurrent('Alpha')
     await itemHasOutcome('Beta', 'Completed')
-    await itemHasOutcome('Alpha', 'Completed')
+    // Alpha was never resolved: Focus moved away from it, and the
+    // advance rule skipped over it, neither of which mutates an
+    // outcome. It is still not_discussed.
+    await itemHasOutcome('Alpha', 'Open')
 
     // No resolution controls while viewing a non-current item.
     await expect(
@@ -2865,17 +2875,22 @@ test(
 
     await itemIsCurrent('Delta')
     await itemIsNotCurrent('Omega')
+    // The advance rule selected a still-open successor: Delta is
+    // current AND open.
+    await itemHasOutcome('Delta', 'Open')
     // Omega is no longer current: its outcome hint is rendered
     // and shows the explicit follow-up outcome.
     await itemHasOutcome('Omega', 'Resolved with follow-up')
-    await itemHasOutcome('Alpha', 'Completed')
+    // Alpha is still open: neither Focus nor the advance rule
+    // resolves an item implicitly.
+    await itemHasOutcome('Alpha', 'Open')
     await itemHasOutcome('Beta', 'Completed')
 
     // --------------------------------------------------------
     // Reload preserves the persisted current pointer AND all
-    // item outcomes: Delta is current; Alpha, Beta done; Omega
-    // follow-up. (Local selection resets to the actual current
-    // item on re-entry.)
+    // item outcomes: Delta is current; Alpha open, Beta done,
+    // Omega follow-up. (Local selection resets to the actual
+    // current item on re-entry.)
     // --------------------------------------------------------
 
     await page.reload()
@@ -2886,7 +2901,8 @@ test(
 
     await itemIsCurrent('Delta')
     await itemIsNotCurrent('Alpha')
-    await itemHasOutcome('Alpha', 'Completed')
+    await itemHasOutcome('Delta', 'Open')
+    await itemHasOutcome('Alpha', 'Open')
     await itemHasOutcome('Beta', 'Completed')
     await itemHasOutcome('Omega', 'Resolved with follow-up')
 
@@ -2915,9 +2931,14 @@ test(
     ).toBeHidden()
 
     // --------------------------------------------------------
-    // Reopen: current was null after End, so Reopen sets it to
-    // the first remaining not_discussed item (Delta); prior
-    // done / follow-up outcomes remain unchanged.
+    // Reopen: End cleared the current pointer, so Reopen makes a
+    // FRESH selection — the FIRST remaining not_discussed item in
+    // canonical agenda order (Alpha), which is NOT the item the
+    // pre-End advance rule had pointed at (Delta). This differs
+    // from advance-from-current: advance walks forward past the
+    // resolved item, Reopen restarts from the beginning. Alpha is
+    // current AND open (Reopen never mutates outcomes); Delta
+    // stays open and non-current. Prior outcomes are untouched.
     // --------------------------------------------------------
 
     await page
@@ -2926,13 +2947,16 @@ test(
 
     await expect(
       workspace,
-    ).toContainText('Delta')
+    ).toContainText('Alpha')
 
-    await itemIsCurrent('Delta')
+    await itemIsCurrent('Alpha')
+    await itemIsNotCurrent('Delta')
     await itemIsNotCurrent('Omega')
-    // Delta is current again: its outcome hint is not rendered
-    // while current. Prior outcomes are untouched.
-    await itemHasOutcome('Alpha', 'Completed')
+    // The current row carries the Current indicator alongside its
+    // outcome hint: Alpha is current AND open (still
+    // not_discussed — Reopen never mutates outcomes).
+    await itemHasOutcome('Alpha', 'Open')
+    await itemHasOutcome('Delta', 'Open')
     await itemHasOutcome('Beta', 'Completed')
     await itemHasOutcome('Omega', 'Resolved with follow-up')
   },
