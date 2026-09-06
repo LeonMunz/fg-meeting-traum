@@ -141,10 +141,12 @@ function makeMeeting(
   }
 }
 
-// Three items in one section: Alpha (1), Beta (2), Omega (3).
+// Three items in one section: Alpha (1) open, Beta (2) completed,
+// Omega (3) open. (Beta's done outcome mirrors the domain rule that
+// resolving a current item advances the pointer past it.)
 const BASE_ITEMS: ApiMeetingItem[] = [
   makeItem({ id: 1, title: 'Alpha', position: 0 }),
-  makeItem({ id: 2, title: 'Beta', position: 1 }),
+  makeItem({ id: 2, title: 'Beta', position: 1, outcome: 'done' }),
   makeItem({ id: 3, title: 'Omega', position: 2 }),
 ]
 
@@ -232,7 +234,7 @@ function renderLivePage(fake: FakeLiveMeeting) {
 }
 
 const workspace = () =>
-  within(screen.getByRole('main', { name: 'Current item' }))
+  within(screen.getByRole('main', { name: 'Agenda item' }))
 
 const agenda = () =>
   screen.getByRole('navigation', { name: 'Agenda' })
@@ -287,7 +289,7 @@ describe('Live current pointer synchronization', () => {
 
     // Workspace shows Alpha (id 1 === currentMeetingItemId).
     expect(
-      screen.getByRole('main', { name: 'Current item' }),
+      screen.getByRole('main', { name: 'Agenda item' }),
     ).toHaveTextContent('Alpha')
     // The rail marks Alpha as current (sr-only "Current").
     await waitFor(() => {
@@ -295,56 +297,57 @@ describe('Live current pointer synchronization', () => {
     })
   })
 
-  it('Focus Beta -> refreshed Meeting pointer -> workspace Beta; Alpha outcome unchanged', async () => {
+  it('the Live rail offers no Focus control; a pointer change from a fresh read shows the current item', async () => {
+    // STALE TEST (updated): the Live-rail "Focus" (make-current)
+    // affordance was removed in the Selected-vs-Current slice. The
+    // Focus API contract is unchanged and is exercised through the
+    // page's existing refresh path (the same boundary the deferred
+    // "Make current" action will use): a fresh Meeting read must
+    // surface the post-action pointer.
     const fake = new FakeLiveMeeting(
       makeMeeting({ currentMeetingItemId: 1 }),
       BASE_ITEMS,
     )
 
-    // Server effect of Focus Beta: pointer moves to 2, outcomes
-    // untouched.
-    vi.mocked(meetingsApi.focusMeetingItem).mockImplementation(
-      (id: number) => {
-        fake.meeting = {
-          ...fake.meeting,
-          currentMeetingItemId: id,
-        }
-        return Promise.resolve(
-          fake.items.find((item) => item.id === id)!,
-        )
-      },
-    )
-
     renderLivePage(fake)
     await waitForLive()
 
-    fireEvent.click(
-      itemRow('Beta').getByRole('button', { name: 'Focus Beta' }),
-    )
-
-    // The workspace switches to Beta WITHOUT a reload.
-    await waitFor(() => {
-      expect(
-      screen.getByRole('main', { name: 'Current item' }),
-    ).toHaveTextContent('Beta')
-    })
-    await waitFor(() => {
-      expect(rowCurrent('Beta')).toBeTruthy()
-    })
-
-    // Alpha is no longer current, and its outcome was never
-    // mutated: the rail now exposes the "Open" hint again.
-    await waitFor(() => {
-      expect(
-        itemRow('Alpha').getByText('Open', { exact: true }),
-      ).toBeTruthy()
-    })
-
-    // The pointer was obtained from a fresh Meeting read after
-    // the action (initial load + post-action refresh).
+    // No Focus / make-current control exists on any Live row.
     expect(
-      vi.mocked(meetingsApi.getMeeting).mock.calls.length,
-    ).toBeGreaterThanOrEqual(2)
+      screen.queryByRole('button', { name: /Focus / }),
+    ).toBeNull()
+
+    // Server-side pointer change: the Meeting now points at Omega.
+    fake.meeting = {
+      ...fake.meeting,
+      currentMeetingItemId: 3,
+    }
+
+    // Simulate a fresh page load: local selection follows the
+    // actual current item.
+    cleanup()
+    renderLivePage(fake)
+    await waitForLive()
+
+    expect(
+      screen.getByRole('main', { name: 'Agenda item' }),
+    ).toHaveTextContent('Omega')
+    await waitFor(() => {
+      expect(rowCurrent('Omega')).toBeTruthy()
+    })
+
+    // Selecting items never moved the pointer (Focus API untouched
+    // by any UI action).
+    expect(
+      vi.mocked(meetingsApi.focusMeetingItem),
+    ).not.toHaveBeenCalled()
+    // Alpha and Beta outcomes are intact.
+    expect(
+      itemRow('Alpha').getByText('Open', { exact: true }),
+    ).toBeTruthy()
+    expect(
+      itemRow('Beta').getByText('Completed', { exact: true }),
+    ).toBeTruthy()
   })
 
   it('Done on current Beta -> Beta done + workspace advances to the next current', async () => {
@@ -375,7 +378,7 @@ describe('Live current pointer synchronization', () => {
     await waitForLive()
 
     expect(
-      screen.getByRole('main', { name: 'Current item' }),
+      screen.getByRole('main', { name: 'Agenda item' }),
     ).toHaveTextContent('Beta')
 
     fireEvent.click(
@@ -387,7 +390,7 @@ describe('Live current pointer synchronization', () => {
     // Workspace advances to Omega (new current).
     await waitFor(() => {
       expect(
-      screen.getByRole('main', { name: 'Current item' }),
+      screen.getByRole('main', { name: 'Agenda item' }),
     ).toHaveTextContent('Omega')
     })
     // Beta, now non-current, exposes its done outcome.
@@ -430,7 +433,7 @@ describe('Live current pointer synchronization', () => {
     await waitForLive()
 
     expect(
-      screen.getByRole('main', { name: 'Current item' }),
+      screen.getByRole('main', { name: 'Agenda item' }),
     ).toHaveTextContent('Alpha')
 
     fireEvent.click(
@@ -443,7 +446,7 @@ describe('Live current pointer synchronization', () => {
     // visible now that it is non-current.
     await waitFor(() => {
       expect(
-      screen.getByRole('main', { name: 'Current item' }),
+      screen.getByRole('main', { name: 'Agenda item' }),
     ).toHaveTextContent('Beta')
       expect(
         itemRow('Alpha').getByText('Resolved with follow-up', {
@@ -482,7 +485,7 @@ describe('Live current pointer synchronization', () => {
     await waitForLive()
 
     expect(
-      screen.getByRole('main', { name: 'Current item' }),
+      screen.getByRole('main', { name: 'Agenda item' }),
     ).toHaveTextContent('Alpha')
 
     // Non-current mutation of Omega (id 3) through the same API
@@ -501,7 +504,7 @@ describe('Live current pointer synchronization', () => {
 
     // The rendered workspace still shows the original current.
     expect(
-      screen.getByRole('main', { name: 'Current item' }),
+      screen.getByRole('main', { name: 'Agenda item' }),
     ).toHaveTextContent('Alpha')
     await waitFor(() => {
       expect(rowCurrent('Alpha')).toBeTruthy()

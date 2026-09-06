@@ -556,8 +556,20 @@ the agenda item the Meeting officially points at while Live.
   (`SET_NULL`); deleting the Meeting removes both.
 - A frontend-only **Selected** concept (free navigation of the
   agenda rail) is intentionally NOT part of this model: it is
-  frontend-local, not persisted, and the corresponding Live UI is
-  not implemented yet.
+  frontend-local and never persisted. The corresponding Live UI is
+  implemented: in a Live Meeting every agenda row is selectable
+  regardless of outcome; selecting a row only changes which item
+  the detail pane shows (never the current pointer, never an
+  outcome); the rail keeps an independent "Current" marker on the
+  actual current item and a "Selected" marker on a selected
+  non-current item; "Return to current" re-points the selection
+  only. If the current pointer advances through an existing
+  lifecycle action (Start / Done / Follow-up / Reopen), a
+  following selection moves with it, while an explicit selection
+  is preserved unless the selected item disappears. A deliberate
+  "Make current" action for a selected non-current item is NOT
+  implemented yet (the Focus API itself is implemented; see
+  Section 17).
 
 Status:
 
@@ -1779,10 +1791,14 @@ Meeting records a new `ended_at`.
   machine above. Ending a Meeting is **not** blocked by the current
   pointer: remaining `not_discussed` items are allowed, and End clears
   `currentMeetingItemId` (see Section 17).
-- The richer live-meeting ceremony from the product concept (Agenda |
-  Current Item split UI, moderator and moderator rotation, frontend-local
-  **Selected** free navigation of the agenda rail, per-item `intent` and
-  `origin`) is not implemented.
+- The richer live-meeting ceremony from the product concept (moderator
+  and moderator rotation, per-item `intent` and `origin`) is not
+  implemented. The Agenda | Current Item split UI IS implemented, and
+  the frontend-local **Selected** free navigation of the agenda rail is
+  implemented frontend-only (never persisted; selection is local UI
+  state, see the `current_meeting_item_id` section above); a deliberate
+  "Make current" action for a selected non-current item is NOT
+  implemented yet.
 
 ---
 
@@ -2288,8 +2304,10 @@ Move to section…
 
 > Intended invariants that depend on not-yet-implemented concepts (Topic
 > state, per-item `intent`/`origin`, NoteEntry streams, moderator rotation,
-> frontend-local Selected navigation) are described in the relevant sections
-> and are not current guarantees.
+> a "Make current" action for a selected non-current item) are described in
+> the relevant sections and are not current guarantees. (Frontend-local
+> Selected navigation of the Live agenda rail IS implemented; see the
+> `current_meeting_item_id` section above.)
 
 ---
 

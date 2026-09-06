@@ -436,6 +436,13 @@ export function MeetingDetailPage() {
   const [updatingItemId, setUpdatingItemId] =
     useState<number | null>(null)
 
+  // Live Meeting: the agenda item the user is currently VIEWING in the
+  // detail pane. Purely local UI navigation (never persisted). "Current"
+  // (persisted on the Meeting as currentMeetingItemId) is a distinct,
+  // domain concept; selecting an item must not change it.
+  const [selectedItemId, setSelectedItemId] =
+    useState<number | null>(null)
+
   const [updatingMeeting, setUpdatingMeeting] =
     useState(false)
 
@@ -652,6 +659,9 @@ export function MeetingDetailPage() {
       setItems(nextItems)
       setMembers(nextMembers)
       setSections(nextSections)
+      // A fresh load/re-entry resets local selection to the Meeting's
+      // actual current item (selection is never persisted).
+      setSelectedItemId(nextMeeting.currentMeetingItemId)
     } catch (error) {
       setMeeting(null)
       setParticipants([])
@@ -675,15 +685,19 @@ export function MeetingDetailPage() {
   // Focus / Done / Follow-up all change one or more items). Keeps
   // the local items in sync without a full page reload or scroll
   // reset.
-  const refreshItems = useCallback(async () => {
+  const refreshItems = useCallback(async ():
+    Promise<ApiMeetingItem[] | null> => {
     if (meetingId == null) {
-      return
+      return null
     }
     try {
-      setItems(await listMeetingItems(meetingId))
+      const next = await listMeetingItems(meetingId)
+      setItems(next)
+      return next
     } catch {
       // The action that triggered the refresh succeeded on the
       // server; the next full load recovers the canonical list.
+      return null
     }
   }, [meetingId])
 
@@ -694,15 +708,19 @@ export function MeetingDetailPage() {
   // obtainable here only from a fresh Meeting read. Awaited after
   // refreshItems (never racing it), so the final state always
   // reflects the post-action server truth.
-  const refreshMeeting = useCallback(async () => {
+  const refreshMeeting = useCallback(async ():
+    Promise<ApiMeeting | null> => {
     if (meetingId == null) {
-      return
+      return null
     }
     try {
-      setMeeting(await getMeeting(meetingId))
+      const next = await getMeeting(meetingId)
+      setMeeting(next)
+      return next
     } catch {
       // The action that triggered the refresh succeeded on the
       // server; the next full load recovers the canonical row.
+      return null
     }
   }, [meetingId])
 
@@ -1196,8 +1214,56 @@ export function MeetingDetailPage() {
     }
   }
 
+  // ── Live Meeting: local selection (decoupled from "current") ──
+  // Selecting an agenda item is pure UI navigation: it only changes
+  // which item the detail pane shows. It never touches the persisted
+  // current pointer or any item outcome.
+  const handleSelectLiveItem = (item: ApiMeetingItem) => {
+    setSelectedItemId(item.id)
+  }
+
+  // "Return to current": re-point local selection at the Meeting's
+  // actual current item. No domain mutation.
+  const handleReturnToCurrent = () => {
+    if (meeting?.currentMeetingItemId != null) {
+      setSelectedItemId(meeting.currentMeetingItemId)
+    }
+  }
+
+  // After an action that may move the persisted current pointer, keep
+  // local selection consistent with the user's intent:
+  //  - if they were following the old current item, follow the new one;
+  //  - if they had explicitly navigated elsewhere, preserve that choice
+  //    (unless the selected item no longer exists).
+  const reconcileLiveSelection = (
+    wasFollowing: boolean,
+    newCurrentId: number | null,
+    currentItems: ApiMeetingItem[] | null,
+  ) => {
+    setSelectedItemId((prev) => {
+      const resolvedCurrent =
+        newCurrentId ?? meeting?.currentMeetingItemId ?? null
+      if (wasFollowing) {
+        return resolvedCurrent
+      }
+      if (currentItems == null) {
+        // The post-action refresh failed; keep the explicit selection.
+        return prev
+      }
+      const stillExists =
+        prev != null && currentItems.some((i) => i.id === prev)
+      if (prev == null || !stillExists) {
+        return resolvedCurrent
+      }
+      return prev
+    })
+  }
+
   const handleFocusItem = async (item: ApiMeetingItem) => {
     if (updatingItemId != null) return
+    const wasFollowing =
+      meeting != null &&
+      selectedItemId === meeting.currentMeetingItemId
     setUpdatingItemId(item.id)
     setActionError(null)
     try {
@@ -1205,8 +1271,13 @@ export function MeetingDetailPage() {
       // Focus moves the persisted current pointer; the action
       // response carries only the item, so re-read the Meeting for
       // the fresh currentMeetingItemId and refresh the collection.
-      await refreshItems()
-      await refreshMeeting()
+      const nextItems = await refreshItems()
+      const nextMeeting = await refreshMeeting()
+      reconcileLiveSelection(
+        wasFollowing,
+        nextMeeting?.currentMeetingItemId ?? null,
+        nextItems,
+      )
     } catch (error) {
       setActionError(
         getErrorMessage(error, 'Agenda item could not be focused.'),
@@ -1218,6 +1289,9 @@ export function MeetingDetailPage() {
 
   const handleDoneItem = async (item: ApiMeetingItem) => {
     if (updatingItemId != null) return
+    const wasFollowing =
+      meeting != null &&
+      selectedItemId === meeting.currentMeetingItemId
     setUpdatingItemId(item.id)
     setActionError(null)
     try {
@@ -1225,8 +1299,13 @@ export function MeetingDetailPage() {
       // Done mutates the item's outcome and, when the item was
       // current, advances the persisted current pointer; re-read
       // the Meeting and refresh the collection.
-      await refreshItems()
-      await refreshMeeting()
+      const nextItems = await refreshItems()
+      const nextMeeting = await refreshMeeting()
+      reconcileLiveSelection(
+        wasFollowing,
+        nextMeeting?.currentMeetingItemId ?? null,
+        nextItems,
+      )
     } catch (error) {
       setActionError(
         getErrorMessage(error, 'Agenda item could not be marked done.'),
@@ -1238,6 +1317,9 @@ export function MeetingDetailPage() {
 
   const handleFollowUpItem = async (item: ApiMeetingItem) => {
     if (updatingItemId != null) return
+    const wasFollowing =
+      meeting != null &&
+      selectedItemId === meeting.currentMeetingItemId
     setUpdatingItemId(item.id)
     setActionError(null)
     try {
@@ -1245,8 +1327,13 @@ export function MeetingDetailPage() {
       // Follow-up mutates the item's outcome and, when the item
       // was current, advances the persisted current pointer;
       // re-read the Meeting and refresh the collection.
-      await refreshItems()
-      await refreshMeeting()
+      const nextItems = await refreshItems()
+      const nextMeeting = await refreshMeeting()
+      reconcileLiveSelection(
+        wasFollowing,
+        nextMeeting?.currentMeetingItemId ?? null,
+        nextItems,
+      )
     } catch (error) {
       setActionError(
         getErrorMessage(
@@ -1277,7 +1364,13 @@ export function MeetingDetailPage() {
       setMeeting(updated)
       // Start may select the first agenda item as the current
       // item; refresh the collection so the UI shows it immediately.
-      await refreshItems()
+      // A fresh Live session follows the (new) current item.
+      const nextItems = await refreshItems()
+      reconcileLiveSelection(
+        true,
+        updated.currentMeetingItemId,
+        nextItems,
+      )
     } catch (error) {
       setActionError(
         getErrorMessage(
@@ -1335,8 +1428,14 @@ export function MeetingDetailPage() {
 
       setMeeting(updated)
       // Reopen may select the first remaining not_discussed item
-      // as the current item; refresh the collection.
-      await refreshItems()
+      // as the current item; refresh the collection. A re-entered
+      // Live session follows the (new) current item.
+      const nextItems = await refreshItems()
+      reconcileLiveSelection(
+        true,
+        updated.currentMeetingItemId,
+        nextItems,
+      )
     } catch (error) {
       setActionError(
         getErrorMessage(
@@ -2050,22 +2149,42 @@ export function MeetingDetailPage() {
       ) ?? null
     : null
 
-  const liveCurrentSection =
-    liveCurrentItem != null
+  // Live Meeting: the item the user is currently VIEWING (local,
+  // decoupled from "current"). Falls back to the current item when
+  // the explicit selection is unset or the item no longer exists.
+  const liveSelectedItem = isLive
+    ? sortedItems.find(
+        (item) => item.id === selectedItemId,
+      ) ??
+      liveCurrentItem ??
+      null
+    : null
+
+  const liveSelectedSection =
+    liveSelectedItem != null
       ? sections.find(
           (section) =>
             section.id ===
-            liveCurrentItem!.meetingSectionId,
+            liveSelectedItem!.meetingSectionId,
         ) ?? null
       : null
 
-  const liveCurrentPosition =
-    liveCurrentItem != null &&
-    liveCurrentSection != null
-      ? (itemsBySection.get(liveCurrentSection.id) ?? []).findIndex(
-          (item) => item.id === liveCurrentItem!.id,
+  const liveSelectedPosition =
+    liveSelectedItem != null &&
+    liveSelectedSection != null
+      ? (itemsBySection.get(liveSelectedSection.id) ?? []).findIndex(
+          (item) => item.id === liveSelectedItem!.id,
         ) + 1
       : 0
+
+  // True while the detail pane shows the Meeting's actual current
+  // item (i.e., the user is "on" current). Lifecycle controls
+  // (Done / Follow-up) only act on the current item, so they render
+  // only in this state and never on an arbitrary selected item.
+  const liveSelectionIsCurrent =
+    liveSelectedItem != null &&
+    liveCurrentItem != null &&
+    liveSelectedItem.id === liveCurrentItem.id
 
   const liveOpenItemCount = sortedItems.filter(
     (item) => item.outcome === 'not_discussed',
@@ -2595,64 +2714,64 @@ export function MeetingDetailPage() {
                             const statusMeta =
                               agendaStatusMeta(item.outcome)
 
+                            const isCurrent =
+                              item.id ===
+                              meeting.currentMeetingItemId
+                            const isSelected =
+                              item.id === selectedItemId
+
                             const rowClass = [
                               'flex w-full items-start gap-2 rounded-md py-1.5 pl-2.5 pr-2 text-left outline-none transition',
-                              item.id === meeting.currentMeetingItemId
+                              isCurrent
                                 ? 'border-l-2 border-primary bg-primary/5'
-                                : 'border-l-2 border-transparent hover:bg-surface-container-low/70',
+                                : isSelected
+                                  ? 'border-l-2 border-primary/50 bg-primary/10'
+                                  : 'border-l-2 border-transparent hover:bg-surface-container-low/70',
                             ].join(' ')
 
                             return (
                               <li key={item.id}>
-                                {item.id ===
-                                meeting.currentMeetingItemId ? (
-                                  <div
-                                    className={rowClass}
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleSelectLiveItem(item)
+                                  }
+                                  aria-pressed={isSelected}
+                                  aria-label={
+                                    isCurrent
+                                      ? `View current item ${item.title}`
+                                      : `View item ${item.title}`
+                                  }
+                                  className={`${rowClass} flex-1 focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-inset`}
+                                >
+                                  <span
+                                    aria-hidden="true"
+                                    className={`mt-px w-4 shrink-0 pl-0.5 text-center text-[13px] leading-5 ${isCurrent ? 'text-primary' : 'text-on-surface-variant'}`}
                                   >
-                                    <span
-                                      aria-hidden="true"
-                                      className="mt-px w-4 shrink-0 pl-0.5 text-center text-[13px] leading-5 text-primary"
-                                    >
-                                      {statusMeta.symbol}
-                                    </span>
+                                    {statusMeta.symbol}
+                                  </span>
 
-                                    <span className="min-w-0 flex-1 break-words text-sm leading-5 font-medium text-on-surface">
-                                      {item.title}
-                                    </span>
+                                  <span className={`min-w-0 flex-1 break-words text-sm leading-5 ${isSelected ? 'font-medium' : 'font-normal'} text-on-surface`}>
+                                    {item.title}
+                                  </span>
 
-                                    <span className="sr-only">
+                                  {isCurrent && (
+                                    <span className="shrink-0 rounded bg-primary/15 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-primary">
                                       Current
                                     </span>
-                                  </div>
-                                ) : (
-                                  <button
-                                    type="button"
-                                    disabled={
-                                      updatingItemId != null
-                                    }
-                                    onClick={() =>
-                                      void handleFocusItem(item)
-                                    }
-                                    aria-label={`Focus ${item.title}`}
-                                    title="Focus"
-                                    className={`${rowClass} focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-inset disabled:cursor-not-allowed disabled:opacity-45`}
-                                  >
-                                    <span
-                                      aria-hidden="true"
-                                      className="mt-px w-4 shrink-0 pl-0.5 text-center text-[13px] leading-5 text-on-surface-variant"
-                                    >
-                                      {statusMeta.symbol}
-                                    </span>
+                                  )}
 
-                                    <span className="min-w-0 flex-1 break-words text-sm leading-5 text-on-surface">
-                                      {item.title}
+                                  {isSelected && !isCurrent && (
+                                    <span className="shrink-0 rounded bg-primary/10 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-primary/80">
+                                      Selected
                                     </span>
+                                  )}
 
-                                    <span className="sr-only">
-                                      {statusMeta.hint}
-                                    </span>
-                                  </button>
-                                )}
+                                  <span className="sr-only">
+                                    {statusMeta.hint}
+                                  </span>
+                                </button>
+
                               </li>
                             )
                           })}
@@ -2743,38 +2862,61 @@ export function MeetingDetailPage() {
 
           {/* RIGHT: Current Item workspace. */}
           <main
-            aria-label="Current item"
+            aria-label="Agenda item"
             className="min-w-0 flex-1"
           >
-            {liveCurrentItem != null ? (
+            {liveSelectedItem != null ? (
               <div>
                 {/* Small context line: Section · position */}
                 <p className="text-sm font-medium text-on-surface-variant">
-                  {liveCurrentSection?.name ?? ''}
-                  {liveCurrentPosition > 0 && (
+                  {liveSelectedSection?.name ?? ''}
+                  {liveSelectedPosition > 0 && (
                     <>
                       {' · '}
-                      {liveCurrentPosition} of{' '}
+                      {liveSelectedPosition} of{' '}
                       {(
                         itemsBySection.get(
-                          liveCurrentSection!.id,
+                          liveSelectedSection!.id,
                         ) ?? []
                       ).length}
                     </>
                   )}
                 </p>
 
+                {/* "Return to current": shown only while the user is
+                    viewing a non-current item. Purely local navigation —
+                    it re-points selection at the Meeting's actual current
+                    item and never mutates the domain. */}
+                {!liveSelectionIsCurrent && (
+                  <div className="mt-3 flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleReturnToCurrent}
+                      className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-primary/40 bg-primary/5 px-3 text-sm font-medium text-primary outline-none transition hover:bg-primary/10 focus-visible:ring-2 focus-visible:ring-primary/40"
+                    >
+                      <span aria-hidden="true" className="material-symbols-outlined text-[16px]">
+                        arrow_back
+                      </span>
+                      Return to current
+                    </button>
+                    <span className="sr-only">
+                      You are viewing a different item than the meeting's
+                      current item.
+                    </span>
+                  </div>
+                )}
+
                 {/* Current item title — strongest heading. */}
                 <h2
                   data-current-item-title
                   className="mt-1 break-words text-2xl font-semibold tracking-tight text-on-surface"
                 >
-                  {liveCurrentItem.title}
+                  {liveSelectedItem.title}
                 </h2>
 
-                {liveCurrentItem.contextNotes && (
+                {liveSelectedItem.contextNotes && (
                   <p className="mt-2 whitespace-pre-wrap text-sm text-on-surface-variant">
-                    {liveCurrentItem.contextNotes}
+                    {liveSelectedItem.contextNotes}
                   </p>
                 )}
 
@@ -2784,7 +2926,7 @@ export function MeetingDetailPage() {
                     column is left-aligned and width-constrained
                     for readability on wide screens. */}
                 <div className="mt-5 w-full max-w-[740px]">
-                  {(liveCurrentItem.notes ?? []).length >
+                  {(liveSelectedItem.notes ?? []).length >
                     0 ? (
                     <div>
                       <p className="text-xs font-semibold text-on-surface-variant">
@@ -2792,7 +2934,7 @@ export function MeetingDetailPage() {
                       </p>
 
                       <ul className="mt-2 space-y-5">
-                        {(liveCurrentItem.notes ?? []).map(
+                        {(liveSelectedItem.notes ?? []).map(
                           (note) => (
                             <li
                               key={note.id}
@@ -2823,7 +2965,7 @@ export function MeetingDetailPage() {
                                     }
                                     autoFocus
                                     rows={2}
-                                    aria-label={`Edit note on ${liveCurrentItem.title}`}
+                                    aria-label={`Edit note on ${liveSelectedItem.title}`}
                                     className="w-full resize-y rounded-lg border border-outline-variant bg-surface-container-lowest px-2 py-1.5 text-sm text-on-surface outline-none focus:border-primary"
                                   />
 
@@ -2846,7 +2988,7 @@ export function MeetingDetailPage() {
                                       onClick={
                                         () =>
                                           void saveNoteEdit(
-                                            liveCurrentItem,
+                                            liveSelectedItem,
                                             note,
                                           )
                                       }
@@ -2956,7 +3098,7 @@ export function MeetingDetailPage() {
                                           type="button"
                                           onClick={() =>
                                             openNoteWorkItem(
-                                              liveCurrentItem,
+                                              liveSelectedItem,
                                               note,
                                             )
                                           }
@@ -3024,7 +3166,7 @@ export function MeetingDetailPage() {
 
                   {/* Composer: only when explicitly open. */}
                   {noteComposerItemId ===
-                  liveCurrentItem.id ? (
+                  liveSelectedItem.id ? (
                     <div className="mt-3">
                       <textarea
                         value={noteDraftContent}
@@ -3042,7 +3184,7 @@ export function MeetingDetailPage() {
                         autoFocus
                         rows={2}
                         placeholder="Add what came up during the discussion…"
-                        aria-label={`Add note to ${liveCurrentItem.title}`}
+                        aria-label={`Add note to ${liveSelectedItem.title}`}
                         className="w-full resize-y rounded-lg border border-outline-variant bg-surface-container-lowest px-3 py-2 text-sm text-on-surface outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
                       />
 
@@ -3055,7 +3197,7 @@ export function MeetingDetailPage() {
                           onClick={() =>
                             void
                               submitNoteThenCreateWorkItem(
-                                liveCurrentItem,
+                                liveSelectedItem,
                               )
                           }
                           className="h-8 rounded-lg px-2 text-xs font-medium text-on-surface-variant outline-none transition hover:bg-surface-container-high hover:text-on-surface focus-visible:ring-2 focus-visible:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-45"
@@ -3070,13 +3212,13 @@ export function MeetingDetailPage() {
                           }
                           onClick={() =>
                             void submitNoteComposer(
-                              liveCurrentItem,
+                              liveSelectedItem,
                             )
                           }
                           className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-sm font-semibold text-on-primary outline-none transition hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-45"
                         >
                           {creatingNoteItemId ===
-                          liveCurrentItem.id && (
+                          liveSelectedItem.id && (
                             <span
                               aria-hidden="true"
                               className="material-symbols-outlined animate-spin text-[15px]"
@@ -3085,7 +3227,7 @@ export function MeetingDetailPage() {
                             </span>
                           )}
                           {creatingNoteItemId ===
-                          liveCurrentItem.id
+                          liveSelectedItem.id
                             ? 'Adding…'
                             : 'Add note'}
                         </button>
@@ -3102,18 +3244,18 @@ export function MeetingDetailPage() {
 
                   {isLive &&
                   noteComposerItemId !==
-                    liveCurrentItem.id && (
+                    liveSelectedItem.id && (
                     <button
                       type="button"
                       onClick={() =>
-                        openNoteComposer(liveCurrentItem)
+                        openNoteComposer(liveSelectedItem)
                       }
                       className="mt-3 inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-xs font-medium text-on-surface-variant/70 outline-none transition hover:bg-surface-container-low hover:text-on-surface focus-visible:ring-2 focus-visible:ring-primary/40"
                     >
                       <span aria-hidden="true" className="material-symbols-outlined text-[14px]">
                         add
                       </span>
-                      {(liveCurrentItem.notes ?? []).length >
+                      {(liveSelectedItem.notes ?? []).length >
                       0
                         ? 'Add note'
                         : 'Add note…'}
@@ -3121,20 +3263,22 @@ export function MeetingDetailPage() {
                   )}
                 </div>
 
-                {/* Live resolution actions — clearly bound to
-                    the current item, not repeated per agenda row. */}
-                {canManageLifecycle && (
+                {/* Live resolution actions — bound to the CURRENT item
+                    only. They render only while the user is viewing the
+                    current item, so they never operate on an arbitrary
+                    selected non-current item. */}
+                {canManageLifecycle && liveSelectionIsCurrent && (
                   <div className="mt-8 flex items-center gap-2 border-t border-outline-variant pt-5">
                     <button
                       type="button"
                       disabled={
                         updatingItemId ===
-                        liveCurrentItem.id
+                        liveCurrentItem!.id
                       }
                       onClick={() =>
-                        void handleDoneItem(liveCurrentItem)
+                        void handleDoneItem(liveCurrentItem!)
                       }
-                      aria-label={`Mark ${liveCurrentItem.title} as done`}
+                      aria-label={`Mark ${liveCurrentItem!.title} as done`}
                       title="Done"
                       className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3 text-sm font-semibold text-on-primary outline-none transition hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 disabled:opacity-60"
                     >
@@ -3142,7 +3286,7 @@ export function MeetingDetailPage() {
                         check
                       </span>
                       {updatingItemId ===
-                      liveCurrentItem.id
+                      liveCurrentItem!.id
                         ? 'Saving…'
                         : 'Done'}
                     </button>
@@ -3151,14 +3295,14 @@ export function MeetingDetailPage() {
                       type="button"
                       disabled={
                         updatingItemId ===
-                        liveCurrentItem.id
+                        liveCurrentItem!.id
                       }
                       onClick={() =>
                         void handleFollowUpItem(
-                          liveCurrentItem,
+                          liveCurrentItem!,
                         )
                       }
-                      aria-label={`Mark ${liveCurrentItem.title} as follow-up`}
+                      aria-label={`Mark ${liveCurrentItem!.title} as follow-up`}
                       title="Follow up"
                       className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm font-medium text-on-surface outline-none transition hover:border-primary/40 hover:bg-surface-container-low focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-60"
                     >

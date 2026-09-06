@@ -436,7 +436,7 @@ describe('Completed recap content', () => {
     ).not.toBeInTheDocument()
     expect(
       screen.queryByRole('main', {
-        name: 'Current item',
+        name: 'Agenda item',
       }),
     ).not.toBeInTheDocument()
     expect(

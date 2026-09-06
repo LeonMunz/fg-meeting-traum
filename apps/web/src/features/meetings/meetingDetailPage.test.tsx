@@ -118,10 +118,11 @@ describe('MeetingDetailPage persistent Meeting Notes', () => {
   })
 
   it('renders persisted Notes in Live and Completed', () => {
-    // Live: the Current Item workspace renders this item's Notes;
-    // Completed: the classic protocol layout keeps rendering them.
+    // Live: the item-detail pane renders the SELECTED (viewed)
+    // item's Notes; Completed: the classic protocol layout keeps
+    // rendering them.
     expect(MEETING_DETAIL_SOURCE).toContain(
-      '(liveCurrentItem.notes ?? []).length >',
+      '(liveSelectedItem.notes ?? []).length >',
     )
     expect(MEETING_DETAIL_SOURCE).toContain(
       '(item.notes ?? []).length >',
@@ -155,12 +156,12 @@ describe('MeetingDetailPage Live Meeting shell', () => {
     )
   })
 
-  it('renders an Agenda rail beside a Current Item workspace', () => {
+  it('renders an Agenda rail beside the viewed-item detail pane', () => {
     expect(MEETING_DETAIL_SOURCE).toContain(
       '"aria-label": "Agenda"',
     )
     expect(MEETING_DETAIL_SOURCE).toContain(
-      '"aria-label": "Current item"',
+      '"aria-label": "Agenda item"',
     )
   })
 
@@ -172,10 +173,10 @@ describe('MeetingDetailPage Live Meeting shell', () => {
 
   it('shows the Section name and section-relative position', () => {
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'liveCurrentSection?.name',
+      'liveSelectedSection?.name',
     )
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'liveCurrentPosition',
+      'liveSelectedPosition',
     )
   })
 
@@ -212,15 +213,28 @@ describe('MeetingDetailPage Live Meeting shell', () => {
     )
   })
 
-  it('wires Agenda navigation to the canonical Focus action', () => {
+  it('wires the Live Agenda rail to local selection only (no Focus / make-current control)', () => {
+    // STALE TEST (updated): the Live rail used to offer a Focus
+    // (make-current) button. That affordance is deferred to the
+    // "Make current" slice, so the Live row is a pure selection
+    // control and the Live rail region must not reference the
+    // Focus action. (The rendered no-Focus behavior is asserted in
+    // meetingLiveSelection.test.tsx.)
     expect(MEETING_DETAIL_SOURCE).toContain(
-      '`Focus ${item.title}`',
+      'handleSelectLiveItem(item)',
     )
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'void handleFocusItem(item)',
+      'aria-pressed',
     )
+    // The workspace pane that follows the rail list is labelled
+    // for the viewed (selected) item, not "Current item". (The
+    // transpiled function source renders JSX attributes as
+    // `aria-label": "…"`, so match the transpiled form.)
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'item.id !== meeting.currentMeetingItemId',
+      'aria-label": "Agenda item"',
+    )
+    expect(MEETING_DETAIL_SOURCE).not.toContain(
+      'aria-label": "Current item"',
     )
   })
 
@@ -251,12 +265,12 @@ describe('MeetingDetailPage Live Meeting shell', () => {
     )
   })
 
-  it('keeps existing Note authoring and Note -> Work Item on the current item', () => {
+  it('keeps existing Note authoring and Note -> Work Item on the viewed item', () => {
     expect(MEETING_DETAIL_SOURCE).toContain(
-      '`Add note to ${liveCurrentItem.title}`',
+      '`Add note to ${liveSelectedItem.title}`',
     )
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'openNoteComposer(liveCurrentItem)',
+      'openNoteComposer(liveSelectedItem)',
     )
     expect(MEETING_DETAIL_SOURCE).toContain(
       'openNoteWorkItem(',
@@ -274,7 +288,7 @@ describe('MeetingDetailPage Live Meeting shell', () => {
     // separate permission and must not gate the composer.
     // Composer open state is gated on the composer state only.
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'noteComposerItemId === liveCurrentItem.id',
+      'noteComposerItemId === liveSelectedItem.id',
     )
     // Note edit mode is gated on the edit state only.
     expect(MEETING_DETAIL_SOURCE).toContain(
@@ -282,7 +296,7 @@ describe('MeetingDetailPage Live Meeting shell', () => {
     )
     // Add-note trigger is Live-only (no lifecycle coupling).
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'isLive && noteComposerItemId !== liveCurrentItem.id',
+      'isLive && noteComposerItemId !== liveSelectedItem.id',
     )
     // Per-note Edit/Delete menu is Live-only, as before the
     // refactor. (Matched against the stable transpiled call
@@ -360,13 +374,13 @@ describe('MeetingDetailPage Live visual polish', () => {
     // The existing-notes block must appear before the open-composer
     // conditional in the Current Item workspace source.
     const notesBlock = MEETING_DETAIL_SOURCE.indexOf(
-      '(liveCurrentItem.notes ?? []).length >',
+      '(liveSelectedItem.notes ?? []).length >',
     )
     // The open composer is keyed on the composer state; the
     // closed-state trigger is keyed on the negation of that same
     // state.
     const composer = MEETING_DETAIL_SOURCE.indexOf(
-      'noteComposerItemId === liveCurrentItem.id',
+      'noteComposerItemId === liveSelectedItem.id',
     )
     expect(notesBlock).toBeGreaterThan(-1)
     expect(composer).toBeGreaterThan(-1)
@@ -375,10 +389,10 @@ describe('MeetingDetailPage Live visual polish', () => {
 
   it('keeps the Add-note composer openable and quiet when closed', () => {
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'openNoteComposer(liveCurrentItem)',
+      'openNoteComposer(liveSelectedItem)',
     )
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'isLive && noteComposerItemId !== liveCurrentItem.id',
+      'isLive && noteComposerItemId !== liveSelectedItem.id',
     )
   })
 
