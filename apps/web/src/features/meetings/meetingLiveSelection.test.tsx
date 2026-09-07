@@ -149,6 +149,15 @@ const BASE_ITEMS: ApiMeetingItem[] = [
   makeItem({ id: 3, title: 'Omega', position: 2 }),
 ]
 
+// One item in each outcome, with the OPEN item current:
+// lets each resolution-control state be observed directly on
+// the current item without any mutation.
+const OUTCOME_ITEMS: ApiMeetingItem[] = [
+  makeItem({ id: 1, title: 'Alpha', position: 0, outcome: 'done' }),
+  makeItem({ id: 2, title: 'Beta', position: 1, outcome: 'not_discussed' }),
+  makeItem({ id: 3, title: 'Omega', position: 2, outcome: 'follow_up' }),
+]
+
 class FakeLiveMeeting {
   meeting: ApiMeeting
   items: ApiMeetingItem[]
@@ -475,17 +484,24 @@ describe('Live Meeting selection (decoupled from current)', () => {
       }),
     ).toBeNull()
 
-    // The selection remains on Alpha and the normal Current
-    // lifecycle controls are exposed again.
+    // The selection remains on Alpha and the Current
+    // lifecycle controls are exposed again. Alpha is already
+    // resolved (done), so the outcome is presented as STATE
+    // ("Done") and only the alternative transition ("Change
+    // to follow-up") is offered as an action — not another
+    // Done button.
     expect(
       selectRow('Alpha').getAttribute('aria-pressed'),
     ).toBe('true')
     expect(
-      screen.getByRole('button', { name: 'Mark Alpha as done' }),
+      screen.queryByRole('button', { name: 'Mark Alpha as done' }),
+    ).toBeNull()
+    expect(
+      screen.getByText('Done', { exact: true }),
     ).toBeTruthy()
     expect(
       screen.getByRole('button', {
-        name: 'Mark Alpha as follow-up',
+        name: 'Change Alpha to follow-up',
       }),
     ).toBeTruthy()
 
@@ -776,8 +792,10 @@ describe('Live Meeting selection (decoupled from current)', () => {
       itemRow('Alpha').getByText('Selected', { exact: true }),
     ).toBeTruthy()
 
-    // While viewing a non-current item, the lifecycle controls
-    // (Done / Follow up) do not operate on it: they are not shown.
+    // While viewing a non-current item, the lifecycle
+    // controls do not operate on it: none are shown (neither
+    // the open-outcome Done/Follow up pair nor the
+    // resolved-state alternative transitions).
     expect(
       screen.queryByRole('button', {
         name: 'Mark Alpha as done',
@@ -786,6 +804,11 @@ describe('Live Meeting selection (decoupled from current)', () => {
     expect(
       screen.queryByRole('button', {
         name: 'Mark Alpha as follow-up',
+      }),
+    ).toBeNull()
+    expect(
+      screen.queryByRole('button', {
+        name: 'Change Alpha to follow-up',
       }),
     ).toBeNull()
   })
@@ -1252,4 +1275,111 @@ describe('Live Meeting selection (decoupled from current)', () => {
       }),
     ).toBeNull()
   })
+describe('Live Meeting resolution controls follow the current outcome', () => {
+  it('open current item offers Done and Follow up as actions', async () => {
+    const fake = new FakeLiveMeeting(
+      makeMeeting({ currentMeetingItemId: 2 }),
+      OUTCOME_ITEMS,
+    )
+    renderLivePage(fake)
+    await waitForLive()
+
+    // Current Beta is open (not_discussed): both resolution
+    // actions are offered, no state presentation.
+    expect(
+      screen.getByRole('button', { name: 'Mark Beta as done' }),
+    ).toBeTruthy()
+    expect(
+      screen.getByRole('button', {
+        name: 'Mark Beta as follow-up',
+      }),
+    ).toBeTruthy()
+    expect(
+      screen.queryByRole('button', {
+        name: 'Change Beta to follow-up',
+      }),
+    ).toBeNull()
+    expect(
+      screen.queryByRole('button', { name: 'Change Beta to done' }),
+    ).toBeNull()
+  })
+
+  it('done current item reports Done as state and offers only Change to follow-up', async () => {
+    const fake = new FakeLiveMeeting(
+      makeMeeting({ currentMeetingItemId: 1 }),
+      OUTCOME_ITEMS,
+    )
+    renderLivePage(fake)
+    await waitForLive()
+
+    // Current Alpha is already done: the outcome reads as state,
+    // the Done action is NOT offered again, and only the
+    // alternative transition is actionable.
+    expect(
+      screen.getByText('Done', { exact: true }),
+    ).toBeTruthy()
+    expect(
+      screen.queryByRole('button', { name: 'Mark Alpha as done' }),
+    ).toBeNull()
+    expect(
+      screen.queryByRole('button', {
+        name: 'Mark Alpha as follow-up',
+      }),
+    ).toBeNull()
+    expect(
+      screen.getByRole('button', {
+        name: 'Change Alpha to follow-up',
+      }),
+    ).toBeTruthy()
+    // A resolved item may remain Current: the rail still marks
+    // it Current with its outcome hint.
+    expect(rowCurrent('Alpha')).toBeTruthy()
+    expect(
+      itemRow('Alpha').getByText('Completed', { exact: true }),
+    ).toBeTruthy()
+  })
+
+  it('follow-up current item reports Follow-up as state and offers only Change to Done', async () => {
+    const fake = new FakeLiveMeeting(
+      makeMeeting({ currentMeetingItemId: 3 }),
+      OUTCOME_ITEMS,
+    )
+    renderLivePage(fake)
+    await waitForLive()
+
+    // Current Omega is already resolved with follow-up: the
+    // outcome reads as state, the Follow up action is NOT
+    // offered again, and only the alternative transition is
+    // actionable.
+    expect(
+      screen.getByText('Follow-up', { exact: true }),
+    ).toBeTruthy()
+    expect(
+      screen.queryByRole('button', {
+        name: 'Mark Omega as follow-up',
+      }),
+    ).toBeNull()
+    expect(
+      screen.queryByRole('button', { name: 'Mark Omega as done' }),
+    ).toBeNull()
+    expect(
+      screen.getByRole('button', {
+        name: 'Change Omega to done',
+      }),
+    ).toBeTruthy()
+    // No internal outcome identifier may leak into visible text.
+    expect(
+      screen.getByRole('main', { name: 'Agenda item' }),
+    ).not.toHaveTextContent('FOLLOW_UP')
+    // Current + Follow-up is a valid combination: the rail still
+    // marks it Current with its follow-up hint.
+    expect(rowCurrent('Omega')).toBeTruthy()
+    expect(
+      itemRow('Omega').getByText('Resolved with follow-up', {
+        exact: true,
+      }),
+    ).toBeTruthy()
+  })
+})
+
 })

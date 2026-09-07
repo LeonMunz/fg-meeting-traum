@@ -2239,6 +2239,25 @@ The Meeting UI should follow the same FG Workspace design language as Work Items
 
 During live Meetings, the strongest visual element is the current MeetingItem.
 
+Color semantics for the Live Meeting (functional tokens, see
+`docs/design/tokens.md`):
+
+- **Current** (persisted Meeting state) uses the **Accent** tokens: a
+  subtle `accent-subtle` row surface, an `accent` left indicator, and
+  `accent-text` for the Current glyph/label. Current is the visually
+  strongest agenda state.
+- **Selected** (local viewing/navigation state) is **neutral**
+  (`surface-muted`); it never uses Accent. When Selected == Current,
+  the Current Accent styling wins and no second highlight is added.
+- **Open / not_discussed** is neutral.
+- **Done** uses a small **Success** signal (check icon/label), never a
+  full row treatment.
+- **Follow-up** is neutral — explicitly not a warning; no Amber.
+- The detail-pane divergence message ("You are viewing a different
+  item…") is neutral/informational, and "Return to current" is a
+  neutral secondary control; "Make current" may use Accent because it
+  changes persisted Current.
+
 ---
 
 ## 52. Accessibility

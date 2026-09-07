@@ -450,12 +450,25 @@ describe('MeetingDetailPage Live visual polish', () => {
     expect(collapse).toBeGreaterThan(create)
   })
 
-  it('keeps a subtle selected state for the current Agenda item', () => {
+  it('keeps an Accent treatment for the current Agenda row only', () => {
+    // Current (persisted) is the primary chromatic state: an accent
+    // left indicator over a subtle accent surface.
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'border-l-2 border-primary bg-primary/5',
+      'border-l-2 border-accent bg-accent-subtle',
     )
     expect(MEETING_DETAIL_SOURCE).toContain(
       'item.id === meeting.currentMeetingItemId',
+    )
+  })
+
+  it('keeps Selected (viewing) rows neutral, never Accent', () => {
+    // Selected != Current is local navigation: a neutral muted
+    // surface with no accent classes.
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'border-l-2 border-transparent bg-surface-muted',
+    )
+    expect(MEETING_DETAIL_SOURCE).not.toContain(
+      'bg-accent-selected',
     )
   })
 
@@ -473,20 +486,30 @@ describe('MeetingDetailPage Live visual polish', () => {
     )
   })
 
-  it('keeps Done and Follow up as one compact outcome group on the current item', () => {
+  it('keeps outcome-aware resolution controls on the current item', () => {
+    // Open items offer both resolution actions; resolved items
+    // present their outcome as state plus the single
+    // alternative transition.
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'void handleDoneItem(liveCurrentItem)',
+      'Mark ${liveCurrentItem.title} as done',
     )
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'void handleFollowUpItem(',
-    )
-    // Compact (h-9) outcome actions, Done primary and Follow up
-    // secondary, in the same group.
-    expect(MEETING_DETAIL_SOURCE).toContain(
-      'h-9 items-center gap-1.5 rounded-lg bg-primary px-3',
+      'Mark ${liveCurrentItem.title} as follow-up',
     )
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'h-9 items-center gap-1.5 rounded-lg border border-outline-variant',
+      'Change ${liveCurrentItem.title} to follow-up',
+    )
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'Change ${liveCurrentItem.title} to done',
+    )
+    // Compact (h-9) controls: Done carries the Success
+    // semantic; Follow up / Change-to transitions are neutral
+    // secondary controls, never a warning color.
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'h-9 items-center gap-1.5 rounded-lg bg-success px-3',
+    )
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'h-9 items-center gap-1.5 rounded-lg border border-default bg-surface px-3',
     )
   })
 })

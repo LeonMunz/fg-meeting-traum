@@ -351,9 +351,16 @@ describe('Live current pointer synchronization', () => {
   })
 
   it('Done on current Beta -> Beta done + workspace advances to the next current', async () => {
+    // Beta starts open (not_discussed): the scenario is
+    // "Done on the current open item advances the pointer."
+    const items = [
+      makeItem({ id: 1, title: 'Alpha', position: 0 }),
+      makeItem({ id: 2, title: 'Beta', position: 1 }),
+      makeItem({ id: 3, title: 'Omega', position: 2 }),
+    ]
     const fake = new FakeLiveMeeting(
       makeMeeting({ currentMeetingItemId: 2 }),
-      BASE_ITEMS,
+      items,
     )
 
     // Server effect of Done on the current Beta: Beta -> done,
@@ -381,8 +388,9 @@ describe('Live current pointer synchronization', () => {
       screen.getByRole('main', { name: 'Agenda item' }),
     ).toHaveTextContent('Beta')
 
+    // Beta is open: the Done action is offered. Click it.
     fireEvent.click(
-      workspace().getByRole('button', {
+      screen.getByRole('button', {
         name: 'Mark Beta as done',
       }),
     )
