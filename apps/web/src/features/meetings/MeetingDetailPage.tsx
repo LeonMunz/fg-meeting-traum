@@ -2723,7 +2723,7 @@ export function MeetingDetailPage() {
                       </h3>
 
                       {sectionItems.length === 0 ? (
-                        <p className="mt-1 px-2.5 text-xs text-text-muted/70">
+                        <p className="mt-1 px-2.5 text-[11px] text-text-muted">
                           No items
                         </p>
                       ) : (
@@ -2786,7 +2786,7 @@ export function MeetingDetailPage() {
                                   </span>
 
                                   {isCurrent && (
-                                    <span className="shrink-0 rounded bg-accent-subtle px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-accent-text">
+                                    <span className="shrink-0 text-[11px] font-medium text-accent-text">
                                       Current
                                     </span>
                                   )}
@@ -3051,12 +3051,11 @@ export function MeetingDetailPage() {
                     column is left-aligned and width-constrained
                     for readability on wide screens. */}
                 <div className="mt-5 w-full max-w-[740px]">
+                  <p className="text-xs font-semibold text-text-muted">
+                    Notes
+                  </p>
                   {(liveSelectedItem.notes ?? []).length >
                     0 ? (
-                    <div>
-                      <p className="text-xs font-semibold text-text-muted">
-                        Notes
-                      </p>
 
                       <ul className="mt-2 space-y-5">
                         {(liveSelectedItem.notes ?? []).map(
@@ -3286,7 +3285,6 @@ export function MeetingDetailPage() {
                           ),
                         )}
                       </ul>
-                    </div>
                   ) : null}
 
                   {/* Composer: only when explicitly open. */}
