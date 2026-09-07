@@ -80,9 +80,10 @@ const secondaryNavigation = [
 function navClasses(isActive: boolean) {
   return [
     'flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors',
+    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface-subtle',
     isActive
-      ? 'bg-secondary-container font-semibold text-on-surface'
-      : 'text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface',
+      ? 'bg-surface-muted font-semibold text-text'
+      : 'text-text-muted hover:bg-surface-muted hover:text-text',
   ].join(' ')
 }
 
@@ -97,18 +98,18 @@ export function Sidebar() {
     loading || groups.length > 0
 
   return (
-    <aside className="fixed inset-y-0 left-0 z-30 flex w-[240px] flex-col border-r border-outline-variant bg-surface-container-low px-4 py-8">
+    <aside className="fixed inset-y-0 left-0 z-30 flex w-[240px] flex-col border-r border-border-subtle bg-surface-subtle px-4 py-8">
       <div className="mb-8 flex items-center gap-3 px-2">
-        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary font-bold text-white">
+        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-accent font-bold text-text-inverse">
           FG
         </div>
 
         <div>
-          <div className="font-semibold text-on-surface">
+          <div className="font-semibold text-text">
             FG Workspace
           </div>
 
-          <div className="text-xs text-on-surface-variant">
+          <div className="text-xs text-text-muted">
             Research OS
           </div>
         </div>
@@ -134,7 +135,7 @@ export function Sidebar() {
       </nav>
 
       {showResearchGroupSection && (
-        <div className="mt-5 border-t border-outline-variant pt-5">
+        <div className="mt-5 border-t border-border-subtle pt-5">
           <ResearchGroupSelector />
 
           {activeResearchGroupId != null && (
@@ -159,7 +160,7 @@ export function Sidebar() {
         </div>
       )}
 
-      <nav className="mt-auto flex flex-col gap-1 border-t border-outline-variant pt-4">
+      <nav className="mt-auto flex flex-col gap-1 border-t border-border-subtle pt-4">
         {secondaryNavigation.map((item) => (
           <NavLink
             key={item.path}

@@ -86,6 +86,12 @@ Markers:
 
 - **IMPLEMENTED** — My Work is an authorized projection over assigned Work Items (personal cross-group and per-Research Group endpoints), wired to the frontend.
 
+## Design / color tokens
+
+- **IMPLEMENTED** — neutral-first functional color token vocabulary in `apps/web/src/index.css` (`canvas`, `surface*`, `text*`, `border-*`, `accent*`, `focus`, `success/warning/danger*`). Rule: neutral defines structure; Accent defines interaction/active focus; semantic colors communicate meaning only. Canonical contract: `docs/design/tokens.md`; value contract enforced by `apps/web/e2e/token-contract.test.ts` (`npm run test:tokens --workspace=web`).
+- **IMPLEMENTED** — App Shell, Sidebar, TopBar, and the shell-level Research Group selector migrated to the functional tokens: neutral structural surfaces, neutral active/hover navigation (no large Accent nav fill), canonical 2px `focus-visible` keyboard ring.
+- **COMPATIBILITY** — legacy Material-style tokens (`primary`, `surface`, `on-surface`, `outline`, `error`, `surface-container-*`) are retained in `@theme` with their **original pre-migration values**, so unmigrated feature screens (Meetings, Projects, Work Items, Dashboard, Research Group settings, `.fg-prose` editor) keep their previous appearance. Legacy tokens are a temporary compatibility layer; migration is feature-by-feature (functional tokens for migrated code, legacy tokens for the rest). A temporary `--color-legacy-surface: #F8F9FF` token preserves the exact historical surface of the one unmigrated Dashboard card (the old Material `surface` name is now owned by the functional `surface` = `#FFFFFF`); it is used only there and removed when Dashboard is migrated. Full policy: `docs/design/tokens.md`.
+
 ## Authorization / multi-user
 
 - **IMPLEMENTED** — session authentication (login/logout/me, CSRF) with server-side, deny-by-default authorization.

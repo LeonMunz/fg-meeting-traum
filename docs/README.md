@@ -16,6 +16,7 @@ The documentation is intentionally split by concern so humans and coding agents 
 | Testing, seed/reset, Living Lab, deployment, privacy | `living-lab.md` |
 | Canonical agent execution flow, debugging budget, verification boundary | `agent/WORKFLOW.md` |
 | UI appearance | relevant file under `stitch_examples/` |
+| Color tokens, palette, design tokens | `design/tokens.md` |
 
 Do not read all documents by default.
 

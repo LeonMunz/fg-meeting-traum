@@ -155,7 +155,7 @@ export function ResearchGroupSelector() {
 
   if (loading) {
     return (
-      <div className="flex h-11 items-center gap-2 px-2 text-sm text-on-surface-variant">
+      <div className="flex h-11 items-center gap-2 px-2 text-sm text-text-muted">
         <span className="material-symbols-outlined animate-spin text-[18px]">
           refresh
         </span>
@@ -166,7 +166,7 @@ export function ResearchGroupSelector() {
 
   if (error) {
     return (
-      <div className="px-2 py-2 text-xs leading-5 text-error">
+      <div className="px-2 py-2 text-xs leading-5 text-danger">
         Research groups unavailable
       </div>
     )
@@ -192,19 +192,19 @@ export function ResearchGroupSelector() {
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={`Research group: ${activeResearchGroup.name}`}
-        className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left transition hover:bg-surface-container-high"
+        className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left transition hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface-subtle"
       >
-        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-surface-container-high text-[10px] font-semibold text-on-surface">
+        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-surface-muted text-[10px] font-semibold text-text">
           {getInitials(
             activeResearchGroup.name,
           )}
         </div>
 
-        <span className="min-w-0 flex-1 truncate text-sm font-semibold text-on-surface">
+        <span className="min-w-0 flex-1 truncate text-sm font-semibold text-text">
           {activeResearchGroup.name}
         </span>
 
-        <span className="material-symbols-outlined text-[18px] text-on-surface-variant">
+        <span className="material-symbols-outlined text-[18px] text-text-muted">
           {open
             ? 'keyboard_arrow_up'
             : 'keyboard_arrow_down'}
@@ -214,7 +214,7 @@ export function ResearchGroupSelector() {
       {open && (
         <div
           role="menu"
-          className="absolute left-0 top-[calc(100%+6px)] z-50 w-[280px] overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest p-1.5 shadow-lg"
+          className="absolute left-0 top-[calc(100%+6px)] z-50 w-[280px] overflow-hidden rounded-xl border border-border-subtle bg-surface p-1.5 shadow-lg"
         >
           {groups.map((group) => {
             const selected =
@@ -229,24 +229,24 @@ export function ResearchGroupSelector() {
                 onClick={() =>
                   switchResearchGroup(group)
                 }
-                className="flex w-full items-center gap-3 rounded-lg px-2.5 py-2.5 text-left transition hover:bg-surface-container-low"
+                className="flex w-full items-center gap-3 rounded-lg px-2.5 py-2.5 text-left transition hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
               >
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-surface-container-high text-[10px] font-semibold text-on-surface">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-surface-muted text-[10px] font-semibold text-text">
                   {getInitials(group.name)}
                 </div>
 
                 <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-medium text-on-surface">
+                  <div className="truncate text-sm font-medium text-text">
                     {group.name}
                   </div>
 
-                  <div className="mt-0.5 text-xs capitalize text-on-surface-variant">
+                  <div className="mt-0.5 text-xs capitalize text-text-muted">
                     {group.role}
                   </div>
                 </div>
 
                 {selected && (
-                  <span className="material-symbols-outlined text-[18px] text-primary">
+                  <span className="material-symbols-outlined text-[18px] text-accent">
                     check
                   </span>
                 )}
@@ -256,7 +256,7 @@ export function ResearchGroupSelector() {
 
           {activeResearchGroup.role === 'admin' && (
             <>
-              <div className="my-1.5 border-t border-outline-variant" />
+              <div className="my-1.5 border-t border-border-subtle" />
 
               <button
                 type="button"
@@ -267,9 +267,9 @@ export function ResearchGroupSelector() {
                     `/groups/${activeResearchGroup.id}/settings`,
                   )
                 }}
-                className="flex w-full items-center gap-3 rounded-lg px-2.5 py-2.5 text-left text-sm font-medium text-on-surface transition hover:bg-surface-container-low"
+                className="flex w-full items-center gap-3 rounded-lg px-2.5 py-2.5 text-left text-sm font-medium text-text transition hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
               >
-                <span className="material-symbols-outlined text-[18px] text-on-surface-variant">
+                <span className="material-symbols-outlined text-[18px] text-text-muted">
                   settings
                 </span>
 

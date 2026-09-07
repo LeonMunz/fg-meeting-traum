@@ -1,7 +1,53 @@
 @import "tailwindcss";
 
 @theme {
-  /* Colors */
+  /* Functional color tokens — canonical, neutral-first color contract.
+   *
+   * Rule: Neutral defines structure; Accent defines interaction and active
+   * focus; semantic colors communicate meaning only.
+   *
+   * The legacy Material-style tokens in the COMPATIBILITY block below are
+   * retained only because unmigrated feature screens still consume them.
+   * They are temporary; new shell/chrome code must use the functional tokens.
+   */
+
+  /* Neutral structure */
+  --color-canvas: #fcfcfd;
+  --color-surface: #ffffff;
+  --color-surface-subtle: #f9f9fb;
+  --color-surface-muted: #f0f0f3;
+  --color-surface-hover: #e8e8ec;
+
+  /* Text */
+  --color-text: #1c2024;
+  --color-text-muted: #60646c;
+  --color-text-inverse: #ffffff;
+
+  /* Borders */
+  --color-border-subtle: #e0e1e6;
+  --color-border-default: #cdced6;
+  --color-border-control: #8b8d98;
+
+  /* Accent — interaction / active focus */
+  --color-accent: #3e63dd;
+  --color-accent-hover: #3358d4;
+  --color-accent-text: #3a5bc7;
+  --color-accent-subtle: #edf2fe;
+  --color-accent-selected: #e1e9ff;
+
+  /* Focus */
+  --color-focus: #3e63dd;
+
+  /* Semantic — meaning only */
+  --color-success: #218358;
+  --color-success-bg: #f4fbf6;
+  --color-warning: #ab6400;
+  --color-warning-bg: #fefbe9;
+  --color-danger: #ce2c31;
+  --color-danger-bg: #fff7f7;
+  --color-danger-subtle: #feebec;
+  /* COMPATIBILITY — legacy Material-style tokens, retained until feature
+   * screens are migrated. Do not consume these in new shell code. */
   --color-primary: #3525cd;
   --color-primary-container: #4f46e5;
   --color-primary-fixed: #e2dfff;
@@ -15,7 +61,11 @@
 
   --color-background: #f8f9ff;
 
-  --color-surface: #f8f9ff;
+  /* TEMPORARY compatibility token — the old Material `surface` name is now owned by the
+   * functional `surface` (#FFFFFF). This preserves the historical legacy surface value
+   * for the single unmigrated Dashboard consumer; remove when Dashboard is migrated. */
+  --color-legacy-surface: #f8f9ff;
+
   --color-surface-container-lowest: #ffffff;
   --color-surface-container-low: #eff4ff;
   --color-surface-container: #e5eeff;
@@ -41,8 +91,8 @@
 
 :root {
   font-family: Inter, ui-sans-serif, system-ui, sans-serif;
-  color: #0b1c30;
-  background: #f8f9ff;
+  color: var(--color-text);
+  background: var(--color-canvas);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }
@@ -61,7 +111,7 @@ body,
 
 body {
   min-height: 100vh;
-  background: #f8f9ff;
+  background: var(--color-canvas);
 }
 
 button,

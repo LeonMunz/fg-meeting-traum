@@ -9,7 +9,7 @@ type AppShellProps = {
 
 export function AppShell({ children }: AppShellProps) {
   return (
-    <div className="min-h-screen bg-background text-on-surface">
+    <div className="min-h-screen bg-canvas text-text">
       <Sidebar />
 
       <div className="ml-[240px] min-h-screen">

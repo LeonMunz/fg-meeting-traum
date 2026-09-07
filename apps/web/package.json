@@ -10,7 +10,8 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "dev:e2e": "vite --config vite.e2e.config.ts",
-    "test:unit": "vitest run"
+    "test:unit": "vitest run",
+    "test:tokens": "vitest run --config vitest.token.config.ts"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.3",

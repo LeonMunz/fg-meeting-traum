@@ -309,7 +309,7 @@ export function DashboardPage() {
 
                     <button
                       type="button"
-                      className="w-full rounded-lg border border-outline-variant bg-surface p-3 text-left transition hover:border-primary/40 hover:shadow-sm"
+                      className="w-full rounded-lg border border-outline-variant bg-legacy-surface p-3 text-left transition hover:border-primary/40 hover:shadow-sm"
                     >
                       <div className="text-sm font-semibold">
                         {item.title}
