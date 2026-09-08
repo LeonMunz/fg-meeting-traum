@@ -183,12 +183,14 @@ function meetingContentSubtitle(
 }
 
 function MenuItem({
+  preparation = false,
   label,
   icon,
   danger,
   disabled,
   onClick,
 }: {
+  preparation?: boolean
   label: string
   icon?: string
   danger?: boolean
@@ -203,7 +205,9 @@ function MenuItem({
       onClick={onClick}
       className={[
         'flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-sm outline-none',
-        danger
+        preparation
+          ? `focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-inset ${danger ? 'text-danger hover:bg-danger-bg' : 'text-text hover:bg-surface-hover'}`
+          : danger
           ? 'text-error hover:bg-error-container/40 focus-visible:bg-error-container/40'
           : 'text-on-surface hover:bg-surface-container-low focus-visible:bg-surface-container-low',
         disabled ? 'pointer-events-none opacity-45' : '',
@@ -212,7 +216,9 @@ function MenuItem({
       {icon && (
         <span
           aria-hidden="true"
-          className="material-symbols-outlined text-[17px] text-on-surface-variant"
+          className={preparation
+            ? 'material-symbols-outlined text-[17px] text-text-muted'
+            : 'material-symbols-outlined text-[17px] text-on-surface-variant'}
         >
           {icon}
         </span>
@@ -224,10 +230,12 @@ function MenuItem({
 }
 
 function MenuTrigger({
+  preparation = false,
   label,
   ariaLabel,
   children,
 }: {
+  preparation?: boolean
   label: string
   ariaLabel?: string
   children: (
@@ -303,8 +311,12 @@ function MenuTrigger({
         aria-expanded={open}
         onClick={toggle}
         className={[
-          'flex h-8 w-8 items-center justify-center rounded-lg text-on-surface-variant outline-none transition hover:bg-surface-container-high focus-visible:bg-surface-container-high focus-visible:ring-2 focus-visible:ring-primary/30',
-          open
+          preparation
+            ? 'flex h-8 w-8 items-center justify-center rounded-lg text-text-muted outline-none transition hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface'
+            : 'flex h-8 w-8 items-center justify-center rounded-lg text-on-surface-variant outline-none transition hover:bg-surface-container-high focus-visible:bg-surface-container-high focus-visible:ring-2 focus-visible:ring-primary/30',
+          preparation
+            ? (open ? 'bg-surface-muted' : 'group-hover/menu:bg-surface-hover')
+            : open
             ? 'bg-surface-container-high'
             : 'group-hover/menu:bg-surface-container-high/70 focus-visible:bg-surface-container-high',
         ].join(' ')}
@@ -325,7 +337,9 @@ function MenuTrigger({
             top: position.top,
             left: position.left,
           }}
-          className="z-50 w-52 rounded-xl border border-outline-variant bg-surface-container-lowest p-1 shadow-lg shadow-on-surface/10"
+          className={preparation
+            ? 'z-50 w-52 rounded-xl border border-border-subtle bg-surface p-1 shadow-lg shadow-text/10'
+            : 'z-50 w-52 rounded-xl border border-outline-variant bg-surface-container-lowest p-1 shadow-lg shadow-on-surface/10'}
         >
           {children(open, toggle)}
         </div>
@@ -2605,11 +2619,11 @@ export function MeetingDetailPage() {
       {!isLive && !isCompleted && (
       <div className="mt-8 flex items-end justify-between gap-6">
         <div>
-          <h2 className="text-lg font-semibold text-on-surface">
+          <h2 className="text-lg font-semibold text-text">
             {meetingContentHeading(meeting.status)}
           </h2>
 
-          <p className="mt-1 text-sm text-on-surface-variant">
+          <p className="mt-1 text-sm text-text-muted">
             {meetingContentSubtitle(meeting.status)}
           </p>
         </div>
@@ -2619,7 +2633,7 @@ export function MeetingDetailPage() {
             type="button"
             onClick={() => setStructureEditing((value) => !value)}
             aria-expanded={structureEditing}
-            className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-xs font-semibold text-on-surface outline-none transition hover:border-primary/40 hover:bg-surface-container-low focus-visible:ring-2 focus-visible:ring-primary/40"
+            className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-border-subtle bg-surface px-3 text-xs font-semibold text-text outline-none transition hover:border-border-default hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
           >
             <span aria-hidden="true" className="material-symbols-outlined text-[16px]">
               {structureEditing ? 'close' : 'edit_note'}
@@ -2634,15 +2648,15 @@ export function MeetingDetailPage() {
 
       {/* Structure editing banner */}
       {structureEditing && canPrepare && (
-        <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-primary/25 bg-primary/5 px-4 py-3">
-          <span aria-hidden="true" className="material-symbols-outlined text-[18px] text-primary">
+        <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-border-subtle bg-surface-subtle px-4 py-3">
+          <span aria-hidden="true" className="material-symbols-outlined text-[18px] text-text-muted">
             edit_note
           </span>
 
-          <div className="min-w-0 flex-1 text-sm text-on-surface">
+          <div className="min-w-0 flex-1 text-sm text-text">
             Section structure editing.
             {hiddenSectionCount > 0 && (
-              <span className="text-on-surface-variant">
+              <span className="text-text-muted">
                 {' '}
                 {hiddenSectionCount} hidden{' '}
                 {hiddenSectionCount === 1
@@ -2666,13 +2680,13 @@ export function MeetingDetailPage() {
               onChange={(e) => setNewSectionName(e.target.value)}
               placeholder="New section name"
               aria-label="New section name"
-              className="h-8 w-44 rounded-lg border border-outline-variant bg-surface-container-lowest px-2.5 text-sm text-on-surface outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
+              className="h-8 w-44 rounded-lg border border-border-control bg-surface px-2.5 text-sm text-text outline-none focus:border-focus focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-surface"
             />
 
             <button
               type="submit"
               disabled={addingSection || !newSectionName.trim()}
-              className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-semibold text-white transition hover:bg-primary/90 disabled:opacity-45"
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-accent px-3 text-xs font-semibold text-text-inverse transition hover:bg-accent-hover disabled:opacity-45 outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
             >
               <span aria-hidden="true" className="material-symbols-outlined text-[15px]">
                 add
@@ -3575,12 +3589,12 @@ export function MeetingDetailPage() {
       /* Agenda / Protocol */
       <div className="mt-6">
         {visibleSections.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-outline-variant px-6 py-12 text-center">
-            <span aria-hidden="true" className="material-symbols-outlined text-[26px] text-on-surface-variant">
+          <div className="rounded-xl border border-dashed border-border-subtle px-6 py-12 text-center">
+            <span aria-hidden="true" className="material-symbols-outlined text-[26px] text-text-muted">
               checklist
             </span>
 
-            <p className="mt-3 text-sm font-medium text-on-surface">
+            <p className="mt-3 text-sm font-medium text-text-muted">
               {structureEditing && canPrepare
                 ? 'No sections yet'
                 : 'No agenda items yet.'}
@@ -3590,7 +3604,7 @@ export function MeetingDetailPage() {
               <button
                 type="button"
                 onClick={() => setStructureEditing(true)}
-                className="mt-3 inline-flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3.5 text-sm font-medium text-on-primary transition hover:bg-primary/90"
+                className="mt-3 inline-flex h-9 items-center gap-1.5 rounded-lg border border-border-default bg-surface px-3.5 text-sm font-medium text-text transition hover:bg-surface-hover outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
               >
                 <span aria-hidden="true" className="material-symbols-outlined text-[17px]">
                   add
@@ -3612,17 +3626,17 @@ export function MeetingDetailPage() {
                 <section key={section.id} aria-label={section.name}>
                   {/* Section header */}
                   <div className="group/menu flex items-center gap-2">
-                    <h3 className="text-base font-semibold text-on-surface">
+                    <h3 className="text-base font-semibold text-text">
                       {section.name}
                     </h3>
 
                     {section.description && (
-                      <span className="truncate text-sm text-on-surface-variant">
+                      <span className="truncate text-sm text-text-muted">
                         {section.description}
                       </span>
                     )}
 
-                    <span className="text-xs tabular-nums text-on-surface-variant/70">
+                    <span className="text-xs tabular-nums text-text-muted">
                       {sectionItems.length}{' '}
                       {sectionItems.length === 1
                         ? 'item'
@@ -3630,7 +3644,7 @@ export function MeetingDetailPage() {
                     </span>
 
                     {!section.isVisible && (
-                      <span className="rounded-full bg-surface-container px-2 py-0.5 text-[11px] font-medium text-on-surface-variant">
+                      <span className="rounded-full bg-surface-muted px-2 py-0.5 text-[11px] font-medium text-text-muted">
                         hidden
                       </span>
                     )}
@@ -3638,11 +3652,13 @@ export function MeetingDetailPage() {
                     {canPrepare && (
                       <span className="ml-auto flex items-center gap-0.5">
                         <MenuTrigger
+                          preparation
                           label={`Actions for section ${section.name}`}
                         >
                           {(_, close) => (
                             <>
                               <MenuItem
+                                preparation
                                 label="Rename / describe"
                                 icon="edit"
                                 onClick={() => {
@@ -3654,6 +3670,7 @@ export function MeetingDetailPage() {
                               />
 
                               <MenuItem
+                                preparation
                                 label="Move up"
                                 icon="arrow_upward"
                                 disabled={
@@ -3668,6 +3685,7 @@ export function MeetingDetailPage() {
                               />
 
                               <MenuItem
+                                preparation
                                 label="Move down"
                                 icon="arrow_downward"
                                 disabled={
@@ -3682,6 +3700,7 @@ export function MeetingDetailPage() {
                               />
 
                               <MenuItem
+                                preparation
                                 label={
                                   section.isVisible
                                     ? 'Hide section'
@@ -3708,10 +3727,10 @@ export function MeetingDetailPage() {
                   {/* Section edit form */}
                   {canPrepare &&
                     editingSectionId === section.id && (
-                      <div className="mt-3 rounded-xl border border-outline-variant bg-surface-container-low/50 p-4">
+                      <div className="mt-3 rounded-xl border border-border-subtle bg-surface-subtle p-4">
                         <div className="flex flex-wrap items-end gap-3">
                           <label className="min-w-40 flex-1">
-                            <span className="mb-1 block text-xs font-medium text-on-surface-variant">
+                            <span className="mb-1 block text-xs font-medium text-text-muted">
                               Name
                             </span>
 
@@ -3722,12 +3741,12 @@ export function MeetingDetailPage() {
                               onChange={(e) =>
                                 setEditSectionName(e.target.value)
                               }
-                              className="h-9 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none focus:border-primary"
+                              className="h-9 w-full rounded-lg border border-border-control bg-surface px-3 text-sm text-text outline-none focus:border-focus focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-surface"
                             />
                           </label>
 
                           <label className="min-w-40 flex-1">
-                            <span className="mb-1 block text-xs font-medium text-on-surface-variant">
+                            <span className="mb-1 block text-xs font-medium text-text-muted">
                               Description
                             </span>
 
@@ -3738,7 +3757,7 @@ export function MeetingDetailPage() {
                               onChange={(e) =>
                                 setEditSectionDescription(e.target.value)
                               }
-                              className="h-9 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none focus:border-primary"
+                              className="h-9 w-full rounded-lg border border-border-control bg-surface px-3 text-sm text-text outline-none focus:border-focus focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-surface"
                             />
                           </label>
 
@@ -3749,7 +3768,7 @@ export function MeetingDetailPage() {
                               onClick={() =>
                                 void handleSaveSection(section)
                               }
-                              className="h-9 rounded-lg bg-primary px-4 text-sm font-semibold text-white transition hover:bg-primary/90 disabled:opacity-45"
+                              className="h-9 rounded-lg bg-accent px-4 text-sm font-semibold text-text-inverse transition hover:bg-accent-hover disabled:opacity-45 outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
                             >
                               {savingSection ? 'Saving…' : 'Save'}
                             </button>
@@ -3757,7 +3776,7 @@ export function MeetingDetailPage() {
                             <button
                               type="button"
                               onClick={() => setEditingSectionId(null)}
-                              className="h-9 rounded-lg px-3 text-sm font-medium text-on-surface-variant transition hover:bg-surface-container-high"
+                              className="h-9 rounded-lg px-3 text-sm font-medium text-text-muted transition hover:bg-surface-hover outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
                             >
                               Cancel
                             </button>
@@ -3769,7 +3788,7 @@ export function MeetingDetailPage() {
                   {/* Items */}
                   <div className="mt-3">
                     {sectionItems.length === 0 && !canPrepare && (
-                      <p className="text-sm text-on-surface-variant/70">
+                      <p className="text-sm text-text-muted">
                         No agenda items yet.
                       </p>
                     )}
@@ -3780,9 +3799,9 @@ export function MeetingDetailPage() {
                           {/* Item editing form */}
                           {canPrepare &&
                             editingItemId === item.id ? (
-                            <div className="rounded-xl border border-outline-variant bg-surface-container-low/50 p-4">
+                            <div className="rounded-xl border border-border-subtle bg-surface-subtle p-4">
                               <label className="block">
-                                <span className="mb-1 block text-xs font-medium text-on-surface-variant">
+                                <span className="mb-1 block text-xs font-medium text-text-muted">
                                   Title
                                 </span>
 
@@ -3792,12 +3811,12 @@ export function MeetingDetailPage() {
                                   onChange={(e) =>
                                     setEditItemTitle(e.target.value)
                                   }
-                                  className="h-9 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none focus:border-primary"
+                                  className="h-9 w-full rounded-lg border border-border-control bg-surface px-3 text-sm text-text outline-none focus:border-focus focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-surface"
                                 />
                               </label>
 
                               <label className="mt-3 block">
-                                <span className="mb-1 block text-xs font-medium text-on-surface-variant">
+                                <span className="mb-1 block text-xs font-medium text-text-muted">
                                   Context / notes
                                 </span>
 
@@ -3807,7 +3826,7 @@ export function MeetingDetailPage() {
                                     setEditItemNotes(e.target.value)
                                   }
                                   rows={3}
-                                  className="w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 py-2 text-sm text-on-surface outline-none focus:border-primary"
+                                  className="w-full rounded-lg border border-border-control bg-surface px-3 py-2 text-sm text-text outline-none focus:border-focus focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-surface"
                                 />
                               </label>
 
@@ -3818,7 +3837,7 @@ export function MeetingDetailPage() {
                                   onClick={() =>
                                     void handleSaveItem(item)
                                   }
-                                  className="h-9 rounded-lg bg-primary px-4 text-sm font-semibold text-white transition hover:bg-primary/90 disabled:opacity-45"
+                                  className="h-9 rounded-lg bg-accent px-4 text-sm font-semibold text-text-inverse transition hover:bg-accent-hover disabled:opacity-45 outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
                                 >
                                   {savingItemId === item.id
                                     ? 'Saving…'
@@ -3828,18 +3847,18 @@ export function MeetingDetailPage() {
                                 <button
                                   type="button"
                                   onClick={() => setEditingItemId(null)}
-                                  className="h-9 rounded-lg px-3 text-sm font-medium text-on-surface-variant transition hover:bg-surface-container-high"
+                                  className="h-9 rounded-lg px-3 text-sm font-medium text-text-muted transition hover:bg-surface-hover outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
                                 >
                                   Cancel
                                 </button>
                               </div>
                             </div>
                           ) : (
-                            <div className="group/item -mx-3 rounded-lg px-3 py-2.5 transition hover:bg-surface-container-low/60">
+                            <div className="group/item -mx-3 rounded-lg px-3 py-2.5 transition hover:bg-surface-hover">
                               <div className="flex items-start gap-3">
                                 <span
                                   aria-hidden="true"
-                                  className="mt-0.5 select-none text-xs tabular-nums text-on-surface-variant/50"
+                                  className="mt-0.5 select-none text-xs tabular-nums text-text-muted"
                                 >
                                   {itemIndex + 1}
                                 </span>
@@ -3852,15 +3871,15 @@ export function MeetingDetailPage() {
                                         (item.outcome === 'done' ||
                                           item.outcome === 'follow_up') &&
                                         !isLive
-                                          ? 'text-on-surface-variant'
-                                          : 'text-on-surface',
+                                          ? 'text-text-muted'
+                                          : 'text-text',
                                       ].join(' ')}
                                     >
                                       {item.title}
                                     </h4>
 
                                     {item.outcome === 'done' && (
-                                      <span className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-on-surface-variant">
+                                      <span className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-text-muted">
                                         <span aria-hidden="true" className="material-symbols-outlined text-[13px]">
                                           check_circle
                                         </span>
@@ -3869,7 +3888,7 @@ export function MeetingDetailPage() {
                                     )}
 
                                     {item.outcome === 'follow_up' && (
-                                      <span className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-on-surface-variant">
+                                      <span className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-text-muted">
                                         <span aria-hidden="true" className="material-symbols-outlined text-[13px]">
                                           follow_up
                                         </span>
@@ -3879,13 +3898,13 @@ export function MeetingDetailPage() {
                                   </div>
 
                                   {item.contextNotes && (
-                                    <p className="mt-1 line-clamp-2 whitespace-pre-wrap text-sm text-on-surface-variant">
+                                    <p className="mt-1 line-clamp-2 whitespace-pre-wrap text-sm text-text-muted">
                                       {item.contextNotes}
                                     </p>
                                   )}
 
                                   {item.workItemIds.length > 0 && (
-                                    <div className="mt-1.5 inline-flex items-center gap-1 text-xs font-medium text-primary">
+                                    <div className="mt-1.5 inline-flex items-center gap-1 text-xs font-medium text-text-muted">
                                       <span aria-hidden="true" className="material-symbols-outlined text-[14px]">
                                         task_alt
                                       </span>
@@ -4320,11 +4339,13 @@ export function MeetingDetailPage() {
                                 {canPrepare && (
                                   <span className="shrink-0 opacity-0 transition group-hover/item:opacity-100 focus-within:opacity-100">
                                     <MenuTrigger
+                                      preparation
                                       label={`Actions for agenda item ${item.title}`}
                                     >
                                       {(_, close) => (
                                         <>
                                           <MenuItem
+                                            preparation
                                             label="Edit"
                                             icon="edit"
                                             onClick={() => {
@@ -4334,6 +4355,7 @@ export function MeetingDetailPage() {
                                           />
 
                                           <MenuItem
+                                            preparation
                                             label="Create work item"
                                             icon="add_task"
                                             onClick={() => {
@@ -4342,9 +4364,10 @@ export function MeetingDetailPage() {
                                             }}
                                           />
 
-                                          <span role="none" className="my-1 border-t border-outline-variant" />
+                                          <span role="none" className="my-1 border-t border-border-subtle" />
 
                                           <MenuItem
+                                            preparation
                                             label="Delete"
                                             icon="delete"
                                             danger
@@ -4406,7 +4429,7 @@ export function MeetingDetailPage() {
                             }}
                             placeholder="Agenda item title"
                             aria-label={`Add item to ${section.name}`}
-                            className="h-9 min-w-0 flex-1 rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
+                            className="h-9 min-w-0 flex-1 rounded-lg border border-border-control bg-surface px-3 text-sm text-text outline-none focus:border-focus focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-surface"
                           />
 
                           <button
@@ -4417,7 +4440,7 @@ export function MeetingDetailPage() {
                                 ''
                               ).trim()
                             }
-                            className="inline-flex h-9 items-center gap-1 rounded-lg bg-primary px-3 text-sm font-semibold text-white transition hover:bg-primary/90 disabled:opacity-45"
+                            className="inline-flex h-9 items-center gap-1 rounded-lg bg-accent px-3 text-sm font-semibold text-text-inverse transition hover:bg-accent-hover disabled:opacity-45 outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
                           >
                             Add
                           </button>
@@ -4431,7 +4454,7 @@ export function MeetingDetailPage() {
                                 [section.id]: '',
                               }))
                             }}
-                            className="inline-flex h-9 items-center rounded-lg px-3 text-sm font-medium text-on-surface-variant transition hover:bg-surface-container-high"
+                            className="inline-flex h-9 items-center rounded-lg px-3 text-sm font-medium text-text-muted transition hover:bg-surface-hover outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
                           >
                             Cancel
                           </button>
@@ -4448,8 +4471,8 @@ export function MeetingDetailPage() {
                           }}
                           className={
                             sectionItems.length === 0
-                              ? 'mt-2 inline-flex h-9 items-center gap-1.5 rounded-lg px-2 text-sm font-medium text-primary outline-none transition hover:bg-primary/10 focus-visible:ring-2 focus-visible:ring-primary/40'
-                              : 'mt-2 inline-flex h-8 items-center gap-1.5 rounded-lg px-2 text-sm font-medium text-on-surface-variant outline-none transition hover:bg-surface-container-low hover:text-primary focus-visible:ring-2 focus-visible:ring-primary/40'
+                              ? 'mt-2 inline-flex h-9 items-center gap-1.5 rounded-lg px-2 text-sm font-medium text-text-muted outline-none transition hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface'
+                              : 'mt-2 inline-flex h-8 items-center gap-1.5 rounded-lg px-2 text-sm font-medium text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface'
                           }
                         >
                           <span aria-hidden="true" className="material-symbols-outlined text-[17px]">
