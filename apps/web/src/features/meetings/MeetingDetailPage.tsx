@@ -2791,8 +2791,13 @@ export function MeetingDetailPage() {
                                     </span>
                                   )}
 
+                                  {/* Selected-only: quiet neutral textual
+                                      signal. The muted row surface
+                                      already marks the selection; the
+                                      label must stay visibly below the
+                                      Current Accent signal. */}
                                   {isSelected && !isCurrent && (
-                                    <span className="shrink-0 rounded bg-surface-hover px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+                                    <span className="shrink-0 text-xs font-medium text-muted">
                                       Selected
                                     </span>
                                   )}
@@ -3542,17 +3547,13 @@ export function MeetingDetailPage() {
                 })()}
               </div>
             ) : (
-              <div className="flex min-h-64 flex-col items-center justify-center rounded-xl border border-dashed border-default px-6 py-12 text-center">
-                <span aria-hidden="true" className="material-symbols-outlined text-[26px] text-text-muted">
-                  check_circle
-                </span>
-
-                <p className="mt-3 text-sm font-medium text-text">
+              <div className="py-10">
+                <p className="text-sm font-medium text-text">
                   No current item
                 </p>
 
                 {liveOpenItemCount > 0 && (
-                  <p className="mt-1 max-w-72 text-sm text-text-muted">
+                  <p className="mt-1.5 max-w-72 text-sm text-text-muted">
                     Select an open agenda item to start
                     discussing it.
                   </p>
