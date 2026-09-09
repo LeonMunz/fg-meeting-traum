@@ -412,6 +412,82 @@ describe('Live Meeting selection (decoupled from current)', () => {
     ).not.toHaveBeenCalled()
   })
 
+  it('renders divergence actions as compact controls below the metadata', async () => {
+    const fake = new FakeLiveMeeting(
+      makeMeeting({ currentMeetingItemId: 2 }),
+      BASE_ITEMS,
+    )
+    renderLivePage(fake)
+    await waitForLive()
+
+    fireEvent.click(selectRow('Alpha'))
+    await waitFor(() => {
+      expect(
+        workspace().getByRole('heading', { name: 'Alpha' }),
+      ).toBeVisible()
+    })
+
+    const returnToCurrent = workspace().getByRole('button', {
+      name: 'Return to current',
+    })
+    const makeCurrent = workspace().getByRole('button', {
+      name: 'Make Alpha current',
+    })
+    const actionRow = returnToCurrent.parentElement
+    const title = workspace().getByRole('heading', {
+      name: 'Alpha',
+    })
+
+    expect(returnToCurrent).toHaveClass(
+      'h-8',
+      'gap-1.5',
+      'rounded-[10px]',
+      'border-default',
+      'bg-surface',
+      'px-3',
+      'text-[13px]!',
+      'font-medium!',
+      'text-text-muted',
+      'hover:bg-surface-hover',
+      'focus-visible:ring-2',
+      'focus-visible:ring-focus',
+    )
+    expect(makeCurrent).toHaveClass(
+      'h-8',
+      'gap-1.5',
+      'rounded-[10px]',
+      'border-accent',
+      'bg-accent-subtle',
+      'px-3',
+      'text-[13px]!',
+      'font-medium!',
+      'text-accent-text',
+      'hover:border-accent-hover',
+      'hover:text-accent',
+      'focus-visible:ring-2',
+      'focus-visible:ring-focus',
+    )
+    expect(returnToCurrent).not.toHaveClass('bg-accent')
+    expect(makeCurrent).not.toHaveClass(
+      'bg-accent',
+      'font-semibold',
+      'text-white',
+    )
+    expect(
+      returnToCurrent.querySelector(
+        '.material-symbols-outlined',
+      ),
+    ).toHaveClass('text-[14px]!')
+    expect(
+      makeCurrent.querySelector('.material-symbols-outlined'),
+    ).toHaveClass('text-[14px]!')
+    expect(actionRow).toHaveClass('mt-3', 'gap-2')
+    expect(title).toHaveClass('mt-3', 'text-2xl')
+    expect(
+      screen.getByRole('button', { name: 'End meeting' }),
+    ).toHaveClass('h-9', 'text-sm')
+  })
+
   it('Make current on a non-current item invokes the canonical Focus action once and converges selection and current', async () => {
     const fake = new FakeLiveMeeting(
       makeMeeting({ currentMeetingItemId: 2 }),

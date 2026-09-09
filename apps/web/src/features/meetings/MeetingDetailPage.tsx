@@ -2209,6 +2209,10 @@ export function MeetingDetailPage() {
     liveCurrentItem != null &&
     liveSelectedItem.id === liveCurrentItem.id
 
+  const showLiveContextActions =
+    !liveSelectionIsCurrent &&
+    (liveCurrentItem != null || canManageLifecycle)
+
   const liveOpenItemCount = sortedItems.filter(
     (item) => item.outcome === 'not_discussed',
   ).length
@@ -2941,9 +2945,9 @@ export function MeetingDetailPage() {
                     <button
                       type="button"
                       onClick={handleReturnToCurrent}
-                      className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-default bg-surface px-3 text-sm font-medium text-text outline-none transition hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
+                      className="inline-flex h-8 items-center gap-1.5 rounded-[10px] border border-default bg-surface px-3 text-[13px]! font-medium! text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
                     >
-                      <span aria-hidden="true" className="material-symbols-outlined text-[16px] text-text-muted">
+                      <span aria-hidden="true" className="material-symbols-outlined text-[14px]! text-text-muted">
                         arrow_back
                       </span>
                       Return to current
@@ -2963,15 +2967,15 @@ export function MeetingDetailPage() {
                         }
                         aria-label={`Make ${liveSelectedItem!.title} current`}
                         title="Make this item the meeting's current item"
-                        className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-accent px-3 text-sm font-semibold text-white outline-none transition hover:bg-accent-hover focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-60"
+                        className="inline-flex h-8 items-center gap-1.5 rounded-[10px] border border-accent bg-accent-subtle px-3 text-[13px]! font-medium! text-accent-text outline-none transition hover:border-accent-hover hover:text-accent focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-60"
                       >
                         {updatingItemId ===
                         liveSelectedItem!.id ? (
-                          <span aria-hidden="true" className="material-symbols-outlined animate-spin text-[16px]">
+                          <span aria-hidden="true" className="material-symbols-outlined animate-spin text-[14px]!">
                             refresh
                           </span>
                         ) : (
-                          <span aria-hidden="true" className="material-symbols-outlined text-[16px]">
+                          <span aria-hidden="true" className="material-symbols-outlined text-[14px]!">
                             center_focus_strong
                           </span>
                         )}
@@ -3015,15 +3019,15 @@ export function MeetingDetailPage() {
                         }
                         aria-label={`Make ${liveSelectedItem!.title} current`}
                         title="Make this item the meeting's current item"
-                        className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-accent px-3 text-sm font-semibold text-white outline-none transition hover:bg-accent-hover focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-60"
+                        className="inline-flex h-8 items-center gap-1.5 rounded-[10px] border border-accent bg-accent-subtle px-3 text-[13px]! font-medium! text-accent-text outline-none transition hover:border-accent-hover hover:text-accent focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-60"
                       >
                         {updatingItemId ===
                         liveSelectedItem!.id ? (
-                          <span aria-hidden="true" className="material-symbols-outlined animate-spin text-[16px]">
+                          <span aria-hidden="true" className="material-symbols-outlined animate-spin text-[14px]!">
                             refresh
                           </span>
                         ) : (
-                          <span aria-hidden="true" className="material-symbols-outlined text-[16px]">
+                          <span aria-hidden="true" className="material-symbols-outlined text-[14px]!">
                             center_focus_strong
                           </span>
                         )}
@@ -3044,7 +3048,7 @@ export function MeetingDetailPage() {
                 {/* Current item title — strongest heading. */}
                 <h2
                   data-current-item-title
-                  className="mt-1 break-words text-2xl font-semibold tracking-tight text-text"
+                  className={`${showLiveContextActions ? 'mt-3' : 'mt-1'} break-words text-2xl font-semibold tracking-tight text-text`}
                 >
                   {liveSelectedItem.title}
                 </h2>
