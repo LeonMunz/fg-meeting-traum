@@ -920,10 +920,7 @@ in the current model:
 - optional `intent` (`inform / discuss / decide`),
 - `origin` (`planned / spontaneous`),
 - `decision_markdown`,
-- a linked `Topic`,
-- a scheduling operation that creates or changes the persisted follow-up
-  schedule (the persistence contract exists; the operation is not yet
-  implemented).
+- a linked `Topic`.
 
 Creating an item requires only a title (plus its Section).
 
@@ -946,10 +943,10 @@ The `follow_up` outcome means:
 
 A follow-up does not necessarily create a Work Item.
 
-The persisted scheduling contract provides that durable continuation point.
+The persisted scheduling operation provides that durable continuation point.
 The source `MeetingItem` remains permanently attached to its original Meeting;
-it is never moved or reused. The later scheduling operation will create a new
-target `MeetingItem` atomically with the follow-up record, preserving
+it is never moved or reused. Scheduling creates a new target `MeetingItem`
+atomically with the follow-up record, preserving
 traceability:
 
 ```text
@@ -961,8 +958,8 @@ source MeetingItem
 For MVP, a source `MeetingItem` may have at most one non-cancelled follow-up.
 Cancelled records remain history and do not prevent a later schedule.
 
-Every follow-up targets an already existing concrete `Meeting`. The later
-scheduling operation accepts only a target whose status is `upcoming`; this
+Every follow-up targets an already existing concrete `Meeting`. The scheduling
+operation accepts only a target whose status is `upcoming`; this
 cross-record eligibility rule belongs in that domain operation rather than a
 SQL check constraint. Scheduling against a not-yet-created Series occurrence
 and automatic creation of future Meetings are outside the MVP.
@@ -994,19 +991,24 @@ introduced later, the source and target MeetingItems should share it.
 Section continuity starts from the `MeetingSection` to which the historical
 source item remains attached. Its existing `source_series_section` relation
 already retains structural Template provenance, so the follow-up record does
-not duplicate that derivable reference. The later scheduling operation will
-suggest a target Section in this order: matching structural Series Section,
-equal Section name as a convenience fallback, then explicit user selection.
-Successful scheduling stores the chosen concrete target `MeetingSection`.
-Resolution and creation of any system `Follow-ups` Section are not implemented
-here.
+not duplicate that derivable reference. The scheduling operation requires an
+explicit visible target `MeetingSection` belonging to the selected target
+Meeting. Section suggestions and creation of any system `Follow-ups` Section
+belong to a later candidate-selection layer and are not implemented.
 
-The later scheduling operation will create the target MeetingItem and follow-up
-record atomically, then set the source outcome to `follow_up` only after the
-operation succeeds. It must not copy the source item's Notes. Scheduling,
-rescheduling/cancellation operations, APIs, and UI are not implemented by this
-persistence slice; the existing Live `Follow up` outcome action remains
-unchanged.
+The implemented `schedule_meeting_item_follow_up` domain operation creates the
+target MeetingItem and follow-up record in one transaction, then sets the
+source outcome to `follow_up` only after both records have been persisted. The
+new target item carries the source title, starts as `not_discussed`, and does
+not copy item Notes, discussion Notes, linked Work Items, decisions, or other
+history. Scheduling never changes either Meeting's current item.
+
+An identical retry for the same source, target Meeting, and target Section
+returns the existing active schedule without creating another target item or
+follow-up record. A retry naming a different target is rejected; changing an
+existing schedule belongs to a later Reschedule operation. HTTP API and UI
+wiring, Reschedule, and cancellation remain unimplemented. The existing Live
+`Follow up` outcome action remains unchanged and still changes only outcome.
 
 Each source and target MeetingItem remains a stable historical instance in its
 own Meeting.
@@ -2390,8 +2392,8 @@ Move to section…
 16. Meeting lifecycle transitions (start/end/reopen) are guarded and serialized per Meeting.
 17. A `MeetingItemFollowUp` requires a concrete target Meeting, target
     MeetingSection, and new target MeetingItem. The source and target item must
-    differ. Target Meeting status and Section membership/visibility are checked
-    by the later scheduling domain operation because they cross records.
+    differ. The scheduling domain operation requires an existing upcoming
+    target Meeting and an explicit visible Section belonging to it.
 18. A source `MeetingItem` has at most one non-cancelled
     `MeetingItemFollowUp`; cancelled records do not block a later schedule.
 
@@ -2422,8 +2424,9 @@ ResearchGroup
 
 Not yet persisted: `DefaultParticipant`, `ModeratorRotation`, `Topic`,
 `MeetingNoteEntry`, `MeetingItemAcknowledgement`, `decision_markdown`, and a
-separate Work Item discussion link. The follow-up scheduling operation is also
-not implemented. Those are intended direction.
+separate Work Item discussion link. Those are intended direction. Follow-up
+scheduling is implemented only as a domain operation; API and UI wiring remain
+future work.
 
 ---
 

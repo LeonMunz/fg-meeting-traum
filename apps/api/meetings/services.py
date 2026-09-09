@@ -13,6 +13,7 @@ from work_items.services import (
 from .models import (
     Meeting,
     MeetingItem,
+    MeetingItemFollowUp,
     MeetingItemWorkItem,
     MeetingNote,
     MeetingParticipant,
@@ -576,6 +577,103 @@ def create_meeting_item(
         position=position,
         created_by=actor,
     )
+
+
+@transaction.atomic
+def schedule_meeting_item_follow_up(
+    *,
+    source_meeting_item,
+    target_meeting,
+    target_meeting_section,
+    actor,
+):
+    """Schedule one source item into an existing upcoming Meeting.
+
+    The source item remains historical. A successful first call appends a
+    distinct, open MeetingItem to the explicit target Section, records the
+    concrete source-to-target trace, and only then marks the source outcome
+    as follow_up. Repeating the same active schedule returns its existing
+    trace; choosing a different target requires a later reschedule action.
+    """
+    source_meeting_item = (
+        MeetingItem.objects
+        .select_for_update()
+        .select_related("meeting")
+        .get(pk=source_meeting_item.pk)
+    )
+    target_meeting = (
+        Meeting.objects
+        .select_for_update()
+        .get(pk=target_meeting.pk)
+    )
+    target_meeting_section = MeetingSection.objects.get(
+        pk=target_meeting_section.pk,
+    )
+
+    _require_meeting_write_access(
+        meeting=source_meeting_item.meeting,
+        user=actor,
+    )
+    _require_meeting_write_access(
+        meeting=target_meeting,
+        user=actor,
+    )
+
+    if source_meeting_item.meeting_id == target_meeting.pk:
+        raise MeetingDomainError(
+            "The source Meeting cannot be the follow-up target."
+        )
+
+    if target_meeting_section.meeting_id != target_meeting.pk:
+        raise MeetingDomainError(
+            "The Section does not belong to the target Meeting."
+        )
+
+    active_follow_up = (
+        MeetingItemFollowUp.objects
+        .filter(source_meeting_item=source_meeting_item)
+        .exclude(status=MeetingItemFollowUp.Status.CANCELLED)
+        .first()
+    )
+    if active_follow_up is not None:
+        if (
+            active_follow_up.target_meeting_id == target_meeting.pk
+            and active_follow_up.target_meeting_section_id
+            == target_meeting_section.pk
+        ):
+            return active_follow_up
+        raise MeetingDomainError(
+            "This Meeting item is already scheduled for follow-up."
+        )
+
+    if target_meeting.status != Meeting.Status.UPCOMING:
+        raise MeetingDomainError(
+            "A follow-up target must be an upcoming Meeting."
+        )
+
+    if not target_meeting_section.is_visible:
+        raise MeetingDomainError(
+            "A follow-up target Section must be visible."
+        )
+
+    target_meeting_item = create_meeting_item(
+        meeting=target_meeting,
+        meeting_section=target_meeting_section,
+        actor=actor,
+        title=source_meeting_item.title,
+    )
+    follow_up = MeetingItemFollowUp.objects.create(
+        source_meeting_item=source_meeting_item,
+        target_meeting=target_meeting,
+        target_meeting_section=target_meeting_section,
+        target_meeting_item=target_meeting_item,
+        status=MeetingItemFollowUp.Status.SCHEDULED,
+        created_by=actor,
+    )
+
+    source_meeting_item.outcome = MeetingItem.Outcome.FOLLOW_UP
+    source_meeting_item.save(update_fields=["outcome", "updated_at"])
+    return follow_up
 
 
 # ── Meeting occurrence Sections (one-off structure) ─────────────
