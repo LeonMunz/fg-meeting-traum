@@ -28,6 +28,7 @@ from .serializers import (
     MeetingItemCreateSerializer,
     MeetingItemPatchSerializer,
     MeetingItemFollowUpSerializer,
+    MeetingFollowUpTargetSerializer,
     MeetingItemScheduleFollowUpSerializer,
     MeetingItemSerializer,
     MeetingNoteCreateSerializer,
@@ -139,6 +140,7 @@ def _require_meeting_item_access(request, meeting_item_id):
             "meeting",
             "meeting__research_group",
             "meeting__project",
+            "meeting_section",
             "created_by",
         ).prefetch_related(
             _active_follow_up_prefetch(),
@@ -1799,6 +1801,77 @@ class MeetingItemScheduleFollowUpView(APIView):
             return Response({"error": exc.message}, status=400)
 
         return Response(MeetingItemFollowUpSerializer(follow_up).data)
+
+
+class MeetingItemFollowUpTargetListView(APIView):
+    """Read valid concrete targets for a later follow-up schedule."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, meeting_item_id):
+        item = _require_meeting_item_access(request, meeting_item_id)
+        if item is None:
+            return Response(
+                {"error": "Meeting item not found"},
+                status=404,
+            )
+        if not _has_scoped_write_access(request.user, item.meeting):
+            return _mutation_forbidden_response()
+
+        candidate_query = (
+            Meeting.objects
+            .filter(
+                status=Meeting.Status.UPCOMING,
+                research_group__memberships__user=request.user,
+                meeting_sections__is_visible=True,
+            )
+            .exclude(pk=item.meeting_id)
+            .select_related(
+                "research_group",
+                "project",
+                "series",
+            )
+            .prefetch_related(
+                Prefetch(
+                    "meeting_sections",
+                    queryset=(
+                        MeetingSection.objects
+                        .filter(is_visible=True)
+                        .order_by("position", "id")
+                    ),
+                    to_attr="follow_up_target_sections",
+                )
+            )
+            .order_by("scheduled_at", "id")
+            .distinct()
+        )
+        candidates = [
+            meeting
+            for meeting in candidate_query
+            if _has_scoped_write_access(request.user, meeting)
+        ]
+
+        recommended_meeting_id = None
+        if item.meeting.series_id is not None:
+            recommended_meeting_id = next(
+                (
+                    meeting.pk
+                    for meeting in candidates
+                    if meeting.series_id == item.meeting.series_id
+                ),
+                None,
+            )
+
+        return Response(
+            {
+                "recommendedMeetingId": recommended_meeting_id,
+                "meetings": MeetingFollowUpTargetSerializer(
+                    candidates,
+                    many=True,
+                    context={"source_section": item.meeting_section},
+                ).data,
+            }
+        )
 
 
 class MeetingItemNoteListCreateView(APIView):

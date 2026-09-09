@@ -993,8 +993,21 @@ source item remains attached. Its existing `source_series_section` relation
 already retains structural Template provenance, so the follow-up record does
 not duplicate that derivable reference. The scheduling operation requires an
 explicit visible target `MeetingSection` belonging to the selected target
-Meeting. Section suggestions and creation of any system `Follow-ups` Section
-belong to a later candidate-selection layer and are not implemented.
+Meeting.
+
+The read-only follow-up target-discovery API returns existing upcoming Meetings
+that the actor can write, excludes the source occurrence, and orders candidates
+by `scheduled_at`, then ID. When the source belongs to a Series, the earliest
+eligible occurrence from that same Series is returned explicitly as the
+recommended Meeting; no unrelated Meeting is fabricated as a default.
+
+Each candidate embeds only its visible occurrence Sections. A unique Section
+with the same `source_series_section` as the source Section is recommended. If
+there is no structural match, a unique exact current-name match is the fallback.
+Structural identity wins over a name match. Ambiguous or missing matches return
+no Section recommendation. Discovery never creates or modifies a Meeting,
+Section, item, follow-up record, outcome, current pointer, or Series template.
+Creation of any system `Follow-ups` Section remains unimplemented.
 
 The implemented `schedule_meeting_item_follow_up` domain operation creates the
 target MeetingItem and follow-up record in one transaction, then sets the
@@ -1024,9 +1037,19 @@ target MeetingItem, lifecycle status, and creation/update timestamps. MeetingIte
 detail and list representations expose that same non-cancelled record as the
 nullable `followUpSchedule` field, so the scheduled state survives reload.
 
-Target discovery/defaulting, Section recommendation/name fallback, creation of
-a system Follow-ups Section, the scheduling dialog, Reschedule, Cancel, and
-Previous Context UI remain unimplemented. The existing Live
+The target-discovery API is implemented as:
+
+```text
+GET /api/meeting-items/{id}/follow-up-targets/
+```
+
+Its response contains `recommendedMeetingId` and compact `meetings`. Each
+candidate contains `id`, `title`, `scheduledAt`, nullable `seriesId`, visible
+`sections`, and nullable `recommendedSectionId`.
+
+Creation of a system Follow-ups Section, the scheduling dialog, Reschedule,
+Cancel, automatic Meeting creation, and Previous Context UI remain
+unimplemented. The existing Live
 `POST /api/meeting-items/{id}/follow-up` action remains unchanged during this
 temporary coexistence and still changes only the outcome.
 
@@ -2445,8 +2468,8 @@ ResearchGroup
 Not yet persisted: `DefaultParticipant`, `ModeratorRotation`, `Topic`,
 `MeetingNoteEntry`, `MeetingItemAcknowledgement`, `decision_markdown`, and a
 separate Work Item discussion link. Those are intended direction. Follow-up
-scheduling has domain and HTTP mutation/read wiring; target discovery/defaulting
-and client UI wiring remain future work.
+scheduling has domain and HTTP mutation/read wiring, and read-only target
+discovery/defaulting is implemented. Client UI wiring remains future work.
 
 ---
 
@@ -2484,6 +2507,7 @@ Meeting Items
 POST   create
 PATCH  edit/intent/status/order
 DELETE where allowed
+GET    discover eligible follow-up Meetings and occurrence Sections
 POST   schedule follow-up into explicit upcoming Meeting Section
 
 Note Entries

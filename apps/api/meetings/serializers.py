@@ -501,6 +501,79 @@ class MeetingItemScheduleFollowUpSerializer(serializers.Serializer):
     targetMeetingSectionId = serializers.IntegerField(min_value=1)
 
 
+class MeetingFollowUpTargetSectionSerializer(serializers.ModelSerializer):
+    sourceSeriesSectionId = serializers.IntegerField(
+        source="source_series_section_id",
+        read_only=True,
+        allow_null=True,
+    )
+
+    class Meta:
+        model = MeetingSection
+        fields = [
+            "id",
+            "name",
+            "position",
+            "sourceSeriesSectionId",
+        ]
+
+
+class MeetingFollowUpTargetSerializer(serializers.ModelSerializer):
+    scheduledAt = serializers.DateTimeField(
+        source="scheduled_at",
+        read_only=True,
+    )
+    seriesId = serializers.IntegerField(
+        source="series_id",
+        read_only=True,
+        allow_null=True,
+    )
+    recommendedSectionId = serializers.SerializerMethodField()
+    sections = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Meeting
+        fields = [
+            "id",
+            "title",
+            "scheduledAt",
+            "seriesId",
+            "recommendedSectionId",
+            "sections",
+        ]
+
+    def get_recommendedSectionId(self, obj):
+        source_section = self.context["source_section"]
+        sections = obj.follow_up_target_sections
+
+        if source_section.source_series_section_id is not None:
+            structural_matches = [
+                section
+                for section in sections
+                if section.source_series_section_id
+                == source_section.source_series_section_id
+            ]
+            if len(structural_matches) == 1:
+                return structural_matches[0].pk
+            if structural_matches:
+                return None
+
+        name_matches = [
+            section
+            for section in sections
+            if section.name == source_section.name
+        ]
+        if len(name_matches) == 1:
+            return name_matches[0].pk
+        return None
+
+    def get_sections(self, obj):
+        return MeetingFollowUpTargetSectionSerializer(
+            obj.follow_up_target_sections,
+            many=True,
+        ).data
+
+
 class MeetingItemSerializer(serializers.ModelSerializer):
     meetingId = serializers.IntegerField(
         source="meeting_id",
