@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it } from 'vitest'
 
 import { AGENDA_STATUS_META } from './agendaStatus'
 import { MeetingDetailPage } from './MeetingDetailPage'
@@ -359,14 +359,18 @@ describe('MeetingDetailPage Live visual polish', () => {
     expect(MEETING_DETAIL_SOURCE).toContain('"participants"')
   })
 
-  it('renders End meeting as a calm secondary action', () => {
+  it('renders End meeting as a calm Danger secondary action', () => {
     // End meeting keeps its behavior (handleEndMeeting) but uses a
-    // quiet bordered treatment instead of a filled destructive one.
+    // quiet bordered treatment that only takes on Danger in hover,
+    // instead of a filled destructive control.
     expect(MEETING_DETAIL_SOURCE).toContain(
       'void handleEndMeeting()',
     )
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'hover:bg-error-container/30',
+      'hover:bg-danger-subtle',
+    )
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'hover:text-danger',
     )
   })
 
@@ -510,6 +514,157 @@ describe('MeetingDetailPage Live visual polish', () => {
     )
     expect(MEETING_DETAIL_SOURCE).toContain(
       'h-9 items-center gap-1.5 rounded-lg border border-default bg-surface px-3',
+    )
+  })
+})
+
+describe('MeetingDetailPage shared header color semantics', () => {
+  // The shared header (back nav, title/meta, Live indicator,
+  // Start/End/Reopen, Meeting actions menu trigger/menu) uses the
+  // neutral-first token system. Legacy Material color classes must
+  // not remain in the shared chrome.
+  //
+  // Two views are asserted: the transpiled MeetingDetailPage source
+  // (behavior wiring + in-page header markup) and the raw TSX source
+  // file (shared MenuTrigger/MenuItem helpers live outside the
+  // export, so their class strings only appear in the file).
+  let fileSource = ''
+
+  beforeAll(async () => {
+    // The vitest environment is node-only; the raw TSX source is
+    // read from the bundled module graph, not from the file
+    // system.
+    const mod = await import('./MeetingDetailPage.tsx?raw')
+    fileSource = (mod as { default: string }).default
+  })
+
+  function classNameOf(
+    haystack: string,
+    label: string,
+    anchor: string,
+  ): string {
+    // Anchor on the element's own opening props. In the raw TSX
+    // file the button-level `className="..."` sits right after
+    // `onClick={...}`, and in the transpiled page source the
+    // `className: "..."` property likewise follows `onClick:` —
+    // both BEFORE any child elements. Text labels and icon names
+    // come after the className, so they never interfere.
+    const idx = haystack.lastIndexOf(label)
+    expect(idx).toBeGreaterThan(-1)
+    const anchorIdx = haystack.lastIndexOf(anchor, idx)
+    expect(anchorIdx).toBeGreaterThan(-1)
+    const segment = haystack.slice(anchorIdx, idx)
+    const value =
+      segment.match(/className="([^"]*)"/)?.[1] ??
+      segment.match(/className: "([^"]*)"/)?.[1]
+    expect(value).not.toBeNull()
+    return value as string
+  }
+
+  it('keeps back navigation neutral with canonical focus', () => {
+    // Both back-navigation buttons (the loaded-page <nav> and the
+    // unavailable-meeting state) must be neutral with canonical
+    // focus — no persistent Accent in the idle state.
+    const anchors = [
+      "navigate('/meetings')",
+    ]
+    for (const anchor of anchors) {
+      const idx = fileSource.lastIndexOf(anchor)
+      expect(idx).toBeGreaterThan(-1)
+      // The className attribute follows the onClick prop on the
+      // same <button>.
+      const after = fileSource.slice(idx, idx + 400)
+      const value = after.match(/className="([^"]*)"/)?.[1]
+      expect(value).toMatch(/text-text-muted/)
+      expect(value).toContain('hover:bg-surface-hover')
+      expect(value).toContain('hover:text-text')
+      expect(value).toContain('focus-visible:ring-2')
+      expect(value).toContain('focus-visible:ring-focus')
+      expect(value).not.toContain('text-primary')
+      expect(value).not.toContain('hover:text-primary')
+    }
+  })
+
+  it('keeps the Meeting actions trigger neutral with canonical focus', () => {
+    // MenuTrigger is a shared helper above the page export, so the
+    // class string lives in the file source.
+    const trigger =
+      'flex h-8 w-8 items-center justify-center rounded-lg text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface'
+    expect(fileSource).toContain(trigger)
+    // The migrated trigger class must not carry any legacy
+    // ring-primary variant.
+    expect(fileSource).not.toContain(
+      'focus-visible:ring-primary/30',
+    )
+  })
+
+  it('classifies Start meeting as the primary Accent action', () => {
+    const start = classNameOf(MEETING_DETAIL_SOURCE, 'Start meeting', 'handleStartMeeting')
+    expect(start).toContain('bg-accent')
+    expect(start).toContain('text-text-inverse')
+    expect(start).toContain('hover:bg-accent-hover')
+    expect(start).toContain('focus-visible:ring-2')
+    expect(start).toContain('focus-visible:ring-focus')
+    expect(start).toContain('focus-visible:ring-offset-2')
+    expect(start).not.toContain('bg-primary')
+    expect(start).not.toContain('ring-primary')
+  })
+
+  it('classifies End meeting as a Danger hover treatment', () => {
+    const end = classNameOf(MEETING_DETAIL_SOURCE, 'End meeting', 'handleEndMeeting')
+    expect(end).toContain('border-border-subtle')
+    expect(end).toContain('hover:bg-danger-subtle')
+    expect(end).toContain('hover:text-danger')
+    expect(end).toContain('focus-visible:ring-2')
+    expect(end).toContain('focus-visible:ring-focus')
+    // The idle state stays neutral; no persistent Danger fill.
+    expect(end).not.toContain('bg-danger ')
+    expect(end).not.toContain('bg-danger"')
+  })
+
+  it('classifies Reopen meeting as a neutral secondary action', () => {
+    const reopen = classNameOf(MEETING_DETAIL_SOURCE, 'Reopen meeting', 'handleReopenMeeting')
+    expect(reopen).toContain('text-text-muted')
+    expect(reopen).toContain('hover:bg-surface-hover')
+    expect(reopen).toContain('focus-visible:ring-2')
+    expect(reopen).toContain('focus-visible:ring-focus')
+    expect(reopen).not.toContain('bg-primary')
+    expect(reopen).not.toContain('bg-accent')
+    expect(reopen).not.toContain('bg-success')
+  })
+
+  it('keeps the header meta, title, and Live indicator neutral', () => {
+    expect(fileSource).toContain(
+      'text-3xl font-semibold tracking-tight text-text',
+    )
+    expect(fileSource).toContain(
+      'mt-2 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm text-text-muted',
+    )
+    // The Live indicator stays a small Accent-text state, never a
+    // broad indigo header treatment.
+    expect(fileSource).toContain(
+      'text-sm font-medium text-accent-text" role="status"',
+    )
+  })
+
+  it('keeps the shared Meeting actions menu neutral with Danger delete', () => {
+    expect(fileSource).toContain(
+      'z-50 w-52 rounded-xl border border-border-subtle bg-surface p-1',
+    )
+    expect(fileSource).toContain('Delete meeting')
+    // Menu items (shared MenuItem helper): ordinary = neutral,
+    // destructive = Danger. No Accent for clickable items.
+    expect(fileSource).toContain(
+      'text-danger hover:bg-danger-bg focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-inset',
+    )
+    expect(fileSource).toContain(
+      'text-text hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-inset',
+    )
+  })
+
+  it('keeps the header error alert on semantic Danger tokens', () => {
+    expect(fileSource).toContain(
+      'rounded-lg bg-danger-bg px-4 py-3 text-sm text-danger',
     )
   })
 })

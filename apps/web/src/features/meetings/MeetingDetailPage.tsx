@@ -208,17 +208,15 @@ function MenuItem({
         preparation
           ? `focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-inset ${danger ? 'text-danger hover:bg-danger-bg' : 'text-text hover:bg-surface-hover'}`
           : danger
-          ? 'text-error hover:bg-error-container/40 focus-visible:bg-error-container/40'
-          : 'text-on-surface hover:bg-surface-container-low focus-visible:bg-surface-container-low',
+          ? 'text-danger hover:bg-danger-bg focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-inset'
+          : 'text-text hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-inset',
         disabled ? 'pointer-events-none opacity-45' : '',
       ].join(' ')}
     >
       {icon && (
         <span
           aria-hidden="true"
-          className={preparation
-            ? 'material-symbols-outlined text-[17px] text-text-muted'
-            : 'material-symbols-outlined text-[17px] text-on-surface-variant'}
+          className="material-symbols-outlined text-[17px] text-text-muted"
         >
           {icon}
         </span>
@@ -311,14 +309,9 @@ function MenuTrigger({
         aria-expanded={open}
         onClick={toggle}
         className={[
-          preparation
-            ? 'flex h-8 w-8 items-center justify-center rounded-lg text-text-muted outline-none transition hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface'
-            : 'flex h-8 w-8 items-center justify-center rounded-lg text-on-surface-variant outline-none transition hover:bg-surface-container-high focus-visible:bg-surface-container-high focus-visible:ring-2 focus-visible:ring-primary/30',
-          preparation
-            ? (open ? 'bg-surface-muted' : 'group-hover/menu:bg-surface-hover')
-            : open
-            ? 'bg-surface-container-high'
-            : 'group-hover/menu:bg-surface-container-high/70 focus-visible:bg-surface-container-high',
+          'flex h-8 w-8 items-center justify-center rounded-lg text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface',
+          open ? 'bg-surface-hover text-text' : '',
+          preparation && !open ? 'group-hover/menu:bg-surface-hover' : '',
         ].join(' ')}
       >
         <span
@@ -337,9 +330,7 @@ function MenuTrigger({
             top: position.top,
             left: position.left,
           }}
-          className={preparation
-            ? 'z-50 w-52 rounded-xl border border-border-subtle bg-surface p-1 shadow-lg shadow-text/10'
-            : 'z-50 w-52 rounded-xl border border-outline-variant bg-surface-container-lowest p-1 shadow-lg shadow-on-surface/10'}
+          className="z-50 w-52 rounded-xl border border-border-subtle bg-surface p-1 shadow-lg shadow-text/10"
         >
           {children(open, toggle)}
         </div>
@@ -2101,12 +2092,12 @@ export function MeetingDetailPage() {
   if (loading) {
     return (
       <div className="w-full px-6 py-8 lg:px-8 lg:py-10 xl:px-10">
-        <div className="flex min-h-72 items-center justify-center rounded-xl border border-outline-variant bg-surface-container-lowest">
-          <span className="material-symbols-outlined mr-2 animate-spin text-[20px] text-on-surface-variant">
+        <div className="flex min-h-72 items-center justify-center rounded-xl border border-border-subtle bg-surface">
+          <span className="material-symbols-outlined mr-2 animate-spin text-[20px] text-text-muted">
             refresh
           </span>
 
-          <span className="text-sm text-on-surface-variant">
+          <span className="text-sm text-text-muted">
             Loading meeting…
           </span>
         </div>
@@ -2120,7 +2111,7 @@ export function MeetingDetailPage() {
         <button
           type="button"
           onClick={() => navigate('/meetings')}
-          className="inline-flex items-center gap-2 text-sm font-medium text-on-surface-variant hover:text-primary"
+          className="inline-flex items-center gap-2 text-sm font-medium text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
         >
           <span className="material-symbols-outlined text-[18px]">
             arrow_back
@@ -2130,17 +2121,17 @@ export function MeetingDetailPage() {
 
         <div
           role="alert"
-          className="mt-6 flex min-h-64 flex-col items-center justify-center rounded-xl border border-outline-variant bg-surface-container-lowest px-6 py-10 text-center"
+          className="mt-6 flex min-h-64 flex-col items-center justify-center rounded-xl border border-border-subtle bg-surface px-6 py-10 text-center"
         >
-          <span className="material-symbols-outlined text-[28px] text-error">
+          <span className="material-symbols-outlined text-[28px] text-danger">
             error
           </span>
 
-          <h1 className="mt-3 text-lg font-semibold text-on-surface">
+          <h1 className="mt-3 text-lg font-semibold text-text">
             Meeting unavailable
           </h1>
 
-          <p className="mt-1 text-sm text-on-surface-variant">
+          <p className="mt-1 text-sm text-text-muted">
             {loadError ??
               'Meeting could not be loaded.'}
           </p>
@@ -2317,7 +2308,7 @@ export function MeetingDetailPage() {
         <button
           type="button"
           onClick={() => navigate('/meetings')}
-          className="inline-flex items-center gap-1.5 text-sm font-medium text-on-surface-variant transition hover:text-primary"
+          className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-sm font-medium text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
         >
           <span aria-hidden="true" className="material-symbols-outlined text-[18px]">
             arrow_back
@@ -2329,13 +2320,13 @@ export function MeetingDetailPage() {
       <header className="mt-4 flex flex-wrap items-start justify-between gap-x-8 gap-y-4">
         <div className="min-w-0 flex-1">
           {(completedRecapHeader || null) ?? (
-            <h1 className="truncate text-3xl font-semibold tracking-tight text-on-surface">
+            <h1 className="truncate text-3xl font-semibold tracking-tight text-text">
               {meeting.title}
             </h1>
           )}
 
           {(completedRecapMetaLine || null) ?? (
-          <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm text-on-surface-variant">
+          <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm text-text-muted">
             <span className="inline-flex items-center gap-1.5">
               <span aria-hidden="true" className="material-symbols-outlined text-[17px]">
                 event
@@ -2376,7 +2367,7 @@ export function MeetingDetailPage() {
 
         <div className="flex shrink-0 items-center gap-2.5">
           {isLive && (
-            <span className="inline-flex items-center gap-1.5 text-sm font-medium text-primary" role="status">
+            <span className="inline-flex items-center gap-1.5 text-sm font-medium text-accent-text" role="status">
               <span aria-hidden="true" className="material-symbols-outlined animate-pulse text-[18px]">
                 fiber_manual_record
               </span>
@@ -2403,7 +2394,7 @@ export function MeetingDetailPage() {
               type="button"
               disabled={updatingMeeting}
               onClick={() => void handleStartMeeting()}
-              className="inline-flex h-10 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-medium text-on-primary outline-none transition hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 disabled:opacity-60"
+              className="inline-flex h-10 items-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-text-inverse outline-none transition hover:bg-accent-hover focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-60"
             >
               <span aria-hidden="true" className="material-symbols-outlined text-[18px]">
                 play_arrow
@@ -2417,7 +2408,7 @@ export function MeetingDetailPage() {
               type="button"
               disabled={updatingMeeting}
               onClick={() => void handleEndMeeting()}
-              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm font-medium text-on-surface outline-none transition hover:border-error/40 hover:bg-error-container/30 hover:text-error focus-visible:ring-2 focus-visible:ring-error/40 disabled:opacity-60"
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-border-subtle bg-surface px-3 text-sm font-medium text-text outline-none transition hover:border-danger-subtle hover:bg-danger-subtle hover:text-danger focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-60"
             >
               <span aria-hidden="true" className="material-symbols-outlined text-[18px]">
                 stop
@@ -2449,7 +2440,7 @@ export function MeetingDetailPage() {
       {actionError && (
         <div
           role="alert"
-          className="mt-5 rounded-lg bg-error-container px-4 py-3 text-sm text-error"
+          className="mt-5 rounded-lg bg-danger-bg px-4 py-3 text-sm text-danger"
         >
           {actionError}
         </div>
@@ -3439,7 +3430,7 @@ export function MeetingDetailPage() {
                       ].join(' ')}
                     >
                       <span aria-hidden="true" className="material-symbols-outlined text-[16px]">
-                        {currentOutcome === 'done' ? 'check' : 'followup'}
+                        {currentOutcome === 'done' ? 'check' : 'refresh'}
                       </span>
                       {statusMeta.label}
                     </span>
@@ -3475,7 +3466,7 @@ export function MeetingDetailPage() {
                               className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-default bg-surface px-3 text-sm font-medium text-text outline-none transition hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-60"
                             >
                               <span aria-hidden="true" className="material-symbols-outlined text-[16px] text-text-muted">
-                                followup
+                                refresh
                               </span>
                               Change to follow-up
                             </button>
@@ -3548,7 +3539,7 @@ export function MeetingDetailPage() {
                             className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-default bg-surface px-3 text-sm font-medium text-text outline-none transition hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-60"
                           >
                             <span aria-hidden="true" className="material-symbols-outlined text-[16px] text-text-muted">
-                              {busy ? 'refresh' : 'followup'}
+                              refresh
                             </span>
                             {busy
                               ? 'Saving…'

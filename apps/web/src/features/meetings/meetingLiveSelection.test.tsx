@@ -1276,6 +1276,19 @@ describe('Live Meeting selection (decoupled from current)', () => {
     ).toBeNull()
   })
 describe('Live Meeting resolution controls follow the current outcome', () => {
+  function expectOutcomeIcon(
+    control: HTMLElement,
+    iconName: 'check' | 'refresh',
+  ) {
+    const icon = control.querySelector<HTMLElement>(
+      '.material-symbols-outlined[aria-hidden="true"]',
+    )
+    expect(icon).not.toBeNull()
+    expect(icon).toHaveClass('text-[16px]')
+    expect(icon).toHaveTextContent(iconName)
+    expect(icon).not.toHaveTextContent(/^(followup|follow_up)$/i)
+  }
+
   it('open current item offers Done and Follow up as actions', async () => {
     const fake = new FakeLiveMeeting(
       makeMeeting({ currentMeetingItemId: 2 }),
@@ -1286,14 +1299,16 @@ describe('Live Meeting resolution controls follow the current outcome', () => {
 
     // Current Beta is open (not_discussed): both resolution
     // actions are offered, no state presentation.
-    expect(
-      screen.getByRole('button', { name: 'Mark Beta as done' }),
-    ).toBeTruthy()
-    expect(
-      screen.getByRole('button', {
-        name: 'Mark Beta as follow-up',
-      }),
-    ).toBeTruthy()
+    const doneAction = screen.getByRole('button', {
+      name: 'Mark Beta as done',
+    })
+    const followUpAction = screen.getByRole('button', {
+      name: 'Mark Beta as follow-up',
+    })
+    expect(doneAction).toBeTruthy()
+    expect(followUpAction).toBeTruthy()
+    expectOutcomeIcon(doneAction, 'check')
+    expectOutcomeIcon(followUpAction, 'refresh')
     expect(
       screen.queryByRole('button', {
         name: 'Change Beta to follow-up',
@@ -1315,9 +1330,9 @@ describe('Live Meeting resolution controls follow the current outcome', () => {
     // Current Alpha is already done: the outcome reads as state,
     // the Done action is NOT offered again, and only the
     // alternative transition is actionable.
-    expect(
-      screen.getByText('Done', { exact: true }),
-    ).toBeTruthy()
+    const doneState = screen.getByText('Done', { exact: true })
+    expect(doneState).toBeTruthy()
+    expectOutcomeIcon(doneState, 'check')
     expect(
       screen.queryByRole('button', { name: 'Mark Alpha as done' }),
     ).toBeNull()
@@ -1326,11 +1341,11 @@ describe('Live Meeting resolution controls follow the current outcome', () => {
         name: 'Mark Alpha as follow-up',
       }),
     ).toBeNull()
-    expect(
-      screen.getByRole('button', {
-        name: 'Change Alpha to follow-up',
-      }),
-    ).toBeTruthy()
+    const changeToFollowUp = screen.getByRole('button', {
+      name: 'Change Alpha to follow-up',
+    })
+    expect(changeToFollowUp).toBeTruthy()
+    expectOutcomeIcon(changeToFollowUp, 'refresh')
     // A resolved item may remain Current: the rail still marks
     // it Current with its outcome hint.
     expect(rowCurrent('Alpha')).toBeTruthy()
@@ -1351,9 +1366,11 @@ describe('Live Meeting resolution controls follow the current outcome', () => {
     // outcome reads as state, the Follow up action is NOT
     // offered again, and only the alternative transition is
     // actionable.
-    expect(
-      screen.getByText('Follow-up', { exact: true }),
-    ).toBeTruthy()
+    const followUpState = screen.getByText('Follow-up', {
+      exact: true,
+    })
+    expect(followUpState).toBeTruthy()
+    expectOutcomeIcon(followUpState, 'refresh')
     expect(
       screen.queryByRole('button', {
         name: 'Mark Omega as follow-up',
@@ -1362,11 +1379,11 @@ describe('Live Meeting resolution controls follow the current outcome', () => {
     expect(
       screen.queryByRole('button', { name: 'Mark Omega as done' }),
     ).toBeNull()
-    expect(
-      screen.getByRole('button', {
-        name: 'Change Omega to done',
-      }),
-    ).toBeTruthy()
+    const changeToDone = screen.getByRole('button', {
+      name: 'Change Omega to done',
+    })
+    expect(changeToDone).toBeTruthy()
+    expectOutcomeIcon(changeToDone, 'check')
     // No internal outcome identifier may leak into visible text.
     expect(
       screen.getByRole('main', { name: 'Agenda item' }),
