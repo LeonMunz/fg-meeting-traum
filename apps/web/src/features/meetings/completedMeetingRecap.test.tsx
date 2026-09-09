@@ -183,6 +183,7 @@ function makeItem(
     contextNotes: '',
     position: 10,
     outcome: 'not_discussed',
+    followUpSchedule: null,
     workItemIds: [],
     notes: [],
     createdById: 1,

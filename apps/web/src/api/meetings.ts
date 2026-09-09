@@ -15,6 +15,8 @@ import type {
   ApiCreateMeetingWorkItemInput,
   ApiMeeting,
   ApiMeetingItem,
+  ApiMeetingItemFollowUpSchedule,
+  ApiMeetingItemFollowUpTargets,
   ApiMeetingNote,
   ApiMeetingParticipant,
   ApiMeetingSection,
@@ -23,6 +25,7 @@ import type {
   ApiCreateMeetingSectionInput,
   ApiReorderMeetingSectionsInput,
   ApiReorderMeetingSeriesSectionsInput,
+  ApiScheduleMeetingItemFollowUpInput,
   ApiUpdateMeetingInput,
   ApiUpdateMeetingItemInput,
   ApiUpdateMeetingSectionInput,
@@ -187,6 +190,24 @@ export async function markMeetingItemFollowUp(
   return apiPost<ApiMeetingItem>(
     `/api/meeting-items/${meetingItemId}/follow-up`,
     {},
+  )
+}
+
+export async function getMeetingItemFollowUpTargets(
+  meetingItemId: number,
+): Promise<ApiMeetingItemFollowUpTargets> {
+  return apiGet<ApiMeetingItemFollowUpTargets>(
+    `/api/meeting-items/${meetingItemId}/follow-up-targets/`,
+  )
+}
+
+export async function scheduleMeetingItemFollowUp(
+  meetingItemId: number,
+  input: ApiScheduleMeetingItemFollowUpInput,
+): Promise<ApiMeetingItemFollowUpSchedule> {
+  return apiPost<ApiMeetingItemFollowUpSchedule>(
+    `/api/meeting-items/${meetingItemId}/schedule-follow-up`,
+    input,
   )
 }
 

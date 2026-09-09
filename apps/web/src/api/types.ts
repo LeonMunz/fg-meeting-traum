@@ -328,6 +328,47 @@ export type ApiMeetingItemOutcome =
   | 'done'
   | 'follow_up'
 
+export type ApiMeetingItemFollowUpStatus =
+  | 'scheduled'
+  | 'needs_reschedule'
+  | 'cancelled'
+
+export interface ApiMeetingItemFollowUpSchedule {
+  id: number
+  status: ApiMeetingItemFollowUpStatus
+  sourceMeetingItemId: number
+  sourceOutcome: ApiMeetingItemOutcome
+  targetMeetingId: number
+  targetMeetingTitle: string
+  targetMeetingScheduledAt: string
+  targetMeetingSectionId: number
+  targetMeetingSectionName: string
+  targetMeetingItemId: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ApiMeetingItemFollowUpTargetSection {
+  id: number
+  name: string
+  position: number
+  sourceSeriesSectionId: number | null
+}
+
+export interface ApiMeetingItemFollowUpTarget {
+  id: number
+  title: string
+  scheduledAt: string
+  seriesId: number | null
+  recommendedSectionId: number | null
+  sections: ApiMeetingItemFollowUpTargetSection[]
+}
+
+export interface ApiMeetingItemFollowUpTargets {
+  recommendedMeetingId: number | null
+  meetings: ApiMeetingItemFollowUpTarget[]
+}
+
 export interface ApiMeetingNoteAuthor {
   id: number
   username: string
@@ -364,11 +405,17 @@ export interface ApiMeetingItem {
   contextNotes: string
   position: number
   outcome: ApiMeetingItemOutcome
+  followUpSchedule: ApiMeetingItemFollowUpSchedule | null
   workItemIds: number[]
   notes: ApiMeetingNote[]
   createdById: number
   createdAt: string
   updatedAt: string
+}
+
+export interface ApiScheduleMeetingItemFollowUpInput {
+  targetMeetingId: number
+  targetMeetingSectionId: number
 }
 
 export interface ApiCreateMeetingItemInput {
