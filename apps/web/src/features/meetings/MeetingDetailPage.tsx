@@ -2696,7 +2696,7 @@ export function MeetingDetailPage() {
       {isLive ? (
         <div
           data-live-shell
-          className="mt-6 flex flex-col gap-6 lg:flex-row lg:items-start"
+          className="mt-6 flex flex-col gap-6 lg:flex-row lg:items-start lg:gap-x-12"
         >
           {/* LEFT: Agenda rail — narrow, visually secondary, always readable. */}
           <nav
@@ -2712,7 +2712,7 @@ export function MeetingDetailPage() {
                 No agenda items yet.
               </p>
             ) : (
-              <div className="mt-2 space-y-4">
+              <div className="mt-2 space-y-7">
                 {sortedSections.map((section) => {
                   const sectionItems =
                     itemsBySection.get(section.id) ?? []
