@@ -2800,17 +2800,6 @@ export function MeetingDetailPage() {
                                     </span>
                                   )}
 
-                                  {/* Selected-only: quiet neutral textual
-                                      signal. The muted row surface
-                                      already marks the selection; the
-                                      label must stay visibly below the
-                                      Current Accent signal. */}
-                                  {isSelected && !isCurrent && (
-                                    <span className="shrink-0 text-xs font-medium text-muted">
-                                      Selected
-                                    </span>
-                                  )}
-
                                   <span className="sr-only">
                                     {statusMeta.hint}
                                   </span>
@@ -3150,7 +3139,7 @@ export function MeetingDetailPage() {
                                 </div>
                               ) : (
                                 <>
-                                  <p className="whitespace-pre-wrap text-sm leading-6 text-text">
+                                  <p className="whitespace-pre-wrap pr-16 text-sm leading-6 text-text">
                                     {note.content}
                                   </p>
 
@@ -3228,7 +3217,7 @@ export function MeetingDetailPage() {
                                   (canCreateWorkFromNote &&
                                   note.linkedWorkItem ==
                                   null)) && (
-                                    <div className="mt-0.5 flex items-center justify-end gap-1 opacity-0 transition group-hover/note:opacity-100 focus-within:opacity-100">
+                                    <div className="absolute right-2 top-1 flex items-center justify-end gap-1 opacity-0 transition group-hover/note:opacity-100 focus-within:opacity-100">
                                       {canCreateWorkFromNote &&
                                       note.linkedWorkItem ==
                                         null && (
@@ -3304,7 +3293,14 @@ export function MeetingDetailPage() {
                   {/* Composer: only when explicitly open. */}
                   {noteComposerItemId ===
                   liveSelectedItem.id ? (
-                    <div className="mt-3">
+                    <div
+                      className={
+                        (liveSelectedItem.notes ?? [])
+                          .length > 0
+                          ? 'mt-5'
+                          : 'mt-2'
+                      }
+                    >
                       <textarea
                         value={noteDraftContent}
                         onChange={(event) =>
@@ -3387,7 +3383,7 @@ export function MeetingDetailPage() {
                       onClick={() =>
                         openNoteComposer(liveSelectedItem)
                       }
-                      className="mt-3 inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-xs font-medium text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus"
+                      className={`${(liveSelectedItem.notes ?? []).length > 0 ? 'mt-5' : 'mt-2'} inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-xs font-medium text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus`}
                     >
                       <span aria-hidden="true" className="material-symbols-outlined text-[14px]">
                         add

@@ -862,11 +862,14 @@ describe('Live Meeting selection (decoupled from current)', () => {
       ).toBeTruthy()
     })
 
-    // The selected (non-current) item exposes a distinct
-    // "Selected" signal, separate from the "Current" signal.
+    // The selected (non-current) item keeps its accessible state
+    // without adding a redundant visible label.
     expect(
-      itemRow('Alpha').getByText('Selected', { exact: true }),
-    ).toBeTruthy()
+      itemRow('Alpha').queryByText('Selected', { exact: true }),
+    ).toBeNull()
+    expect(
+      selectRow('Alpha').getAttribute('aria-pressed'),
+    ).toBe('true')
 
     // While viewing a non-current item, the lifecycle
     // controls do not operate on it: none are shown (neither
@@ -912,10 +915,14 @@ describe('Live Meeting selection (decoupled from current)', () => {
       vi.mocked(meetingsApi.focusMeetingItem),
     ).not.toHaveBeenCalled()
 
-    // Omega is selected, not current.
+    // Omega is selected, not current. Selection remains exposed
+    // through the row control rather than visible status text.
     expect(
-      itemRow('Omega').getByText('Selected', { exact: true }),
-    ).toBeTruthy()
+      itemRow('Omega').queryByText('Selected', { exact: true }),
+    ).toBeNull()
+    expect(
+      selectRow('Omega').getAttribute('aria-pressed'),
+    ).toBe('true')
     expect(
       itemRow('Omega').queryByText('Current', {
         exact: true,
@@ -1153,9 +1160,9 @@ describe('Live Meeting selection (decoupled from current)', () => {
 
     // Browse back to Alpha: selection is purely local navigation.
     // While browsing Alpha (non-current), the actual current stays
-    // Omega, the "Selected" signal stays on Alpha, "Return to
-    // current" remains available, and no domain call happens from
-    // the browsing itself.
+    // Omega, Alpha's accessible selected state stays true without
+    // visible status text, "Return to current" remains available,
+    // and no domain call happens from the browsing itself.
     fireEvent.click(selectRow('Alpha'))
     await waitFor(() => {
       expect(
@@ -1168,8 +1175,8 @@ describe('Live Meeting selection (decoupled from current)', () => {
       }).getAttribute('aria-pressed'),
     ).toBe('true')
     expect(
-      itemRow('Alpha').getByText('Selected', { exact: true }),
-    ).toBeTruthy()
+      itemRow('Alpha').queryByText('Selected', { exact: true }),
+    ).toBeNull()
     expect(rowCurrent('Omega')).toBeTruthy()
     expect(
       screen.getByRole('button', { name: 'Return to current' }),

@@ -400,6 +400,24 @@ describe('MeetingDetailPage Live visual polish', () => {
     )
   })
 
+  it('keeps Live Notes in one compact editorial flow', () => {
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'className: "mt-2 space-y-5"',
+    )
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'className: "mt-1 text-[11px] text-text-muted/70"',
+    )
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'absolute right-2 top-1',
+    )
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      '? "mt-5"',
+    )
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      ': "mt-2"',
+    )
+  })
+
   it('keeps Create work item and Add note wired in the composer', () => {
     expect(MEETING_DETAIL_SOURCE).toContain(
       'submitNoteThenCreateWorkItem(',
@@ -473,6 +491,9 @@ describe('MeetingDetailPage Live visual polish', () => {
     )
     expect(MEETING_DETAIL_SOURCE).not.toContain(
       'bg-accent-selected',
+    )
+    expect(MEETING_DETAIL_SOURCE).not.toContain(
+      'children: "Selected"',
     )
   })
 
