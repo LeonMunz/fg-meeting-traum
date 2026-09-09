@@ -2271,11 +2271,11 @@ export function MeetingDetailPage() {
 
   const completedRecapHeader = isCompleted && (
     <>
-      <h1 className="min-w-0 break-words text-2xl font-semibold tracking-tight text-on-surface">
+      <h1 className="min-w-0 break-words text-2xl font-semibold tracking-tight text-text">
         {meeting.title}
       </h1>
 
-      <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-on-surface-variant">
+      <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-text-muted">
         <span aria-hidden="true" className="material-symbols-outlined text-[14px]">
           check_circle
         </span>
@@ -2285,7 +2285,7 @@ export function MeetingDetailPage() {
   )
 
   const completedRecapMetaLine = isCompleted && (
-    <p className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-sm text-on-surface-variant">
+    <p className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-sm text-text-muted">
       <span>{formatMeetingDateCompact(meeting.scheduledAt)}</span>
       {completedDurationLabel != null && (
         <>
@@ -2368,7 +2368,7 @@ export function MeetingDetailPage() {
 
           {isCompleted &&
             completedOutcomeCounts.length > 0 && (
-              <p className="mt-1.5 text-[13px] text-on-surface-variant">
+              <p className="mt-1.5 text-[13px] text-text-muted">
                 {completedOutcomeCounts.join(' · ')}
               </p>
             )}
@@ -2389,7 +2389,7 @@ export function MeetingDetailPage() {
               type="button"
               disabled={updatingMeeting}
               onClick={() => void handleReopenMeeting()}
-              className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[13px] font-medium text-on-surface-variant outline-none transition hover:bg-surface-container-low/60 hover:text-on-surface focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-60"
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[13px] font-medium text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus disabled:opacity-60"
             >
               <span aria-hidden="true" className="material-symbols-outlined text-[16px]">
                 replay
@@ -3879,7 +3879,7 @@ export function MeetingDetailPage() {
                                     </h4>
 
                                     {item.outcome === 'done' && (
-                                      <span className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-text-muted">
+                                      <span className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-success">
                                         <span aria-hidden="true" className="material-symbols-outlined text-[13px]">
                                           check_circle
                                         </span>
@@ -3890,7 +3890,7 @@ export function MeetingDetailPage() {
                                     {item.outcome === 'follow_up' && (
                                       <span className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-text-muted">
                                         <span aria-hidden="true" className="material-symbols-outlined text-[13px]">
-                                          follow_up
+                                          followup
                                         </span>
                                         Follow-up
                                       </span>
@@ -4324,10 +4324,10 @@ export function MeetingDetailPage() {
                                           }
                                           aria-label={`Mark ${item.title} as follow-up`}
                                           title="Follow up"
-                                          className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg text-on-surface-variant transition hover:bg-surface-container-high disabled:opacity-45"
+                                          className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg text-text-muted transition hover:bg-surface-hover disabled:opacity-45"
                                         >
                                           <span aria-hidden="true" className="material-symbols-outlined text-[18px]">
-                                            follow_up
+                                            followup
                                           </span>
                                         </button>
                                       </>

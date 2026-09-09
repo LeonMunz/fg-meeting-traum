@@ -689,9 +689,10 @@ describe('Completed Meeting single header (page level)', () => {
     expect(reopen).toBeVisible()
     // Quiet secondary (ghost) treatment, not a bordered or
     // filled primary action.
-    expect(reopen.className).toContain('text-on-surface-variant')
+    expect(reopen.className).toContain('text-text-muted')
     expect(reopen.className).not.toContain('border')
     expect(reopen.className).not.toContain('bg-primary')
+    expect(reopen.className).not.toContain('bg-accent')
 
     user.click(reopen)
     await waitFor(() =>
@@ -1195,7 +1196,7 @@ describe('Outcomes', () => {
 /* ── 10-17. Protocol ─────────────────────────────────────────── */
 
 describe('Protocol', () => {
-  it('does not show a redundant Done badge on ordinary completed items', () => {
+  it('shows a small Done Success marker on done items', () => {
     const item = makeItem({ outcome: 'done' })
     renderRecap({ sortedItems: [item] })
 
@@ -1204,9 +1205,62 @@ describe('Protocol', () => {
         name: 'GPU procurement',
       }),
     ).toBeVisible()
-    expect(
-      screen.queryByText('Done', { exact: true }),
-    ).not.toBeInTheDocument()
+    // Done gets a small Success signal (icon + visible label),
+    // not a large green card/panel.
+    const done = screen.getByText('Done', { exact: true })
+    expect(done).toHaveClass('text-success')
+  })
+  it('uses a Success signal for Done items in the Protocol', () => {
+    const item = makeItem({
+      id: 6,
+      title: 'Done item',
+      outcome: 'done',
+    })
+    const { container } = renderRecap({ sortedItems: [item] })
+
+    const done = screen.getByText('Done', { exact: true })
+    // Small Success signal — not a large green card/panel.
+    expect(done).toHaveClass('text-success')
+    expect(done.closest('section')!.className).not.toContain(
+      'bg-success',
+    )
+    // No green surface anywhere in the recap for a Done item.
+    expect(container.innerHTML).not.toContain('bg-success')
+  })
+
+  it('keeps Follow-up neutral (no Amber / warning treatment)', () => {
+    const item = makeItem({
+      id: 4,
+      title: 'Sample holder issue',
+      outcome: 'follow_up',
+    })
+    const { container } = renderRecap({ sortedItems: [item] })
+
+    const followUp = screen.getByText('Follow-up', { exact: true })
+    expect(followUp).toHaveClass('text-text-muted')
+    const text = container.textContent ?? ''
+    // No amber/warning class anywhere in the recap.
+    expect(container.innerHTML).not.toMatch(/amber|warning/)
+    expect(text).not.toContain('FOLLOW_UP')
+    expect(text).not.toContain('follow_up')
+  })
+
+  it('renders the valid followup Material Symbol (never raw FOLLOW_UP)', () => {
+    const item = makeItem({
+      id: 4,
+      title: 'Sample holder issue',
+      outcome: 'follow_up',
+    })
+    const { container } = renderRecap({ sortedItems: [item] })
+
+    // The icon element carries the valid "followup" ligature and is
+    // hidden from assistive technology; the visible label stays.
+    const icon = container.querySelector(
+      '.material-symbols-outlined',
+    )
+    expect(icon?.textContent?.trim()).toBe('followup')
+    expect(icon).toHaveAttribute('aria-hidden', 'true')
+    expect(screen.getByText('Follow-up', { exact: true })).toBeVisible()
   })
 
   it('shows Not discussed for not_discussed items', () => {

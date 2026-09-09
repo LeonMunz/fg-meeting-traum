@@ -4,6 +4,8 @@ import {
   itemResultingWork,
 } from './shared'
 
+import { ITEM_OUTCOME_META } from './agendaStatus'
+
 import type {
   ApiLinkedWorkItem,
   ApiMeetingItem,
@@ -25,21 +27,21 @@ export function LinkedWorkButton({
       type="button"
       onClick={() => onOpen(linked)}
       aria-label={`Open linked work item: ${linked.title}`}
-      className="flex w-full items-start gap-2 rounded-md px-1 py-0.5 text-left outline-none transition hover:bg-surface-container-low/70 focus-visible:ring-2 focus-visible:ring-primary/40"
+      className="flex w-full items-start gap-2 rounded-md px-1 py-0.5 text-left outline-none transition hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus"
     >
       <span
         aria-hidden="true"
-        className="material-symbols-outlined mt-px text-[15px] text-on-surface-variant"
+        className="material-symbols-outlined mt-px text-[15px] text-text-muted"
       >
         task_alt
       </span>
 
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm text-on-surface">
+        <span className="block truncate text-sm text-text">
           {linked.title}
         </span>
 
-        <span className="block truncate text-[11px] text-on-surface-variant">
+        <span className="block truncate text-[11px] text-text-muted">
           {[
             linked.assigneeNames.length > 0
               ? linked.assigneeNames.join(', ')
@@ -64,11 +66,11 @@ function NoteEntry({
 }) {
   return (
     <li className="min-w-0">
-      <p className="whitespace-pre-wrap text-sm leading-6 text-on-surface">
+      <p className="whitespace-pre-wrap text-sm leading-6 text-text">
         {note.content}
       </p>
 
-      <p className="mt-1.5 text-[11px] text-on-surface-variant/70">
+      <p className="mt-1.5 text-[11px] text-text-muted">
         {getPersonName(note.author)} ·{' '}
         {formatNoteTime(note.createdAt)}
       </p>
@@ -77,7 +79,7 @@ function NoteEntry({
           produced, rendered at its origin. */}
       {note.linkedWorkItem != null && (
         <div className="mt-1.5">
-          <p className="text-[11px] font-medium text-on-surface-variant">
+          <p className="text-[11px] font-medium text-text-muted">
             Resulting work
           </p>
 
@@ -132,14 +134,14 @@ export function CompletedMeetingOutcomes({
 
   return (
     <section aria-label="Outcomes">
-      <h2 className="text-base font-semibold text-on-surface">
+      <h2 className="text-base font-semibold text-text">
         Outcomes
       </h2>
 
       <div className="mt-3 space-y-5">
         {workItems.length > 0 && (
           <div>
-            <p className="text-[13px] font-semibold text-on-surface-variant">
+            <p className="text-[13px] font-semibold text-text-muted">
               Resulting work
             </p>
 
@@ -158,19 +160,19 @@ export function CompletedMeetingOutcomes({
 
         {followUps.length > 0 && (
           <div>
-            <p className="text-[13px] font-semibold text-on-surface-variant">
+            <p className="text-[13px] font-semibold text-text-muted">
               Follow-ups
             </p>
 
             <ul className="mt-1.5 space-y-1">
               {followUps.map((item) => (
                 <li key={item.id} className="min-w-0">
-                  <span className="flex items-baseline gap-2 text-sm text-on-surface">
+                  <span className="flex items-baseline gap-2 text-sm text-text">
                     <span
                       aria-hidden="true"
-                      className="shrink-0 text-on-surface-variant"
+                      className="material-symbols-outlined shrink-0 self-center text-[14px] text-text-muted"
                     >
-                      ↻
+                      {ITEM_OUTCOME_META.follow_up.icon}
                     </span>
                     <span className="min-w-0 break-words">
                       {item.title}
@@ -204,15 +206,15 @@ export function CompletedMeetingProtocol({
   return (
     <section
       aria-label="Protocol"
-      className="min-w-0 border-t border-outline-variant pt-8"
+      className="min-w-0 border-t border-border-subtle pt-8"
     >
-      <h2 className="text-base font-semibold text-on-surface">
+      <h2 className="text-base font-semibold text-text">
         Protocol
       </h2>
 
       <div className="mt-5 max-w-[800px] space-y-10">
         {sections.length === 0 ? (
-          <p className="text-sm text-on-surface-variant">
+          <p className="text-sm text-text-muted">
             No agenda sections.
           </p>
         ) : (
@@ -225,12 +227,12 @@ export function CompletedMeetingProtocol({
                 key={section.id}
                 aria-label={section.name}
               >
-                <h3 className="border-b border-outline-variant pb-2 text-lg font-semibold tracking-tight text-on-surface">
+                <h3 className="border-b border-border-subtle pb-2 text-lg font-semibold tracking-tight text-text">
                   {section.name}
                 </h3>
 
                 {sectionItems.length === 0 ? (
-                  <p className="mt-2 text-sm text-on-surface-variant">
+                  <p className="mt-2 text-sm text-text-muted">
                     No items
                   </p>
                 ) : (
@@ -259,35 +261,36 @@ export function CompletedMeetingProtocol({
                           <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
                             <span
                               aria-hidden="true"
-                              className="shrink-0 select-none text-xs tabular-nums text-on-surface-variant/50"
+                              className="shrink-0 select-none text-xs tabular-nums text-text-muted/60"
                             >
                               {itemIndex + 1}
                             </span>
 
-                            <h4 className="min-w-0 flex-1 break-words text-[15px] font-medium text-on-surface">
+                            <h4 className="min-w-0 flex-1 break-words text-[15px] font-medium text-text">
                               {item.title}
                             </h4>
 
-                            {item.outcome ===
-                              'not_discussed' && (
-                              <span className="ml-auto inline-flex shrink-0 items-center gap-1 text-xs font-medium text-on-surface-variant">
+                            {item.outcome === 'done' ||
+                            item.outcome === 'follow_up' ||
+                            item.outcome === 'not_discussed' ? (
+                              <span
+                                aria-hidden="true"
+                                className={[
+                                  'ml-auto inline-flex shrink-0 items-center gap-1 text-xs font-medium',
+                                  item.outcome === 'done'
+                                    ? 'text-success'
+                                    : 'text-text-muted',
+                                ].join(' ')}
+                              >
                                 <span
                                   aria-hidden="true"
                                   className="material-symbols-outlined text-[13px]"
                                 >
-                                  circle
+                                  {ITEM_OUTCOME_META[item.outcome].icon}
                                 </span>
-                                Not discussed
+                                {ITEM_OUTCOME_META[item.outcome].label}
                               </span>
-                            )}
-
-                            {item.outcome ===
-                              'follow_up' && (
-                              <span className="ml-auto inline-flex shrink-0 items-center gap-1 text-xs font-medium text-on-surface-variant">
-                                <span aria-hidden="true">↻</span>
-                                Follow-up
-                              </span>
-                            )}
+                            ) : null}
                           </div>
 
                           {/* Direct MeetingItem -> Work Item links,
@@ -296,7 +299,7 @@ export function CompletedMeetingProtocol({
                               repeated here). */}
                           {itemLevelWork.length > 0 && (
                             <div className="mt-2 pl-5">
-                              <p className="text-[11px] font-medium text-on-surface-variant">
+                              <p className="text-[11px] font-medium text-text-muted">
                                 Resulting work
                               </p>
 
@@ -316,7 +319,7 @@ export function CompletedMeetingProtocol({
                               visible, attribution secondary. */}
                           {notes.length > 0 && (
                             <div className="mt-3 pl-5">
-                              <p className="text-[11px] font-semibold uppercase tracking-wide text-on-surface-variant/80">
+                              <p className="text-[11px] font-semibold uppercase tracking-wide text-text-muted/80">
                                 Notes
                               </p>
 
