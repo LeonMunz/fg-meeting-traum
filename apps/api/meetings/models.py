@@ -290,6 +290,68 @@ class MeetingItem(models.Model):
         return self.title
 
 
+class MeetingItemFollowUp(models.Model):
+    """A source item's scheduled continuation in an existing Meeting."""
+
+    class Status(models.TextChoices):
+        SCHEDULED = "scheduled", "Scheduled"
+        NEEDS_RESCHEDULE = "needs_reschedule", "Needs reschedule"
+        CANCELLED = "cancelled", "Cancelled"
+
+    source_meeting_item = models.ForeignKey(
+        MeetingItem,
+        on_delete=models.CASCADE,
+        related_name="follow_up_schedules",
+    )
+    target_meeting = models.ForeignKey(
+        Meeting,
+        on_delete=models.RESTRICT,
+        related_name="targeted_follow_up_schedules",
+    )
+    target_meeting_section = models.ForeignKey(
+        MeetingSection,
+        on_delete=models.RESTRICT,
+        related_name="targeted_follow_up_schedules",
+    )
+    target_meeting_item = models.ForeignKey(
+        MeetingItem,
+        on_delete=models.RESTRICT,
+        related_name="source_follow_up_schedules",
+    )
+    status = models.CharField(
+        max_length=24,
+        choices=Status.choices,
+        default=Status.SCHEDULED,
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        related_name="created_meeting_item_follow_ups",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "meetings_item_follow_up"
+        ordering = ["created_at", "id"]
+        constraints = [
+            models.CheckConstraint(
+                condition=~models.Q(
+                    target_meeting_item=models.F("source_meeting_item")
+                ),
+                name="meetings_follow_up_target_item_is_new",
+            ),
+            models.UniqueConstraint(
+                fields=["source_meeting_item"],
+                condition=~models.Q(status="cancelled"),
+                name="meetings_follow_up_one_active_per_source",
+            ),
+        ]
+
+    def __str__(self):
+        return f"Follow-up for {self.source_meeting_item.title}"
+
+
 class MeetingNote(models.Model):
     """A persistent discussion note attached to one MeetingItem.
 
