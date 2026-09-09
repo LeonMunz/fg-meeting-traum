@@ -29,6 +29,10 @@ class MeetingDomainError(Exception):
         super().__init__(message)
 
 
+class MeetingFollowUpConflictError(MeetingDomainError):
+    """An active schedule exists and requires explicit rescheduling."""
+
+
 PROJECT_READ_ROLES = {
     ProjectMembership.Role.OWNER,
     ProjectMembership.Role.MEMBER,
@@ -642,7 +646,7 @@ def schedule_meeting_item_follow_up(
             == target_meeting_section.pk
         ):
             return active_follow_up
-        raise MeetingDomainError(
+        raise MeetingFollowUpConflictError(
             "This Meeting item is already scheduled for follow-up."
         )
 

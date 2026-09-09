@@ -1005,10 +1005,30 @@ history. Scheduling never changes either Meeting's current item.
 
 An identical retry for the same source, target Meeting, and target Section
 returns the existing active schedule without creating another target item or
-follow-up record. A retry naming a different target is rejected; changing an
-existing schedule belongs to a later Reschedule operation. HTTP API and UI
-wiring, Reschedule, and cancellation remain unimplemented. The existing Live
-`Follow up` outcome action remains unchanged and still changes only outcome.
+follow-up record. A retry naming a different target is rejected with HTTP 409;
+changing an existing schedule belongs to a later Reschedule operation.
+
+The scheduling API is implemented as:
+
+```text
+POST /api/meeting-items/{id}/schedule-follow-up
+{
+  "targetMeetingId": id,
+  "targetMeetingSectionId": id
+}
+```
+
+The compact response identifies the source item and outcome, target Meeting
+(`id`, title, scheduled date/time), target Section (`id`, name), materialized
+target MeetingItem, lifecycle status, and creation/update timestamps. MeetingItem
+detail and list representations expose that same non-cancelled record as the
+nullable `followUpSchedule` field, so the scheduled state survives reload.
+
+Target discovery/defaulting, Section recommendation/name fallback, creation of
+a system Follow-ups Section, the scheduling dialog, Reschedule, Cancel, and
+Previous Context UI remain unimplemented. The existing Live
+`POST /api/meeting-items/{id}/follow-up` action remains unchanged during this
+temporary coexistence and still changes only the outcome.
 
 Each source and target MeetingItem remains a stable historical instance in its
 own Meeting.
@@ -2425,8 +2445,8 @@ ResearchGroup
 Not yet persisted: `DefaultParticipant`, `ModeratorRotation`, `Topic`,
 `MeetingNoteEntry`, `MeetingItemAcknowledgement`, `decision_markdown`, and a
 separate Work Item discussion link. Those are intended direction. Follow-up
-scheduling is implemented only as a domain operation; API and UI wiring remain
-future work.
+scheduling has domain and HTTP mutation/read wiring; target discovery/defaulting
+and client UI wiring remain future work.
 
 ---
 
@@ -2464,6 +2484,7 @@ Meeting Items
 POST   create
 PATCH  edit/intent/status/order
 DELETE where allowed
+POST   schedule follow-up into explicit upcoming Meeting Section
 
 Note Entries
 POST

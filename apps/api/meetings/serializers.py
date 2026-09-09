@@ -1,10 +1,12 @@
 from rest_framework import serializers
 
 from projects.models import ProjectMembership
+from research_groups.models import ResearchGroupMembership
 
 from .models import (
     Meeting,
     MeetingItem,
+    MeetingItemFollowUp,
     MeetingNote,
     MeetingSection,
     MeetingSeries,
@@ -434,6 +436,71 @@ class MeetingNotePatchSerializer(serializers.Serializer):
     )
 
 
+class MeetingItemFollowUpSerializer(serializers.ModelSerializer):
+    sourceMeetingItemId = serializers.IntegerField(
+        source="source_meeting_item_id",
+        read_only=True,
+    )
+    sourceOutcome = serializers.CharField(
+        source="source_meeting_item.outcome",
+        read_only=True,
+    )
+    targetMeetingId = serializers.IntegerField(
+        source="target_meeting_id",
+        read_only=True,
+    )
+    targetMeetingTitle = serializers.CharField(
+        source="target_meeting.title",
+        read_only=True,
+    )
+    targetMeetingScheduledAt = serializers.DateTimeField(
+        source="target_meeting.scheduled_at",
+        read_only=True,
+    )
+    targetMeetingSectionId = serializers.IntegerField(
+        source="target_meeting_section_id",
+        read_only=True,
+    )
+    targetMeetingSectionName = serializers.CharField(
+        source="target_meeting_section.name",
+        read_only=True,
+    )
+    targetMeetingItemId = serializers.IntegerField(
+        source="target_meeting_item_id",
+        read_only=True,
+    )
+    createdAt = serializers.DateTimeField(
+        source="created_at",
+        read_only=True,
+    )
+    updatedAt = serializers.DateTimeField(
+        source="updated_at",
+        read_only=True,
+    )
+
+    class Meta:
+        model = MeetingItemFollowUp
+        fields = [
+            "id",
+            "status",
+            "sourceMeetingItemId",
+            "sourceOutcome",
+            "targetMeetingId",
+            "targetMeetingTitle",
+            "targetMeetingScheduledAt",
+            "targetMeetingSectionId",
+            "targetMeetingSectionName",
+            "targetMeetingItemId",
+            "createdAt",
+            "updatedAt",
+        ]
+
+
+class MeetingItemScheduleFollowUpSerializer(serializers.Serializer):
+    targetMeetingId = serializers.IntegerField(min_value=1)
+    targetMeetingSectionId = serializers.IntegerField(min_value=1)
+
+
 class MeetingItemSerializer(serializers.ModelSerializer):
     meetingId = serializers.IntegerField(
         source="meeting_id",
@@ -449,6 +516,7 @@ class MeetingItemSerializer(serializers.ModelSerializer):
         allow_blank=True,
     )
     workItemIds = serializers.SerializerMethodField()
+    followUpSchedule = serializers.SerializerMethodField()
     notes = MeetingNoteSerializer(
         source="note_relations",
         many=True,
@@ -477,6 +545,7 @@ class MeetingItemSerializer(serializers.ModelSerializer):
             "contextNotes",
             "position",
             "outcome",
+            "followUpSchedule",
             "workItemIds",
             "notes",
             "createdById",
@@ -496,6 +565,53 @@ class MeetingItemSerializer(serializers.ModelSerializer):
         return list(
             relations.values_list("work_item_id", flat=True)
         )
+
+    def get_followUpSchedule(self, obj):
+        schedules = getattr(
+            obj,
+            "active_follow_up_schedules",
+            None,
+        )
+        if schedules is None:
+            schedule = (
+                obj.follow_up_schedules
+                .exclude(status=MeetingItemFollowUp.Status.CANCELLED)
+                .select_related(
+                    "source_meeting_item",
+                    "target_meeting",
+                    "target_meeting_section",
+                )
+                .first()
+            )
+        else:
+            schedule = schedules[0] if schedules else None
+
+        if schedule is None:
+            return None
+
+        request = self.context.get("request")
+        if request is not None:
+            target = schedule.target_meeting
+            has_group_access = ResearchGroupMembership.objects.filter(
+                research_group_id=target.research_group_id,
+                user=request.user,
+            ).exists()
+            has_project_access = (
+                target.scope == Meeting.Scope.GROUP
+                or ProjectMembership.objects.filter(
+                    project_id=target.project_id,
+                    user=request.user,
+                    role__in=(
+                        ProjectMembership.Role.OWNER,
+                        ProjectMembership.Role.MEMBER,
+                        ProjectMembership.Role.VIEWER,
+                    ),
+                ).exists()
+            )
+            if not has_group_access or not has_project_access:
+                return None
+
+        return MeetingItemFollowUpSerializer(schedule).data
 
 
 class MeetingItemCreateSerializer(serializers.Serializer):

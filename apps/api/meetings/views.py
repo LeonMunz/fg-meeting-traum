@@ -1,5 +1,5 @@
 from django.contrib.auth import get_user_model
-from django.db.models import Q
+from django.db.models import Prefetch, Q
 
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -15,6 +15,7 @@ from research_groups.models import (
 from .models import (
     Meeting,
     MeetingItem,
+    MeetingItemFollowUp,
     MeetingNote,
     MeetingParticipant,
     MeetingSection,
@@ -26,6 +27,8 @@ from .serializers import (
     MeetingCreateSerializer,
     MeetingItemCreateSerializer,
     MeetingItemPatchSerializer,
+    MeetingItemFollowUpSerializer,
+    MeetingItemScheduleFollowUpSerializer,
     MeetingItemSerializer,
     MeetingNoteCreateSerializer,
     MeetingNotePatchSerializer,
@@ -47,6 +50,7 @@ from .serializers import (
 )
 from .services import (
     MeetingDomainError,
+    MeetingFollowUpConflictError,
     PROJECT_READ_ROLES,
     PROJECT_WRITE_ROLES,
     add_meeting_participant,
@@ -58,6 +62,7 @@ from .services import (
     focus_meeting_item,
     mark_meeting_item_done,
     mark_meeting_item_follow_up,
+    schedule_meeting_item_follow_up,
     create_meeting_section,
     create_meeting_series,
     create_series_section,
@@ -80,6 +85,22 @@ from .services import (
 
 
 User = get_user_model()
+
+
+def _active_follow_up_prefetch():
+    return Prefetch(
+        "follow_up_schedules",
+        queryset=(
+            MeetingItemFollowUp.objects
+            .exclude(status=MeetingItemFollowUp.Status.CANCELLED)
+            .select_related(
+                "source_meeting_item",
+                "target_meeting",
+                "target_meeting_section",
+            )
+        ),
+        to_attr="active_follow_up_schedules",
+    )
 
 
 def _require_research_group_access(request, group_id):
@@ -120,6 +141,7 @@ def _require_meeting_item_access(request, meeting_item_id):
             "meeting__project",
             "created_by",
         ).prefetch_related(
+            _active_follow_up_prefetch(),
             "note_relations__author",
         ).get(pk=meeting_item_id)
     except MeetingItem.DoesNotExist:
@@ -1299,6 +1321,7 @@ class MeetingItemListCreateView(APIView):
                 "created_by",
             )
             .prefetch_related(
+                _active_follow_up_prefetch(),
                 "work_item_relations",
                 "note_relations__author",
                 "note_relations__work_item_relations__work_item__project",
@@ -1708,6 +1731,74 @@ class MeetingItemFollowUpView(APIView):
             item,
             mark_meeting_item_follow_up,
         )
+
+
+class MeetingItemScheduleFollowUpView(APIView):
+    """Schedule an item into an explicit upcoming Meeting Section.
+
+    This concrete scheduling action coexists temporarily with the legacy
+    ``follow-up`` outcome-only action above.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, meeting_item_id):
+        item = _require_meeting_item_access(request, meeting_item_id)
+        if item is None:
+            return Response(
+                {"error": "Meeting item not found"},
+                status=404,
+            )
+
+        if not _has_scoped_write_access(request.user, item.meeting):
+            return _mutation_forbidden_response()
+
+        serializer = MeetingItemScheduleFollowUpSerializer(
+            data=request.data,
+        )
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=400)
+
+        data = serializer.validated_data
+        target_meeting = _require_meeting_access(
+            request,
+            data["targetMeetingId"],
+        )
+        if target_meeting is None:
+            return Response(
+                {"error": "Target Meeting not found"},
+                status=404,
+            )
+
+        if not _has_scoped_write_access(request.user, target_meeting):
+            return _mutation_forbidden_response()
+
+        target_section = _require_meeting_section_access(
+            request,
+            data["targetMeetingSectionId"],
+        )
+        if target_section is None:
+            return Response(
+                {"error": "Target Meeting Section not found"},
+                status=404,
+            )
+
+        try:
+            follow_up = schedule_meeting_item_follow_up(
+                source_meeting_item=item,
+                target_meeting=target_meeting,
+                target_meeting_section=target_section,
+                actor=request.user,
+            )
+        except MeetingFollowUpConflictError as exc:
+            return Response(
+                {"error": exc.message},
+                status=409,
+            )
+        except MeetingDomainError as exc:
+            return Response({"error": exc.message}, status=400)
+
+        return Response(MeetingItemFollowUpSerializer(follow_up).data)
 
 
 class MeetingItemNoteListCreateView(APIView):
