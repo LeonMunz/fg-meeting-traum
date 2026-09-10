@@ -1282,6 +1282,24 @@ export function MeetingDetailPage() {
     })
   }
 
+  // Done and concrete follow-up scheduling are resolving actions. After
+  // either succeeds, re-read the canonical Meeting pointer instead of
+  // deriving an agenda successor in the client. A non-null server Current
+  // becomes Selected; when the server clears Current, retain the resolved
+  // source item as useful local context.
+  const refreshAfterResolvingCurrent = async (
+    sourceItemId: number,
+    sourceWasCurrent: boolean,
+  ) => {
+    await refreshItems()
+    const nextMeeting = await refreshMeeting()
+
+    if (!sourceWasCurrent || nextMeeting == null) return
+    setSelectedItemId(
+      nextMeeting.currentMeetingItemId ?? sourceItemId,
+    )
+  }
+
   const handleFocusItem = async (item: ApiMeetingItem) => {
     if (updatingItemId != null) return
     const wasFollowing =
@@ -1312,22 +1330,15 @@ export function MeetingDetailPage() {
 
   const handleDoneItem = async (item: ApiMeetingItem) => {
     if (updatingItemId != null) return
-    const wasFollowing =
-      meeting != null &&
-      selectedItemId === meeting.currentMeetingItemId
+    const sourceWasCurrent =
+      meeting?.currentMeetingItemId === item.id
     setUpdatingItemId(item.id)
     setActionError(null)
     try {
       await markMeetingItemDone(item.id)
-      // Done mutates the item's outcome and, when the item was
-      // current, advances the persisted current pointer; re-read
-      // the Meeting and refresh the collection.
-      const nextItems = await refreshItems()
-      const nextMeeting = await refreshMeeting()
-      reconcileLiveSelection(
-        wasFollowing,
-        nextMeeting?.currentMeetingItemId ?? null,
-        nextItems,
+      await refreshAfterResolvingCurrent(
+        item.id,
+        sourceWasCurrent,
       )
     } catch (error) {
       setActionError(
@@ -2144,10 +2155,9 @@ export function MeetingDetailPage() {
   // Live Meeting: the item the user is currently VIEWING (local,
   // decoupled from "current"). Falls back to the current item when
   // the explicit selection is unset or the item no longer exists.
-  // When the Meeting has NO current item (e.g. the last open item
-  // was just resolved while the user was following it), there is
-  // nothing to fall back to: the detail pane renders the calm
-  // no-current state instead of resurrecting a resolved item.
+  // A successful resolution that clears Current deliberately keeps
+  // its source selected; a fresh Live load with no Current still
+  // renders the calm no-current state.
   const liveSelectedItem = isLive
     ? sortedItems.find(
         (item) => item.id === selectedItemId,
@@ -3370,11 +3380,32 @@ export function MeetingDetailPage() {
                   )}
                 </div>
 
+                {liveSelectedItem.followUpSchedule != null && (
+                  <div className="mt-8 border-t border-subtle pt-5">
+                    <div className="flex items-start gap-2 text-sm">
+                      <span aria-hidden="true" className="material-symbols-outlined mt-0.5 text-[17px] text-text-muted">
+                        event_repeat
+                      </span>
+                      <div>
+                        <p className="font-medium text-text">
+                          Scheduled for {liveSelectedItem.followUpSchedule.targetMeetingTitle} · {formatMeetingDateCompact(liveSelectedItem.followUpSchedule.targetMeetingScheduledAt)}
+                        </p>
+                        <p className="mt-0.5 text-xs text-text-muted">
+                          {liveSelectedItem.followUpSchedule.targetMeetingSectionName}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {/* Live resolution actions — bound to the CURRENT item
                     only. They render only while the user is viewing the
                     current item, so they never operate on an arbitrary
                     selected non-current item. */}
                 {(() => {
+                  if (liveSelectedItem.followUpSchedule != null) {
+                    return null
+                  }
                   const currentOutcome: AgendaItemOutcome =
                     liveCurrentItem != null
                       ? liveCurrentItem.outcome
@@ -3428,27 +3459,6 @@ export function MeetingDetailPage() {
                       Schedule follow-up
                     </button>
                   )
-
-                  if (liveCurrentItem.followUpSchedule != null) {
-                    const schedule = liveCurrentItem.followUpSchedule
-                    return (
-                      <div className="mt-8 border-t border-subtle pt-5">
-                        <div className="flex items-start gap-2 text-sm">
-                          <span aria-hidden="true" className="material-symbols-outlined mt-0.5 text-[17px] text-text-muted">
-                            event_repeat
-                          </span>
-                          <div>
-                            <p className="font-medium text-text">
-                              Scheduled for {schedule.targetMeetingTitle} · {formatMeetingDateCompact(schedule.targetMeetingScheduledAt)}
-                            </p>
-                            <p className="mt-0.5 text-xs text-text-muted">
-                              {schedule.targetMeetingSectionName}
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-                    )
-                  }
 
                   return (
                     <div className="mt-8 flex flex-wrap items-center gap-3 border-t border-subtle pt-5">
@@ -4460,11 +4470,14 @@ export function MeetingDetailPage() {
         returnFocusRef={followUpTriggerRef}
         onClose={() => setFollowUpSourceItem(null)}
         onScheduled={async () => {
-          // Scheduling returns a compact trace. Re-read the canonical
-          // MeetingItem collection so outcome and followUpSchedule arrive
-          // together from server truth. Scheduling never moves Current,
-          // and this refresh deliberately leaves local Selected unchanged.
-          await refreshItems()
+          const sourceItem = followUpSourceItem
+          if (sourceItem == null) return
+          const sourceWasCurrent =
+            meeting?.currentMeetingItemId === sourceItem.id
+          await refreshAfterResolvingCurrent(
+            sourceItem.id,
+            sourceWasCurrent,
+          )
         }}
       />
 

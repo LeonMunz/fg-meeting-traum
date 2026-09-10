@@ -350,13 +350,18 @@ test(
         .getByText('Completed', { exact: true }),
     ).toBeAttached()
 
-    // With no unresolved items, the workspace shows the calm
-    // no-current-item state.
+    // With no later unresolved item, Current clears. The resolved
+    // source stays selected so the Live detail pane keeps useful
+    // context instead of becoming empty immediately.
     await expect(
-      page.getByRole('main', {
-        name: 'Agenda item',
+      workspace.getByRole('heading', {
+        name: AGENDA_TITLE,
+        exact: true,
       }),
-    ).toContainText('No current item')
+    ).toBeVisible()
+    await expect(
+      currentAgendaItem.getByText('Current', { exact: true }),
+    ).toHaveCount(0)
 
     // --------------------------------------------------------
     // Reload proves all Meeting state persisted.
@@ -2681,8 +2686,18 @@ test(
         name: 'Schedule follow-up for Carry this topic',
       }),
     ).toHaveCount(0)
+    await expect(
+      page
+        .getByRole('navigation', { name: 'Agenda' })
+        .getByText('Current', { exact: true }),
+    ).toHaveCount(0)
 
     await page.reload()
+    await expect(workspace).toContainText('No current item')
+    await page
+      .getByRole('navigation', { name: 'Agenda' })
+      .getByRole('button', { name: 'View item Carry this topic' })
+      .click()
     await expect(workspace).toContainText(
       'Scheduled for E2E Explicit Follow-up Target',
     )
@@ -2693,7 +2708,7 @@ test(
   'Live Meeting current pointer and outcome end-to-end flow',
   async ({ page }) => {
     // --------------------------------------------------------
-    // Alex creates a real Meeting with three agenda items in
+    // Alex creates a real Meeting with four agenda items in
     // the default Agenda section. Cross-section advance is
     // covered by backend ordering tests; this E2E exercises the
     // persisted Current-vs-Outcome contract within one section.
@@ -2992,7 +3007,8 @@ test(
     // --------------------------------------------------------
     // Scheduling is explicit and concrete. Opening the dialog does
     // not mutate Omega; only Schedule creates the continuation and
-    // changes its outcome. Scheduling preserves Current and Selected.
+    // changes its outcome. Success advances server Current to Delta,
+    // and the local selection follows that refreshed pointer.
     // --------------------------------------------------------
 
     await page
@@ -3031,12 +3047,13 @@ test(
       .getByRole('button', { name: 'Schedule', exact: true })
       .click()
 
-    await expect(workspace).toContainText(
-      'Scheduled for E2E Live Follow-up Target',
-    )
+    await expect(workspace).toContainText('Delta')
+    await expect(
+      page.getByRole('dialog', { name: 'Schedule follow-up' }),
+    ).toHaveCount(0)
 
-    await itemIsCurrent('Omega')
-    await itemIsNotCurrent('Delta')
+    await itemIsNotCurrent('Omega')
+    await itemIsCurrent('Delta')
     await itemHasOutcome('Delta', 'Open')
     await itemHasOutcome('Omega', 'Resolved with follow-up')
     // Alpha is still open: neither Focus nor the advance rule
@@ -3044,9 +3061,17 @@ test(
     await itemHasOutcome('Alpha', 'Open')
     await itemHasOutcome('Beta', 'Completed')
 
+    // The persisted schedule remains visible when the user selects
+    // the resolved source again; this row click changes Selected only.
+    await selectRow('Omega')
+    await expect(workspace).toContainText(
+      'Scheduled for E2E Live Follow-up Target',
+    )
+    await itemIsCurrent('Delta')
+
     // --------------------------------------------------------
     // Reload preserves the persisted current pointer AND all
-    // item outcomes: Omega is current; Alpha open, Beta done,
+    // item outcomes: Delta is current; Alpha open, Beta done,
     // Omega follow-up. (Local selection resets to the actual
     // current item on re-entry.)
     // --------------------------------------------------------
@@ -3055,9 +3080,10 @@ test(
 
     await expect(
       workspace,
-    ).toContainText('Omega')
+    ).toContainText('Delta')
 
-    await itemIsCurrent('Omega')
+    await itemIsCurrent('Delta')
+    await itemIsNotCurrent('Omega')
     await itemIsNotCurrent('Alpha')
     await itemHasOutcome('Delta', 'Open')
     await itemHasOutcome('Alpha', 'Open')
@@ -3065,7 +3091,7 @@ test(
     await itemHasOutcome('Omega', 'Resolved with follow-up')
 
     // --------------------------------------------------------
-    // End is NEVER blocked by the current pointer: with Omega
+    // End is NEVER blocked by the current pointer: with Delta
     // still current and Delta still Open, End
     // succeeds — remaining not_discussed items are allowed in
     // the Completed state. (The pointer is cleared server-side
