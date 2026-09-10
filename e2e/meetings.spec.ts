@@ -2585,6 +2585,111 @@ test(
 )
 
 test(
+  'Live Meeting schedules a follow-up into a concrete future Meeting',
+  async ({ page }) => {
+    await login(page, 'alex')
+    await page.getByRole('link', { name: /Meetings/ }).click()
+
+    const meetingsUrl = new URL(page.url())
+    const groupId = meetingsUrl.searchParams.get('group') ?? '1'
+
+    // A template-backed source and target let the backend provide
+    // the recommended Meeting and Section.
+    await page.goto(`/meetings/series?group=${groupId}`)
+    await page.getByLabel('Name').fill('E2E Follow-up Series')
+    await page.getByRole('button', { name: /Create template/ }).click()
+    await expect(page).toHaveURL(/\/meetings\/series\/\d+$/)
+    const seriesUrl = page.url()
+
+    await page.getByLabel('Section name').fill('For your Info')
+    await page.getByRole('button', { name: /Add section/ }).click()
+    await expect(
+      page.locator('span.font-semibold', { hasText: /^For your Info$/ }),
+    ).toBeVisible()
+
+    await page.getByLabel('Date & Time').fill('2031-01-10T09:00')
+    await page.getByRole('button', { name: /Create meeting/ }).click()
+    await expect(page).toHaveURL(/\/meetings\/\d+$/)
+    const sourceUrl = page.url()
+
+    await page.goto(seriesUrl)
+    await page.getByLabel('Date & Time').fill('2031-01-17T09:00')
+    await page.getByRole('button', { name: /Create meeting/ }).click()
+    await expect(page).toHaveURL(/\/meetings\/\d+$/)
+
+    // Add a second, unrelated candidate to exercise explicit selection.
+    await page.getByRole('link', { name: /Meetings/ }).click()
+    await page.getByRole('button', { name: /New meeting/ }).click()
+    await page.getByLabel('Title').fill('E2E Explicit Follow-up Target')
+    await page.getByLabel('Date and time').fill('2031-01-20T09:00')
+    await page
+      .locator('form')
+      .getByRole('button', { name: /Create meeting/ })
+      .click()
+
+    await page.goto(sourceUrl)
+    await quickAddAgendaItem(page, 'Carry this topic', 'For your Info')
+    await page.getByRole('button', { name: 'Start meeting' }).click()
+
+    const workspace = page.getByRole('main', { name: 'Agenda item' })
+    await expect(workspace).toContainText('Carry this topic')
+    await page
+      .getByRole('button', {
+        name: 'Schedule follow-up for Carry this topic',
+      })
+      .click()
+
+    const scheduleDialog = page.getByRole('dialog', {
+      name: 'Schedule follow-up',
+    })
+    const meetingSelect = scheduleDialog.getByRole('combobox', {
+      name: /^Meeting/,
+    })
+    const sectionSelect = scheduleDialog.getByRole('combobox', {
+      name: /^Section/,
+    })
+    await expect(meetingSelect).not.toHaveValue('')
+    await expect(meetingSelect.locator('option:checked')).toContainText(
+      'E2E Follow-up Series',
+    )
+    await expect(sectionSelect.locator('option:checked')).toHaveText(
+      'For your Info',
+    )
+
+    const explicitTargetOption = meetingSelect
+      .locator('option')
+      .filter({ hasText: 'E2E Explicit Follow-up Target' })
+    await expect(explicitTargetOption).toHaveCount(1)
+    const explicitTargetValue =
+      await explicitTargetOption.getAttribute('value')
+    if (explicitTargetValue == null) {
+      throw new Error('Explicit follow-up target has no option value')
+    }
+    await meetingSelect.selectOption(explicitTargetValue)
+    await expect(sectionSelect).toHaveValue('')
+    await sectionSelect.selectOption({ label: 'Agenda' })
+    await page
+      .getByRole('button', { name: 'Schedule', exact: true })
+      .click()
+
+    await expect(workspace).toContainText(
+      'Scheduled for E2E Explicit Follow-up Target',
+    )
+    await expect(workspace).toContainText('Agenda')
+    await expect(
+      page.getByRole('button', {
+        name: 'Schedule follow-up for Carry this topic',
+      }),
+    ).toHaveCount(0)
+
+    await page.reload()
+    await expect(workspace).toContainText(
+      'Scheduled for E2E Explicit Follow-up Target',
+    )
+  },
+)
+
+test(
   'Live Meeting current pointer and outcome end-to-end flow',
   async ({ page }) => {
     // --------------------------------------------------------
@@ -2595,6 +2700,34 @@ test(
     // --------------------------------------------------------
 
     await login(page, 'alex')
+
+    await page
+      .getByRole('link', {
+        name: /Meetings/,
+      })
+      .click()
+
+    // Create an explicit future destination before the Live source.
+    await page
+      .getByRole('button', {
+        name: /New meeting/,
+      })
+      .click()
+
+    await page
+      .getByLabel('Title')
+      .fill('E2E Live Follow-up Target')
+
+    await page
+      .getByLabel('Date and time')
+      .fill('2030-02-10T09:00')
+
+    await page
+      .locator('form')
+      .getByRole('button', {
+        name: /Create meeting/,
+      })
+      .click()
 
     await page
       .getByRole('link', {
@@ -2857,29 +2990,54 @@ test(
     ).toContainText('Omega')
 
     // --------------------------------------------------------
-    // Follow-up is an explicit outcome mutation on the CURRENT
-    // item: Omega becomes "Resolved with follow-up" and the
-    // pointer advances to the next not_discussed item (Delta),
-    // so another not_discussed item can remain current.
+    // Scheduling is explicit and concrete. Opening the dialog does
+    // not mutate Omega; only Schedule creates the continuation and
+    // changes its outcome. Scheduling preserves Current and Selected.
     // --------------------------------------------------------
 
     await page
       .getByRole('button', {
-        name: 'Mark Omega as follow-up',
+        name: 'Schedule follow-up for Omega',
       })
       .click()
 
     await expect(
-      workspace,
-    ).toContainText('Delta')
+      page.getByRole('dialog', { name: 'Schedule follow-up' }),
+    ).toBeVisible()
 
-    await itemIsCurrent('Delta')
-    await itemIsNotCurrent('Omega')
-    // The advance rule selected a still-open successor: Delta is
-    // current AND open.
+    const scheduleDialog = page.getByRole('dialog', {
+      name: 'Schedule follow-up',
+    })
+    const targetMeetingSelect = scheduleDialog.getByRole(
+      'combobox',
+      { name: /^Meeting/ },
+    )
+    const targetMeetingOption = targetMeetingSelect
+      .locator('option')
+      .filter({ hasText: 'E2E Live Follow-up Target' })
+    await expect(targetMeetingOption).toHaveCount(1)
+    const targetMeetingValue =
+      await targetMeetingOption.getAttribute('value')
+    if (targetMeetingValue == null) {
+      throw new Error('Follow-up target has no option value')
+    }
+    await targetMeetingSelect.selectOption(targetMeetingValue)
+
+    await expect(
+      scheduleDialog.getByRole('combobox', { name: /^Section/ }),
+    ).toHaveValue(/\d+/)
+
+    await page
+      .getByRole('button', { name: 'Schedule', exact: true })
+      .click()
+
+    await expect(workspace).toContainText(
+      'Scheduled for E2E Live Follow-up Target',
+    )
+
+    await itemIsCurrent('Omega')
+    await itemIsNotCurrent('Delta')
     await itemHasOutcome('Delta', 'Open')
-    // Omega is no longer current: its outcome hint is rendered
-    // and shows the explicit follow-up outcome.
     await itemHasOutcome('Omega', 'Resolved with follow-up')
     // Alpha is still open: neither Focus nor the advance rule
     // resolves an item implicitly.
@@ -2888,7 +3046,7 @@ test(
 
     // --------------------------------------------------------
     // Reload preserves the persisted current pointer AND all
-    // item outcomes: Delta is current; Alpha open, Beta done,
+    // item outcomes: Omega is current; Alpha open, Beta done,
     // Omega follow-up. (Local selection resets to the actual
     // current item on re-entry.)
     // --------------------------------------------------------
@@ -2897,9 +3055,9 @@ test(
 
     await expect(
       workspace,
-    ).toContainText('Delta')
+    ).toContainText('Omega')
 
-    await itemIsCurrent('Delta')
+    await itemIsCurrent('Omega')
     await itemIsNotCurrent('Alpha')
     await itemHasOutcome('Delta', 'Open')
     await itemHasOutcome('Alpha', 'Open')
@@ -2907,8 +3065,8 @@ test(
     await itemHasOutcome('Omega', 'Resolved with follow-up')
 
     // --------------------------------------------------------
-    // End is NEVER blocked by the current pointer: with Delta
-    // still current (and Delta's outcome still Open), End
+    // End is NEVER blocked by the current pointer: with Omega
+    // still current and Delta still Open, End
     // succeeds — remaining not_discussed items are allowed in
     // the Completed state. (The pointer is cleared server-side
     // on End; that persisted state is not yet observable in the

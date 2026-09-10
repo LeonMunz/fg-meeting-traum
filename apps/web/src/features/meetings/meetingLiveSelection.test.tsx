@@ -51,6 +51,8 @@ vi.mock('../../api/meetings', async (importOriginal) => {
     focusMeetingItem: vi.fn(),
     markMeetingItemDone: vi.fn(),
     markMeetingItemFollowUp: vi.fn(),
+    getMeetingItemFollowUpTargets: vi.fn(),
+    scheduleMeetingItemFollowUp: vi.fn(),
   }
 })
 
@@ -74,6 +76,8 @@ vi.mock('../../api/research-groups', async (importOriginal) => {
 import type {
   ApiMeeting,
   ApiMeetingItem,
+  ApiMeetingItemFollowUpSchedule,
+  ApiMeetingItemFollowUpTargets,
   ApiMeetingSection,
 } from '../../api/types'
 
@@ -158,6 +162,63 @@ const OUTCOME_ITEMS: ApiMeetingItem[] = [
   makeItem({ id: 2, title: 'Beta', position: 1, outcome: 'not_discussed' }),
   makeItem({ id: 3, title: 'Omega', position: 2, outcome: 'follow_up' }),
 ]
+
+const FOLLOW_UP_SCHEDULE: ApiMeetingItemFollowUpSchedule = {
+  id: 41,
+  status: 'scheduled',
+  sourceMeetingItemId: 2,
+  sourceOutcome: 'follow_up',
+  targetMeetingId: 23,
+  targetMeetingTitle: 'FG Weekly',
+  targetMeetingScheduledAt: '2026-09-16T09:00:00Z',
+  targetMeetingSectionId: 29,
+  targetMeetingSectionName: 'For your Info',
+  targetMeetingItemId: 31,
+  createdAt: '2026-09-09T10:00:00Z',
+  updatedAt: '2026-09-09T10:00:00Z',
+}
+
+const FOLLOW_UP_TARGETS: ApiMeetingItemFollowUpTargets = {
+  recommendedMeetingId: 23,
+  meetings: [
+    {
+      id: 23,
+      title: 'FG Weekly',
+      scheduledAt: '2026-09-16T09:00:00Z',
+      seriesId: 5,
+      recommendedSectionId: 29,
+      sections: [
+        {
+          id: 29,
+          name: 'For your Info',
+          position: 0,
+          sourceSeriesSectionId: 7,
+        },
+        {
+          id: 30,
+          name: 'Discussion',
+          position: 1,
+          sourceSeriesSectionId: 8,
+        },
+      ],
+    },
+    {
+      id: 24,
+      title: 'Project Sync',
+      scheduledAt: '2026-09-18T11:00:00Z',
+      seriesId: null,
+      recommendedSectionId: null,
+      sections: [
+        {
+          id: 32,
+          name: 'Topics',
+          position: 0,
+          sourceSeriesSectionId: null,
+        },
+      ],
+    },
+  ],
+}
 
 class FakeLiveMeeting {
   meeting: ApiMeeting
@@ -278,6 +339,15 @@ beforeEach(() => {
   vi.mocked(
     meetingsApi.markMeetingItemFollowUp,
   ).mockReset()
+  vi.mocked(
+    meetingsApi.getMeetingItemFollowUpTargets,
+  ).mockReset()
+  vi.mocked(
+    meetingsApi.scheduleMeetingItemFollowUp,
+  ).mockReset()
+  vi.mocked(
+    meetingsApi.getMeetingItemFollowUpTargets,
+  ).mockResolvedValue(FOLLOW_UP_TARGETS)
   // Selection must never trigger a domain mutation.
   vi.mocked(meetingsApi.focusMeetingItem).mockResolvedValue(
     makeItem(),
@@ -388,7 +458,7 @@ describe('Live Meeting selection (decoupled from current)', () => {
     ).toBeNull()
     expect(
       screen.queryByRole('button', {
-        name: 'Mark Alpha as follow-up',
+        name: 'Schedule follow-up for Alpha',
       }),
     ).toBeNull()
 
@@ -564,8 +634,7 @@ describe('Live Meeting selection (decoupled from current)', () => {
     // The selection remains on Alpha and the Current
     // lifecycle controls are exposed again. Alpha is already
     // resolved (done), so the outcome is presented as STATE
-    // ("Done") and only the alternative transition ("Change
-    // to follow-up") is offered as an action — not another
+    // ("Done") and scheduling remains available — not another
     // Done button.
     expect(
       selectRow('Alpha').getAttribute('aria-pressed'),
@@ -578,7 +647,7 @@ describe('Live Meeting selection (decoupled from current)', () => {
     ).toBeTruthy()
     expect(
       screen.getByRole('button', {
-        name: 'Change Alpha to follow-up',
+        name: 'Schedule follow-up for Alpha',
       }),
     ).toBeTruthy()
 
@@ -883,12 +952,7 @@ describe('Live Meeting selection (decoupled from current)', () => {
     ).toBeNull()
     expect(
       screen.queryByRole('button', {
-        name: 'Mark Alpha as follow-up',
-      }),
-    ).toBeNull()
-    expect(
-      screen.queryByRole('button', {
-        name: 'Change Alpha to follow-up',
+        name: 'Schedule follow-up for Alpha',
       }),
     ).toBeNull()
   })
@@ -1081,120 +1145,64 @@ describe('Live Meeting selection (decoupled from current)', () => {
     ).toBeNull()
   })
 
-  it('an explicit selection is preserved when the current pointer moves elsewhere', async () => {
+  it('scheduling preserves both Current and Selected', async () => {
     const fake = new FakeLiveMeeting(
       makeMeeting({ currentMeetingItemId: 2 }),
       BASE_ITEMS,
     )
+    vi.mocked(
+      meetingsApi.scheduleMeetingItemFollowUp,
+    ).mockImplementation(async (id, input) => {
+      fake.items = fake.items.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              outcome: 'follow_up' as const,
+              followUpSchedule: FOLLOW_UP_SCHEDULE,
+            }
+          : item,
+      )
+      expect(input).toEqual({
+        targetMeetingId: 23,
+        targetMeetingSectionId: 29,
+      })
+      return FOLLOW_UP_SCHEDULE
+    })
 
     renderLivePage(fake)
     await waitForLive()
 
-    // Explicitly navigate to the completed Alpha (NOT the current
-    // item). The user is no longer "following" current.
-    fireEvent.click(selectRow('Alpha'))
-    await waitFor(() => {
-      expect(
-        screen.getByRole('main', { name: 'Agenda item' }),
-      ).toHaveTextContent('Alpha')
-    })
-
-    // Now move the current pointer through a lifecycle action on
-    // the CURRENT item (Follow-up on Beta): the pointer advances
-    // to the next not_discussed item (Omega). The user was NOT
-    // following the old current (Beta) — they had explicitly
-    // navigated to Alpha — so the explicit selection (Alpha) is
-    // preserved and does not jump to the new current.
-    vi.mocked(
-      meetingsApi.markMeetingItemFollowUp,
-    ).mockImplementation((id: number) => {
-      fake.items = fake.items.map((item) =>
-        item.id === id
-          ? { ...item, outcome: 'follow_up' as const }
-          : item,
-      )
-      fake.meeting = {
-        ...fake.meeting,
-        currentMeetingItemId: 3,
-      }
-      return Promise.resolve(
-        fake.items.find((item) => item.id === id)!,
-      )
-    })
-
-    // Capture the user's explicit selection (Alpha) before the
-    // pointer moves.
-    expect(
-      itemRow('Alpha').getByRole('button', {
-        name: 'View item Alpha',
-      }).getAttribute('aria-pressed'),
-    ).toBe('true')
-
-    // Return to current first (resolution controls only act on
-    // the viewed current item), then resolve Beta: the pointer
-    // advances to Omega.
-    fireEvent.click(
-      screen.getByRole('button', { name: 'Return to current' }),
-    )
-    await waitFor(() => {
-      expect(
-        screen.getByRole('main', { name: 'Agenda item' }),
-      ).toHaveTextContent('Beta')
-    })
-
     fireEvent.click(
       workspace().getByRole('button', {
-        name: 'Mark Beta as follow-up',
+        name: 'Schedule follow-up for Beta',
       }),
     )
-
-    // Current moved to Omega; Beta's explicit outcome is visible
-    // now that it is non-current.
     await waitFor(() => {
-      expect(rowCurrent('Omega')).toBeTruthy()
+      expect(screen.getByLabelText('Meeting')).toHaveValue('23')
+      expect(screen.getByLabelText('Section')).toHaveValue('29')
     })
-    expect(
-      itemRow('Beta').getByText('Resolved with follow-up', {
-        exact: true,
-      }),
-    ).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Schedule' }))
 
-    // Browse back to Alpha: selection is purely local navigation.
-    // While browsing Alpha (non-current), the actual current stays
-    // Omega, Alpha's accessible selected state stays true without
-    // visible status text, "Return to current" remains available,
-    // and no domain call happens from the browsing itself.
-    fireEvent.click(selectRow('Alpha'))
     await waitFor(() => {
       expect(
         screen.getByRole('main', { name: 'Agenda item' }),
-      ).toHaveTextContent('Alpha')
+      ).toHaveTextContent('Scheduled for FG Weekly')
     })
+    expect(rowCurrent('Beta')).toBeTruthy()
+    expect(selectRow('Beta').getAttribute('aria-pressed')).toBe('true')
+    expect(fake.meeting.currentMeetingItemId).toBe(2)
+    expect(fake.items[1].outcome).toBe('follow_up')
+    expect(screen.queryByRole('dialog')).toBeNull()
     expect(
-      itemRow('Alpha').getByRole('button', {
-        name: 'View item Alpha',
-      }).getAttribute('aria-pressed'),
-    ).toBe('true')
-    expect(
-      itemRow('Alpha').queryByText('Selected', { exact: true }),
+      screen.queryByRole('button', {
+        name: 'Schedule follow-up for Beta',
+      }),
     ).toBeNull()
-    expect(rowCurrent('Omega')).toBeTruthy()
-    expect(
-      screen.getByRole('button', { name: 'Return to current' }),
-    ).toBeTruthy()
-    // Exactly one domain mutation happened (the Follow-up on
-    // Beta); browsing triggered none.
-    expect(
-      vi.mocked(meetingsApi.focusMeetingItem),
-    ).not.toHaveBeenCalled()
-    expect(
-      vi.mocked(meetingsApi.markMeetingItemDone),
-    ).not.toHaveBeenCalled()
     expect(
       vi.mocked(
         meetingsApi.markMeetingItemFollowUp,
       ),
-    ).toHaveBeenCalledTimes(1)
+    ).not.toHaveBeenCalled()
   })
 
   it('a following selection that resolves the LAST open item enters the no-current state', async () => {
@@ -1362,7 +1370,7 @@ describe('Live Meeting selection (decoupled from current)', () => {
 describe('Live Meeting resolution controls follow the current outcome', () => {
   function expectOutcomeIcon(
     control: HTMLElement,
-    iconName: 'check' | 'refresh',
+    iconName: 'check' | 'refresh' | 'event_repeat',
   ) {
     const icon = control.querySelector<HTMLElement>(
       '.material-symbols-outlined[aria-hidden="true"]',
@@ -1373,7 +1381,7 @@ describe('Live Meeting resolution controls follow the current outcome', () => {
     expect(icon).not.toHaveTextContent(/^(followup|follow_up)$/i)
   }
 
-  it('open current item offers Done and Follow up as actions', async () => {
+  it('open current item offers Done and Schedule follow-up as actions', async () => {
     const fake = new FakeLiveMeeting(
       makeMeeting({ currentMeetingItemId: 2 }),
       OUTCOME_ITEMS,
@@ -1387,12 +1395,12 @@ describe('Live Meeting resolution controls follow the current outcome', () => {
       name: 'Mark Beta as done',
     })
     const followUpAction = screen.getByRole('button', {
-      name: 'Mark Beta as follow-up',
+      name: 'Schedule follow-up for Beta',
     })
     expect(doneAction).toBeTruthy()
     expect(followUpAction).toBeTruthy()
     expectOutcomeIcon(doneAction, 'check')
-    expectOutcomeIcon(followUpAction, 'refresh')
+    expectOutcomeIcon(followUpAction, 'event_repeat')
     expect(
       screen.queryByRole('button', {
         name: 'Change Beta to follow-up',
@@ -1403,7 +1411,7 @@ describe('Live Meeting resolution controls follow the current outcome', () => {
     ).toBeNull()
   })
 
-  it('done current item reports Done as state and offers only Change to follow-up', async () => {
+  it('done current item reports Done as state and offers scheduling', async () => {
     const fake = new FakeLiveMeeting(
       makeMeeting({ currentMeetingItemId: 1 }),
       OUTCOME_ITEMS,
@@ -1425,11 +1433,10 @@ describe('Live Meeting resolution controls follow the current outcome', () => {
         name: 'Mark Alpha as follow-up',
       }),
     ).toBeNull()
-    const changeToFollowUp = screen.getByRole('button', {
-      name: 'Change Alpha to follow-up',
+    const scheduleFollowUp = screen.getByRole('button', {
+      name: 'Schedule follow-up for Alpha',
     })
-    expect(changeToFollowUp).toBeTruthy()
-    expectOutcomeIcon(changeToFollowUp, 'refresh')
+    expect(scheduleFollowUp).toBeTruthy()
     // A resolved item may remain Current: the rail still marks
     // it Current with its outcome hint.
     expect(rowCurrent('Alpha')).toBeTruthy()
@@ -1468,6 +1475,11 @@ describe('Live Meeting resolution controls follow the current outcome', () => {
     })
     expect(changeToDone).toBeTruthy()
     expectOutcomeIcon(changeToDone, 'check')
+    expect(
+      screen.getByRole('button', {
+        name: 'Schedule follow-up for Omega',
+      }),
+    ).toBeTruthy()
     // No internal outcome identifier may leak into visible text.
     expect(
       screen.getByRole('main', { name: 'Agenda item' }),
@@ -1480,6 +1492,219 @@ describe('Live Meeting resolution controls follow the current outcome', () => {
         exact: true,
       }),
     ).toBeTruthy()
+  })
+
+  describe('Live follow-up scheduling', () => {
+    it('opens and cancels without mutating the source item', async () => {
+      const fake = new FakeLiveMeeting(
+        makeMeeting({ currentMeetingItemId: 2 }),
+        BASE_ITEMS,
+      )
+      renderLivePage(fake)
+      await waitForLive()
+
+      const trigger = screen.getByRole('button', {
+        name: 'Schedule follow-up for Beta',
+      })
+      fireEvent.click(trigger)
+
+      expect(
+        screen.getByRole('dialog', { name: 'Schedule follow-up' }),
+      ).toBeTruthy()
+      expect(
+        meetingsApi.getMeetingItemFollowUpTargets,
+      ).toHaveBeenCalledWith(2)
+      expect(meetingsApi.scheduleMeetingItemFollowUp).not.toHaveBeenCalled()
+      expect(meetingsApi.markMeetingItemFollowUp).not.toHaveBeenCalled()
+      expect(fake.items[1].outcome).toBe('not_discussed')
+      expect(fake.meeting.currentMeetingItemId).toBe(2)
+      expect(selectRow('Beta').getAttribute('aria-pressed')).toBe('true')
+
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+      expect(screen.queryByRole('dialog')).toBeNull()
+      expect(meetingsApi.scheduleMeetingItemFollowUp).not.toHaveBeenCalled()
+      expect(fake.items[1].outcome).toBe('not_discussed')
+      await waitFor(() => expect(trigger).toHaveFocus())
+
+      fireEvent.click(trigger)
+      await waitFor(() => expect(screen.getByRole('dialog')).toBeTruthy())
+      fireEvent.keyDown(window, { key: 'Escape' })
+      expect(screen.queryByRole('dialog')).toBeNull()
+      await waitFor(() => expect(trigger).toHaveFocus())
+    })
+
+    it('uses only server recommendations and resets Section with Meeting', async () => {
+      const fake = new FakeLiveMeeting(
+        makeMeeting({ currentMeetingItemId: 2 }),
+        BASE_ITEMS,
+      )
+      renderLivePage(fake)
+      await waitForLive()
+      fireEvent.click(
+        screen.getByRole('button', {
+          name: 'Schedule follow-up for Beta',
+        }),
+      )
+
+      await waitFor(() => {
+        expect(screen.getByLabelText('Meeting')).toHaveValue('23')
+        expect(screen.getByLabelText('Section')).toHaveValue('29')
+      })
+
+      fireEvent.change(screen.getByLabelText('Meeting'), {
+        target: { value: '24' },
+      })
+      expect(screen.getByLabelText('Section')).toHaveValue('')
+      expect(screen.getByRole('button', { name: 'Schedule' })).toBeDisabled()
+
+      fireEvent.change(screen.getByLabelText('Section'), {
+        target: { value: '32' },
+      })
+      expect(screen.getByRole('button', { name: 'Schedule' })).toBeEnabled()
+
+      fireEvent.change(screen.getByLabelText('Meeting'), {
+        target: { value: '23' },
+      })
+      expect(screen.getByLabelText('Section')).toHaveValue('29')
+    })
+
+    it('leaves both fields empty when the server recommends no Meeting', async () => {
+      vi.mocked(
+        meetingsApi.getMeetingItemFollowUpTargets,
+      ).mockResolvedValue({
+        ...FOLLOW_UP_TARGETS,
+        recommendedMeetingId: null,
+      })
+      const fake = new FakeLiveMeeting(
+        makeMeeting({ currentMeetingItemId: 2 }),
+        BASE_ITEMS,
+      )
+      renderLivePage(fake)
+      await waitForLive()
+      fireEvent.click(
+        screen.getByRole('button', {
+          name: 'Schedule follow-up for Beta',
+        }),
+      )
+
+      await waitFor(() => expect(screen.getByLabelText('Meeting')).toHaveValue(''))
+      expect(screen.getByLabelText('Section')).toHaveValue('')
+      expect(screen.getByLabelText('Section')).toBeDisabled()
+      expect(screen.getByRole('button', { name: 'Schedule' })).toBeDisabled()
+    })
+
+    it('shows the no-candidates state and disables Schedule', async () => {
+      vi.mocked(
+        meetingsApi.getMeetingItemFollowUpTargets,
+      ).mockResolvedValue({
+        recommendedMeetingId: null,
+        meetings: [],
+      })
+      const fake = new FakeLiveMeeting(
+        makeMeeting({ currentMeetingItemId: 2 }),
+        BASE_ITEMS,
+      )
+      renderLivePage(fake)
+      await waitForLive()
+      fireEvent.click(
+        screen.getByRole('button', {
+          name: 'Schedule follow-up for Beta',
+        }),
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('No planned meetings available.')).toBeTruthy()
+      })
+      expect(
+        screen.getByText('Create or schedule a future meeting first.'),
+      ).toBeTruthy()
+      expect(screen.getByRole('button', { name: 'Schedule' })).toBeDisabled()
+    })
+
+    it('keeps the dialog and selections after a scheduling error', async () => {
+      vi.mocked(
+        meetingsApi.scheduleMeetingItemFollowUp,
+      ).mockRejectedValue(new Error('That item is already scheduled.'))
+      const fake = new FakeLiveMeeting(
+        makeMeeting({ currentMeetingItemId: 2 }),
+        BASE_ITEMS,
+      )
+      renderLivePage(fake)
+      await waitForLive()
+      fireEvent.click(
+        screen.getByRole('button', {
+          name: 'Schedule follow-up for Beta',
+        }),
+      )
+      await waitFor(() => expect(screen.getByLabelText('Meeting')).toHaveValue('23'))
+      fireEvent.click(screen.getByRole('button', { name: 'Schedule' }))
+
+      await waitFor(() => {
+        expect(screen.getByRole('alert')).toHaveTextContent(
+          'That item is already scheduled.',
+        )
+      })
+      expect(screen.getByLabelText('Meeting')).toHaveValue('23')
+      expect(screen.getByLabelText('Section')).toHaveValue('29')
+      expect(fake.items[1].outcome).toBe('not_discussed')
+    })
+
+    it('shows discovery errors without enabling a mutation', async () => {
+      vi.mocked(
+        meetingsApi.getMeetingItemFollowUpTargets,
+      ).mockRejectedValue(new Error('Destinations unavailable.'))
+      const fake = new FakeLiveMeeting(
+        makeMeeting({ currentMeetingItemId: 2 }),
+        BASE_ITEMS,
+      )
+      renderLivePage(fake)
+      await waitForLive()
+      fireEvent.click(
+        screen.getByRole('button', {
+          name: 'Schedule follow-up for Beta',
+        }),
+      )
+
+      await waitFor(() => {
+        expect(screen.getByRole('alert')).toHaveTextContent(
+          'Destinations unavailable.',
+        )
+      })
+      expect(screen.getByRole('dialog')).toBeTruthy()
+      expect(screen.getByRole('button', { name: 'Schedule' })).toBeDisabled()
+      expect(meetingsApi.scheduleMeetingItemFollowUp).not.toHaveBeenCalled()
+    })
+
+    it('renders a persisted concrete destination and suppresses retry actions', async () => {
+      const scheduledItem = makeItem({
+        id: 2,
+        title: 'Beta',
+        position: 1,
+        outcome: 'follow_up',
+        followUpSchedule: FOLLOW_UP_SCHEDULE,
+      })
+      const fake = new FakeLiveMeeting(
+        makeMeeting({ currentMeetingItemId: 2 }),
+        [BASE_ITEMS[0], scheduledItem, BASE_ITEMS[2]],
+      )
+      renderLivePage(fake)
+      await waitForLive()
+
+      const workspaceElement = screen.getByRole('main', {
+        name: 'Agenda item',
+      })
+      expect(workspaceElement).toHaveTextContent('Scheduled for FG Weekly')
+      expect(workspaceElement).toHaveTextContent('For your Info')
+      expect(
+        screen.queryByRole('button', {
+          name: 'Schedule follow-up for Beta',
+        }),
+      ).toBeNull()
+      expect(
+        screen.queryByRole('button', { name: 'Change Beta to done' }),
+      ).toBeNull()
+      expect(meetingsApi.getMeetingItemFollowUpTargets).not.toHaveBeenCalled()
+    })
   })
 })
 

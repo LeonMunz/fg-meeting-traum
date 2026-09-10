@@ -234,9 +234,6 @@ function renderLivePage(fake: FakeLiveMeeting) {
   )
 }
 
-const workspace = () =>
-  within(screen.getByRole('main', { name: 'Agenda item' }))
-
 const agenda = () =>
   screen.getByRole('navigation', { name: 'Agenda' })
 
@@ -410,59 +407,6 @@ describe('Live current pointer synchronization', () => {
         }),
       ).toBeTruthy()
       expect(rowCurrent('Omega')).toBeTruthy()
-    })
-  })
-
-  it('Follow-up on current Alpha -> outcome follow_up + workspace advances', async () => {
-    const fake = new FakeLiveMeeting(
-      makeMeeting({ currentMeetingItemId: 1 }),
-      BASE_ITEMS,
-    )
-
-    // Server effect of Follow-up on the current Alpha: Alpha ->
-    // follow_up, pointer advances to the next not_discussed item
-    // (Beta 2).
-    vi.mocked(
-      meetingsApi.markMeetingItemFollowUp,
-    ).mockImplementation((id: number) => {
-      fake.items = withOutcome(fake.items, {
-        id,
-        outcome: 'follow_up',
-      })
-      fake.meeting = {
-        ...fake.meeting,
-        currentMeetingItemId: 2,
-      }
-      return Promise.resolve(
-        fake.items.find((item) => item.id === id)!,
-      )
-    })
-
-    renderLivePage(fake)
-    await waitForLive()
-
-    expect(
-      screen.getByRole('main', { name: 'Agenda item' }),
-    ).toHaveTextContent('Alpha')
-
-    fireEvent.click(
-      workspace().getByRole('button', {
-        name: 'Mark Alpha as follow-up',
-      }),
-    )
-
-    // Workspace advances to Beta; Alpha's follow-up outcome is
-    // visible now that it is non-current.
-    await waitFor(() => {
-      expect(
-      screen.getByRole('main', { name: 'Agenda item' }),
-    ).toHaveTextContent('Beta')
-      expect(
-        itemRow('Alpha').getByText('Resolved with follow-up', {
-          exact: true,
-        }),
-      ).toBeTruthy()
-      expect(rowCurrent('Beta')).toBeTruthy()
     })
   })
 

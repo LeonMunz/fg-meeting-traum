@@ -40,11 +40,11 @@ describe('MeetingDetailPage status-aware content', () => {
     )
   })
 
-  it('exposes canonical Focus, Done and Follow-up actions', () => {
+  it('exposes canonical Focus, Done and follow-up scheduling actions', () => {
     expect(MEETING_DETAIL_SOURCE).toContain('handleFocusItem')
     expect(MEETING_DETAIL_SOURCE).toContain('handleDoneItem')
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'handleFollowUpItem',
+      'setFollowUpSourceItem',
     )
   })
 })
@@ -238,18 +238,18 @@ describe('MeetingDetailPage Live Meeting shell', () => {
     )
   })
 
-  it('keeps Done and Follow up on the current item', () => {
+  it('keeps Done and Schedule follow-up on the current item', () => {
     expect(MEETING_DETAIL_SOURCE).toContain(
       'void handleDoneItem(liveCurrentItem)',
     )
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'void handleFollowUpItem(',
+      'setFollowUpSourceItem(liveCurrentItem)',
     )
     expect(MEETING_DETAIL_SOURCE).toContain(
       '`Mark ${liveCurrentItem.title} as done`',
     )
     expect(MEETING_DETAIL_SOURCE).toContain(
-      '`Mark ${liveCurrentItem.title} as follow-up`',
+      '`Schedule follow-up for ${liveCurrentItem.title}`',
     )
   })
 
@@ -512,24 +512,23 @@ describe('MeetingDetailPage Live visual polish', () => {
   })
 
   it('keeps outcome-aware resolution controls on the current item', () => {
-    // Open items offer both resolution actions; resolved items
-    // present their outcome as state plus the single
-    // alternative transition.
+    // Open and resolved unscheduled items offer concrete
+    // scheduling, while scheduled items render their destination.
     expect(MEETING_DETAIL_SOURCE).toContain(
       'Mark ${liveCurrentItem.title} as done',
     )
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'Mark ${liveCurrentItem.title} as follow-up',
+      'Schedule follow-up for ${liveCurrentItem.title}',
     )
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'Change ${liveCurrentItem.title} to follow-up',
+      'Scheduled for',
     )
     expect(MEETING_DETAIL_SOURCE).toContain(
       'Change ${liveCurrentItem.title} to done',
     )
     // Compact (h-9) controls: Done carries the Success
-    // semantic; Follow up / Change-to transitions are neutral
-    // secondary controls, never a warning color.
+    // semantic; scheduling / Change-to transitions are neutral
+    // secondary controls.
     expect(MEETING_DETAIL_SOURCE).toContain(
       'h-9 items-center gap-1.5 rounded-lg bg-success px-3',
     )

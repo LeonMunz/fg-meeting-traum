@@ -29,7 +29,6 @@ import {
   listMeetingParticipants,
   listMeetingSections,
   markMeetingItemDone,
-  markMeetingItemFollowUp,
   reorderMeetingSections,
   reopenMeeting,
   removeMeetingParticipant,
@@ -52,6 +51,7 @@ import {
 import { useResearchGroup } from '../research-group/useResearchGroup'
 import { useSession } from '../../api/useSession'
 import { CreateMeetingWorkItemDialog } from './CreateMeetingWorkItemDialog'
+import { MeetingFollowUpSchedulingDialog } from './MeetingFollowUpSchedulingDialog'
 import {
   AGENDA_STATUS_META,
   agendaStatusMeta,
@@ -451,6 +451,11 @@ export function MeetingDetailPage() {
   // domain concept; selecting an item must not change it.
   const [selectedItemId, setSelectedItemId] =
     useState<number | null>(null)
+
+  const [followUpSourceItem, setFollowUpSourceItem] =
+    useState<ApiMeetingItem | null>(null)
+  const followUpTriggerRef =
+    useRef<HTMLButtonElement>(null)
 
   const [updatingMeeting, setUpdatingMeeting] =
     useState(false)
@@ -1327,37 +1332,6 @@ export function MeetingDetailPage() {
     } catch (error) {
       setActionError(
         getErrorMessage(error, 'Agenda item could not be marked done.'),
-      )
-    } finally {
-      setUpdatingItemId(null)
-    }
-  }
-
-  const handleFollowUpItem = async (item: ApiMeetingItem) => {
-    if (updatingItemId != null) return
-    const wasFollowing =
-      meeting != null &&
-      selectedItemId === meeting.currentMeetingItemId
-    setUpdatingItemId(item.id)
-    setActionError(null)
-    try {
-      await markMeetingItemFollowUp(item.id)
-      // Follow-up mutates the item's outcome and, when the item
-      // was current, advances the persisted current pointer;
-      // re-read the Meeting and refresh the collection.
-      const nextItems = await refreshItems()
-      const nextMeeting = await refreshMeeting()
-      reconcileLiveSelection(
-        wasFollowing,
-        nextMeeting?.currentMeetingItemId ?? null,
-        nextItems,
-      )
-    } catch (error) {
-      setActionError(
-        getErrorMessage(
-          error,
-          'Agenda item could not be marked as follow-up.',
-        ),
       )
     } finally {
       setUpdatingItemId(null)
@@ -3436,41 +3410,52 @@ export function MeetingDetailPage() {
                     </span>
                   )
 
+                  const scheduleAction = (
+                    <button
+                      ref={followUpTriggerRef}
+                      type="button"
+                      disabled={busy}
+                      onClick={() =>
+                        setFollowUpSourceItem(liveCurrentItem)
+                      }
+                      aria-label={`Schedule follow-up for ${liveCurrentItem.title}`}
+                      title="Schedule follow-up"
+                      className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-default bg-surface px-3 text-sm font-medium text-text outline-none transition hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-60"
+                    >
+                      <span aria-hidden="true" className="material-symbols-outlined text-[16px] text-text-muted">
+                        event_repeat
+                      </span>
+                      Schedule follow-up
+                    </button>
+                  )
+
+                  if (liveCurrentItem.followUpSchedule != null) {
+                    const schedule = liveCurrentItem.followUpSchedule
+                    return (
+                      <div className="mt-8 border-t border-subtle pt-5">
+                        <div className="flex items-start gap-2 text-sm">
+                          <span aria-hidden="true" className="material-symbols-outlined mt-0.5 text-[17px] text-text-muted">
+                            event_repeat
+                          </span>
+                          <div>
+                            <p className="font-medium text-text">
+                              Scheduled for {schedule.targetMeetingTitle} · {formatMeetingDateCompact(schedule.targetMeetingScheduledAt)}
+                            </p>
+                            <p className="mt-0.5 text-xs text-text-muted">
+                              {schedule.targetMeetingSectionName}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  }
+
                   return (
-                    <div className="mt-8 flex items-center gap-3 border-t border-subtle pt-5">
+                    <div className="mt-8 flex flex-wrap items-center gap-3 border-t border-subtle pt-5">
                       {currentOutcome === 'done' ? (
                         <>
                           {statusNode}
-                          {busy ? (
-                            <button
-                              type="button"
-                              disabled
-                              aria-label={`Changing ${liveCurrentItem.title} outcome`}
-                              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-default bg-surface px-3 text-sm font-medium text-text-muted"
-                            >
-                              <span aria-hidden="true" className="material-symbols-outlined animate-spin text-[16px]">
-                                refresh
-                              </span>
-                              Saving…
-                            </button>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                void handleFollowUpItem(
-                                  liveCurrentItem,
-                                )
-                              }
-                              aria-label={`Change ${liveCurrentItem.title} to follow-up`}
-                              title="Change to follow-up"
-                              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-default bg-surface px-3 text-sm font-medium text-text outline-none transition hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-60"
-                            >
-                              <span aria-hidden="true" className="material-symbols-outlined text-[16px] text-text-muted">
-                                refresh
-                              </span>
-                              Change to follow-up
-                            </button>
-                          )}
+                          {scheduleAction}
                         </>
                       ) : currentOutcome === 'follow_up' ? (
                         <>
@@ -3503,6 +3488,7 @@ export function MeetingDetailPage() {
                               Change to Done
                             </button>
                           )}
+                          {scheduleAction}
                         </>
                       ) : (
                         <>
@@ -3526,25 +3512,7 @@ export function MeetingDetailPage() {
                               : 'Done'}
                           </button>
 
-                          <button
-                            type="button"
-                            disabled={busy}
-                            onClick={() =>
-                              void handleFollowUpItem(
-                                liveCurrentItem,
-                              )
-                            }
-                            aria-label={`Mark ${liveCurrentItem.title} as follow-up`}
-                            title="Follow up"
-                            className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-default bg-surface px-3 text-sm font-medium text-text outline-none transition hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-60"
-                          >
-                            <span aria-hidden="true" className="material-symbols-outlined text-[16px] text-text-muted">
-                              refresh
-                            </span>
-                            {busy
-                              ? 'Saving…'
-                              : 'Follow up'}
-                          </button>
+                          {scheduleAction}
                         </>
                       )}
                     </div>
@@ -4305,22 +4273,25 @@ export function MeetingDetailPage() {
                                             check_circle
                                           </span>
                                         </button>
-                                        <button
-                                          type="button"
-                                          disabled={
-                                            updatingItemId === item.id
-                                          }
-                                          onClick={() =>
-                                            void handleFollowUpItem(item)
-                                          }
-                                          aria-label={`Mark ${item.title} as follow-up`}
-                                          title="Follow up"
-                                          className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg text-text-muted transition hover:bg-surface-hover disabled:opacity-45"
-                                        >
-                                          <span aria-hidden="true" className="material-symbols-outlined text-[18px]">
-                                            followup
-                                          </span>
-                                        </button>
+                                        {item.followUpSchedule == null && (
+                                          <button
+                                            ref={followUpTriggerRef}
+                                            type="button"
+                                            disabled={
+                                              updatingItemId === item.id
+                                            }
+                                            onClick={() =>
+                                              setFollowUpSourceItem(item)
+                                            }
+                                            aria-label={`Schedule follow-up for ${item.title}`}
+                                            title="Schedule follow-up"
+                                            className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg text-text-muted transition hover:bg-surface-hover disabled:opacity-45"
+                                          >
+                                            <span aria-hidden="true" className="material-symbols-outlined text-[18px]">
+                                              event_repeat
+                                            </span>
+                                          </button>
+                                        )}
                                       </>
                                     )}
                                   </span>
@@ -4483,6 +4454,19 @@ export function MeetingDetailPage() {
         )}
       </div>
       )}
+
+      <MeetingFollowUpSchedulingDialog
+        sourceItem={isLive ? followUpSourceItem : null}
+        returnFocusRef={followUpTriggerRef}
+        onClose={() => setFollowUpSourceItem(null)}
+        onScheduled={async () => {
+          // Scheduling returns a compact trace. Re-read the canonical
+          // MeetingItem collection so outcome and followUpSchedule arrive
+          // together from server truth. Scheduling never moves Current,
+          // and this refresh deliberately leaves local Selected unchanged.
+          await refreshItems()
+        }}
+      />
 
       {deleteDialogOpen && (
         <div
