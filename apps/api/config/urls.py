@@ -70,9 +70,11 @@ from meetings.views import (
     MeetingSeriesCreateOccurrenceView,
     MeetingSeriesDetailView,
     MeetingSeriesListCreateView,
+    MeetingSeriesParticipantCandidateListView,
     MeetingSeriesSectionDetailView,
     MeetingSeriesSectionListCreateView,
     MeetingSeriesSectionReorderView,
+    ResearchGroupMeetingParticipantCandidateListView,
     ResearchGroupMeetingListCreateView,
 )
 
@@ -131,6 +133,7 @@ urlpatterns = [
 
     # Meetings
     path('api/research-groups/<int:group_id>/meetings/', ResearchGroupMeetingListCreateView.as_view(), name='research-group-meetings-list'),
+    path('api/research-groups/<int:group_id>/meetings/participant-candidates/', ResearchGroupMeetingParticipantCandidateListView.as_view(), name='research-group-meeting-participant-candidates'),
     path('api/meetings/<int:meeting_id>/', MeetingDetailView.as_view(), name='meeting-detail'),
     path('api/meetings/<int:meeting_id>/start', MeetingStartView.as_view(), name='meeting-start'),
     path('api/meetings/<int:meeting_id>/end', MeetingEndView.as_view(), name='meeting-end'),
@@ -159,5 +162,6 @@ urlpatterns = [
     path('api/meeting-series/<int:series_id>/sections/', MeetingSeriesSectionListCreateView.as_view(), name='meeting-series-sections-list'),
     path('api/meeting-series/<int:series_id>/sections/reorder/', MeetingSeriesSectionReorderView.as_view(), name='meeting-series-sections-reorder'),
     path('api/meeting-series/<int:series_id>/occurrences/', MeetingSeriesCreateOccurrenceView.as_view(), name='meeting-series-occurrences'),
+    path('api/meeting-series/<int:series_id>/participant-candidates/', MeetingSeriesParticipantCandidateListView.as_view(), name='meeting-series-participant-candidates'),
     path('api/meeting-series-sections/<int:section_id>/', MeetingSeriesSectionDetailView.as_view(), name='meeting-series-section-detail'),
 ]

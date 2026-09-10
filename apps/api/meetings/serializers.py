@@ -320,6 +320,18 @@ class MeetingCreateSerializer(serializers.Serializer):
     )
 
 
+class MeetingParticipantCandidateContextSerializer(serializers.Serializer):
+    scope = serializers.ChoiceField(
+        choices=Meeting.Scope.choices,
+        default=Meeting.Scope.GROUP,
+    )
+    projectId = serializers.IntegerField(
+        min_value=1,
+        required=False,
+        allow_null=True,
+    )
+
+
 class MeetingPatchSerializer(serializers.Serializer):
     title = serializers.CharField(
         max_length=255,

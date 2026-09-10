@@ -690,6 +690,25 @@ or another user more than once does not create duplicate rows. If any ID is
 invalid, validation fails and no Meeting or participant rows from that request
 are persisted.
 
+### Create-time participant candidate discovery
+
+The API provides read-only participant-candidate search for both creation
+contexts:
+
+```text
+GET /api/research-groups/{groupId}/meetings/participant-candidates/
+GET /api/meeting-series/{seriesId}/participant-candidates/
+```
+
+The standalone endpoint accepts the same `scope` and optional `projectId`
+context used by standalone Meeting creation. Each endpoint requires the same
+effective permission needed to create its corresponding Meeting occurrence.
+Results include active application users matching username, first name, or
+last name, regardless of Research Group membership, Project membership, or
+Project role. Discovery returns only `id`, `username`, `firstName`, and
+`lastName`; it creates no participant or membership records and grants no
+Meeting, Research Group, or Project access.
+
 Default participants are not implemented (see Section 14 for the
 scope of the implemented model).
 

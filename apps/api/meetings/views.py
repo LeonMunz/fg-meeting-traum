@@ -35,6 +35,7 @@ from .serializers import (
     MeetingNoteCreateSerializer,
     MeetingNotePatchSerializer,
     MeetingNoteSerializer,
+    MeetingParticipantCandidateContextSerializer,
     MeetingPatchSerializer,
     MeetingSectionCreateSerializer,
     MeetingSectionPatchSerializer,
@@ -91,6 +92,8 @@ from .services import (
 
 
 User = get_user_model()
+
+PARTICIPANT_CANDIDATE_LIMIT = 20
 
 
 def _active_follow_up_prefetch():
@@ -292,6 +295,35 @@ def _mutation_forbidden_response():
     )
 
 
+def _participant_candidate_response(request):
+    query = request.query_params.get("q", "").strip()
+    if len(query) < 2:
+        return Response([])
+
+    candidates = (
+        User.objects
+        .filter(is_active=True)
+        .filter(
+            Q(username__icontains=query)
+            | Q(first_name__icontains=query)
+            | Q(last_name__icontains=query)
+        )
+        .order_by("username", "pk")[:PARTICIPANT_CANDIDATE_LIMIT]
+    )
+
+    return Response(
+        [
+            {
+                "id": candidate.pk,
+                "username": candidate.username,
+                "firstName": candidate.first_name,
+                "lastName": candidate.last_name,
+            }
+            for candidate in candidates
+        ]
+    )
+
+
 def _run_meeting_lifecycle_action(request, meeting, action):
     """Shared handler for explicit Start/End lifecycle actions.
 
@@ -370,6 +402,32 @@ def _resolve_project_for_scope_read(*, group, user, scope, project_id):
         return None
 
     return membership.project
+
+
+def _resolve_standalone_meeting_create_context(
+    *,
+    group,
+    user,
+    scope,
+    project_id,
+):
+    try:
+        project = _resolve_project_for_scope_read(
+            group=group,
+            user=user,
+            scope=scope,
+            project_id=project_id,
+        )
+    except MeetingDomainError as exc:
+        return None, Response({"error": exc.message}, status=400)
+
+    if scope == Meeting.Scope.PROJECT and project is None:
+        return None, Response({"error": "Project not found"}, status=404)
+
+    if project is not None and not _has_project_write_access(user, project):
+        return None, _mutation_forbidden_response()
+
+    return project, None
 
 
 # ── MeetingSeries endpoints ──────────────────────────────────────
@@ -704,6 +762,25 @@ class MeetingSeriesSectionReorderView(APIView):
 # ── Meeting occurrence from Series ───────────────────────────────
 
 
+class MeetingSeriesParticipantCandidateListView(APIView):
+    """Candidate discovery for creating an occurrence from a Template."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, series_id):
+        series = _require_meeting_series_access(request, series_id)
+        if series is None:
+            return Response(
+                {"error": "Meeting series not found"},
+                status=404,
+            )
+
+        if not _has_scoped_write_access(request.user, series):
+            return _mutation_forbidden_response()
+
+        return _participant_candidate_response(request)
+
+
 class MeetingSeriesCreateOccurrenceView(APIView):
     """POST /api/meeting-series/{series_id}/occurrences/"""
 
@@ -927,6 +1004,39 @@ class MeetingSectionDetailView(APIView):
         )
 
 
+class ResearchGroupMeetingParticipantCandidateListView(APIView):
+    """Candidate discovery for standalone Meeting creation."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, group_id):
+        group = _require_research_group_access(request, group_id)
+        if group is None:
+            return Response(
+                {"error": "Research group not found"},
+                status=404,
+            )
+
+        serializer = MeetingParticipantCandidateContextSerializer(
+            data=request.query_params,
+        )
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=400)
+
+        data = serializer.validated_data
+
+        project, error_response = _resolve_standalone_meeting_create_context(
+            group=group,
+            user=request.user,
+            scope=data["scope"],
+            project_id=data.get("projectId"),
+        )
+        if error_response is not None:
+            return error_response
+
+        return _participant_candidate_response(request)
+
+
 class ResearchGroupMeetingListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -982,24 +1092,14 @@ class ResearchGroupMeetingListCreateView(APIView):
 
         data = serializer.validated_data
 
-        try:
-            project = _resolve_project_for_scope_read(
-                group=group,
-                user=request.user,
-                scope=data["scope"],
-                project_id=data.get("projectId"),
-            )
-        except MeetingDomainError as exc:
-            return Response({"error": exc.message}, status=400)
-
-        if data["scope"] == Meeting.Scope.PROJECT and project is None:
-            return Response({"error": "Project not found"}, status=404)
-
-        if project is not None and not _has_project_write_access(
-            request.user,
-            project,
-        ):
-            return _mutation_forbidden_response()
+        project, error_response = _resolve_standalone_meeting_create_context(
+            group=group,
+            user=request.user,
+            scope=data["scope"],
+            project_id=data.get("projectId"),
+        )
+        if error_response is not None:
+            return error_response
 
         try:
             meeting = create_meeting(
