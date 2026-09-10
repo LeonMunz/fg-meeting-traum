@@ -526,14 +526,14 @@ describe('MeetingDetailPage Live visual polish', () => {
     expect(MEETING_DETAIL_SOURCE).toContain(
       'Change ${liveCurrentItem.title} to done',
     )
-    // Compact (h-9) controls: Done carries the Success
+    // Compact (h-8) controls: Done carries the Success
     // semantic; scheduling / Change-to transitions are neutral
     // secondary controls.
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'h-9 items-center gap-1.5 rounded-lg bg-success px-3',
+      'h-8 items-center gap-1.5 rounded-lg bg-success px-2.5',
     )
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'h-9 items-center gap-1.5 rounded-lg border border-default bg-surface px-3',
+      'h-8 items-center gap-1.5 rounded-lg border border-default bg-surface px-2.5',
     )
   })
 })

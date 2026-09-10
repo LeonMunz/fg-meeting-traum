@@ -1532,12 +1532,13 @@ describe('Live Meeting resolution controls follow the current outcome', () => {
   function expectOutcomeIcon(
     control: HTMLElement,
     iconName: 'check' | 'refresh' | 'event_repeat',
+    iconSize: 'text-[16px]' | 'text-[15px]' = 'text-[16px]',
   ) {
     const icon = control.querySelector<HTMLElement>(
       '.material-symbols-outlined[aria-hidden="true"]',
     )
     expect(icon).not.toBeNull()
-    expect(icon).toHaveClass('text-[16px]')
+    expect(icon).toHaveClass(iconSize)
     expect(icon).toHaveTextContent(iconName)
     expect(icon).not.toHaveTextContent(/^(followup|follow_up)$/i)
   }
@@ -1560,8 +1561,8 @@ describe('Live Meeting resolution controls follow the current outcome', () => {
     })
     expect(doneAction).toBeTruthy()
     expect(followUpAction).toBeTruthy()
-    expectOutcomeIcon(doneAction, 'check')
-    expectOutcomeIcon(followUpAction, 'event_repeat')
+    expectOutcomeIcon(doneAction, 'check', 'text-[15px]')
+    expectOutcomeIcon(followUpAction, 'event_repeat', 'text-[15px]')
     expect(
       screen.queryByRole('button', {
         name: 'Change Beta to follow-up',
@@ -1640,7 +1641,7 @@ describe('Live Meeting resolution controls follow the current outcome', () => {
       name: 'Change Omega to done',
     })
     expect(changeToDone).toBeTruthy()
-    expectOutcomeIcon(changeToDone, 'check')
+    expectOutcomeIcon(changeToDone, 'check', 'text-[15px]')
     expect(
       screen.getByRole('button', {
         name: 'Schedule follow-up for Omega',

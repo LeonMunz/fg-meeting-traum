@@ -3601,9 +3601,9 @@ export function MeetingDetailPage() {
                       }
                       aria-label={`Schedule follow-up for ${liveCurrentItem.title}`}
                       title="Schedule follow-up"
-                      className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-default bg-surface px-3 text-sm font-medium text-text outline-none transition hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-60"
+                      className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-default bg-surface px-2.5 text-sm font-medium text-text outline-none transition hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-60"
                     >
-                      <span aria-hidden="true" className="material-symbols-outlined text-[16px] text-text-muted">
+                      <span aria-hidden="true" className="material-symbols-outlined text-[15px] text-text-muted">
                         event_repeat
                       </span>
                       Schedule follow-up
@@ -3615,14 +3615,15 @@ export function MeetingDetailPage() {
                       {currentOutcome === 'follow_up' ? (
                         <>
                           {statusNode}
+                          {scheduleAction}
                           {busy ? (
                             <button
                               type="button"
                               disabled
                               aria-label={`Changing ${liveCurrentItem.title} outcome`}
-                              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-default bg-surface px-3 text-sm font-medium text-text-muted"
+                              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-default bg-surface px-2.5 text-sm font-medium text-text-muted"
                             >
-                              <span aria-hidden="true" className="material-symbols-outlined animate-spin text-[16px]">
+                              <span aria-hidden="true" className="material-symbols-outlined animate-spin text-[15px]">
                                 refresh
                               </span>
                               Saving…
@@ -3635,18 +3636,18 @@ export function MeetingDetailPage() {
                               }
                               aria-label={`Change ${liveCurrentItem.title} to done`}
                               title="Change to Done"
-                              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-default bg-surface px-3 text-sm font-medium text-text outline-none transition hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-60"
+                              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-default bg-surface px-2.5 text-sm font-medium text-text outline-none transition hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-60"
                             >
-                              <span aria-hidden="true" className="material-symbols-outlined text-[16px] text-text-muted">
+                              <span aria-hidden="true" className="material-symbols-outlined text-[15px] text-text-muted">
                                 check
                               </span>
                               Change to Done
                             </button>
                           )}
-                          {scheduleAction}
                         </>
                       ) : (
                         <>
+                          {scheduleAction}
                           <button
                             type="button"
                             disabled={busy}
@@ -3657,17 +3658,21 @@ export function MeetingDetailPage() {
                             }
                             aria-label={`Mark ${liveCurrentItem.title} as done`}
                             title="Done"
-                            className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-success px-3 text-sm font-semibold text-white outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-60"
+                            className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-success px-2.5 text-sm font-semibold text-white outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-60"
                           >
-                            <span aria-hidden="true" className="material-symbols-outlined animate-spin text-[16px]">
-                              {busy ? 'refresh' : 'check'}
-                            </span>
+                            {busy ? (
+                              <span aria-hidden="true" className="material-symbols-outlined animate-spin text-[15px]">
+                                refresh
+                              </span>
+                            ) : (
+                              <span aria-hidden="true" className="material-symbols-outlined text-[15px]">
+                                check
+                              </span>
+                            )}
                             {busy
                               ? 'Saving…'
                               : 'Done'}
                           </button>
-
-                          {scheduleAction}
                         </>
                       )}
                     </div>
