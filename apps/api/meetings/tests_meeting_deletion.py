@@ -29,6 +29,7 @@ from .models import (
     MeetingSeriesSection,
 )
 from .services import (
+    add_meeting_participant,
     create_meeting,
     create_meeting_from_series,
     create_meeting_item,
@@ -176,6 +177,9 @@ class MeetingDeletionApiTest(MeetingDeletionBase):
 
     def test_group_member_can_delete_group_meeting(self):
         meeting = self.create_group_meeting()
+        add_meeting_participant(
+            meeting=meeting, actor=self.alex, target_user=self.chris,
+        )
 
         self.login(self.chris)
 
@@ -203,12 +207,15 @@ class MeetingDeletionApiTest(MeetingDeletionBase):
 
         self.assertEqual(
             self.delete(meeting).status_code,
-            status.HTTP_403_FORBIDDEN,
+            status.HTTP_404_NOT_FOUND,
         )
         self.assertTrue(Meeting.objects.filter(pk=meeting.pk).exists())
 
     def test_member_can_delete_project_meeting(self):
         meeting = self.create_project_meeting()
+        add_meeting_participant(
+            meeting=meeting, actor=self.alex, target_user=self.chris,
+        )
 
         self.login(self.chris)
 

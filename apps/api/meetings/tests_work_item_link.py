@@ -19,6 +19,7 @@ from work_items.models import WorkItem
 from .models import MeetingItemWorkItem, MeetingSection
 from .services import (
     MeetingDomainError,
+    add_meeting_participant,
     create_meeting,
     create_meeting_item,
     create_work_item_from_meeting_item,
@@ -98,6 +99,12 @@ class MeetingWorkItemLinkBase(TestCase):
             title="FG Weekly",
             scheduled_at=timezone.now(),
         )
+        for _p in (self.chris, self.laura):
+            add_meeting_participant(
+                meeting=self.meeting,
+                actor=self.alex,
+                target_user=_p,
+            )
 
         self.section = MeetingSection.objects.get(meeting=self.meeting)
 
@@ -419,6 +426,11 @@ class MeetingWorkItemLinkApiTest(
             research_group=self.group,
             user=group_only,
             role=ResearchGroupMembership.Role.MEMBER,
+        )
+        add_meeting_participant(
+            meeting=self.meeting,
+            actor=self.alex,
+            target_user=group_only,
         )
 
         self.login(group_only)

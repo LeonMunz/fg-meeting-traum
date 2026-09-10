@@ -51,6 +51,7 @@ from .models import (
 )
 from .services import (
     MeetingDomainError,
+    add_meeting_participant,
     create_meeting,
     create_meeting_item,
     create_meeting_note,
@@ -137,6 +138,12 @@ class NoteWorkItemBase(TestCase):
             title="FG Weekly",
             scheduled_at=self.scheduled_at,
         )
+        for _p in (self.chris, self.laura, self.maria):
+            add_meeting_participant(
+                meeting=self.meeting,
+                actor=self.alex,
+                target_user=_p,
+            )
         start_meeting(meeting=self.meeting, actor=self.alex)
         self.meeting.refresh_from_db()
 
@@ -730,9 +737,11 @@ class NoteWorkItemApiTest(NoteWorkItemBase):
             note,
         )
 
+        # laura is not a participant of this meeting, so the
+        # meeting is not visible to her (404).
         self.assertEqual(
             response.status_code,
-            status.HTTP_403_FORBIDDEN,
+            status.HTTP_404_NOT_FOUND,
         )
         self.assertFalse(
             WorkItem.objects.filter(
@@ -917,9 +926,9 @@ class NoteWorkItemApiTest(NoteWorkItemBase):
             title="Origin Guard",
         )
 
-        # A crafted Project membership without Research Group
-        # membership can read the WorkItem but not the group
-        # Meeting, so the origin must stay hidden.
+        # A Project member who is neither the Meeting creator nor a
+        # Meeting participant cannot read the group Meeting, so the
+        # origin must stay hidden.
         outsider = User.objects.create_user(
             username="note-wi-cross",
             password="Pass1!",

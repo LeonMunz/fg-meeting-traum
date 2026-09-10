@@ -18,6 +18,7 @@ from .models import Meeting, MeetingItem, MeetingItemFollowUp, MeetingSection
 from .services import (
     create_meeting,
     create_meeting_from_series,
+    add_meeting_participant,
     create_meeting_item,
     create_meeting_series,
     create_series_section,
@@ -68,6 +69,11 @@ class MeetingItemFollowUpTargetsApiTest(TestCase):
             meeting_section=self.source_section,
             actor=self.actor,
             title="Continue experiment",
+        )
+        add_meeting_participant(
+            meeting=self.source_meeting,
+            actor=self.actor,
+            target_user=self.viewer,
         )
         self.client = APIClient()
         self.client.force_login(self.actor)
@@ -368,4 +374,6 @@ class MeetingItemFollowUpTargetsApiTest(TestCase):
 
         response = self.client.get(self._url(source_item))
 
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        # self.viewer is not a participant of this source meeting,
+        # so the meeting is not visible to her (404).
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)

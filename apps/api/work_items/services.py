@@ -902,20 +902,15 @@ def resolve_work_item_meeting_origin(work_item: WorkItem, user):
     if relation is None:
         return None
 
+    from meetings.services import _has_canonical_meeting_read_access
+
     meeting = relation.meeting_item.meeting
 
-    if not ResearchGroupMembership.objects.filter(
-        research_group_id=meeting.research_group_id,
+    if not _has_canonical_meeting_read_access(
+        meeting=meeting,
         user=user,
-    ).exists():
+    ):
         return None
-
-    if meeting.scope == Meeting.Scope.PROJECT:
-        if not ProjectMembership.objects.filter(
-            project_id=meeting.project_id,
-            user=user,
-        ).exists():
-            return None
 
     return {
         "meetingId": meeting.id,

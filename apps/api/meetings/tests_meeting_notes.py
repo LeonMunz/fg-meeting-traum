@@ -34,6 +34,7 @@ from .models import (
 )
 from .services import (
     MeetingDomainError,
+    add_meeting_participant,
     create_meeting,
     create_meeting_item,
     delete_meeting,
@@ -98,6 +99,11 @@ class MeetingNoteApiTest(TestCase):
             actor=self.alex,
             title="Live Weekly",
             scheduled_at=self.scheduled_at,
+        )
+        add_meeting_participant(
+            meeting=meeting,
+            actor=self.alex,
+            target_user=self.chris,
         )
         start_meeting(meeting=meeting, actor=self.alex)
         meeting.refresh_from_db()

@@ -143,15 +143,31 @@ class MeetingDomainTest(TestCase):
             self.chris,
         )
 
-    def test_non_group_member_cannot_be_participant(self):
+    def test_non_group_member_can_be_added_by_creator(self):
         meeting = self.create_default_meeting()
 
-        with self.assertRaises(MeetingDomainError):
-            add_meeting_participant(
-                meeting=meeting,
-                actor=self.alex,
-                target_user=self.maria,
-            )
+        participant = add_meeting_participant(
+            meeting=meeting,
+            actor=self.alex,
+            target_user=self.maria,
+        )
+
+        self.assertEqual(
+            participant.meeting,
+            meeting,
+        )
+        self.assertEqual(
+            participant.user,
+            self.maria,
+        )
+        # Adding the participant does not create Research Group
+        # membership.
+        self.assertFalse(
+            ResearchGroupMembership.objects.filter(
+                research_group=self.group,
+                user=self.maria,
+            ).exists()
+        )
 
     def test_duplicate_participant_is_rejected(self):
         meeting = self.create_default_meeting()

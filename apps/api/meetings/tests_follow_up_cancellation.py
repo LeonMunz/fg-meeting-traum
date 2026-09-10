@@ -932,7 +932,9 @@ class CancelFollowUpApiTest(CancelFollowUpBase):
         self.client.force_login(self.other)
         response = self._post_cancel(follow_up.pk)
 
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        # self.other is not a participant of the source meeting,
+        # so the meeting is not visible to her (404).
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
         follow_up.refresh_from_db()
         self.assertEqual(
             follow_up.status,

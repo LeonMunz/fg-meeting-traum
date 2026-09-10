@@ -55,6 +55,8 @@ from .services import (
     MeetingFollowUpConflictError,
     PROJECT_READ_ROLES,
     PROJECT_WRITE_ROLES,
+    _has_canonical_meeting_read_access,
+    _has_can_meet_participant_add_access,
     add_meeting_participant,
     create_meeting,
     delete_meeting,
@@ -131,7 +133,10 @@ def _require_meeting_access(request, meeting_id):
     except Meeting.DoesNotExist:
         return None
 
-    if not _has_scoped_read_access(request.user, meeting):
+    if not _has_canonical_meeting_read_access(
+        meeting=meeting,
+        user=request.user,
+    ):
         return None
 
     return meeting
@@ -152,7 +157,10 @@ def _require_meeting_item_access(request, meeting_item_id):
     except MeetingItem.DoesNotExist:
         return None
 
-    if not _has_scoped_read_access(request.user, item.meeting):
+    if not _has_canonical_meeting_read_access(
+        meeting=item.meeting,
+        user=request.user,
+    ):
         return None
 
     return item
@@ -170,8 +178,9 @@ def _require_meeting_note_access(request, note_id):
     except MeetingNote.DoesNotExist:
         return None
 
-    if not _has_scoped_read_access(
-        request.user, note.meeting_item.meeting
+    if not _has_canonical_meeting_read_access(
+        meeting=note.meeting_item.meeting,
+        user=request.user,
     ):
         return None
 
@@ -220,7 +229,10 @@ def _require_meeting_section_access(request, section_id):
     except MeetingSection.DoesNotExist:
         return None
 
-    if not _has_scoped_read_access(request.user, section.meeting):
+    if not _has_canonical_meeting_read_access(
+        meeting=section.meeting,
+        user=request.user,
+    ):
         return None
 
     return section
@@ -300,12 +312,32 @@ def _run_meeting_lifecycle_action(request, meeting, action):
 
 
 def _accessible_scope_filter(user):
+    """Meetings the user may discover: creator or explicit
+    participant. Scope membership alone does NOT grant Meeting
+    visibility."""
     return (
-        Q(scope=Meeting.Scope.GROUP, project__isnull=True)
-        | Q(
-            scope=Meeting.Scope.PROJECT,
-            project__memberships__user=user,
-            project__memberships__role__in=PROJECT_READ_ROLES,
+        Q(created_by=user)
+        | Q(participant_relations__user=user)
+    )
+
+
+def _series_scope_filter(user):
+    """MeetingSeries the user may discover via scope membership
+    (creator or scope member). Series are templates, not concrete
+    occurrences, so they keep the legacy scope-membership rule."""
+    return (
+        Q(created_by=user)
+        | (
+            Q(scope=Meeting.Scope.GROUP, project__isnull=True)
+            & Q(research_group__memberships__user=user)
+        )
+        | (
+            Q(scope=Meeting.Scope.PROJECT, project__isnull=False)
+            & Q(research_group__memberships__user=user)
+            & Q(
+                project__memberships__user=user,
+                project__memberships__role__in=PROJECT_READ_ROLES,
+            )
         )
     )
 
@@ -356,7 +388,7 @@ class MeetingSeriesListCreateView(APIView):
         series = (
             MeetingSeries.objects
             .filter(research_group=group)
-            .filter(_accessible_scope_filter(request.user))
+            .filter(_series_scope_filter(request.user))
             .select_related("research_group", "project", "created_by")
             .distinct()
         )
@@ -1210,7 +1242,10 @@ class MeetingParticipantListCreateView(APIView):
                 status=404,
             )
 
-        if not _has_scoped_write_access(request.user, meeting):
+        if not _has_can_meet_participant_add_access(
+            meeting=meeting,
+            user=request.user,
+        ):
             return _mutation_forbidden_response()
 
         user_id = request.data.get("userId")
@@ -1920,7 +1955,10 @@ class MeetingItemFollowUpCancelView(APIView):
             )
 
         source_meeting = follow_up.source_meeting_item.meeting
-        if not _has_scoped_read_access(request.user, source_meeting):
+        if not _has_canonical_meeting_read_access(
+            meeting=source_meeting,
+            user=request.user,
+        ):
             return Response(
                 {"error": "Follow-up not found"},
                 status=404,

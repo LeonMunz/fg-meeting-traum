@@ -634,7 +634,7 @@ Edit series structure
 
 ---
 
-## 13. Meeting participants (implemented)
+## 13. Meeting participants and access boundary (implemented)
 
 Participants are relational.
 
@@ -652,23 +652,34 @@ Constraint:
 UNIQUE(meeting_id, user_id)
 ```
 
-Research Group Meeting:
+### Meeting read-access invariant
 
-```text
-participant is a member of the Meeting's Research Group
-```
+A Meeting is visible/readable iff the user:
 
-Project Meeting:
+1. created the Meeting (`created_by`), or
+2. is an explicit `MeetingParticipant`.
 
-```text
-participant has read access to the Meeting's Project
-```
+Research Group membership, Project membership, ownership, or admin
+status alone must NOT grant Meeting visibility. A Meeting
+invitation grants Meeting read access only — it does NOT create
+Research Group membership, Project membership, Project permissions,
+or access to otherwise protected Work Items.
 
-The creator of a Meeting is automatically added as a participant. Adding a
-participant is authorized against the Meeting's scope.
+### Participant-add authorization
 
-Default participants are not implemented (see Section 14 for the scope of the
-implemented model).
+- The Meeting creator may add participants.
+- Any existing Meeting participant may add participants.
+- The added user may be any existing application user. They do NOT
+  need to belong to the Meeting's Research Group or Project.
+- Adding a participant must not create or alter Research Group
+  membership, Project membership, or unrelated permissions.
+- An unrelated non-participant (who is not the creator) cannot add
+  participants.
+
+The creator of a Meeting is automatically added as a participant.
+
+Default participants are not implemented (see Section 14 for the
+scope of the implemented model).
 
 Do not build attendance analytics, rankings or performance metrics.
 
@@ -2555,8 +2566,9 @@ Move to section…
 1. A Research Group Meeting has no `project_id` (scope `group`).
 2. A Project Meeting has a `project_id` (scope `project`).
 3. Both `Meeting` and `MeetingSeries` enforce the scope/project consistency constraint at the database level.
-4. Research Group Meeting participants must be members of the Meeting's Research Group.
-5. Project Meeting participants must have read access to the Meeting's Project.
+4. Meeting read access is creator-or-participant: a user may see/read a Meeting iff they created it or are an explicit participant. Research Group membership, Project membership, ownership, or admin status alone must NOT grant Meeting visibility.
+5. A Meeting invitation grants Meeting read access only. It must NOT grant Research Group membership, Project membership, Project permissions, or access to otherwise protected Work Items.
+6. The Meeting creator and any existing Meeting participant may add further participants. The added user may be any existing application user and does NOT need to belong to the Meeting's Research Group or Project.
 6. Meeting content on a Project Meeting obeys Project write roles: `viewer` cannot mutate; archived Projects are read-only.
 7. Every `MeetingItem` belongs to exactly one `Meeting`.
 8. Every `MeetingItem` belongs to exactly one `MeetingSection` (`meeting_section` is NOT NULL).

@@ -54,6 +54,29 @@ def _require_research_group_membership(*, research_group, user):
         )
 
 
+def _has_canonical_meeting_read_access(*, meeting, user):
+    """Canonical Meeting read-access rule.
+
+    A Meeting is visible/readable iff the user:
+
+    1. created the Meeting (``created_by``), or
+    2. is an explicit ``MeetingParticipant``.
+
+    Research Group membership, Project membership, ownership, or
+    admin status alone must NOT grant Meeting visibility. A
+    Meeting invitation grants Meeting read access only — it does
+    NOT create Research Group membership, Project membership,
+    Project permissions, or access to otherwise protected Work
+    Items.
+    """
+    if meeting.created_by_id == user.pk:
+        return True
+    return MeetingParticipant.objects.filter(
+        meeting_id=meeting.pk,
+        user=user,
+    ).exists()
+
+
 def _require_scoped_read_access(
     *,
     research_group,
@@ -183,6 +206,26 @@ def _require_meeting_write_access(*, meeting, user):
         project=meeting.project,
         user=user,
     )
+
+
+def _has_can_meet_participant_add_access(*, meeting, user):
+    """A Meeting creator or existing participant may add participants."""
+    if meeting.created_by_id == user.pk:
+        return True
+    return MeetingParticipant.objects.filter(
+        meeting=meeting,
+        user=user,
+    ).exists()
+
+
+def _require_can_meet_participant_adder(*, meeting, user):
+    if not _has_can_meet_participant_add_access(
+        meeting=meeting,
+        user=user,
+    ):
+        raise MeetingDomainError(
+            "Only a Meeting creator or participant may add participants."
+        )
 
 
 # ── MeetingSeries ────────────────────────────────────────────────
@@ -511,13 +554,9 @@ def add_meeting_participant(
     actor,
     target_user,
 ):
-    _require_meeting_write_access(meeting=meeting, user=actor)
-
-    _require_scoped_read_access(
-        research_group=meeting.research_group,
-        scope=meeting.scope,
-        project=meeting.project,
-        user=target_user,
+    _require_can_meet_participant_adder(
+        meeting=meeting,
+        user=actor,
     )
 
     if MeetingParticipant.objects.filter(

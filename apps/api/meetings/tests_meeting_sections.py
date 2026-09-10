@@ -30,6 +30,7 @@ from .models import (
 )
 from .services import (
     MeetingDomainError,
+    add_meeting_participant,
     create_meeting,
     create_meeting_from_series,
     create_meeting_item,
@@ -230,6 +231,11 @@ class MeetingSectionApiTest(MeetingSectionBase):
             title="Section Meeting",
             scheduled_at=self.scheduled_at,
         )
+        add_meeting_participant(
+            meeting=self.meeting,
+            actor=self.alex,
+            target_user=self.chris,
+        )
 
     def login(self, user):
         self.client.logout()
@@ -303,9 +309,11 @@ class MeetingSectionApiTest(MeetingSectionBase):
             response = getattr(self.client, method)(
                 url, payload, format="json"
             )
+            # laura is not a participant, so the meeting is not
+            # visible to her (404).
             self.assertEqual(
                 response.status_code,
-                status.HTTP_403_FORBIDDEN,
+                status.HTTP_404_NOT_FOUND,
             )
 
     def test_rename_section_persists_and_isolated_from_series(self):
@@ -391,6 +399,11 @@ class MeetingItemSectionApiTest(MeetingSectionBase):
             actor=self.alex,
             title="Item Section Meeting",
             scheduled_at=self.scheduled_at,
+        )
+        add_meeting_participant(
+            meeting=self.meeting,
+            actor=self.alex,
+            target_user=self.chris,
         )
         self.login(self.chris)
 

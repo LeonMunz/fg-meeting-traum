@@ -35,6 +35,7 @@ from .models import (
 )
 from .services import (
     MeetingDomainError,
+    add_meeting_participant,
     create_meeting,
     create_meeting_item,
     create_meeting_section,
@@ -958,6 +959,11 @@ class LiveStateMachineAPITest(LiveStateMachineBase):
 
     def _group_meeting_with_items(self, count=3):
         meeting = self.create_meeting()
+        add_meeting_participant(
+            meeting=meeting,
+            actor=self.alex,
+            target_user=self.chris,
+        )
         section = MeetingSection.objects.get(meeting=meeting)
         items = [
             self.create_item(meeting, section, f"Item {chr(65 + i)}")
@@ -1146,7 +1152,7 @@ class LiveStateMachineAPITest(LiveStateMachineBase):
             f"/api/meeting-items/{b.pk}/focus",
             {}, format="json",
         )
-        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
 
 
 class LiveStateMachineConcurrencyTest(TransactionTestCase):

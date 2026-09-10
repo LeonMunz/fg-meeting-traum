@@ -717,7 +717,9 @@ class ScheduleMeetingItemFollowUpAPITest(TestCase):
             targetMeetingId=project_target.pk,
             targetMeetingSectionId=project_section.pk,
         )
-        self.assertEqual(unwritable.status_code, status.HTTP_403_FORBIDDEN)
+        # self.viewer is not a participant of the source meeting,
+        # so the source is not visible to her (404).
+        self.assertEqual(unwritable.status_code, status.HTTP_404_NOT_FOUND)
         self._assert_no_schedule_writes(meeting=project_target)
 
     def test_unwritable_source_is_rejected(self):
@@ -748,7 +750,9 @@ class ScheduleMeetingItemFollowUpAPITest(TestCase):
 
         self.client.force_login(self.viewer)
         response = self._post()
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        # self.viewer is not a participant of the source meeting,
+        # so the source is not visible to her (404).
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
         self._assert_no_schedule_writes()
 
     def test_cancelled_schedule_is_not_exposed_as_active(self):
