@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useRef,
   useState,
 } from 'react'
 import type { FormEvent } from 'react'
@@ -9,11 +10,15 @@ import {
 } from '../../api/projects'
 import {
   listMeetingSeries,
+  searchMeetingSeriesParticipantCandidates,
+  searchStandaloneMeetingParticipantCandidates,
 } from '../../api/meetings'
 import { useResearchGroup } from '../research-group/useResearchGroup'
+import { getPersonName } from './shared'
 
 import type {
   ApiMeetingScope,
+  ApiMeetingParticipantCandidate,
   ApiMeetingSeries,
   ApiProject,
 } from '../../api/types'
@@ -25,6 +30,7 @@ export type CreateMeetingInput = {
   scope: ApiMeetingScope
   projectId: number | null
   seriesId: number | null
+  participantIds: number[]
 }
 
 type CreateMeetingDialogProps = {
@@ -44,6 +50,16 @@ function getDefaultDateTimeValue() {
   )
 
   return local.toISOString().slice(0, 16)
+}
+
+function getPersonInitials(person: ApiMeetingParticipantCandidate) {
+  const first =
+    person.firstName.trim()[0] ??
+    person.username.trim()[0] ??
+    '?'
+  const last = person.lastName.trim()[0] ?? ''
+
+  return `${first}${last}`.toUpperCase()
 }
 
 export function CreateMeetingDialog({
@@ -66,6 +82,24 @@ export function CreateMeetingDialog({
   const [projectId, setProjectId] = useState('')
   const [series, setSeries] = useState<ApiMeetingSeries[]>([])
   const [seriesId, setSeriesId] = useState('')
+  const [participantQuery, setParticipantQuery] = useState('')
+  const [participantCandidates, setParticipantCandidates] = useState<
+    ApiMeetingParticipantCandidate[]
+  >([])
+  const [selectedParticipants, setSelectedParticipants] = useState<
+    ApiMeetingParticipantCandidate[]
+  >([])
+  const [searchingParticipants, setSearchingParticipants] = useState(false)
+  const [participantSearchError, setParticipantSearchError] = useState<
+    string | null
+  >(null)
+  const participantSearchVersion = useRef(0)
+
+  const scope: ApiMeetingScope =
+    projectId === '' ? 'group' : 'project'
+
+  const selectedProjectId =
+    projectId === '' ? null : Number(projectId)
 
   useEffect(() => {
     if (!open) {
@@ -78,6 +112,12 @@ export function CreateMeetingDialog({
       setProjectId('')
       setSeries([])
       setSeriesId('')
+      setParticipantQuery('')
+      setParticipantCandidates([])
+      setSelectedParticipants([])
+      setSearchingParticipants(false)
+      setParticipantSearchError(null)
+      participantSearchVersion.current += 1
       return
     }
 
@@ -182,15 +222,81 @@ export function CreateMeetingDialog({
     }
   }, [open, researchGroupId, projectId])
 
+  useEffect(() => {
+    if (!open) {
+      return
+    }
+
+    const query = participantQuery.trim()
+    const groupId = Number(researchGroupId)
+    const selectedSeriesId = Number(seriesId)
+
+    participantSearchVersion.current += 1
+    const version = participantSearchVersion.current
+    setParticipantCandidates([])
+    setSearchingParticipants(false)
+    setParticipantSearchError(null)
+
+    if (
+      query.length < 2 ||
+      (!seriesId &&
+        (!Number.isInteger(groupId) || groupId <= 0)) ||
+      (seriesId &&
+        (!Number.isInteger(selectedSeriesId) || selectedSeriesId <= 0))
+    ) {
+      return
+    }
+
+    const timeout = window.setTimeout(() => {
+      setSearchingParticipants(true)
+
+      const request = seriesId
+        ? searchMeetingSeriesParticipantCandidates(
+            selectedSeriesId,
+            query,
+          )
+        : searchStandaloneMeetingParticipantCandidates(groupId, {
+            query,
+            scope,
+            projectId: selectedProjectId,
+          })
+
+      void request
+        .then((results) => {
+          if (participantSearchVersion.current !== version) {
+            return
+          }
+          setParticipantCandidates(results)
+        })
+        .catch(() => {
+          if (participantSearchVersion.current !== version) {
+            return
+          }
+          setParticipantSearchError('People could not be searched.')
+        })
+        .finally(() => {
+          if (participantSearchVersion.current === version) {
+            setSearchingParticipants(false)
+          }
+        })
+    }, 250)
+
+    return () => {
+      window.clearTimeout(timeout)
+    }
+  }, [
+    open,
+    participantQuery,
+    projectId,
+    researchGroupId,
+    scope,
+    selectedProjectId,
+    seriesId,
+  ])
+
   if (!open) {
     return null
   }
-
-  const scope: ApiMeetingScope =
-    projectId === '' ? 'group' : 'project'
-
-  const selectedProjectId =
-    projectId === '' ? null : Number(projectId)
 
   const availableSeries = series.filter((candidate) => {
     if (candidate.isArchived) {
@@ -230,16 +336,37 @@ export function CreateMeetingDialog({
       scope,
       projectId: resolvedProjectId,
       seriesId: seriesId === '' ? null : Number(seriesId),
+      participantIds: selectedParticipants.map(
+        (participant) => participant.id,
+      ),
     })
   }
 
+  const selectedParticipantIds = new Set(
+    selectedParticipants.map((participant) => participant.id),
+  )
+
+  const availableParticipantCandidates = participantCandidates.filter(
+    (candidate) => !selectedParticipantIds.has(candidate.id),
+  )
+
+  const selectParticipant = (
+    candidate: ApiMeetingParticipantCandidate,
+  ) => {
+    setSelectedParticipants((current) =>
+      current.some((participant) => participant.id === candidate.id)
+        ? current
+        : [...current, candidate],
+    )
+  }
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 px-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 px-4 py-4">
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="create-meeting-title"
-        className="w-full max-w-lg overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest shadow-xl"
+        className="max-h-[calc(100vh-2rem)] w-full max-w-lg overflow-y-auto rounded-xl border border-outline-variant bg-surface-container-lowest shadow-xl"
       >
         <form onSubmit={handleSubmit}>
           <div className="border-b border-outline-variant px-6 py-5">
@@ -283,6 +410,136 @@ export function CreateMeetingDialog({
 
             <div>
               <label
+                htmlFor="create-meeting-participants"
+                className="mb-1.5 block text-sm font-medium text-on-surface"
+              >
+                Participants
+              </label>
+
+              <div className="relative">
+                <span
+                  aria-hidden="true"
+                  className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[18px] text-on-surface-variant"
+                >
+                  search
+                </span>
+                <input
+                  id="create-meeting-participants"
+                  type="search"
+                  value={participantQuery}
+                  onChange={(event) =>
+                    setParticipantQuery(event.target.value)
+                  }
+                  placeholder="Search people..."
+                  aria-describedby="create-meeting-participants-help"
+                  className="h-10 w-full rounded-lg border border-outline-variant bg-surface-container-lowest pl-10 pr-3 text-sm text-on-surface outline-none transition placeholder:text-on-surface-variant/60 focus:border-primary focus:ring-2 focus:ring-primary/15"
+                />
+              </div>
+
+              <p
+                id="create-meeting-participants-help"
+                className="mt-1.5 text-xs text-on-surface-variant"
+              >
+                Search by name or username. Enter at least 2 characters.
+              </p>
+
+              {participantQuery.trim().length >= 2 && (
+                <div
+                  aria-live="polite"
+                  className="mt-2 max-h-44 overflow-y-auto rounded-xl border border-outline-variant"
+                >
+                  {searchingParticipants ? (
+                    <div className="flex items-center gap-2 px-4 py-3 text-sm text-on-surface-variant">
+                      <span
+                        aria-hidden="true"
+                        className="material-symbols-outlined animate-spin text-[18px]"
+                      >
+                        refresh
+                      </span>
+                      Searching…
+                    </div>
+                  ) : participantSearchError ? (
+                    <div role="alert" className="px-4 py-3 text-sm text-error">
+                      {participantSearchError}
+                    </div>
+                  ) : availableParticipantCandidates.length > 0 ? (
+                    <div className="divide-y divide-outline-variant">
+                      {availableParticipantCandidates.map((candidate) => (
+                        <button
+                          key={candidate.id}
+                          type="button"
+                          onClick={() => selectParticipant(candidate)}
+                          className="flex w-full items-center gap-3 px-4 py-3 text-left transition hover:bg-surface-container-low focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"
+                        >
+                          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-surface-container-high text-[11px] font-semibold text-on-surface">
+                            {getPersonInitials(candidate)}
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-sm font-medium text-on-surface">
+                              {getPersonName(candidate)}
+                            </span>
+                            <span className="block truncate text-xs text-on-surface-variant">
+                              @{candidate.username}
+                            </span>
+                          </span>
+                          <span className="text-xs font-semibold text-primary">
+                            Add
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="px-4 py-3 text-sm text-on-surface-variant">
+                      {participantCandidates.length > 0
+                        ? 'All matching people are selected.'
+                        : 'No matching people found.'}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {selectedParticipants.length > 0 && (
+                <div
+                  role="list"
+                  aria-label="Selected participants"
+                  className="mt-3 flex flex-wrap gap-2"
+                >
+                  {selectedParticipants.map((participant) => (
+                    <span
+                      key={participant.id}
+                      role="listitem"
+                      className="inline-flex min-w-0 items-center gap-1.5 rounded-full bg-primary-fixed px-3 py-1.5 text-sm text-on-primary-fixed"
+                    >
+                      <span className="max-w-40 truncate">
+                        {getPersonName(participant)}
+                      </span>
+                      <button
+                        type="button"
+                        aria-label={`Remove ${getPersonName(participant)}`}
+                        onClick={() =>
+                          setSelectedParticipants((current) =>
+                            current.filter(
+                              (candidate) => candidate.id !== participant.id,
+                            ),
+                          )
+                        }
+                        className="-mr-1 flex h-5 w-5 items-center justify-center rounded-full text-on-primary-fixed/70 transition hover:bg-on-primary-fixed/10 hover:text-on-primary-fixed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                      >
+                        <span
+                          aria-hidden="true"
+                          className="material-symbols-outlined text-[16px]"
+                        >
+                          close
+                        </span>
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div>
+              <label
                 htmlFor="create-meeting-project"
                 className="mb-1.5 block text-sm font-medium text-on-surface"
               >
@@ -321,12 +578,17 @@ export function CreateMeetingDialog({
               </p>
             </div>
 
-            <label className="block">
-              <span className="mb-1.5 block text-sm font-medium text-on-surface">
+            <div>
+              <label
+                htmlFor="create-meeting-template"
+                className="mb-1.5 block text-sm font-medium text-on-surface"
+              >
                 Meeting template
-              </span>
+              </label>
 
               <select
+                id="create-meeting-template"
+                aria-describedby="create-meeting-template-help"
                 value={seriesId}
                 onChange={(event) =>
                   setSeriesId(event.target.value)
@@ -345,12 +607,15 @@ export function CreateMeetingDialog({
                 ))}
               </select>
 
-              <span className="mt-1.5 block text-xs text-on-surface-variant">
+              <p
+                id="create-meeting-template-help"
+                className="mt-1.5 text-xs text-on-surface-variant"
+              >
                 {seriesId === ''
                   ? 'Creates a standalone meeting.'
                   : 'Uses the template sections as the starting structure.'}
-              </span>
-            </label>
+              </p>
+            </div>
 
             <label className="block">
               <span className="mb-1.5 block text-sm font-medium text-on-surface">

@@ -109,6 +109,27 @@ test(
       })
       .click()
 
+    const createMeetingDialog = page.getByRole('dialog', {
+      name: 'New meeting',
+    })
+
+    await createMeetingDialog
+      .getByLabel('Participants')
+      .fill('chris')
+
+    const chrisCandidate = createMeetingDialog
+      .getByRole('button')
+      .filter({ hasText: '@chris' })
+
+    await expect(chrisCandidate).toBeVisible()
+    await chrisCandidate.click()
+
+    await expect(
+      createMeetingDialog.getByRole('list', {
+        name: 'Selected participants',
+      }),
+    ).toContainText('Chris')
+
     await page
       .getByLabel('Title')
       .fill(MEETING_TITLE)
@@ -174,69 +195,6 @@ test(
     await expect(
       page.getByTitle('Alex Dev'),
     ).toBeVisible()
-
-    // --------------------------------------------------------
-    // Alex adds Chris as participant.
-    // --------------------------------------------------------
-
-    const manageButton = page
-      .getByRole('button', {
-        name: 'Manage',
-        exact: true,
-      })
-      .first()
-
-    await manageButton.scrollIntoViewIfNeeded()
-
-    await manageButton.click()
-
-    const participantSelect =
-      page.getByLabel(
-        'Add participant',
-      )
-
-    const chrisOption =
-      participantSelect
-        .locator('option')
-        .filter({
-          hasText: /Chris|chris/i,
-        })
-
-    await expect(
-      chrisOption,
-    ).toHaveCount(1)
-
-    const chrisValue =
-      await chrisOption.getAttribute(
-        'value',
-      )
-
-    expect(chrisValue).not.toBeNull()
-
-    await participantSelect.selectOption(
-      chrisValue!,
-    )
-
-    await page
-      .getByRole('button', {
-        name: 'Add',
-        exact: true,
-      })
-      .click()
-
-    // The manage panel lists each participant with @username.
-    await expect(
-      page.getByText('@alex', { exact: true }),
-    ).toBeVisible()
-    await expect(
-      page.getByText('@chris', { exact: true }),
-    ).toBeVisible()
-
-    // Close the manage panel (the toggle now reads 'Done').
-    await page.getByRole('button', {
-      name: 'Done',
-      exact: true,
-    }).click()
 
     // --------------------------------------------------------
     // Alex creates and discusses an agenda item.
@@ -442,6 +400,30 @@ test(
         name: 'Agenda item',
       }),
     ).toContainText('No current item')
+
+    // The create-time invitation grants Chris access to this Meeting.
+    await logout(page)
+    await login(page, 'chris')
+
+    await page
+      .getByRole('link', {
+        name: /Meetings/,
+      })
+      .click()
+
+    const invitedMeetingRow = page
+      .getByRole('button')
+      .filter({ hasText: MEETING_TITLE })
+
+    await expect(invitedMeetingRow).toBeVisible()
+    await invitedMeetingRow.click()
+
+    await expect(
+      page.getByRole('heading', {
+        name: MEETING_TITLE,
+        exact: true,
+      }),
+    ).toBeVisible()
   },
 )
 

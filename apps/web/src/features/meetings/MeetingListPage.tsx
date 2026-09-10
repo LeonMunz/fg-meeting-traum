@@ -148,6 +148,7 @@ export function MeetingListPage() {
               {
                 title: input.title,
                 scheduledAt: input.scheduledAt,
+                participantIds: input.participantIds,
               },
             )
           : await createMeeting(
@@ -157,6 +158,7 @@ export function MeetingListPage() {
                 scheduledAt: input.scheduledAt,
                 scope: input.scope,
                 projectId: input.projectId,
+                participantIds: input.participantIds,
               },
             )
 

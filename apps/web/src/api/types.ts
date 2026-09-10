@@ -314,6 +314,9 @@ export interface ApiMeetingParticipantUser {
   lastName: string
 }
 
+export type ApiMeetingParticipantCandidate =
+  ApiMeetingParticipantUser
+
 export interface ApiMeetingParticipant {
   id: number
   user: ApiMeetingParticipantUser

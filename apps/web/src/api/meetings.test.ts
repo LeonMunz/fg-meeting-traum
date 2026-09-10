@@ -13,10 +13,14 @@ import {
 } from './client'
 import {
   cancelMeetingItemFollowUp,
+  createMeeting,
+  createMeetingFromSeries,
   getMeetingItemFollowUpTargets,
   markMeetingItemFollowUp,
   reopenMeetingItem,
   scheduleMeetingItemFollowUp,
+  searchMeetingSeriesParticipantCandidates,
+  searchStandaloneMeetingParticipantCandidates,
 } from './meetings'
 
 import type {
@@ -164,6 +168,71 @@ describe('Meeting follow-up API client', () => {
     expect(apiPost).toHaveBeenCalledWith(
       '/api/meeting-items/17/reopen',
       {},
+    )
+  })
+})
+
+describe('Meeting creation participant API client', () => {
+  beforeEach(() => {
+    vi.mocked(apiGet).mockReset()
+    vi.mocked(apiPost).mockReset()
+  })
+
+  it('searches standalone candidates with the exact create context', async () => {
+    vi.mocked(apiGet).mockResolvedValue([])
+
+    await searchStandaloneMeetingParticipantCandidates(3, {
+      query: 'alex meyer',
+      scope: 'project',
+      projectId: 9,
+    })
+
+    expect(apiGet).toHaveBeenCalledWith(
+      '/api/research-groups/3/meetings/participant-candidates/?q=alex+meyer&scope=project&projectId=9',
+    )
+  })
+
+  it('searches candidates through the selected Meeting Template', async () => {
+    vi.mocked(apiGet).mockResolvedValue([])
+
+    await searchMeetingSeriesParticipantCandidates(7, 'chris')
+
+    expect(apiGet).toHaveBeenCalledWith(
+      '/api/meeting-series/7/participant-candidates/?q=chris',
+    )
+  })
+
+  it('posts exact participant IDs on standalone creation', async () => {
+    vi.mocked(apiPost).mockResolvedValue({})
+    const input = {
+      title: 'Weekly',
+      scheduledAt: '2030-01-02T10:30:00.000Z',
+      scope: 'group' as const,
+      projectId: null,
+      participantIds: [4, 8],
+    }
+
+    await createMeeting(3, input)
+
+    expect(apiPost).toHaveBeenCalledWith(
+      '/api/research-groups/3/meetings/',
+      input,
+    )
+  })
+
+  it('posts exact participant IDs on Template occurrence creation', async () => {
+    vi.mocked(apiPost).mockResolvedValue({})
+    const input = {
+      title: 'Weekly',
+      scheduledAt: '2030-01-02T10:30:00.000Z',
+      participantIds: [4, 8],
+    }
+
+    await createMeetingFromSeries(7, input)
+
+    expect(apiPost).toHaveBeenCalledWith(
+      '/api/meeting-series/7/occurrences/',
+      input,
     )
   })
 })

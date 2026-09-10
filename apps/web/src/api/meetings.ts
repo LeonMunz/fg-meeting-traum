@@ -20,6 +20,7 @@ import type {
   ApiMeetingItemFollowUpTargets,
   ApiMeetingNote,
   ApiMeetingParticipant,
+  ApiMeetingParticipantCandidate,
   ApiMeetingSection,
   ApiMeetingSeries,
   ApiMeetingSeriesSection,
@@ -50,6 +51,28 @@ export async function createMeeting(
   return apiPost<ApiMeeting>(
     `/api/research-groups/${researchGroupId}/meetings/`,
     input,
+  )
+}
+
+export async function searchStandaloneMeetingParticipantCandidates(
+  researchGroupId: number,
+  input: {
+    query: string
+    scope: 'group' | 'project'
+    projectId: number | null
+  },
+): Promise<ApiMeetingParticipantCandidate[]> {
+  const params = new URLSearchParams({
+    q: input.query,
+    scope: input.scope,
+  })
+
+  if (input.projectId != null) {
+    params.set('projectId', String(input.projectId))
+  }
+
+  return apiGet<ApiMeetingParticipantCandidate[]>(
+    `/api/research-groups/${researchGroupId}/meetings/participant-candidates/?${params.toString()}`,
   )
 }
 
@@ -327,6 +350,17 @@ export async function createMeetingFromSeries(
   return apiPost<ApiMeeting>(
     `/api/meeting-series/${seriesId}/occurrences/`,
     input,
+  )
+}
+
+export async function searchMeetingSeriesParticipantCandidates(
+  seriesId: number,
+  query: string,
+): Promise<ApiMeetingParticipantCandidate[]> {
+  const params = new URLSearchParams({ q: query })
+
+  return apiGet<ApiMeetingParticipantCandidate[]>(
+    `/api/meeting-series/${seriesId}/participant-candidates/?${params.toString()}`,
   )
 }
 
