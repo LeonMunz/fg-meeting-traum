@@ -735,6 +735,7 @@ class MeetingSeriesCreateOccurrenceView(APIView):
                 title=data.get("title"),
                 scheduled_at=data.get("scheduledAt"),
                 status=data.get("status"),
+                participants=data.get("participantIds", ()),
             )
         except MeetingDomainError as exc:
             return Response({"error": exc.message}, status=400)
@@ -1009,6 +1010,7 @@ class ResearchGroupMeetingListCreateView(APIView):
                 status=data.get("status"),
                 scope=data["scope"],
                 project=project,
+                participants=data.get("participantIds", ()),
             )
         except MeetingDomainError as exc:
             return Response(

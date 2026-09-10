@@ -148,6 +148,76 @@ class MeetingApiTest(TestCase):
             [self.alex.pk],
         )
 
+    def test_create_meeting_accepts_external_initial_participants(self):
+        self.login(self.alex)
+
+        response = self.client.post(
+            f"/api/research-groups/{self.group.pk}/meetings/",
+            {
+                "title": "API Weekly with guests",
+                "scheduledAt": self.scheduled_at.isoformat(),
+                "participantIds": [
+                    self.alex.pk,
+                    self.chris.pk,
+                    self.maria.pk,
+                    self.chris.pk,
+                ],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        data = response.json()
+        self.assertEqual(
+            data["participantIds"],
+            [self.alex.pk, self.chris.pk, self.maria.pk],
+        )
+        self.assertEqual(
+            MeetingParticipant.objects.filter(
+                meeting_id=data["id"],
+            ).count(),
+            3,
+        )
+        self.assertFalse(
+            ResearchGroupMembership.objects.filter(
+                research_group=self.group,
+                user=self.maria,
+            ).exists()
+        )
+
+        self.login(self.maria)
+        detail_response = self.client.get(
+            f"/api/meetings/{data['id']}/"
+        )
+        self.assertEqual(
+            detail_response.status_code,
+            status.HTTP_200_OK,
+        )
+
+    def test_invalid_initial_participant_rolls_back_entire_create(self):
+        meeting_count = Meeting.objects.count()
+        participant_count = MeetingParticipant.objects.count()
+        missing_user_id = User.objects.order_by("-pk").first().pk + 1000
+        self.login(self.alex)
+
+        response = self.client.post(
+            f"/api/research-groups/{self.group.pk}/meetings/",
+            {
+                "title": "Must not persist",
+                "scheduledAt": self.scheduled_at.isoformat(),
+                "participantIds": [self.chris.pk, missing_user_id],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("participantIds", response.json())
+        self.assertEqual(Meeting.objects.count(), meeting_count)
+        self.assertEqual(
+            MeetingParticipant.objects.count(),
+            participant_count,
+        )
+
     def test_non_member_cannot_create_meeting(self):
         self.login(self.maria)
 

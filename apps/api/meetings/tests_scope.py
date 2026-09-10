@@ -533,6 +533,52 @@ class MeetingScopeApiTest(MeetingScopeBase):
         self.assertEqual(direct_response.status_code, status.HTTP_403_FORBIDDEN)
         self.assertEqual(Meeting.objects.count(), before_count)
 
+    def test_project_meeting_accepts_initial_participant_without_access(self):
+        self.assertFalse(
+            ProjectMembership.objects.filter(
+                project=self.project,
+                user=self.maria,
+            ).exists()
+        )
+        self.login(self.alex)
+
+        response = self.client.post(
+            f"/api/research-groups/{self.group.pk}/meetings/",
+            {
+                "title": "Project meeting with guest",
+                "scheduledAt": self.scheduled_at.isoformat(),
+                "scope": "project",
+                "projectId": self.project.pk,
+                "participantIds": [self.maria.pk],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        meeting_id = response.json()["id"]
+        self.assertTrue(
+            MeetingParticipant.objects.filter(
+                meeting_id=meeting_id,
+                user=self.maria,
+            ).exists()
+        )
+        self.assertFalse(
+            ProjectMembership.objects.filter(
+                project=self.project,
+                user=self.maria,
+            ).exists()
+        )
+
+        self.login(self.maria)
+        self.assertEqual(
+            self.client.get(f"/api/meetings/{meeting_id}/").status_code,
+            status.HTTP_200_OK,
+        )
+        self.assertEqual(
+            self.client.get(f"/api/projects/{self.project.pk}/").status_code,
+            status.HTTP_404_NOT_FOUND,
+        )
+
     def test_viewer_cannot_mutate_meeting_participants_or_items(self):
         create_series_section(
             meeting_series=self.project_series,

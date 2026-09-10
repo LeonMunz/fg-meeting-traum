@@ -299,6 +299,7 @@ export interface ApiCreateMeetingInput {
   status?: ApiMeetingStatus
   scope?: ApiMeetingScope
   projectId?: number | null
+  participantIds?: number[]
 }
 
 export interface ApiUpdateMeetingInput {
@@ -568,6 +569,7 @@ export interface ApiCreateMeetingFromSeriesInput {
   title?: string
   scheduledAt?: string
   status?: ApiMeetingStatus
+  participantIds?: number[]
 }
 
 

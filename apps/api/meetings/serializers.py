@@ -1,3 +1,5 @@
+from django.contrib.auth import get_user_model
+
 from rest_framework import serializers
 
 from projects.models import ProjectMembership
@@ -12,6 +14,9 @@ from .models import (
     MeetingSeries,
     MeetingSeriesSection,
 )
+
+
+User = get_user_model()
 
 
 # ── MeetingSeries ────────────────────────────────────────────────
@@ -308,6 +313,11 @@ class MeetingCreateSerializer(serializers.Serializer):
         allow_blank=False,
     )
     scheduledAt = serializers.DateTimeField()
+    participantIds = serializers.PrimaryKeyRelatedField(
+        queryset=User.objects.all(),
+        many=True,
+        required=False,
+    )
 
 
 class MeetingPatchSerializer(serializers.Serializer):
@@ -328,6 +338,11 @@ class CreateMeetingFromSeriesSerializer(serializers.Serializer):
         required=False,
     )
     scheduledAt = serializers.DateTimeField(
+        required=False,
+    )
+    participantIds = serializers.PrimaryKeyRelatedField(
+        queryset=User.objects.all(),
+        many=True,
         required=False,
     )
 

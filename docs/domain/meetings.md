@@ -678,6 +678,18 @@ or access to otherwise protected Work Items.
 
 The creator of a Meeting is automatically added as a participant.
 
+### Create-time participants
+
+Both standalone Meeting creation and creation of an occurrence from a
+Meeting Template accept an optional `participantIds` list. Every ID must
+identify an existing application user; Research Group membership and Project
+access are not invitee eligibility requirements. The creator and the unique
+supplied users are persisted as `MeetingParticipant` rows in the same database
+transaction as the Meeting and its occurrence Sections. Supplying the creator
+or another user more than once does not create duplicate rows. If any ID is
+invalid, validation fails and no Meeting or participant rows from that request
+are persisted.
+
 Default participants are not implemented (see Section 14 for the
 scope of the implemented model).
 

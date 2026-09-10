@@ -438,6 +438,7 @@ def create_meeting_from_series(
     title=None,
     scheduled_at=None,
     status=None,
+    participants=(),
 ):
     """Create a Meeting occurrence from a Series.
 
@@ -468,10 +469,10 @@ def create_meeting_from_series(
         created_by=actor,
     )
 
-    # Creator becomes a participant.
-    MeetingParticipant.objects.create(
+    _create_initial_meeting_participants(
         meeting=meeting,
-        user=actor,
+        actor=actor,
+        participants=participants,
     )
 
     # Snapshot active series sections.
@@ -504,6 +505,7 @@ def create_meeting(
     status=None,
     scope=Meeting.Scope.GROUP,
     project=None,
+    participants=(),
 ):
     _require_scoped_write_access(
         research_group=research_group,
@@ -530,9 +532,10 @@ def create_meeting(
         created_by=actor,
     )
 
-    MeetingParticipant.objects.create(
+    _create_initial_meeting_participants(
         meeting=meeting,
-        user=actor,
+        actor=actor,
+        participants=participants,
     )
 
     # A standalone Meeting (no Series) still needs a usable structure.
@@ -546,6 +549,23 @@ def create_meeting(
     )
 
     return meeting
+
+
+def _create_initial_meeting_participants(
+    *,
+    meeting,
+    actor,
+    participants,
+):
+    """Add the creator and unique initial participants to a Meeting."""
+    participants_by_id = {actor.pk: actor}
+    for participant in participants:
+        participants_by_id[participant.pk] = participant
+
+    MeetingParticipant.objects.bulk_create([
+        MeetingParticipant(meeting=meeting, user=participant)
+        for participant in participants_by_id.values()
+    ])
 
 
 def add_meeting_participant(
