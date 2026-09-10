@@ -315,8 +315,26 @@ class MeetingItemFollowUp(models.Model):
     )
     target_meeting_item = models.ForeignKey(
         MeetingItem,
-        on_delete=models.RESTRICT,
+        on_delete=models.SET_NULL,
         related_name="source_follow_up_schedules",
+        null=True,
+        blank=True,
+    )
+    # True only when the target MeetingItem was created by the
+    # scheduling operation and has not since been mutated.  This is
+    # the provenance flag that makes the "provably untouched"
+    # deletion decision conservative and deterministic.  Pre-existing
+    # rows (pre-migration-0013) default to False: preserve, never
+    # delete.
+    target_pristine = models.BooleanField(default=False)
+    # The agenda position assigned to the generated target item at
+    # scheduling time.  Used to detect meaningful reorders: if the
+    # target item's current position differs from this value, the
+    # target is no longer provably untouched.  NULL for pre-migration
+    # rows (treated as not provably pristine).
+    target_item_created_position = models.PositiveIntegerField(
+        null=True,
+        blank=True,
     )
     status = models.CharField(
         max_length=24,
@@ -335,11 +353,29 @@ class MeetingItemFollowUp(models.Model):
         db_table = "meetings_item_follow_up"
         ordering = ["created_at", "id"]
         constraints = [
+            # A non-NULL target must not equal the source item.
+            # A NULL target is allowed only for cancelled follow-ups
+            # (enforced by the second constraint below).
             models.CheckConstraint(
-                condition=~models.Q(
+                condition=models.Q(
+                    target_meeting_item__isnull=True
+                )
+                | ~models.Q(
                     target_meeting_item=models.F("source_meeting_item")
                 ),
                 name="meetings_follow_up_target_item_is_new",
+            ),
+            # Every non-cancelled follow-up must retain a concrete
+            # target MeetingItem.  Null is only permitted after
+            # cancellation (when the generated target may be deleted).
+            models.CheckConstraint(
+                condition=models.Q(
+                    status="cancelled"
+                )
+                | models.Q(
+                    target_meeting_item__isnull=False
+                ),
+                name="meetings_follow_up_active_target_required",
             ),
             models.UniqueConstraint(
                 fields=["source_meeting_item"],

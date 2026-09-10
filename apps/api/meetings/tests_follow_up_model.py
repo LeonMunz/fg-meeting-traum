@@ -97,10 +97,12 @@ class MeetingItemFollowUpModelTest(TestCase):
         )
 
     def test_all_concrete_target_references_are_required(self):
+        # target_meeting and target_meeting_section are NOT NULL.
+        # target_meeting_item is nullable (SET_NULL on item deletion)
+        # so it is excluded from this NOT-NULL assertion.
         for field_name in (
             "target_meeting",
             "target_meeting_section",
-            "target_meeting_item",
         ):
             with self.subTest(field_name=field_name):
                 with self.assertRaises(IntegrityError), transaction.atomic():
@@ -134,6 +136,26 @@ class MeetingItemFollowUpModelTest(TestCase):
     def test_source_item_cannot_be_reused_as_target(self):
         with self.assertRaises(IntegrityError), transaction.atomic():
             self._create_follow_up(target_meeting_item=self.source_item)
+
+    def test_active_follow_up_cannot_have_null_target(self):
+        """A non-cancelled follow-up must have a concrete target item."""
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            self._create_follow_up(
+                target_meeting_item=None,
+                status=MeetingItemFollowUp.Status.SCHEDULED,
+            )
+
+    def test_cancelled_follow_up_may_have_null_target(self):
+        """A cancelled follow-up may have a NULL target item."""
+        follow_up = self._create_follow_up(
+            status=MeetingItemFollowUp.Status.CANCELLED,
+            target_meeting_item=None,
+        )
+        self.assertIsNone(follow_up.target_meeting_item)
+        self.assertEqual(
+            follow_up.status,
+            MeetingItemFollowUp.Status.CANCELLED,
+        )
 
     def test_second_non_cancelled_follow_up_for_source_is_rejected(self):
         self._create_follow_up()

@@ -687,6 +687,11 @@ def schedule_meeting_item_follow_up(
         target_meeting=target_meeting,
         target_meeting_section=target_meeting_section,
         target_meeting_item=target_meeting_item,
+        # The target item was just created by this operation with a
+        # known clean state (no notes, no work links, not_discussed
+        # outcome, title copied from source, position = max+1).
+        target_pristine=True,
+        target_item_created_position=target_meeting_item.position,
         status=MeetingItemFollowUp.Status.SCHEDULED,
         created_by=actor,
     )
@@ -698,6 +703,205 @@ def schedule_meeting_item_follow_up(
             meeting=source_meeting,
             resolved_pk=source_meeting_item.pk,
         )
+    return follow_up
+
+
+# ── Follow-up cancellation ─────────────────────────────────────
+
+
+@transaction.atomic
+def cancel_meeting_item_follow_up(*, follow_up_id, actor):
+    """Cancel a concrete scheduled follow-up by its FollowUp ID.
+
+    Product rule: ``follow_up + scheduled → not_discussed + cancelled``.
+
+    Cancellation is a reversal operation, NOT a resolving operation.
+    It NEVER advances, reconciles, or changes the Meeting's current
+    pointer.
+
+    Atomicity and locking follow the same convention as
+    ``schedule_meeting_item_follow_up``: lock both the source and
+    target Meetings (in pk order), then the source item, then the
+    follow-up record — all before any mutation.
+
+    Behaviour:
+    - Already-cancelled FollowUp: idempotent, returns the record.
+      Does not alter any other record.
+    - Active scheduled FollowUp:
+        1. Requires source.outcome == follow_up and the relation is
+           the active (non-cancelled) one for that source; otherwise
+           rejects with MeetingDomainError.
+        2. Requires the target Meeting to still be ``upcoming``;
+           otherwise rejects with MeetingDomainError (no mutation).
+        3. Changes FollowUp.status → cancelled.
+        4. Changes source.outcome → not_discussed.
+        5. If the generated target item is provably untouched AND the
+           actor has write access to the target Meeting, deletes the
+           target item.  Otherwise preserves it.
+        6. Never changes ``Meeting.current_meeting_item``.
+    """
+    # Resolve the follow-up up-front to get both Meeting pks.
+    follow_up = MeetingItemFollowUp.objects.filter(
+        pk=follow_up_id,
+    ).select_related(
+        "source_meeting_item__meeting",
+        "target_meeting",
+    ).first()
+
+    if follow_up is None:
+        raise MeetingDomainError("Follow-up not found.")
+
+    source_meeting_pk = (
+        MeetingItem.objects
+        .values_list("meeting_id", flat=True)
+        .get(pk=follow_up.source_meeting_item_id)
+    )
+
+    # Lock both Meetings in deterministic pk order, matching the
+    # scheduling lock convention.
+    locked_meetings = {
+        meeting.pk: meeting
+        for meeting in (
+            Meeting.objects
+            .select_for_update()
+            .filter(pk__in={source_meeting_pk, follow_up.target_meeting_id})
+            .order_by("pk")
+        )
+    }
+    source_meeting = locked_meetings[source_meeting_pk]
+    target_meeting = locked_meetings[follow_up.target_meeting_id]
+
+    # Lock the follow-up row (prevents concurrent double-cancel).
+    follow_up = MeetingItemFollowUp.objects.select_for_update().get(
+        pk=follow_up.pk,
+    )
+
+    # ── Write permission on source context ─────────────────────────
+    # This check MUST precede the idempotent early-return below:
+    # an unauthorized actor must not be able to receive the
+    # "already cancelled" success path without canonical source
+    # authorization.
+    _require_meeting_write_access(meeting=source_meeting, user=actor)
+
+    # ── Idempotent: already cancelled ─────────────────────────────
+    if follow_up.status == MeetingItemFollowUp.Status.CANCELLED:
+        return follow_up
+
+    # ── Source state consistency ───────────────────────────────────
+    # The source item must still reflect the scheduled relation.
+    source_item = MeetingItem.objects.select_for_update().get(
+        pk=follow_up.source_meeting_item_id,
+    )
+
+    if follow_up.status != MeetingItemFollowUp.Status.SCHEDULED:
+        raise MeetingDomainError(
+            "Only a scheduled follow-up can be cancelled."
+        )
+
+    if source_item.outcome != MeetingItem.Outcome.FOLLOW_UP:
+        raise MeetingDomainError(
+            "The source item is not in a follow-up state; "
+            "cancellation is not consistent with the persisted state."
+        )
+
+    # Confirm this is the active (non-cancelled) follow-up for the source.
+    active = (
+        MeetingItemFollowUp.objects
+        .filter(source_meeting_item=source_item)
+        .exclude(status=MeetingItemFollowUp.Status.CANCELLED)
+        .exclude(pk=follow_up.pk)
+        .exists()
+    )
+    if active:
+        raise MeetingDomainError(
+            "Another active follow-up exists for this source; "
+            "cannot cancel a stale relation."
+        )
+
+    # ── Target Meeting must still be upcoming ─────────────────────
+    if target_meeting.status != Meeting.Status.UPCOMING:
+        raise MeetingDomainError(
+            "The target Meeting is no longer upcoming; "
+            "cancellation is rejected without mutation."
+        )
+
+    # ── Perform the cancellation mutations ─────────────────────────
+    # Capture the pristine flag BEFORE we clear it.
+    was_pristine = follow_up.target_pristine
+
+    follow_up.status = MeetingItemFollowUp.Status.CANCELLED
+    follow_up.save(update_fields=["status", "updated_at"])
+
+    source_item.outcome = MeetingItem.Outcome.NOT_DISCUSSED
+    source_item.save(update_fields=["outcome", "updated_at"])
+
+    # ── Target cleanup: delete only if provably untouched AND
+    #     the actor can write the target Meeting ────────────────────
+    if follow_up.target_meeting_item_id is not None:
+        target_item = MeetingItem.objects.select_for_update().filter(
+            pk=follow_up.target_meeting_item_id,
+        ).first()
+
+        has_target_write = True
+        try:
+            _require_meeting_write_access(meeting=target_meeting, user=actor)
+        except MeetingDomainError:
+            has_target_write = False
+
+        if target_item is not None and has_target_write and was_pristine:
+            # Re-verify the item's persisted state is still clean
+            # (defence in depth: catches any drift after scheduling).
+            if (
+                target_item.outcome == MeetingItem.Outcome.NOT_DISCUSSED
+                and target_item.title == source_item.title
+                and not target_item.notes
+                and not target_item.note_relations.exists()
+                and not target_item.work_item_relations.exists()
+                and (
+                    follow_up.target_meeting_section_id is None
+                    or target_item.meeting_section_id
+                    == follow_up.target_meeting_section_id
+                )
+                and (
+                    follow_up.target_item_created_position is None
+                    or target_item.position
+                    == follow_up.target_item_created_position
+                )
+            ):
+                # Clear the follow-up's target reference before
+                # deletion so the cancelled trace survives.
+                follow_up.target_meeting_item = None
+                follow_up.target_pristine = False
+                follow_up.save(
+                    update_fields=[
+                        "target_meeting_item",
+                        "target_pristine",
+                        "updated_at",
+                    ],
+                )
+                target_item.delete()
+            else:
+                # Target was mutated; preserve it and clear the
+                # pristine flag.
+                follow_up.target_pristine = False
+                follow_up.save(
+                    update_fields=["target_pristine", "updated_at"],
+                )
+        elif target_item is not None:
+            # Cannot delete (no write access or item missing):
+            # clear the pristine flag to be conservative.
+            follow_up.target_pristine = False
+            follow_up.save(
+                update_fields=["target_pristine", "updated_at"],
+            )
+    else:
+        # No target item reference (should not happen for a
+        # scheduled follow-up, but handle gracefully).
+        follow_up.target_pristine = False
+        follow_up.save(
+            update_fields=["target_pristine", "updated_at"],
+        )
+
     return follow_up
 
 

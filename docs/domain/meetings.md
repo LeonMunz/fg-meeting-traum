@@ -885,9 +885,12 @@ Canonical semantics:
   unchanged, including when it is `null`, points to another item,
   or already points to the Done item. Reopening never advances or
   reconciles Current and does not imply **Make current**.
-- Cancelling a follow-up is a separate future slice. Reopen Done
-  rejects `follow_up` (including a scheduled follow-up) and never
-  cancels or changes follow-up scheduling.
+- Reopen Done rejects `follow_up` (including a scheduled follow-up) and
+  never cancels or changes follow-up scheduling.
+- Cancelling a concrete scheduled follow-up is implemented as a domain
+  operation (``cancel_meeting_item_follow_up``); the API endpoint and UI
+  remain a future slice. See §18a for the implemented cancellation
+  invariant.
 - **Start** (`upcoming -> live`) sets current to the first
   `not_discussed` item in canonical agenda order **only if no
   valid current item exists** (an already-set, still-valid
@@ -1064,13 +1067,95 @@ candidate contains `id`, `title`, `scheduledAt`, nullable `seriesId`, visible
 `sections`, and nullable `recommendedSectionId`.
 
 Creation of a system Follow-ups Section, the scheduling dialog, Reschedule,
-Cancel, automatic Meeting creation, and Previous Context UI remain
-unimplemented. The existing Live
+the Cancel API endpoint and UI, automatic Meeting creation, and Previous
+Context UI remain unimplemented. The domain-level cancellation operation
+(``cancel_meeting_item_follow_up``) IS implemented (see §18a); its API
+endpoint and UI are not. The existing Live
 `POST /api/meeting-items/{id}/follow-up` action remains unchanged during this
 temporary coexistence and still changes only the outcome.
 
 Each source and target MeetingItem remains a stable historical instance in its
 own Meeting.
+
+### 18a. Safe cancellation of a scheduled follow-up (domain)
+
+The domain operation ``cancel_meeting_item_follow_up(follow_up_id, actor)``
+cancels one concrete scheduled ``MeetingItemFollowUp`` by its primary key.
+It is a **reversal** operation, not a resolving operation: it **never**
+advances, reconciles, or otherwise changes the source Meeting's
+``current_meeting_item`` pointer.
+
+**Product rule:** ``follow_up + scheduled → not_discussed + cancelled``.
+
+On a first (active) cancellation the operation requires, atomically:
+
+- the FollowUp record's ``status`` is ``scheduled``;
+- the source item's ``outcome`` is still ``follow_up``;
+- the FollowUp is the active (non-cancelled) relation for that source;
+- the target Meeting is still ``upcoming`` (live or completed targets are
+  rejected without mutation — no retroactive reopening after discussion has
+  begun or ended).
+
+If persisted state contradicts the contract, the operation is rejected with a
+domain error and no mutation occurs. Drift is never silently repaired.
+
+**Idempotent retry:** cancelling an already-``cancelled`` FollowUp ID again
+returns the persisted record, does not alter a newer active FollowUp, does not
+reopen the source a second time, and does not delete another target.
+
+**Target MeetingItem cleanup (provably untouched only):**
+
+The generated target item is deleted **only** when it is provably untouched
+and the actor has canonical write access to the target Meeting. A target is
+provably untouched when **all** of the following hold:
+
+- the ``target_pristine`` provenance flag on the FollowUp record is ``True``
+  (set at scheduling time; pre-migration-0013 rows default to ``False``,
+  which is treated as *not* provably pristine → preserve);
+- the target item's ``outcome`` is still ``not_discussed``;
+- the target item's ``title`` still equals the source item's title;
+- the target item's ``notes`` field is empty;
+- the target item has no ``MeetingNote`` records;
+- the target item has no ``MeetingItemWorkItem`` links;
+- the target item is still in the ``MeetingSection`` recorded on the
+  FollowUp;
+- the target item's ``position`` still equals the
+  ``target_item_created_position`` recorded on the FollowUp at
+  scheduling time (a meaningful agenda reorder invalidates pristine
+  status; pre-migration rows with a ``NULL`` position are treated as
+  not provably pristine → preserve).
+
+**Uncertainty means preserve, never delete.** If any condition cannot be
+verified, the target item is preserved as a normal independent agenda item;
+the FollowUp relation is still cancelled and the source is still reopened.
+
+**Traceability:** the cancelled ``MeetingItemFollowUp`` record is never
+deleted. When the target item is removed, the FollowUp's
+``target_meeting_item`` FK is set to ``NULL`` (the column is nullable,
+``SET_NULL``); the concrete ``target_meeting`` and ``target_meeting_section``
+references are retained so the cancelled trace to the target Meeting and
+Section survives. A database check constraint
+(``meetings_follow_up_active_target_required``) enforces that every
+non-cancelled follow-up retains a concrete target ``MeetingItem``; a
+``NULL`` target is permitted only on cancelled records, so normal
+deletion of a target item can never silently orphan a scheduled
+follow-up.
+
+**Permissions:** cancellation requires canonical write permission on the
+source context. Target deletion additionally requires canonical write
+permission on the target Meeting; if the actor lacks target write access,
+the target is preserved (not deleted) and the cancellation otherwise
+proceeds.
+
+**Transaction and locking:** the operation locks the source and target
+Meeting rows (in deterministic PK order) and the source item and FollowUp
+rows before any mutation, consistent with the scheduling lock convention.
+All changes are atomic.
+
+**Reschedule** (creating a new scheduled FollowUp after a cancelled one for
+the same source) is a future slice. The existing "one active follow-up per
+source" invariant means one *active* (non-cancelled) relation; cancelled
+records do not block a later schedule.
 
 ### Carry-forward is an action, not a parallel status system
 
@@ -2455,6 +2540,16 @@ Move to section…
     target Meeting and an explicit visible Section belonging to it.
 18. A source `MeetingItem` has at most one non-cancelled
     `MeetingItemFollowUp`; cancelled records do not block a later schedule.
+19. Cancelling a scheduled follow-up reopens the source to `not_discussed`,
+    leaves `current_meeting_item` exactly unchanged, and is addressed by
+    concrete FollowUp ID. Repeated cancellation is idempotent. The generated
+    target is removed only when provably untouched (pristine provenance flag,
+    verified clean state, and unchanged agenda position); an edited,
+    reordered, or unprovable target is preserved. The target Meeting must
+    still be `upcoming`. The cancelled FollowUp record remains persisted
+    with its Meeting/Section trace. A check constraint guarantees that every
+    non-cancelled follow-up has a concrete target item (null target only
+    after cancellation). Reschedule remains unimplemented.
 
 > Intended invariants that depend on not-yet-implemented concepts (Topic
 > state, per-item `intent`/`origin`, NoteEntry streams, moderator rotation,
