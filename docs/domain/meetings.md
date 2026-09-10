@@ -890,8 +890,8 @@ Canonical semantics:
 - Cancelling a concrete scheduled follow-up is implemented as a domain
   operation (``cancel_meeting_item_follow_up``) exposed through
   ``POST /api/meeting-item-follow-ups/{followUpId}/cancel`` and the typed
-  frontend client; the Live Cancel UI remains a future slice. See §18a for
-  the implemented cancellation invariant and API contract.
+  frontend client, and the Live Cancel follow-up UI is implemented (see
+  §18a for the implemented cancellation invariant and API contract).
 - **Start** (`upcoming -> live`) sets current to the first
   `not_discussed` item in canonical agenda order **only if no
   valid current item exists** (an already-set, still-valid
@@ -1072,7 +1072,7 @@ automatic Meeting creation, and Previous Context UI remain unimplemented.
 The domain-level cancellation operation (``cancel_meeting_item_follow_up``)
 IS implemented (see §18a) and is exposed through the
 ``POST /api/meeting-item-follow-ups/{followUpId}/cancel`` endpoint and the
-typed frontend client; its Live Cancel UI is not. The existing Live
+typed frontend client; its Live Cancel follow-up UI is implemented (the dialog confirms before any mutation, keeps the source Selected, leaves the server Current untouched, and reports preserved targets explicitly). The existing Live
 `POST /api/meeting-items/{id}/follow-up` action remains unchanged during this
 temporary coexistence and still changes only the outcome.
 

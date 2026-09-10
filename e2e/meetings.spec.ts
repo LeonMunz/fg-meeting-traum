@@ -11,6 +11,13 @@ import {
   openProjects,
 } from './helpers'
 
+type ApiMeetingItemLike = {
+  id: number
+  title: string
+  outcome: string
+  followUpSchedule: { targetMeetingItemId: number } | null
+}
+
 // The redesigned Meeting Detail uses an inline quick-add: a quiet
 // "+ Add item" button expands into a title input (required field)
 // plus Add / Cancel. Enter also submits.
@@ -3200,5 +3207,459 @@ test(
       page.getByRole('button', { name: 'Return to current' }),
     ).toHaveCount(0)
 
+  },
+)
+
+test(
+  'Live Meeting cancels a scheduled follow-up from a non-current source',
+  async ({ page }) => {
+    // --------------------------------------------------------
+    // Setup: two upcoming Meetings in one template Series.
+    // Source (first) and Target (second) share the Series so
+    // the backend recommends the Target's section.
+    // --------------------------------------------------------
+
+    await login(page, 'alex')
+    await page.getByRole('link', { name: /Meetings/ }).click()
+
+    const meetingsUrl = new URL(page.url())
+    const groupId = meetingsUrl.searchParams.get('group') ?? '1'
+
+    await page.goto(`/meetings/series?group=${groupId}`)
+    await page.getByLabel('Name').fill('E2E Cancel Follow-up Series')
+    await page.getByRole('button', { name: /Create template/ }).click()
+    await expect(page).toHaveURL(/\/meetings\/series\/\d+$/)
+    const seriesUrl = page.url()
+
+    await page.getByLabel('Section name').fill('For your Info')
+    await page.getByRole('button', { name: /Add section/ }).click()
+    await expect(
+      page.locator('span.font-semibold', { hasText: /^For your Info$/ }),
+    ).toBeVisible()
+
+    // First occurrence = source.
+    await page.getByLabel('Date & Time').fill('2031-02-10T09:00')
+    await page.getByRole('button', { name: /Create meeting/ }).click()
+    await expect(page).toHaveURL(/\/meetings\/\d+$/)
+    const sourceUrl = page.url()
+
+    // Second occurrence = target.
+    await page.goto(seriesUrl)
+    await page.getByLabel('Date & Time').fill('2031-02-17T09:00')
+    await page.getByRole('button', { name: /Create meeting/ }).click()
+    await expect(page).toHaveURL(/\/meetings\/\d+$/)
+    const targetUrl = page.url()
+    const targetMeetingId = Number(
+      targetUrl.match(/\/meetings\/(\d+)$/)?.[1] ?? '',
+    )
+    expect(targetMeetingId).toBeGreaterThan(0)
+
+    // --------------------------------------------------------
+    // Source Meeting: Alpha (scheduled), Beta (Current after
+    // Alpha's follow-up scheduling), Gamma (open).
+    // --------------------------------------------------------
+
+    await page.goto(sourceUrl)
+    for (const title of ['Alpha', 'Beta', 'Gamma']) {
+      await quickAddAgendaItem(page, title, 'For your Info')
+    }
+
+    const agenda = page.getByRole('navigation', { name: 'Agenda' })
+    const workspace = page.getByRole('main', { name: 'Agenda item' })
+    const agendaItem = (title: string) =>
+      agenda.locator('li').filter({
+        has: page.getByText(title, { exact: true }),
+      })
+    const itemIsCurrent = async (title: string) => {
+      await expect(
+        agendaItem(title).getByText('Current', { exact: true }),
+      ).toBeAttached()
+    }
+    const itemIsNotCurrent = async (title: string) => {
+      await expect(
+        agendaItem(title).getByText('Current', { exact: true }),
+      ).toHaveCount(0)
+    }
+    const itemHasOutcome = async (title: string, hint: string) => {
+      await expect(
+        agendaItem(title).getByText(hint, { exact: true }),
+      ).toBeAttached()
+    }
+    const selectRow = async (title: string) => {
+      await agendaItem(title)
+        .getByRole('button', {
+          name: new RegExp(`View (current )?item ${title}$`),
+        })
+        .click()
+    }
+
+    // Same-origin API calls (session cookie + CSRF), used only to
+    // inspect/edit the upcoming TARGET meeting — the source flow
+    // below is driven entirely through the UI.
+    const apiJson = (
+        path: string,
+        init?: RequestInit,
+      ): Promise<unknown> =>
+      page.evaluate(async ([p, i]) => {
+        const headers: Record<string, string> = {
+          Accept: 'application/json',
+        }
+        if (i?.method) {
+          const m = document.cookie
+            .split(';')
+            .map((c) => c.trim())
+            .find((c) => c.startsWith('csrftoken='))
+          headers['X-CSRFToken'] = m ? m.split('=')[1] : ''
+          headers['Content-Type'] = 'application/json'
+        }
+        const res = await fetch(p, { ...i, headers, credentials: 'same-origin' })
+        return { ok: res.ok, status: res.status, body: await res.json().catch(() => null) }
+      }, [path, init] as const)
+
+    // --------------------------------------------------------
+    // Start: Alpha becomes Current. Schedule Alpha as a
+    // follow-up into the Target: the advance rule moves
+    // Current to Beta, and Alpha keeps its active schedule.
+    // --------------------------------------------------------
+
+    await page.getByRole('button', { name: 'Start meeting' }).click()
+    await expect(workspace).toContainText('Alpha')
+    await itemIsCurrent('Alpha')
+
+    await page
+      .getByRole('button', {
+        name: 'Schedule follow-up for Alpha',
+      })
+      .click()
+    const scheduleDialog = page.getByRole('dialog', {
+      name: 'Schedule follow-up',
+    })
+    await expect(
+      scheduleDialog.getByRole('combobox', { name: /^Meeting/ }),
+    ).not.toHaveValue('')
+    await expect(
+      scheduleDialog.getByRole('combobox', { name: /^Section/ }),
+    ).not.toHaveValue('')
+    await page.getByRole('button', { name: 'Schedule', exact: true }).click()
+
+    // After scheduling the current item, Current advanced to
+    // Beta and the selection followed it.
+    await expect(workspace).toContainText('Beta')
+    await itemIsCurrent('Beta')
+    await itemIsNotCurrent('Alpha')
+    await itemHasOutcome('Alpha', 'Resolved with follow-up')
+
+    // --------------------------------------------------------
+    // Select the scheduled, NON-current Alpha: the detail pane
+    // shows the persisted destination and the neutral Cancel
+    // action (no Make current required).
+    // --------------------------------------------------------
+
+    await selectRow('Alpha')
+    await expect(workspace).toContainText(
+      'Scheduled for E2E Cancel Follow-up Series',
+    )
+
+    const cancelTrigger = page.getByRole('button', {
+      name: 'Cancel follow-up for Alpha',
+    })
+    await expect(cancelTrigger).toBeVisible()
+
+    // --------------------------------------------------------
+    // Primary flow: confirm cancellation of the PRISTINE
+    // target (server disposition = removed).
+    // --------------------------------------------------------
+
+    await cancelTrigger.click()
+
+    const cancelDialog = page.getByRole('dialog', {
+      name: 'Cancel follow-up?',
+    })
+    await expect(
+      cancelDialog.getByText(
+        'This will remove the scheduled follow-up from',
+      ),
+    ).toBeVisible()
+    await expect(
+      cancelDialog.getByText('For your Info', { exact: true }),
+    ).toBeVisible()
+
+    await cancelDialog
+      .getByRole('button', { name: 'Cancel follow-up' })
+      .click()
+
+    await expect(
+      page.getByRole('dialog', { name: 'Cancel follow-up?' }),
+    ).toHaveCount(0)
+
+    // Removed target: source reopens, stays Selected, the
+    // destination display disappears, no preserved-target notice.
+    await expect(workspace).toContainText('Alpha')
+    await expect(
+      workspace.getByText(/was kept because/),
+    ).toHaveCount(0)
+    await expect(workspace).not.toContainText('Scheduled for')
+    await itemHasOutcome('Alpha', 'Open')
+
+    // Reversal, not resolution: Alpha remains Selected (detail
+    // pane stays on Alpha) while Current remains Beta — no
+    // automatic Make current / advance / navigation jump.
+    await itemIsCurrent('Beta')
+    await itemIsNotCurrent('Alpha')
+    await itemIsNotCurrent('Gamma')
+
+    // Reload: persistence holds (Alpha open, Beta current).
+    await page.reload()
+    await selectRow('Alpha')
+    await expect(workspace).toContainText('Alpha')
+    await expect(workspace).not.toContainText('Scheduled for')
+    await itemIsCurrent('Beta')
+    await itemHasOutcome('Alpha', 'Open')
+
+  },
+)
+
+test(
+  'Live Meeting cancel keeps an edited follow-up target (preserved)',
+  async ({ page }) => {
+    // --------------------------------------------------------
+    // Setup mirrors the primary cancel scenario (the E2E schema
+    // is reset per run): upcoming Source + Target Meetings
+    // sharing one template Section, with Alpha / Beta / Gamma
+    // on the Source agenda.
+    // --------------------------------------------------------
+
+    await login(page, 'alex')
+    await page.getByRole('link', { name: /Meetings/ }).click()
+
+    const meetingsUrl = new URL(page.url())
+    const groupId = meetingsUrl.searchParams.get('group') ?? '1'
+
+    await page.goto(`/meetings/series?group=${groupId}`)
+    await page.getByLabel('Name').fill('E2E Cancel Follow-up Series')
+    await page.getByRole('button', { name: /Create template/ }).click()
+    await expect(page).toHaveURL(/\/meetings\/series\/\d+$/)
+    const seriesUrl = page.url()
+
+    await page.getByLabel('Section name').fill('For your Info')
+    await page.getByRole('button', { name: /Add section/ }).click()
+    await expect(
+      page.locator('span.font-semibold', { hasText: /^For your Info$/ }),
+    ).toBeVisible()
+
+    // First occurrence = source.
+    await page.getByLabel('Date & Time').fill('2031-02-10T09:00')
+    await page.getByRole('button', { name: /Create meeting/ }).click()
+    await expect(page).toHaveURL(/\/meetings\/\d+$/)
+    const sourceUrl = page.url()
+
+    // Second occurrence = target.
+    await page.goto(seriesUrl)
+    await page.getByLabel('Date & Time').fill('2031-02-17T09:00')
+    await page.getByRole('button', { name: /Create meeting/ }).click()
+    await expect(page).toHaveURL(/\/meetings\/\d+$/)
+    const targetUrl = page.url()
+    const targetMeetingId = Number(
+      targetUrl.match(/\/meetings\/(\d+)$/)?.[1] ?? '',
+    )
+    expect(targetMeetingId).toBeGreaterThan(0)
+
+    await page.goto(sourceUrl)
+    for (const title of ['Alpha', 'Beta', 'Gamma']) {
+      await quickAddAgendaItem(page, title, 'For your Info')
+    }
+
+    const agenda = page.getByRole('navigation', { name: 'Agenda' })
+    const workspace = page.getByRole('main', { name: 'Agenda item' })
+    const agendaItem = (title: string) =>
+      agenda.locator('li').filter({
+        has: page.getByText(title, { exact: true }),
+      })
+    const itemIsCurrent = async (title: string) => {
+      await expect(
+        agendaItem(title).getByText('Current', { exact: true }),
+      ).toBeAttached()
+    }
+    const itemIsNotCurrent = async (title: string) => {
+      await expect(
+        agendaItem(title).getByText('Current', { exact: true }),
+      ).toHaveCount(0)
+    }
+    const itemHasOutcome = async (title: string, hint: string) => {
+      await expect(
+        agendaItem(title).getByText(hint, { exact: true }),
+      ).toBeAttached()
+    }
+    const selectRow = async (title: string) => {
+      await agendaItem(title)
+        .getByRole('button', {
+          name: new RegExp(`View (current )?item ${title}$`),
+        })
+        .click()
+    }
+
+    // Same-origin API calls (session cookie + CSRF): used to
+    // prepare/inspect the scheduled state. The Cancel action
+    // itself is driven through the Live UI.
+    const apiJson = (
+        path: string,
+        init?: RequestInit,
+      ): Promise<unknown> =>
+      page.evaluate(async ([p, i]) => {
+        const headers: Record<string, string> = {
+          Accept: 'application/json',
+        }
+        if (i?.method) {
+          const m = document.cookie
+            .split(';')
+            .map((c) => c.trim())
+            .find((c) => c.startsWith('csrftoken='))
+          headers['X-CSRFToken'] = m ? m.split('=')[1] : ''
+          headers['Content-Type'] = 'application/json'
+        }
+        const res = await fetch(p, { ...i, headers, credentials: 'same-origin' })
+        return { ok: res.ok, status: res.status, body: await res.json().catch(() => null) }
+      }, [path, init] as const)
+
+    // --------------------------------------------------------
+    // Prepare the scheduled state via the supported API (the
+    // scheduling UI action is Current-only; here we exercise
+    // the preserved-target contract, not scheduling). Alpha
+    // becomes a follow-up into the Target; by the server
+    // advance rule Current moves to Beta.
+    // --------------------------------------------------------
+
+    const sourceMeetingId = Number(
+      sourceUrl.match(/\/meetings\/(\d+)$/)?.[1] ?? '',
+    )
+    expect(sourceMeetingId).toBeGreaterThan(0)
+
+    await page.getByRole('button', { name: 'Start meeting' }).click()
+    await itemIsCurrent('Alpha')
+
+    const sourceItems = (
+      (await apiJson(`/api/meetings/${sourceMeetingId}/items/`)) as {
+        body?: ApiMeetingItemLike[]
+      }
+    ).body ?? []
+    const alpha = sourceItems.find((item) => item.title === 'Alpha')
+    if (alpha == null) {
+      throw new Error('Source agenda item Alpha not found')
+    }
+    const targets = (
+      (await apiJson(
+        `/api/meeting-items/${alpha.id}/follow-up-targets/`,
+      )) as {
+        body?: {
+          meetings: {
+            id: number
+            sections: { id: number }[]
+          }[]
+        }
+      }
+    ).body
+    if (
+      targets == null ||
+      targets.meetings.length === 0
+    ) {
+      throw new Error('No recommended follow-up targets')
+    }
+    const targetMeeting = targets.meetings.find(
+      (m) => m.id === targetMeetingId,
+    )
+    if (targetMeeting == null || targetMeeting.sections.length === 0) {
+      throw new Error('Follow-up target meeting has no sections')
+    }
+    const scheduleRes = await apiJson(
+      `/api/meeting-items/${alpha.id}/schedule-follow-up`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          targetMeetingId,
+          targetMeetingSectionId: targetMeeting.sections[0]!.id,
+        }),
+      },
+    )
+    expect((scheduleRes as { ok: boolean }).ok).toBe(true)
+
+    // Server effect: Alpha resolved with follow-up; Current
+    // advanced to Beta (the next open item).
+    await page.reload()
+    await itemHasOutcome('Alpha', 'Resolved with follow-up')
+    await itemIsCurrent('Beta')
+    await itemIsNotCurrent('Alpha')
+
+    // --------------------------------------------------------
+    // Make the generated target non-pristine by editing it
+    // through the existing item API.
+    // --------------------------------------------------------
+
+    const targetItems = (
+      (await apiJson(`/api/meetings/${targetMeetingId}/items/`)) as {
+        body?: ApiMeetingItemLike[]
+      }
+    ).body ?? []
+    const generated = targetItems.find(
+      (item) => item.title === 'Alpha',
+    )
+    if (generated == null) {
+      throw new Error('Generated follow-up target item not found')
+    }
+    const editedRes = await apiJson(
+      `/api/meeting-items/${generated.id}/`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ title: 'Alpha (edited)', notes: '' }),
+      },
+    )
+    expect((editedRes as { ok: boolean }).ok).toBe(true)
+
+    // --------------------------------------------------------
+    // Cancel through the Live UI: the edited target is no
+    // longer pristine, so the server preserves it and the user
+    // must be told it stays as a normal agenda item.
+    // --------------------------------------------------------
+
+    await selectRow('Alpha')
+    await expect(workspace).toContainText(
+      'Scheduled for E2E Cancel Follow-up Series',
+    )
+    const cancelTrigger = page.getByRole('button', {
+      name: 'Cancel follow-up for Alpha',
+    })
+    await cancelTrigger.click()
+    const cancelDialog = page.getByRole('dialog', {
+      name: 'Cancel follow-up?',
+    })
+    await expect(cancelDialog).toBeVisible()
+    await cancelDialog
+      .getByRole('button', { name: 'Cancel follow-up' })
+      .click()
+
+    await expect(
+      page.getByRole('dialog', { name: 'Cancel follow-up?' }),
+    ).toHaveCount(0)
+
+    // Explicit kept-target feedback, plus the standard reversal
+    // invariants (source Selected + open, Current unchanged).
+    await expect(
+      workspace.getByText(
+        'Follow-up cancelled. The agenda item in E2E Cancel Follow-up Series was kept because it had already been changed.',
+      ),
+    ).toBeVisible()
+    await itemHasOutcome('Alpha', 'Open')
+    await itemIsCurrent('Beta')
+    await expect(workspace).not.toContainText('Scheduled for')
+
+    // The edited target survives in the upcoming Target Meeting
+    // as a normal agenda item.
+    const targetAfter = (
+      (await apiJson(`/api/meetings/${targetMeetingId}/items/`)) as {
+        body?: ApiMeetingItemLike[]
+      }
+    ).body ?? []
+    expect(
+      targetAfter.some((item) => item.title === 'Alpha (edited)'),
+    ).toBe(true)
   },
 )

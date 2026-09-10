@@ -53,6 +53,7 @@ import { useResearchGroup } from '../research-group/useResearchGroup'
 import { useSession } from '../../api/useSession'
 import { CreateMeetingWorkItemDialog } from './CreateMeetingWorkItemDialog'
 import { MeetingFollowUpSchedulingDialog } from './MeetingFollowUpSchedulingDialog'
+import { MeetingCancelFollowUpDialog } from './MeetingCancelFollowUpDialog'
 import {
   AGENDA_STATUS_META,
   agendaStatusMeta,
@@ -81,6 +82,7 @@ const WorkItemDrawer = lazy(() =>
 )
 
 import type {
+  ApiCancelMeetingItemFollowUpResult,
   ApiMeeting,
   ApiMeetingItem,
   ApiMeetingNote,
@@ -458,6 +460,15 @@ export function MeetingDetailPage() {
   const followUpTriggerRef =
     useRef<HTMLButtonElement>(null)
 
+  // Cancellation dialog source (selected item with an active
+  // followUpSchedule) + the destination notice for preserved targets.
+  const [cancelFollowUpSourceItem, setCancelFollowUpSourceItem] =
+    useState<ApiMeetingItem | null>(null)
+  const cancelFollowUpTriggerRef =
+    useRef<HTMLButtonElement>(null)
+  const [preservedFollowUpNotice, setPreservedFollowUpNotice] =
+    useState<string | null>(null)
+
   const [updatingMeeting, setUpdatingMeeting] =
     useState(false)
 
@@ -677,6 +688,7 @@ export function MeetingDetailPage() {
       // A fresh load/re-entry resets local selection to the Meeting's
       // actual current item (selection is never persisted).
       setSelectedItemId(nextMeeting.currentMeetingItemId)
+      setPreservedFollowUpNotice(null)
     } catch (error) {
       setMeeting(null)
       setParticipants([])
@@ -1235,6 +1247,7 @@ export function MeetingDetailPage() {
   // current pointer or any item outcome.
   const handleSelectLiveItem = (item: ApiMeetingItem) => {
     setSelectedItemId(item.id)
+    setPreservedFollowUpNotice(null)
   }
 
   // "Return to current": re-point local selection at the Meeting's
@@ -1242,6 +1255,7 @@ export function MeetingDetailPage() {
   const handleReturnToCurrent = () => {
     if (meeting?.currentMeetingItemId != null) {
       setSelectedItemId(meeting.currentMeetingItemId)
+      setPreservedFollowUpNotice(null)
     }
   }
 
@@ -1368,6 +1382,31 @@ export function MeetingDetailPage() {
       setUpdatingItemId(null)
     }
   }
+
+  // Cancellation is a reversal: refresh canonical item + Meeting state
+  // (server Current stays authoritative) but deliberately do NOT
+  // reconcile/advance selection. The source remains Selected. The
+  // preserved-target notice uses the destination captured from the
+  // active schedule BEFORE the refresh clears it.
+  const handleCancelFollowUpCompleted = useCallback(
+    async (
+      result: ApiCancelMeetingItemFollowUpResult,
+    ) => {
+      const destinationTitle =
+        cancelFollowUpSourceItem?.followUpSchedule
+          ?.targetMeetingTitle ?? 'the meeting'
+      await refreshItems()
+      await refreshMeeting()
+      if (
+        result.targetItemDisposition === 'preserved'
+      ) {
+        setPreservedFollowUpNotice(
+          `Follow-up cancelled. The agenda item in ${destinationTitle} was kept because it had already been changed.`,
+        )
+      }
+    },
+    [cancelFollowUpSourceItem, refreshItems, refreshMeeting],
+  )
 
   const handleStartMeeting = async () => {
     if (
@@ -2920,6 +2959,35 @@ export function MeetingDetailPage() {
                   )}
                 </p>
 
+                {/* Informational feedback after a cancellation that
+                    preserved an edited target; cleared by selection
+                    changes and the next full load. */}
+                {preservedFollowUpNotice != null && (
+                  <div
+                    role="status"
+                    className="mt-3 flex items-start gap-2 rounded-lg bg-surface-muted px-3 py-2 text-sm text-text"
+                  >
+                    <span
+                      aria-hidden="true"
+                      className="material-symbols-outlined mt-0.5 text-[16px] text-text-muted"
+                    >
+                      info
+                    </span>
+                    <span className="min-w-0">
+                      {preservedFollowUpNotice}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setPreservedFollowUpNotice(null)
+                        }
+                        className="ml-2 text-xs font-medium text-text-muted outline-none transition hover:text-text focus-visible:underline"
+                      >
+                        Dismiss
+                      </button>
+                    </span>
+                  </div>
+                )}
+
                 {/* Shown only while the user is viewing a non-current
                     item. "Return to current" is purely local navigation —
                     it re-points selection at the Meeting's actual current
@@ -3415,6 +3483,29 @@ export function MeetingDetailPage() {
                         </p>
                       </div>
                     </div>
+                    {canManageLifecycle && (
+                      <button
+                        ref={cancelFollowUpTriggerRef}
+                        type="button"
+                        disabled={
+                          updatingItemId ===
+                            liveSelectedItem.id
+                        }
+                        onClick={() =>
+                          setCancelFollowUpSourceItem(
+                            liveSelectedItem,
+                          )
+                        }
+                        aria-label={`Cancel follow-up for ${liveSelectedItem.title}`}
+                        title="Cancel follow-up"
+                        className="mt-3 ml-7 inline-flex h-8 items-center gap-1.5 rounded-lg border border-default bg-surface px-3 text-xs font-medium text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-60"
+                      >
+                        <span aria-hidden="true" className="material-symbols-outlined text-[15px] text-text-muted">
+                          event_busy
+                        </span>
+                        Cancel follow-up
+                      </button>
+                    )}
                   </div>
                 )}
 
@@ -4533,6 +4624,15 @@ export function MeetingDetailPage() {
             sourceWasCurrent,
           )
         }}
+      />
+
+      <MeetingCancelFollowUpDialog
+        sourceItem={
+          isLive ? cancelFollowUpSourceItem : null
+        }
+        returnFocusRef={cancelFollowUpTriggerRef}
+        onClose={() => setCancelFollowUpSourceItem(null)}
+        onCancelled={handleCancelFollowUpCompleted}
       />
 
       {deleteDialogOpen && (
