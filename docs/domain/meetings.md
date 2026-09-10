@@ -879,9 +879,15 @@ Canonical semantics:
   with its existing behavior. Concrete follow-up scheduling is the
   canonical Meeting Live operation and follows the resolving rule
   documented in Section 18.
-- Reversal operations such as reopening Done or cancelling a
-  follow-up do not imply **Make current**. Those reversal operations
-  remain future slices.
+- **Reopen Done** (`POST /api/meeting-items/{id}/reopen`) is a
+  Live-only outcome correction from `done` to `not_discussed`.
+  It changes Outcome only: `currentMeetingItemId` remains exactly
+  unchanged, including when it is `null`, points to another item,
+  or already points to the Done item. Reopening never advances or
+  reconciles Current and does not imply **Make current**.
+- Cancelling a follow-up is a separate future slice. Reopen Done
+  rejects `follow_up` (including a scheduled follow-up) and never
+  cancels or changes follow-up scheduling.
 - **Start** (`upcoming -> live`) sets current to the first
   `not_discussed` item in canonical agenda order **only if no
   valid current item exists** (an already-set, still-valid
@@ -900,10 +906,10 @@ Canonical semantics:
 - **Deleting the current item** clears the pointer
   (`SET_NULL`), leaving the Meeting without a current item.
 
-Outcome mutations only happen through Done, the legacy direct
-Follow-up action, or concrete Follow-up scheduling. Focus changes
-only current. The generic MeetingItem PATCH rejects both the new
-`outcome` field and the legacy `status` field.
+Outcome mutations only happen through Done, Reopen Done, the legacy
+direct Follow-up action, or concrete Follow-up scheduling. Focus
+changes only current. The generic MeetingItem PATCH rejects both the
+new `outcome` field and the legacy `status` field.
 
 Legacy data migrations (historical background; superseded by
 0011): 0009/0010 mapped the former statuses
@@ -1920,8 +1926,8 @@ Meeting records a new `ended_at`.
   the frontend-local **Selected** free navigation of the agenda rail is
   implemented frontend-only (never persisted; selection is local UI
   state, see the `current_meeting_item_id` section above); a deliberate
-  "Make current" action for a selected non-current item is NOT
-  implemented yet.
+  "Make current" action for a selected non-current item is also
+  implemented in the Live detail context.
 
 ---
 

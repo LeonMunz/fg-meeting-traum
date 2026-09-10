@@ -43,6 +43,7 @@ from .services import (
     focus_meeting_item,
     mark_meeting_item_done,
     mark_meeting_item_follow_up,
+    reopen_meeting_item,
     reopen_meeting,
     start_meeting,
 )
@@ -367,6 +368,77 @@ class LiveStateMachineDomainTest(LiveStateMachineBase):
             self.item_outcome(a), MeetingItem.Outcome.DONE
         )
         self.assertEqual(self.current_id(meeting), b.pk)
+
+    # ── Reopen item ─────────────────────────────────────────────
+
+    def test_reopen_done_item_keeps_another_current(self):
+        meeting = self.create_meeting()
+        section = MeetingSection.objects.get(meeting=meeting)
+        a = self.create_item(meeting, section, "A")
+        c = self.create_item(meeting, section, "C")
+        self.set_outcome(a, MeetingItem.Outcome.DONE)
+        self.start(meeting)
+        self.assertEqual(self.current_id(meeting), c.pk)
+
+        reopen_meeting_item(meeting_item=a, actor=self.alex)
+
+        self.assertEqual(
+            self.item_outcome(a), MeetingItem.Outcome.NOT_DISCUSSED
+        )
+        self.assertEqual(self.current_id(meeting), c.pk)
+
+    def test_reopen_done_item_keeps_null_current(self):
+        meeting = self.create_meeting()
+        section = MeetingSection.objects.get(meeting=meeting)
+        a = self.create_item(meeting, section, "A")
+        self.set_outcome(a, MeetingItem.Outcome.DONE)
+        self.start(meeting)
+        self.assertIsNone(self.current_id(meeting))
+
+        reopen_meeting_item(meeting_item=a, actor=self.alex)
+
+        self.assertEqual(
+            self.item_outcome(a), MeetingItem.Outcome.NOT_DISCUSSED
+        )
+        self.assertIsNone(self.current_id(meeting))
+
+    def test_reopen_done_current_preserves_existing_pointer(self):
+        meeting = self.create_meeting()
+        section = MeetingSection.objects.get(meeting=meeting)
+        a = self.create_item(meeting, section, "A")
+        self.start(meeting)
+        self.set_outcome(a, MeetingItem.Outcome.DONE)
+        self.assertEqual(self.current_id(meeting), a.pk)
+
+        reopen_meeting_item(meeting_item=a, actor=self.alex)
+
+        self.assertEqual(
+            self.item_outcome(a), MeetingItem.Outcome.NOT_DISCUSSED
+        )
+        self.assertEqual(self.current_id(meeting), a.pk)
+
+    def test_reopen_rejects_non_done_outcomes(self):
+        meeting = self.create_meeting()
+        section = MeetingSection.objects.get(meeting=meeting)
+        a = self.create_item(meeting, section, "A")
+        b = self.create_item(meeting, section, "B")
+        self.set_outcome(b, MeetingItem.Outcome.FOLLOW_UP)
+        self.start(meeting)
+
+        for item in (a, b):
+            with self.subTest(outcome=self.item_outcome(item)):
+                with self.assertRaises(MeetingDomainError):
+                    reopen_meeting_item(
+                        meeting_item=item,
+                        actor=self.alex,
+                    )
+
+        self.assertEqual(
+            self.item_outcome(a), MeetingItem.Outcome.NOT_DISCUSSED
+        )
+        self.assertEqual(
+            self.item_outcome(b), MeetingItem.Outcome.FOLLOW_UP
+        )
 
     # ── Follow-up ────────────────────────────────────────────────
 
@@ -847,6 +919,23 @@ class LiveStateMachineIsolationTest(LiveStateMachineBase):
         with self.assertRaises(MeetingDomainError):
             focus_meeting_item(meeting_item=a, actor=self.laura)
 
+    def test_reopen_uses_project_meeting_write_permission(self):
+        meeting, section, a, b = self._project_meeting_with_items("P reopen")
+        self.set_outcome(a, MeetingItem.Outcome.DONE)
+        self.set_outcome(b, MeetingItem.Outcome.DONE)
+        start_meeting(meeting=meeting, actor=self.alex)
+
+        with self.assertRaises(MeetingDomainError):
+            reopen_meeting_item(meeting_item=a, actor=self.laura)
+
+        reopen_meeting_item(meeting_item=b, actor=self.chris)
+        self.assertEqual(
+            self.item_outcome(a), MeetingItem.Outcome.DONE
+        )
+        self.assertEqual(
+            self.item_outcome(b), MeetingItem.Outcome.NOT_DISCUSSED
+        )
+
     def test_group_meeting_member_can_drive_state_machine(self):
         meeting = self.create_meeting()
         section = MeetingSection.objects.get(meeting=meeting)
@@ -945,6 +1034,37 @@ class LiveStateMachineAPITest(LiveStateMachineBase):
         )
         self.assertEqual(
             self.current_id(meeting), items[1].pk
+        )
+
+    def test_reopen_endpoint_returns_updated_item_and_keeps_current(self):
+        meeting, items = self._group_meeting_with_items()
+        self.set_outcome(items[0], MeetingItem.Outcome.DONE)
+        start_meeting(meeting=meeting, actor=self.alex)
+        self.client.force_login(self.chris)
+
+        resp = self.client.post(
+            f"/api/meeting-items/{items[0].pk}/reopen",
+            {}, format="json",
+        )
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.json()["outcome"], "not_discussed")
+        self.assertEqual(self.current_id(meeting), items[1].pk)
+
+    def test_reopen_endpoint_rejects_non_done_item(self):
+        meeting, items = self._group_meeting_with_items()
+        start_meeting(meeting=meeting, actor=self.alex)
+        self.client.force_login(self.chris)
+
+        resp = self.client.post(
+            f"/api/meeting-items/{items[0].pk}/reopen",
+            {}, format="json",
+        )
+
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            resp.json(),
+            {"error": "Only a done Meeting item can be reopened."},
         )
 
     def test_follow_up_endpoint(self):

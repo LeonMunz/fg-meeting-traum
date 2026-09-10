@@ -50,6 +50,7 @@ vi.mock('../../api/meetings', async (importOriginal) => {
     listMeetingSections: vi.fn(),
     focusMeetingItem: vi.fn(),
     markMeetingItemDone: vi.fn(),
+    reopenMeetingItem: vi.fn(),
     markMeetingItemFollowUp: vi.fn(),
     getMeetingItemFollowUpTargets: vi.fn(),
     scheduleMeetingItemFollowUp: vi.fn(),
@@ -337,6 +338,7 @@ const waitForLive = async () => {
 beforeEach(() => {
   vi.mocked(meetingsApi.focusMeetingItem).mockReset()
   vi.mocked(meetingsApi.markMeetingItemDone).mockReset()
+  vi.mocked(meetingsApi.reopenMeetingItem).mockReset()
   vi.mocked(
     meetingsApi.markMeetingItemFollowUp,
   ).mockReset()
@@ -916,6 +918,9 @@ describe('Live Meeting selection (decoupled from current)', () => {
       vi.mocked(meetingsApi.markMeetingItemDone),
     ).not.toHaveBeenCalled()
     expect(
+      vi.mocked(meetingsApi.reopenMeetingItem),
+    ).not.toHaveBeenCalled()
+    expect(
       vi.mocked(
         meetingsApi.markMeetingItemFollowUp,
       ),
@@ -955,6 +960,107 @@ describe('Live Meeting selection (decoupled from current)', () => {
       screen.queryByRole('button', {
         name: 'Schedule follow-up for Alpha',
       }),
+    ).toBeNull()
+    expect(
+      workspace().getByRole('button', {
+        name: 'Reopen Alpha',
+      }),
+    ).toBeTruthy()
+  })
+
+  it('reopens a selected Done item while preserving another Current and the local selection', async () => {
+    const fake = new FakeLiveMeeting(
+      makeMeeting({ currentMeetingItemId: 2 }),
+      BASE_ITEMS,
+    )
+    vi.mocked(meetingsApi.reopenMeetingItem).mockImplementation(
+      (id: number) => {
+        fake.items = fake.items.map((item) =>
+          item.id === id
+            ? { ...item, outcome: 'not_discussed' as const }
+            : item,
+        )
+        return Promise.resolve(
+          fake.items.find((item) => item.id === id)!,
+        )
+      },
+    )
+    renderLivePage(fake)
+    await waitForLive()
+
+    fireEvent.click(selectRow('Alpha'))
+    fireEvent.click(
+      workspace().getByRole('button', { name: 'Reopen Alpha' }),
+    )
+
+    await waitFor(() => {
+      expect(
+        itemRow('Alpha').getByText('Open', { exact: true }),
+      ).toBeTruthy()
+    })
+    expect(fake.meeting.currentMeetingItemId).toBe(2)
+    expect(rowCurrent('Beta')).toBeTruthy()
+    expect(selectRow('Alpha').getAttribute('aria-pressed')).toBe('true')
+    expect(
+      screen.getByRole('main', { name: 'Agenda item' }),
+    ).toHaveTextContent('Alpha')
+    expect(
+      screen.getByRole('button', { name: 'Return to current' }),
+    ).toBeTruthy()
+    expect(
+      vi.mocked(meetingsApi.reopenMeetingItem),
+    ).toHaveBeenCalledWith(1)
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Return to current' }),
+    )
+    await waitFor(() => {
+      expect(
+        screen.getByRole('main', { name: 'Agenda item' }),
+      ).toHaveTextContent('Beta')
+    })
+    expect(rowCurrent('Beta')).toBeTruthy()
+  })
+
+  it('reopens a selected Done item while preserving null Current', async () => {
+    const only = makeItem({ id: 1, title: 'Only', outcome: 'done' })
+    const fake = new FakeLiveMeeting(
+      makeMeeting({ currentMeetingItemId: null }),
+      [only],
+    )
+    vi.mocked(meetingsApi.reopenMeetingItem).mockImplementation(
+      (id: number) => {
+        fake.items = fake.items.map((item) =>
+          item.id === id
+            ? { ...item, outcome: 'not_discussed' as const }
+            : item,
+        )
+        return Promise.resolve(fake.items[0])
+      },
+    )
+    renderLivePage(fake)
+    await waitForLive()
+
+    fireEvent.click(selectRow('Only'))
+    fireEvent.click(
+      workspace().getByRole('button', { name: 'Reopen Only' }),
+    )
+
+    await waitFor(() => {
+      expect(
+        itemRow('Only').getByText('Open', { exact: true }),
+      ).toBeTruthy()
+    })
+    expect(fake.meeting.currentMeetingItemId).toBeNull()
+    expect(selectRow('Only').getAttribute('aria-pressed')).toBe('true')
+    expect(
+      screen.getByRole('main', { name: 'Agenda item' }),
+    ).toHaveTextContent('Only')
+    expect(
+      screen.queryAllByText('Current', { exact: true }),
+    ).toHaveLength(0)
+    expect(
+      screen.queryByRole('button', { name: 'Return to current' }),
     ).toBeNull()
   })
 
@@ -1480,6 +1586,11 @@ describe('Live Meeting resolution controls follow the current outcome', () => {
     const doneState = screen.getByText('Done', { exact: true })
     expect(doneState).toBeTruthy()
     expectOutcomeIcon(doneState, 'check')
+    const reopenAction = screen.getByRole('button', {
+      name: 'Reopen Alpha',
+    })
+    expect(reopenAction).toHaveClass('border-default', 'bg-surface')
+    expect(reopenAction).not.toHaveClass('bg-success')
     expect(
       screen.queryByRole('button', { name: 'Mark Alpha as done' }),
     ).toBeNull()

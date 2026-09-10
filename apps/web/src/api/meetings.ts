@@ -184,6 +184,15 @@ export async function markMeetingItemDone(
   )
 }
 
+export async function reopenMeetingItem(
+  meetingItemId: number,
+): Promise<ApiMeetingItem> {
+  return apiPost<ApiMeetingItem>(
+    `/api/meeting-items/${meetingItemId}/reopen`,
+    {},
+  )
+}
+
 export async function markMeetingItemFollowUp(
   meetingItemId: number,
 ): Promise<ApiMeetingItem> {

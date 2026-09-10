@@ -1247,6 +1247,39 @@ def mark_meeting_item_done(*, meeting_item, actor):
 
 
 @transaction.atomic
+def reopen_meeting_item(*, meeting_item, actor):
+    """Reopen one done item without changing the Meeting's current item.
+
+    This is an outcome correction only. It deliberately does not use the
+    resolving helper or reconcile the current pointer, including when
+    persisted data points Current at the done item being reopened.
+    """
+    meeting = meeting_item.meeting
+    _require_meeting_write_access(meeting=meeting, user=actor)
+    _require_live_meeting(meeting=meeting)
+
+    # Serialize against concurrent focus/done/follow-up/end actions while
+    # preserving the current pointer exactly as stored.
+    Meeting.objects.select_for_update().get(pk=meeting.pk)
+    meeting.refresh_from_db()
+    _require_live_meeting(meeting=meeting)
+
+    meeting_item.refresh_from_db()
+    if meeting_item.meeting_id != meeting.pk:
+        raise MeetingDomainError(
+            "The item does not belong to this Meeting."
+        )
+    if meeting_item.outcome != MeetingItem.Outcome.DONE:
+        raise MeetingDomainError(
+            "Only a done Meeting item can be reopened."
+        )
+
+    meeting_item.outcome = MeetingItem.Outcome.NOT_DISCUSSED
+    meeting_item.save(update_fields=["outcome", "updated_at"])
+    return meeting_item
+
+
+@transaction.atomic
 def mark_meeting_item_follow_up(*, meeting_item, actor):
     """Mark one item as a follow-up: item.outcome = "follow_up".
 

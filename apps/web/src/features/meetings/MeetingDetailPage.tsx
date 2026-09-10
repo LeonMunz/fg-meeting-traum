@@ -31,6 +31,7 @@ import {
   markMeetingItemDone,
   reorderMeetingSections,
   reopenMeeting,
+  reopenMeetingItem,
   removeMeetingParticipant,
   startMeeting,
   updateMeetingItem,
@@ -1343,6 +1344,25 @@ export function MeetingDetailPage() {
     } catch (error) {
       setActionError(
         getErrorMessage(error, 'Agenda item could not be marked done.'),
+      )
+    } finally {
+      setUpdatingItemId(null)
+    }
+  }
+
+  const handleReopenItem = async (item: ApiMeetingItem) => {
+    if (updatingItemId != null) return
+    setUpdatingItemId(item.id)
+    setActionError(null)
+    try {
+      await reopenMeetingItem(item.id)
+      // Reopen corrects Outcome only. Refresh canonical item and Meeting
+      // state while preserving the user's local Selected item exactly.
+      await refreshItems()
+      await refreshMeeting()
+    } catch (error) {
+      setActionError(
+        getErrorMessage(error, 'Agenda item could not be reopened.'),
       )
     } finally {
       setUpdatingItemId(null)
@@ -3398,49 +3418,88 @@ export function MeetingDetailPage() {
                   </div>
                 )}
 
-                {/* Live resolution actions — bound to the CURRENT item
-                    only. They render only while the user is viewing the
-                    current item, so they never operate on an arbitrary
-                    selected non-current item. */}
+                {/* Resolving actions stay bound to Current. Reopen is an
+                    outcome-only correction on the selected Done item and
+                    deliberately does not move Current or Selected. */}
                 {(() => {
-                  if (liveSelectedItem.followUpSchedule != null) {
+                  if (!canManageLifecycle) {
                     return null
                   }
-                  const currentOutcome: AgendaItemOutcome =
-                    liveCurrentItem != null
-                      ? liveCurrentItem.outcome
-                      : 'not_discussed'
-                  if (
-                    !canManageLifecycle ||
-                    !liveSelectionIsCurrent ||
-                    liveCurrentItem == null
-                  ) {
-                    return null
-                  }
+                  const selectedOutcome: AgendaItemOutcome =
+                    liveSelectedItem.outcome
                   const busy =
                     updatingItemId !== null &&
-                    updatingItemId === liveCurrentItem.id
-                  // The current outcome is presented as STATE; only the
-                  // meaningful alternative transition is offered as an
-                  // action. Current and outcome stay independent: a
-                  // resolved item may remain Current.
-                  const statusMeta = AGENDA_STATUS_META[currentOutcome]
+                    updatingItemId === liveSelectedItem.id
+                  const canResolveCurrent =
+                    liveSelectionIsCurrent &&
+                    liveCurrentItem != null &&
+                    liveSelectedItem.followUpSchedule == null
+                  const canReopenSelected = selectedOutcome === 'done'
+
+                  if (!canResolveCurrent && !canReopenSelected) {
+                    return null
+                  }
+
+                  const statusMeta = AGENDA_STATUS_META[selectedOutcome]
                   const statusNode = (
                     <span
                       className={[
                         'inline-flex h-9 items-center gap-1.5 rounded-lg px-1 text-sm font-medium',
-                        currentOutcome === 'done'
+                        selectedOutcome === 'done'
                           ? 'text-success'
                           : 'text-text-muted',
                       ].join(' ')}
                     >
                       <span aria-hidden="true" className="material-symbols-outlined text-[16px]">
-                        {currentOutcome === 'done' ? 'check' : 'refresh'}
+                        {selectedOutcome === 'done' ? 'check' : 'refresh'}
                       </span>
                       {statusMeta.label}
                     </span>
                   )
 
+                  if (canReopenSelected) {
+                    return (
+                      <div className="mt-8 flex flex-wrap items-center gap-3 border-t border-subtle pt-5">
+                        {statusNode}
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() =>
+                            void handleReopenItem(liveSelectedItem)
+                          }
+                          aria-label={`Reopen ${liveSelectedItem.title}`}
+                          title="Reopen"
+                          className="inline-flex h-9 items-center rounded-lg border border-default bg-surface px-3 text-sm font-medium text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-60"
+                        >
+                          {busy ? 'Reopening…' : 'Reopen'}
+                        </button>
+                        {canResolveCurrent && liveCurrentItem != null && (
+                          <button
+                            ref={followUpTriggerRef}
+                            type="button"
+                            disabled={busy}
+                            onClick={() =>
+                              setFollowUpSourceItem(liveCurrentItem)
+                            }
+                            aria-label={`Schedule follow-up for ${liveCurrentItem.title}`}
+                            title="Schedule follow-up"
+                            className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-default bg-surface px-3 text-sm font-medium text-text outline-none transition hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-60"
+                          >
+                            <span aria-hidden="true" className="material-symbols-outlined text-[16px] text-text-muted">
+                              event_repeat
+                            </span>
+                            Schedule follow-up
+                          </button>
+                        )}
+                      </div>
+                    )
+                  }
+
+                  if (!canResolveCurrent || liveCurrentItem == null) {
+                    return null
+                  }
+
+                  const currentOutcome = liveCurrentItem.outcome
                   const scheduleAction = (
                     <button
                       ref={followUpTriggerRef}
@@ -3462,12 +3521,7 @@ export function MeetingDetailPage() {
 
                   return (
                     <div className="mt-8 flex flex-wrap items-center gap-3 border-t border-subtle pt-5">
-                      {currentOutcome === 'done' ? (
-                        <>
-                          {statusNode}
-                          {scheduleAction}
-                        </>
-                      ) : currentOutcome === 'follow_up' ? (
+                      {currentOutcome === 'follow_up' ? (
                         <>
                           {statusNode}
                           {busy ? (

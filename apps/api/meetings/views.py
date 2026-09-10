@@ -63,6 +63,7 @@ from .services import (
     focus_meeting_item,
     mark_meeting_item_done,
     mark_meeting_item_follow_up,
+    reopen_meeting_item,
     schedule_meeting_item_follow_up,
     create_meeting_section,
     create_meeting_series,
@@ -1707,6 +1708,30 @@ class MeetingItemDoneView(APIView):
             request,
             item,
             mark_meeting_item_done,
+        )
+
+
+class MeetingItemReopenView(APIView):
+    """POST /api/meeting-items/{id}/reopen — change a done item's
+    outcome to not_discussed without changing the current item."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, meeting_item_id):
+        item = _require_meeting_item_access(
+            request,
+            meeting_item_id,
+        )
+        if item is None:
+            return Response(
+                {"error": "Meeting item not found"},
+                status=404,
+            )
+
+        return _run_meeting_item_action(
+            request,
+            item,
+            reopen_meeting_item,
         )
 
 

@@ -2834,11 +2834,10 @@ test(
       ).toHaveCount(0)
     }
 
-    // STALE TEST (updated): clicking a Live agenda row is now
-    // SELECTION-only (local UI navigation); the Focus (make-current)
-    // affordance is deferred. The current pointer therefore only
-    // moves through explicit resolution actions (Done / Follow-up),
-    // whose server-side advance rule the rest of this flow asserts.
+    // Clicking a Live agenda row is selection-only (local UI
+    // navigation). The detail pane's explicit Make current action
+    // performs Focus; resolving actions may then advance Current by
+    // the server-side rule asserted throughout this flow.
     const selectRow = async (title: string) => {
       await agendaItem(title)
         .getByRole('button', {
@@ -2967,6 +2966,36 @@ test(
     // The advance rule selected a still-open successor: Omega is
     // current AND open.
     await itemHasOutcome('Omega', 'Open')
+
+    // Reopen corrects the selected Done item's outcome only. Beta
+    // remains Selected in the detail pane, while Omega remains the
+    // persisted Current item and Return to current stays meaningful.
+    await selectRow('Beta')
+    await expect(workspace).toContainText('Beta')
+    await expect(
+      page.getByRole('button', { name: 'Reopen Beta' }),
+    ).toBeVisible()
+    await page
+      .getByRole('button', { name: 'Reopen Beta' })
+      .click()
+    await itemHasOutcome('Beta', 'Open')
+    await itemIsCurrent('Omega')
+    await expect(workspace).toContainText('Beta')
+    await expect(
+      page.getByRole('button', { name: 'Return to current' }),
+    ).toBeVisible()
+
+    // Restore the later flow through explicit navigation: only Make
+    // current moves Current to Beta, and Done then advances it to Omega.
+    await page
+      .getByRole('button', { name: 'Make Beta current' })
+      .click()
+    await itemIsCurrent('Beta')
+    await page
+      .getByRole('button', { name: 'Mark Beta as done' })
+      .click()
+    await itemHasOutcome('Beta', 'Completed')
+    await itemIsCurrent('Omega')
 
     // --------------------------------------------------------
     // Browsing Alpha (open, non-current) is selection-only:
@@ -3143,5 +3172,33 @@ test(
     await itemHasOutcome('Delta', 'Open')
     await itemHasOutcome('Beta', 'Completed')
     await itemHasOutcome('Omega', 'Resolved with follow-up')
+
+    // Drive Current to null through the existing Done advancement, then
+    // reopen selected Beta. Reopen must preserve both the null pointer
+    // and Beta as the local Selected item.
+    await page
+      .getByRole('button', { name: 'Mark Alpha as done' })
+      .click()
+    await itemIsCurrent('Delta')
+    await page
+      .getByRole('button', { name: 'Mark Delta as done' })
+      .click()
+    await expect(
+      agenda.getByText('Current', { exact: true }),
+    ).toHaveCount(0)
+
+    await selectRow('Beta')
+    await page
+      .getByRole('button', { name: 'Reopen Beta' })
+      .click()
+    await itemHasOutcome('Beta', 'Open')
+    await expect(workspace).toContainText('Beta')
+    await expect(
+      agenda.getByText('Current', { exact: true }),
+    ).toHaveCount(0)
+    await expect(
+      page.getByRole('button', { name: 'Return to current' }),
+    ).toHaveCount(0)
+
   },
 )

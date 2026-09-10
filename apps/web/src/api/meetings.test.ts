@@ -13,6 +13,7 @@ import {
 import {
   getMeetingItemFollowUpTargets,
   markMeetingItemFollowUp,
+  reopenMeetingItem,
   scheduleMeetingItemFollowUp,
 } from './meetings'
 
@@ -134,6 +135,20 @@ describe('Meeting follow-up API client', () => {
     )
     expect(apiPost).toHaveBeenCalledWith(
       '/api/meeting-items/17/follow-up',
+      {},
+    )
+  })
+
+  it('posts to the focused MeetingItem reopen endpoint', async () => {
+    const reopened = {
+      ...itemWithoutSchedule,
+      outcome: 'not_discussed' as const,
+    }
+    vi.mocked(apiPost).mockResolvedValue(reopened)
+
+    await expect(reopenMeetingItem(17)).resolves.toEqual(reopened)
+    expect(apiPost).toHaveBeenCalledWith(
+      '/api/meeting-items/17/reopen',
       {},
     )
   })
