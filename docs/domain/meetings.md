@@ -864,20 +864,24 @@ Canonical semantics:
   is Live-only navigation. It accepts an item of **any** outcome
   and changes only `currentMeetingItemId`; it never completes or
   reopens the previously current item.
-- **Done / Follow-up** (`POST /api/meeting-items/{id}/done`,
-  `POST /api/meeting-items/{id}/follow-up`) are Live-only
-  explicit outcome mutations and do **not** require the target to
-  be current. A previously `done` item may later become
-  `follow_up` explicitly (and vice versa). When the resolved item
-  **is** the current item, current advances to the next
-  `not_discussed` item **after** the resolved item in canonical
-  agenda order (`Section.position`, then `MeetingItem.position`,
-  spanning section boundaries), wrapping once to the beginning if
-  no open item exists after it. `done` / `follow_up` items are
-  never selected as current by the advance rule, and the resolved
-  item is never reselected; when no `not_discussed` items remain,
-  current becomes `null`. When the resolved item is **not**
-  current, current stays unchanged.
+- **Done** (`POST /api/meeting-items/{id}/done`) is a Live-only
+  explicit outcome mutation and does **not** require the target to
+  be current. When the item **is** current at the start of the
+  successful operation, current advances to the next later
+  `not_discussed` item in canonical agenda order
+  (`Section.position`, then `MeetingItem.position`, spanning
+  section boundaries). `done` / `follow_up` items are skipped. If
+  there is no later open item, current becomes `null`; the search
+  never wraps to an earlier item. Resolving a non-current item
+  leaves current unchanged.
+- The legacy direct outcome action
+  (`POST /api/meeting-items/{id}/follow-up`) remains implemented
+  with its existing behavior. Concrete follow-up scheduling is the
+  canonical Meeting Live operation and follows the resolving rule
+  documented in Section 18.
+- Reversal operations such as reopening Done or cancelling a
+  follow-up do not imply **Make current**. Those reversal operations
+  remain future slices.
 - **Start** (`upcoming -> live`) sets current to the first
   `not_discussed` item in canonical agenda order **only if no
   valid current item exists** (an already-set, still-valid
@@ -896,10 +900,10 @@ Canonical semantics:
 - **Deleting the current item** clears the pointer
   (`SET_NULL`), leaving the Meeting without a current item.
 
-Outcome mutations only happen through the explicit domain actions
-(`focus`, `done`, `follow-up`); the generic MeetingItem PATCH
-rejects both the new `outcome` field and the legacy `status`
-field.
+Outcome mutations only happen through Done, the legacy direct
+Follow-up action, or concrete Follow-up scheduling. Focus changes
+only current. The generic MeetingItem PATCH rejects both the new
+`outcome` field and the legacy `status` field.
 
 Legacy data migrations (historical background; superseded by
 0011): 0009/0010 mapped the former statuses
@@ -1011,15 +1015,21 @@ Creation of any system `Follow-ups` Section remains unimplemented.
 
 The implemented `schedule_meeting_item_follow_up` domain operation creates the
 target MeetingItem and follow-up record in one transaction, then sets the
-source outcome to `follow_up` only after both records have been persisted. The
-new target item carries the source title, starts as `not_discussed`, and does
-not copy item Notes, discussion Notes, linked Work Items, decisions, or other
-history. Scheduling never changes either Meeting's current item.
+source outcome to `follow_up` only after both records have been persisted. If
+the source item was current at the start of that first successful scheduling,
+the same transaction advances the source Meeting's current pointer to the next
+later `not_discussed` item in canonical agenda order, across Section boundaries
+and skipping `done` / `follow_up` items. With no later open item, current becomes
+`null`; the search never wraps. Scheduling a non-current source leaves current
+unchanged. The target Meeting's current pointer is never changed. The new target
+item carries the source title, starts as `not_discussed`, and does not copy item
+Notes, discussion Notes, linked Work Items, decisions, or other history.
 
 An identical retry for the same source, target Meeting, and target Section
 returns the existing active schedule without creating another target item or
-follow-up record. A retry naming a different target is rejected with HTTP 409;
-changing an existing schedule belongs to a later Reschedule operation.
+follow-up record and never advances current again. A retry naming a different
+target is rejected with HTTP 409; changing an existing schedule belongs to a
+later Reschedule operation.
 
 The scheduling API is implemented as:
 

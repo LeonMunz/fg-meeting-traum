@@ -28,6 +28,7 @@ from .services import (
     MeetingFollowUpConflictError,
     create_meeting,
     create_meeting_item,
+    create_meeting_section,
     schedule_meeting_item_follow_up,
 )
 
@@ -129,10 +130,7 @@ class ScheduleMeetingItemFollowUpTest(TestCase):
             self.source_item.outcome,
             MeetingItem.Outcome.FOLLOW_UP,
         )
-        self.assertEqual(
-            self.source_meeting.current_meeting_item,
-            self.source_item,
-        )
+        self.assertIsNone(self.source_meeting.current_meeting_item)
         self.assertEqual(follow_up.source_meeting_item, self.source_item)
         self.assertEqual(follow_up.target_meeting, self.target_meeting)
         self.assertEqual(
@@ -146,6 +144,89 @@ class ScheduleMeetingItemFollowUpTest(TestCase):
         )
         self.assertEqual(follow_up.created_by, self.actor)
 
+    def test_scheduling_current_advances_across_sections_and_skips_resolved(self):
+        later_source_item = create_meeting_item(
+            meeting=self.source_meeting,
+            meeting_section=self.source_section,
+            actor=self.actor,
+            title="Already done",
+        )
+        later_source_item.outcome = MeetingItem.Outcome.DONE
+        later_source_item.save(update_fields=["outcome", "updated_at"])
+        next_section = create_meeting_section(
+            meeting=self.source_meeting,
+            actor=self.actor,
+            name="Decisions",
+        )
+        followed_up_item = create_meeting_item(
+            meeting=self.source_meeting,
+            meeting_section=next_section,
+            actor=self.actor,
+            title="Already followed up",
+        )
+        followed_up_item.outcome = MeetingItem.Outcome.FOLLOW_UP
+        followed_up_item.save(update_fields=["outcome", "updated_at"])
+        next_open_item = create_meeting_item(
+            meeting=self.source_meeting,
+            meeting_section=next_section,
+            actor=self.actor,
+            title="Next open item",
+        )
+        self.source_meeting.current_meeting_item = self.source_item
+        self.source_meeting.save(
+            update_fields=["current_meeting_item", "updated_at"],
+        )
+
+        self._schedule()
+
+        self.source_meeting.refresh_from_db()
+        self.assertEqual(
+            self.source_meeting.current_meeting_item,
+            next_open_item,
+        )
+
+    def test_scheduling_non_current_item_preserves_current(self):
+        current_item = create_meeting_item(
+            meeting=self.source_meeting,
+            meeting_section=self.source_section,
+            actor=self.actor,
+            title="Current discussion",
+        )
+        self.source_meeting.current_meeting_item = current_item
+        self.source_meeting.save(
+            update_fields=["current_meeting_item", "updated_at"],
+        )
+
+        self._schedule()
+
+        self.source_meeting.refresh_from_db()
+        self.assertEqual(
+            self.source_meeting.current_meeting_item,
+            current_item,
+        )
+
+    def test_scheduling_current_without_later_open_item_clears_current(self):
+        last_item = create_meeting_item(
+            meeting=self.source_meeting,
+            meeting_section=self.source_section,
+            actor=self.actor,
+            title="Last agenda item",
+        )
+        self.source_meeting.current_meeting_item = last_item
+        self.source_meeting.save(
+            update_fields=["current_meeting_item", "updated_at"],
+        )
+
+        self._schedule(source_meeting_item=last_item)
+
+        self.source_meeting.refresh_from_db()
+        self.assertIsNone(self.source_meeting.current_meeting_item)
+        self.source_item.refresh_from_db()
+        self.assertEqual(
+            self.source_item.outcome,
+            MeetingItem.Outcome.NOT_DISCUSSED,
+        )
+
     def test_live_and_completed_targets_are_rejected_without_writes(self):
         for target_status in (
             Meeting.Status.LIVE,
@@ -156,6 +237,10 @@ class ScheduleMeetingItemFollowUpTest(TestCase):
                 section = MeetingSection.objects.get(meeting=target)
                 target.status = target_status
                 target.save(update_fields=["status", "updated_at"])
+                self.source_meeting.current_meeting_item = self.source_item
+                self.source_meeting.save(
+                    update_fields=["current_meeting_item", "updated_at"],
+                )
 
                 with self.assertRaises(MeetingDomainError):
                     self._schedule(
@@ -164,6 +249,11 @@ class ScheduleMeetingItemFollowUpTest(TestCase):
                     )
 
                 self._assert_no_schedule_writes()
+                self.source_meeting.refresh_from_db()
+                self.assertEqual(
+                    self.source_meeting.current_meeting_item,
+                    self.source_item,
+                )
 
     def test_source_meeting_cannot_be_target(self):
         with self.assertRaises(MeetingDomainError):
@@ -221,6 +311,10 @@ class ScheduleMeetingItemFollowUpTest(TestCase):
         self._assert_no_schedule_writes()
 
     def test_failure_after_follow_up_insert_rolls_back_every_write(self):
+        self.source_meeting.current_meeting_item = self.source_item
+        self.source_meeting.save(
+            update_fields=["current_meeting_item", "updated_at"],
+        )
         original_create = MeetingItemFollowUp.objects.create
 
         def create_then_fail(**kwargs):
@@ -236,13 +330,40 @@ class ScheduleMeetingItemFollowUpTest(TestCase):
                 self._schedule()
 
         self._assert_no_schedule_writes()
+        self.source_meeting.refresh_from_db()
+        self.assertEqual(
+            self.source_meeting.current_meeting_item,
+            self.source_item,
+        )
 
     def test_identical_retry_reuses_existing_schedule(self):
+        next_item = create_meeting_item(
+            meeting=self.source_meeting,
+            meeting_section=self.source_section,
+            actor=self.actor,
+            title="Next item",
+        )
+        later_item = create_meeting_item(
+            meeting=self.source_meeting,
+            meeting_section=self.source_section,
+            actor=self.actor,
+            title="Later item",
+        )
+        self.source_meeting.current_meeting_item = self.source_item
+        self.source_meeting.save(
+            update_fields=["current_meeting_item", "updated_at"],
+        )
         first = self._schedule()
+
+        self.source_meeting.refresh_from_db()
+        self.assertEqual(self.source_meeting.current_meeting_item, next_item)
 
         second = self._schedule()
 
+        self.source_meeting.refresh_from_db()
         self.assertEqual(second.pk, first.pk)
+        self.assertEqual(self.source_meeting.current_meeting_item, next_item)
+        self.assertNotEqual(self.source_meeting.current_meeting_item, later_item)
         self.assertEqual(MeetingItemFollowUp.objects.count(), 1)
         self.assertEqual(
             MeetingItem.objects.filter(meeting=self.target_meeting).count(),

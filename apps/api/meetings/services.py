@@ -596,26 +596,38 @@ def schedule_meeting_item_follow_up(
     The source item remains historical. A successful first call appends a
     distinct, open MeetingItem to the explicit target Section, records the
     concrete source-to-target trace, and only then marks the source outcome
-    as follow_up. Repeating the same active schedule returns its existing
-    trace; choosing a different target requires a later reschedule action.
+    as follow_up. If the source was current when the locked operation began,
+    current advances to the next later open agenda item. Repeating the same
+    active schedule returns its existing trace without advancing again;
+    choosing a different target requires a later reschedule action.
     """
+    source_meeting_id = (
+        MeetingItem.objects
+        .values_list("meeting_id", flat=True)
+        .get(pk=source_meeting_item.pk)
+    )
+    locked_meetings = {
+        meeting.pk: meeting
+        for meeting in (
+            Meeting.objects
+            .select_for_update()
+            .filter(pk__in={source_meeting_id, target_meeting.pk})
+            .order_by("pk")
+        )
+    }
+    source_meeting = locked_meetings[source_meeting_id]
+    target_meeting = locked_meetings[target_meeting.pk]
     source_meeting_item = (
         MeetingItem.objects
         .select_for_update()
-        .select_related("meeting")
         .get(pk=source_meeting_item.pk)
-    )
-    target_meeting = (
-        Meeting.objects
-        .select_for_update()
-        .get(pk=target_meeting.pk)
     )
     target_meeting_section = MeetingSection.objects.get(
         pk=target_meeting_section.pk,
     )
 
     _require_meeting_write_access(
-        meeting=source_meeting_item.meeting,
+        meeting=source_meeting,
         user=actor,
     )
     _require_meeting_write_access(
@@ -623,7 +635,7 @@ def schedule_meeting_item_follow_up(
         user=actor,
     )
 
-    if source_meeting_item.meeting_id == target_meeting.pk:
+    if source_meeting.pk == target_meeting.pk:
         raise MeetingDomainError(
             "The source Meeting cannot be the follow-up target."
         )
@@ -649,6 +661,10 @@ def schedule_meeting_item_follow_up(
         raise MeetingFollowUpConflictError(
             "This Meeting item is already scheduled for follow-up."
         )
+
+    was_current = (
+        source_meeting.current_meeting_item_id == source_meeting_item.pk
+    )
 
     if target_meeting.status != Meeting.Status.UPCOMING:
         raise MeetingDomainError(
@@ -677,6 +693,11 @@ def schedule_meeting_item_follow_up(
 
     source_meeting_item.outcome = MeetingItem.Outcome.FOLLOW_UP
     source_meeting_item.save(update_fields=["outcome", "updated_at"])
+    if was_current:
+        _advance_current_to_next_not_discussed(
+            meeting=source_meeting,
+            resolved_pk=source_meeting_item.pk,
+        )
     return follow_up
 
 
@@ -1119,47 +1140,36 @@ def _ordered_meeting_items(*, meeting):
     )
 
 
-def _advance_current_to_next_not_discussed(*, meeting, resolved_pk):
+def _advance_current_to_next_not_discussed(
+    *, meeting, resolved_pk, wrap=False,
+):
     """Advance the Meeting's current pointer to the next open item
     after the one that was just resolved.
 
     The successor is the first ``not_discussed`` item strictly AFTER
     ``resolved_pk`` in canonical agenda order (which spans section
-    boundaries). If none exists after it, the search wraps once to
-    the beginning and selects the first remaining ``not_discussed``
-    item before it. ``done`` / ``follow_up`` items are never
-    selected, and the resolved item itself is never reselected.
-    When no ``not_discussed`` items remain, the Meeting has no
-    current item. The caller must hold the Meeting row lock; no
-    item outcome is mutated here.
+    boundaries). ``done`` / ``follow_up`` items are skipped. If no
+    later open item exists, the Meeting has no current item. The
+    legacy direct follow-up outcome action may request its historical
+    one-time wrap behavior. The caller must hold the Meeting row lock;
+    no item outcome is mutated here.
     """
-    order = [
-        item.pk
-        for item in _ordered_meeting_items(meeting=meeting)
-    ]
+    ordered_items = list(_ordered_meeting_items(meeting=meeting))
+    order = [item.pk for item in ordered_items]
     if resolved_pk not in order:
-        # Defensive: the resolved item must be part of the Meeting.
-        order_pk_set = set(order)
-        if resolved_pk not in order_pk_set:
-            raise MeetingDomainError(
-                "The item does not belong to this Meeting."
-            )
+        raise MeetingDomainError(
+            "The item does not belong to this Meeting."
+        )
 
     index = order.index(resolved_pk)
-    n = len(order)
-    for offset in range(1, n + 1):
-        candidate_pk = order[(index + offset) % n]
-        if (
-            MeetingItem.objects
-            .filter(
-                pk=candidate_pk,
-                outcome=MeetingItem.Outcome.NOT_DISCUSSED,
-            )
-            .exists()
-        ):
+    candidates = ordered_items[index + 1:]
+    if wrap:
+        candidates += ordered_items[:index]
+    for candidate in candidates:
+        if candidate.outcome == MeetingItem.Outcome.NOT_DISCUSSED:
             _set_current_item(
                 meeting=meeting,
-                item_pk=candidate_pk,
+                item_pk=candidate.pk,
             )
             return
 
@@ -1167,15 +1177,18 @@ def _advance_current_to_next_not_discussed(*, meeting, resolved_pk):
     meeting.save(update_fields=["current_meeting_item_id", "updated_at"])
 
 
-def _resolve_item_outcome(*, meeting_item, actor, outcome):
+def _resolve_item_outcome(
+    *, meeting_item, actor, outcome, wrap_after_resolved=False,
+):
     """Set an explicit outcome on a MeetingItem of a Live Meeting.
 
     The action is valid for any item of the Meeting — Done and
     Follow-up do not require the item to be current. A previously
     done item may later become follow_up explicitly (and vice
     versa). When the resolved item IS the Meeting's current item,
-    the current pointer advances to the next not_discussed item
-    (wrapping once); otherwise the pointer is left unchanged.
+    the current pointer advances to the next later not_discussed item;
+    otherwise the pointer is left unchanged. The legacy direct
+    follow-up action retains its historical one-time wrap behavior.
     """
     meeting = meeting_item.meeting
     _require_meeting_write_access(meeting=meeting, user=actor)
@@ -1209,6 +1222,7 @@ def _resolve_item_outcome(*, meeting_item, actor, outcome):
         _advance_current_to_next_not_discussed(
             meeting=meeting,
             resolved_pk=meeting_item.pk,
+            wrap=wrap_after_resolved,
         )
         meeting.refresh_from_db()
 
@@ -1221,8 +1235,8 @@ def mark_meeting_item_done(*, meeting_item, actor):
 
     Done does not require the item to be current. When the
     resolved item IS the Meeting's current item, current advances
-    to the next not_discussed item in canonical agenda order
-    (wrapping once); when none remains, current becomes null.
+    to the next later not_discussed item in canonical agenda order;
+    when none exists, current becomes null.
     A non-current item's Done leaves current unchanged.
     """
     return _resolve_item_outcome(
@@ -1247,6 +1261,7 @@ def mark_meeting_item_follow_up(*, meeting_item, actor):
         meeting_item=meeting_item,
         actor=actor,
         outcome=MeetingItem.Outcome.FOLLOW_UP,
+        wrap_after_resolved=True,
     )
 
 

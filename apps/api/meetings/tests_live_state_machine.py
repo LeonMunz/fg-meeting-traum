@@ -744,7 +744,7 @@ class LiveStateMachineDomainTest(LiveStateMachineBase):
             MeetingItem.Outcome.NOT_DISCUSSED,
         )
 
-    def test_successor_wraps_across_sections_to_first_open(self):
+    def test_done_does_not_wrap_to_earlier_open_item(self):
         meeting = self.create_meeting()
         section_a = MeetingSection.objects.get(meeting=meeting)
         section_b = self.create_section(meeting, "Decisions")
@@ -761,7 +761,11 @@ class LiveStateMachineDomainTest(LiveStateMachineBase):
         self.assertEqual(self.current_id(meeting), b1.pk)
 
         mark_meeting_item_done(meeting_item=b1, actor=self.alex)
-        self.assertEqual(self.current_id(meeting), a1.pk)
+        self.assertIsNone(self.current_id(meeting))
+        self.assertEqual(
+            self.item_outcome(a1),
+            MeetingItem.Outcome.NOT_DISCUSSED,
+        )
 
     def test_successor_never_selects_resolved_items(self):
         meeting = self.create_meeting()
