@@ -888,9 +888,10 @@ Canonical semantics:
 - Reopen Done rejects `follow_up` (including a scheduled follow-up) and
   never cancels or changes follow-up scheduling.
 - Cancelling a concrete scheduled follow-up is implemented as a domain
-  operation (``cancel_meeting_item_follow_up``); the API endpoint and UI
-  remain a future slice. See §18a for the implemented cancellation
-  invariant.
+  operation (``cancel_meeting_item_follow_up``) exposed through
+  ``POST /api/meeting-item-follow-ups/{followUpId}/cancel`` and the typed
+  frontend client; the Live Cancel UI remains a future slice. See §18a for
+  the implemented cancellation invariant and API contract.
 - **Start** (`upcoming -> live`) sets current to the first
   `not_discussed` item in canonical agenda order **only if no
   valid current item exists** (an already-set, still-valid
@@ -1067,10 +1068,11 @@ candidate contains `id`, `title`, `scheduledAt`, nullable `seriesId`, visible
 `sections`, and nullable `recommendedSectionId`.
 
 Creation of a system Follow-ups Section, the scheduling dialog, Reschedule,
-the Cancel API endpoint and UI, automatic Meeting creation, and Previous
-Context UI remain unimplemented. The domain-level cancellation operation
-(``cancel_meeting_item_follow_up``) IS implemented (see §18a); its API
-endpoint and UI are not. The existing Live
+automatic Meeting creation, and Previous Context UI remain unimplemented.
+The domain-level cancellation operation (``cancel_meeting_item_follow_up``)
+IS implemented (see §18a) and is exposed through the
+``POST /api/meeting-item-follow-ups/{followUpId}/cancel`` endpoint and the
+typed frontend client; its Live Cancel UI is not. The existing Live
 `POST /api/meeting-items/{id}/follow-up` action remains unchanged during this
 temporary coexistence and still changes only the outcome.
 
@@ -1156,6 +1158,38 @@ All changes are atomic.
 the same source) is a future slice. The existing "one active follow-up per
 source" invariant means one *active* (non-cancelled) relation; cancelled
 records do not block a later schedule.
+
+**API contract:** ``POST /api/meeting-item-follow-ups/{followUpId}/cancel``
+cancels one concrete scheduled FollowUp by its primary key. Authentication is
+required; the view performs no additional authorization of its own beyond the
+canonical read-access check used to locate the record — write authorization
+is enforced exclusively by the domain operation with the authenticated user,
+so idempotent retries of an already-cancelled FollowUp still pass through the
+canonical source write check. A FollowUp outside the caller's readable scope
+is indistinguishable from a nonexistent one (``404``); a caller without
+canonical source write permission receives ``403``; domain rejections
+(non-upcoming target, inconsistent persisted state, non-scheduled status)
+receive ``400``. On success the endpoint returns the compact persisted
+result::
+
+    {
+        "id": <followUpId>,
+        "status": "cancelled",
+        "sourceMeetingItemId": <sourceItemId>,
+        "sourceOutcome": "not_discussed",
+        "targetMeetingItemId": <targetItemId | null>,
+        "targetItemDisposition": "removed" | "preserved"
+    }
+
+``targetItemDisposition`` is derived only from the persisted target
+reference after the operation: ``null`` target → ``removed``; a concrete
+target → ``preserved`` (with its ID in ``targetMeetingItemId``). An
+idempotent retry returns the same stable result. Cancelling never changes
+``Meeting.current_meeting_item`` and the existing MeetingItem
+``followUpSchedule`` read keeps its active-follow-up semantics: after a
+cancellation a normal refresh shows ``outcome = not_discussed`` and a null
+``followUpSchedule``. The Live Cancel UI is not implemented; the endpoint is
+currently consumed only by the typed frontend client.
 
 ### Carry-forward is an action, not a parallel status system
 

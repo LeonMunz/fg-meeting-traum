@@ -501,6 +501,45 @@ class MeetingItemScheduleFollowUpSerializer(serializers.Serializer):
     targetMeetingSectionId = serializers.IntegerField(min_value=1)
 
 
+class MeetingItemFollowUpCancelSerializer(serializers.ModelSerializer):
+    """Compact result of cancelling one concrete FollowUp.
+
+    ``targetItemDisposition`` is derived from the persisted target
+    reference: a ``NULL`` target means the generated item was removed;
+    a concrete target means it was preserved.
+    """
+
+    sourceMeetingItemId = serializers.IntegerField(
+        source="source_meeting_item_id",
+        read_only=True,
+    )
+    sourceOutcome = serializers.CharField(
+        source="source_meeting_item.outcome",
+        read_only=True,
+    )
+    targetMeetingItemId = serializers.IntegerField(
+        source="target_meeting_item_id",
+        read_only=True,
+    )
+    targetItemDisposition = serializers.SerializerMethodField()
+
+    class Meta:
+        model = MeetingItemFollowUp
+        fields = [
+            "id",
+            "status",
+            "sourceMeetingItemId",
+            "sourceOutcome",
+            "targetMeetingItemId",
+            "targetItemDisposition",
+        ]
+
+    def get_targetItemDisposition(self, obj):
+        if obj.target_meeting_item_id is None:
+            return "removed"
+        return "preserved"
+
+
 class MeetingFollowUpTargetSectionSerializer(serializers.ModelSerializer):
     sourceSeriesSectionId = serializers.IntegerField(
         source="source_series_section_id",

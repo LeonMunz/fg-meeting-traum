@@ -418,6 +418,19 @@ export interface ApiScheduleMeetingItemFollowUpInput {
   targetMeetingSectionId: number
 }
 
+export type ApiMeetingItemFollowUpTargetDisposition =
+  | 'removed'
+  | 'preserved'
+
+export interface ApiCancelMeetingItemFollowUpResult {
+  id: number
+  status: ApiMeetingItemFollowUpStatus
+  sourceMeetingItemId: number
+  sourceOutcome: ApiMeetingItemOutcome
+  targetMeetingItemId: number | null
+  targetItemDisposition: ApiMeetingItemFollowUpTargetDisposition
+}
+
 export interface ApiCreateMeetingItemInput {
   meetingSectionId: number
   title: string

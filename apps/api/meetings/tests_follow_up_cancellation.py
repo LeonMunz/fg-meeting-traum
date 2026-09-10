@@ -5,6 +5,8 @@ from datetime import timedelta
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.utils import timezone
+from rest_framework import status
+from rest_framework.test import APIClient
 
 from projects.models import ProjectMembership
 from projects.services import add_project_membership, create_project
@@ -71,12 +73,23 @@ class CancelFollowUpBase(TestCase):
             title="Source topic",
         )
 
-    def _create_meeting(self, title, *, days, group=None, actor=None):
+    def _create_meeting(
+        self,
+        title,
+        *,
+        days,
+        group=None,
+        actor=None,
+        scope=Meeting.Scope.GROUP,
+        project=None,
+    ):
         return create_meeting(
             research_group=group or self.group,
             actor=actor or self.actor,
             title=f"{title} Meeting",
             scheduled_at=timezone.now() + timedelta(days=days),
+            scope=scope,
+            project=project,
         )
 
     def _schedule(self):
@@ -803,4 +816,199 @@ class CancelFollowUpDomainTest(CancelFollowUpBase):
                 source_meeting_item=self.source_item,
             ).count(),
             1,
+        )
+
+
+class CancelFollowUpApiTest(CancelFollowUpBase):
+    """API-level tests for POST /api/meeting-item-follow-ups/{id}/cancel."""
+
+    def setUp(self):
+        super().setUp()
+        self.client = APIClient()
+        self.client.force_login(self.actor)
+
+    def _post_cancel(self, follow_up_id):
+        return self.client.post(
+            f"/api/meeting-item-follow-ups/{follow_up_id}/cancel",
+            {},
+            format="json",
+        )
+
+    def test_cancel_pristine_target_returns_removed_disposition(self):
+        follow_up = self._schedule()
+
+        response = self._post_cancel(follow_up.pk)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.source_item.refresh_from_db()
+        self.assertEqual(
+            self.source_item.outcome,
+            MeetingItem.Outcome.NOT_DISCUSSED,
+        )
+        self.assertFalse(
+            MeetingItem.objects.filter(
+                pk=follow_up.target_meeting_item_id,
+            ).exists()
+        )
+        self.assertEqual(response.json(), {
+            "id": follow_up.pk,
+            "status": "cancelled",
+            "sourceMeetingItemId": self.source_item.pk,
+            "sourceOutcome": "not_discussed",
+            "targetMeetingItemId": None,
+            "targetItemDisposition": "removed",
+        })
+
+    def test_cancel_pristine_target_meeting_item_read_clears_schedule(self):
+        follow_up = self._schedule()
+
+        response = self._post_cancel(follow_up.pk)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        detail = self.client.get(f"/api/meeting-items/{self.source_item.pk}/")
+        self.assertEqual(detail.status_code, status.HTTP_200_OK)
+        body = detail.json()
+        self.assertEqual(body["outcome"], "not_discussed")
+        self.assertIsNone(body["followUpSchedule"])
+
+    def test_cancel_edited_target_returns_preserved_disposition(self):
+        follow_up = self._schedule()
+        target_item = follow_up.target_meeting_item
+        target_item.title = "Edited target title"
+        target_item.save(update_fields=["title", "updated_at"])
+
+        response = self._post_cancel(follow_up.pk)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.source_item.refresh_from_db()
+        self.assertEqual(
+            self.source_item.outcome,
+            MeetingItem.Outcome.NOT_DISCUSSED,
+        )
+        self.assertTrue(
+            MeetingItem.objects.filter(pk=target_item.pk).exists()
+        )
+        self.assertEqual(response.json(), {
+            "id": follow_up.pk,
+            "status": "cancelled",
+            "sourceMeetingItemId": self.source_item.pk,
+            "sourceOutcome": "not_discussed",
+            "targetMeetingItemId": target_item.pk,
+            "targetItemDisposition": "preserved",
+        })
+
+    def test_unauthorized_caller_is_rejected(self):
+        project = create_project(
+            research_group=self.group,
+            creator=self.actor,
+            name="Read-only project",
+        )
+        add_project_membership(
+            project=project,
+            actor=self.actor,
+            target_user=self.other,
+            role=ProjectMembership.Role.VIEWER,
+        )
+        project_meeting = self._create_meeting(
+            "Project source",
+            days=0,
+            scope=Meeting.Scope.PROJECT,
+            project=project,
+        )
+        section = MeetingSection.objects.get(meeting=project_meeting)
+        project_item = create_meeting_item(
+            meeting=project_meeting,
+            meeting_section=section,
+            actor=self.actor,
+            title="Project source topic",
+        )
+        follow_up = schedule_meeting_item_follow_up(
+            source_meeting_item=project_item,
+            target_meeting=self.target_meeting,
+            target_meeting_section=self.target_section,
+            actor=self.actor,
+        )
+
+        self.client.force_login(self.other)
+        response = self._post_cancel(follow_up.pk)
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        follow_up.refresh_from_db()
+        self.assertEqual(
+            follow_up.status,
+            MeetingItemFollowUp.Status.SCHEDULED,
+        )
+
+    def test_non_upcoming_target_is_rejected(self):
+        follow_up = self._schedule()
+        self.target_meeting.status = Meeting.Status.LIVE
+        self.target_meeting.save(update_fields=["status", "updated_at"])
+
+        response = self._post_cancel(follow_up.pk)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("no longer upcoming", response.json()["error"])
+        follow_up.refresh_from_db()
+        self.assertEqual(
+            follow_up.status,
+            MeetingItemFollowUp.Status.SCHEDULED,
+        )
+        self.source_item.refresh_from_db()
+        self.assertEqual(
+            self.source_item.outcome,
+            MeetingItem.Outcome.FOLLOW_UP,
+        )
+
+    def test_already_cancelled_authorized_retry_is_idempotent(self):
+        follow_up = self._schedule()
+        self._cancel(follow_up)
+        follow_up.refresh_from_db()
+
+        response = self._post_cancel(follow_up.pk)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.json(), {
+            "id": follow_up.pk,
+            "status": "cancelled",
+            "sourceMeetingItemId": self.source_item.pk,
+            "sourceOutcome": "not_discussed",
+            "targetMeetingItemId": None,
+            "targetItemDisposition": "removed",
+        })
+
+    def test_already_cancelled_preserved_retry_returns_stable_disposition(self):
+        follow_up = self._schedule()
+        target_item = follow_up.target_meeting_item
+        target_item.title = "Edited target title"
+        target_item.save(update_fields=["title", "updated_at"])
+        self._cancel(follow_up)
+
+        response = self._post_cancel(follow_up.pk)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.json()["targetItemDisposition"], "preserved")
+        self.assertEqual(
+            response.json()["targetMeetingItemId"],
+            target_item.pk,
+        )
+
+    def test_unknown_follow_up_is_not_found(self):
+        response = self._post_cancel(999999)
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_forbidden_scope_follow_up_is_not_found(self):
+        follow_up = self._schedule()
+
+        outsider = User.objects.create_user(
+            username="cancel-api-outsider", password="Pass1!",
+        )
+        self.client.force_login(outsider)
+        response = self._post_cancel(follow_up.pk)
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        follow_up.refresh_from_db()
+        self.assertEqual(
+            follow_up.status,
+            MeetingItemFollowUp.Status.SCHEDULED,
         )

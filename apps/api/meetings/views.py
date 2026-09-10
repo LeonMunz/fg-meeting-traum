@@ -27,6 +27,7 @@ from .serializers import (
     MeetingCreateSerializer,
     MeetingItemCreateSerializer,
     MeetingItemPatchSerializer,
+    MeetingItemFollowUpCancelSerializer,
     MeetingItemFollowUpSerializer,
     MeetingFollowUpTargetSerializer,
     MeetingItemScheduleFollowUpSerializer,
@@ -62,6 +63,7 @@ from .services import (
     create_meeting_note,
     focus_meeting_item,
     mark_meeting_item_done,
+    cancel_meeting_item_follow_up,
     mark_meeting_item_follow_up,
     reopen_meeting_item,
     schedule_meeting_item_follow_up,
@@ -1896,6 +1898,47 @@ class MeetingItemFollowUpTargetListView(APIView):
                     context={"source_section": item.meeting_section},
                 ).data,
             }
+        )
+
+
+class MeetingItemFollowUpCancelView(APIView):
+    """POST /api/meeting-item-follow-ups/{follow_up_id}/cancel —
+    cancel one concrete scheduled FollowUp by its FollowUp ID."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, follow_up_id):
+        try:
+            follow_up = MeetingItemFollowUp.objects.select_related(
+                "source_meeting_item",
+                "source_meeting_item__meeting",
+            ).get(pk=follow_up_id)
+        except MeetingItemFollowUp.DoesNotExist:
+            return Response(
+                {"error": "Follow-up not found"},
+                status=404,
+            )
+
+        source_meeting = follow_up.source_meeting_item.meeting
+        if not _has_scoped_read_access(request.user, source_meeting):
+            return Response(
+                {"error": "Follow-up not found"},
+                status=404,
+            )
+
+        if not _has_scoped_write_access(request.user, source_meeting):
+            return _mutation_forbidden_response()
+
+        try:
+            follow_up = cancel_meeting_item_follow_up(
+                follow_up_id=follow_up.pk,
+                actor=request.user,
+            )
+        except MeetingDomainError as exc:
+            return Response({"error": exc.message}, status=400)
+
+        return Response(
+            MeetingItemFollowUpCancelSerializer(follow_up).data
         )
 
 

@@ -15,6 +15,7 @@ import type {
   ApiCreateMeetingWorkItemInput,
   ApiMeeting,
   ApiMeetingItem,
+  ApiCancelMeetingItemFollowUpResult,
   ApiMeetingItemFollowUpSchedule,
   ApiMeetingItemFollowUpTargets,
   ApiMeetingNote,
@@ -217,6 +218,15 @@ export async function scheduleMeetingItemFollowUp(
   return apiPost<ApiMeetingItemFollowUpSchedule>(
     `/api/meeting-items/${meetingItemId}/schedule-follow-up`,
     input,
+  )
+}
+
+export async function cancelMeetingItemFollowUp(
+  followUpId: number,
+): Promise<ApiCancelMeetingItemFollowUpResult> {
+  return apiPost<ApiCancelMeetingItemFollowUpResult>(
+    `/api/meeting-item-follow-ups/${followUpId}/cancel`,
+    {},
   )
 }
 

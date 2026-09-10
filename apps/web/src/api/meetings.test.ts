@@ -9,8 +9,10 @@ import {
 import {
   apiGet,
   apiPost,
+  ApiError,
 } from './client'
 import {
+  cancelMeetingItemFollowUp,
   getMeetingItemFollowUpTargets,
   markMeetingItemFollowUp,
   reopenMeetingItem,
@@ -18,6 +20,7 @@ import {
 } from './meetings'
 
 import type {
+  ApiCancelMeetingItemFollowUpResult,
   ApiMeetingItem,
   ApiMeetingItemFollowUpSchedule,
   ApiMeetingItemFollowUpTargets,
@@ -28,6 +31,17 @@ vi.mock('./client', () => ({
   apiGet: vi.fn(),
   apiPatch: vi.fn(),
   apiPost: vi.fn(),
+  ApiError: class ApiError extends Error {
+    public readonly status: number
+
+    public readonly detail: unknown
+
+    constructor(status: number, detail: unknown) {
+      super(`API error ${status}`)
+      this.status = status
+      this.detail = detail
+    }
+  },
 }))
 
 const schedule: ApiMeetingItemFollowUpSchedule = {
@@ -151,5 +165,69 @@ describe('Meeting follow-up API client', () => {
       '/api/meeting-items/17/reopen',
       {},
     )
+  })
+})
+
+describe('Meeting follow-up cancel API client', () => {
+  beforeEach(() => {
+    vi.mocked(apiPost).mockReset()
+  })
+
+  const removedResult: ApiCancelMeetingItemFollowUpResult = {
+    id: 41,
+    status: 'cancelled',
+    sourceMeetingItemId: 17,
+    sourceOutcome: 'not_discussed',
+    targetMeetingItemId: null,
+    targetItemDisposition: 'removed',
+  }
+
+  const preservedResult: ApiCancelMeetingItemFollowUpResult = {
+    id: 41,
+    status: 'cancelled',
+    sourceMeetingItemId: 17,
+    sourceOutcome: 'not_discussed',
+    targetMeetingItemId: 31,
+    targetItemDisposition: 'preserved',
+  }
+
+  it('posts the focused cancel endpoint by FollowUp ID', async () => {
+    vi.mocked(apiPost).mockResolvedValue(removedResult)
+
+    await expect(cancelMeetingItemFollowUp(41)).resolves.toEqual(
+      removedResult,
+    )
+    expect(apiPost).toHaveBeenCalledWith(
+      '/api/meeting-item-follow-ups/41/cancel',
+      {},
+    )
+  })
+
+  it('parses a removed disposition response', async () => {
+    vi.mocked(apiPost).mockResolvedValue(removedResult)
+
+    const result = await cancelMeetingItemFollowUp(41)
+
+    expect(result.targetMeetingItemId).toBeNull()
+    expect(result.targetItemDisposition).toBe('removed')
+  })
+
+  it('parses a preserved disposition response', async () => {
+    vi.mocked(apiPost).mockResolvedValue(preservedResult)
+
+    const result = await cancelMeetingItemFollowUp(41)
+
+    expect(result.targetMeetingItemId).toBe(31)
+    expect(result.targetItemDisposition).toBe('preserved')
+  })
+
+  it('surfaces client ApiError on failure', async () => {
+    const error = new ApiError(403, { error: 'denied' })
+    vi.mocked(apiPost).mockRejectedValue(error)
+
+    await expect(cancelMeetingItemFollowUp(41)).rejects.toThrow(
+      'API error 403',
+    )
+    await expect(cancelMeetingItemFollowUp(41)).rejects.toEqual(error)
   })
 })
