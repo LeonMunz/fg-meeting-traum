@@ -261,7 +261,7 @@ export function CompletedMeetingProtocol({
                           <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
                             <span
                               aria-hidden="true"
-                              className="shrink-0 select-none text-xs tabular-nums text-text-muted/60"
+                              className="shrink-0 select-none text-xs tabular-nums text-text-muted"
                             >
                               {itemIndex + 1}
                             </span>
@@ -319,7 +319,7 @@ export function CompletedMeetingProtocol({
                               visible, attribution secondary. */}
                           {notes.length > 0 && (
                             <div className="mt-3 pl-5">
-                              <p className="text-[11px] font-semibold uppercase tracking-wide text-text-muted/80">
+                              <p className="text-[11px] font-semibold uppercase tracking-wide text-text-muted">
                                 Notes
                               </p>
 

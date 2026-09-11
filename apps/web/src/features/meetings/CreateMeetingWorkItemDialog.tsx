@@ -594,24 +594,24 @@ export function CreateMeetingWorkItemDialog({
     >
       <form
         onSubmit={handleSubmit}
-        className="flex max-h-[min(52rem,calc(100dvh-2rem))] w-full max-w-xl flex-col overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest shadow-xl"
+        className="flex max-h-[min(52rem,calc(100dvh-2rem))] w-full max-w-xl flex-col overflow-hidden rounded-xl border border-border-subtle bg-surface shadow-xl"
       >
-        <div className="shrink-0 border-b border-outline-variant px-6 py-5">
+        <div className="shrink-0 border-b border-border-subtle px-6 py-5">
           <h2
             id="meeting-work-item-title"
-            className="text-lg font-semibold text-on-surface"
+            className="text-lg font-semibold text-text"
           >
             Create work item
           </h2>
 
-          <p className="mt-1 text-sm text-on-surface-variant">
+          <p className="mt-1 text-sm text-text-muted">
             Turn this agenda item into project work.
           </p>
         </div>
 
         <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5">
           <label className="block">
-            <span className="mb-1.5 block text-sm font-medium text-on-surface">
+            <span className="mb-1.5 block text-sm font-medium text-text">
               Project
             </span>
 
@@ -626,7 +626,7 @@ export function CreateMeetingWorkItemDialog({
                   event.target.value,
                 )
               }
-              className="h-10 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none focus:border-primary"
+              className="h-10 w-full rounded-lg border border-border-control bg-surface px-3 text-sm text-text outline-none focus:border-focus"
             >
               {projects.length === 0 ? (
                 <option value="">
@@ -654,7 +654,7 @@ export function CreateMeetingWorkItemDialog({
           </label>
 
           <label className="block">
-            <span className="mb-1.5 block text-sm font-medium text-on-surface">
+            <span className="mb-1.5 block text-sm font-medium text-text">
               Type
             </span>
 
@@ -668,7 +668,7 @@ export function CreateMeetingWorkItemDialog({
                   setTypeDefinitionId(next)
                 }
               }}
-              className="h-10 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none focus:border-primary"
+              className="h-10 w-full rounded-lg border border-border-control bg-surface px-3 text-sm text-text outline-none focus:border-focus"
             >
               {typeDefinitions.length === 0 ? (
                 <option value="">
@@ -691,7 +691,7 @@ export function CreateMeetingWorkItemDialog({
 
           {statusDefinitions.length > 0 && (
             <label className="block">
-              <span className="mb-1.5 block text-sm font-medium text-on-surface">
+              <span className="mb-1.5 block text-sm font-medium text-text">
                 Status
               </span>
 
@@ -708,7 +708,7 @@ export function CreateMeetingWorkItemDialog({
                     Number.isInteger(next) ? next : null,
                   )
                 }}
-                className="h-10 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none focus:border-primary"
+                className="h-10 w-full rounded-lg border border-border-control bg-surface px-3 text-sm text-text outline-none focus:border-focus"
               >
                 {statusDefinitions.map((statusDefinition) => (
                   <option
@@ -723,7 +723,7 @@ export function CreateMeetingWorkItemDialog({
           )}
 
           <label className="block">
-            <span className="mb-1.5 block text-sm font-medium text-on-surface">
+            <span className="mb-1.5 block text-sm font-medium text-text">
               Title
             </span>
 
@@ -733,12 +733,12 @@ export function CreateMeetingWorkItemDialog({
               onChange={(event) =>
                 setTitle(event.target.value)
               }
-              className="h-10 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
+              className="h-10 w-full rounded-lg border border-border-control bg-surface px-3 text-sm text-text outline-none focus:border-focus focus:ring-2 focus:ring-focus/15"
             />
           </label>
 
           <label className="block">
-            <span className="mb-1.5 block text-sm font-medium text-on-surface">
+            <span className="mb-1.5 block text-sm font-medium text-text">
               Description
             </span>
 
@@ -750,26 +750,26 @@ export function CreateMeetingWorkItemDialog({
                 )
               }
               rows={3}
-              className="w-full resize-y rounded-lg border border-outline-variant bg-surface-container-lowest px-3 py-2.5 text-sm text-on-surface outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
+              className="w-full resize-y rounded-lg border border-border-control bg-surface px-3 py-2.5 text-sm text-text outline-none focus:border-focus focus:ring-2 focus:ring-focus/15"
             />
           </label>
 
           <fieldset>
-            <legend className="text-sm font-medium text-on-surface">
+            <legend className="text-sm font-medium text-text">
               Assignees
             </legend>
 
             <div
               role="group"
               aria-label="Assignees"
-              className="mt-2 rounded-lg border border-outline-variant"
+              className="mt-2 rounded-lg border border-border-subtle"
             >
               {loadingMembers ? (
-                <div className="px-4 py-3 text-sm text-on-surface-variant">
+                <div className="px-4 py-3 text-sm text-text-muted">
                   Loading project members…
                 </div>
               ) : eligibleAssignees.length === 0 ? (
-                <div className="px-4 py-3 text-sm text-on-surface-variant">
+                <div className="px-4 py-3 text-sm text-text-muted">
                   No eligible assignees.
                 </div>
               ) : (
@@ -777,7 +777,7 @@ export function CreateMeetingWorkItemDialog({
                   (membership) => (
                     <label
                       key={membership.id}
-                      className="flex items-center gap-3 border-b border-outline-variant px-4 py-3 last:border-b-0"
+                      className="flex items-center gap-3 border-b border-border-subtle px-4 py-3 last:border-b-0"
                     >
                       <input
                         type="checkbox"
@@ -791,11 +791,11 @@ export function CreateMeetingWorkItemDialog({
                         }
                       />
 
-                      <span className="text-sm text-on-surface">
+                      <span className="text-sm text-text">
                         {getPersonName(
                           membership,
                         )}{' '}
-                        <span className="text-on-surface-variant">
+                        <span className="text-text-muted">
                           @
                           {
                             membership.user
@@ -811,7 +811,7 @@ export function CreateMeetingWorkItemDialog({
           </fieldset>
 
           <label className="block">
-            <span className="mb-1.5 block text-sm font-medium text-on-surface">
+            <span className="mb-1.5 block text-sm font-medium text-text">
               Due date
             </span>
 
@@ -823,16 +823,16 @@ export function CreateMeetingWorkItemDialog({
                   event.target.value,
                 )
               }
-              className="h-10 rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none focus:border-primary"
+              className="h-10 rounded-lg border border-border-control bg-surface px-3 text-sm text-text outline-none focus:border-focus"
             />
           </label>
         </div>
 
-        <div className="shrink-0 border-t border-outline-variant bg-surface-container-low/45">
+        <div className="shrink-0 border-t border-border-subtle bg-surface-quiet">
           {(error ?? typeValidationError) && (
             <div
               role="alert"
-              className="px-6 pt-3 text-sm text-error"
+              className="px-6 pt-3 text-sm text-danger"
             >
               {error ?? typeValidationError}
             </div>
@@ -843,7 +843,7 @@ export function CreateMeetingWorkItemDialog({
             type="button"
             disabled={submitting}
             onClick={onClose}
-            className="h-9 rounded-lg px-4 text-sm font-medium text-on-surface-variant hover:bg-surface-container-high disabled:opacity-45"
+            className="h-9 rounded-lg px-4 text-sm font-medium text-text-muted hover:bg-surface-hover disabled:opacity-45"
           >
             Cancel
           </button>
@@ -858,7 +858,7 @@ export function CreateMeetingWorkItemDialog({
               typeDefinitionId == null ||
               !title.trim()
             }
-            className="inline-flex h-9 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-45"
+            className="inline-flex h-9 items-center gap-2 rounded-lg bg-accent px-4 text-sm font-semibold text-text-inverse disabled:cursor-not-allowed disabled:opacity-45"
           >
             <span className="material-symbols-outlined text-[18px]">
               task_alt

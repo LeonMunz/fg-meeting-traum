@@ -333,7 +333,7 @@ function MenuTrigger({
             top: position.top,
             left: position.left,
           }}
-          className="z-50 w-52 rounded-xl border border-border-subtle bg-surface p-1 shadow-lg shadow-text/10"
+          className="z-50 w-52 rounded-xl border border-border-subtle bg-surface p-1 shadow-lg"
         >
           {children(open, toggle)}
         </div>
@@ -2497,27 +2497,27 @@ export function MeetingDetailPage() {
           and Completed because the header metadata line already
           shows the count. */}
       {!isLive && !isCompleted && (
-      <div className="mt-6 flex flex-wrap items-center gap-3 border-b border-outline-variant pb-5">
+      <div className="mt-6 flex flex-wrap items-center gap-3 border-b border-border-subtle pb-5">
         <div className="flex -space-x-1.5">
           {sortedParticipants.slice(0, 6).map((participant) => (
             <span
               key={participant.id}
               title={getPersonName(participant.user)}
-              className="flex h-7 w-7 items-center justify-center rounded-full border-2 border-background bg-surface-container-high text-[10px] font-semibold text-on-surface"
+              className="flex h-7 w-7 items-center justify-center rounded-full border-2 border-canvas bg-surface-muted text-[10px] font-semibold text-text"
             >
               {getInitials(participant.user)}
             </span>
           ))}
 
           {participants.length > 6 && (
-            <span className="flex h-7 w-7 items-center justify-center rounded-full border-2 border-background bg-surface-container text-[10px] font-semibold text-on-surface-variant">
+            <span className="flex h-7 w-7 items-center justify-center rounded-full border-2 border-canvas bg-surface-muted text-[10px] font-semibold text-text-muted">
               +{participants.length - 6}
             </span>
           )}
         </div>
 
-        <span className="text-sm text-on-surface-variant">
-          <span className="font-medium text-on-surface">
+        <span className="text-sm text-text-muted">
+          <span className="font-medium text-text">
             Participants
           </span>{' '}
           · {participants.length}
@@ -2544,7 +2544,7 @@ export function MeetingDetailPage() {
               })
             }}
             aria-expanded={managingParticipants}
-            className="inline-flex h-8 items-center gap-1 rounded-lg px-2.5 text-sm font-medium text-primary outline-none transition hover:bg-primary/10 focus-visible:ring-2 focus-visible:ring-primary/40"
+            className="inline-flex h-8 items-center gap-1 rounded-lg px-2.5 text-sm font-medium text-accent-text outline-none transition hover:bg-accent-subtle focus-visible:ring-2 focus-visible:ring-focus/40"
           >
             <span aria-hidden="true" className="material-symbols-outlined text-[17px]">
               {managingParticipants
@@ -2560,7 +2560,7 @@ export function MeetingDetailPage() {
       )}
 
       {managingParticipants && canEditParticipants && (
-        <div className="mt-4 rounded-xl border border-outline-variant bg-surface-container-low/50 p-4">
+        <div className="mt-4 rounded-xl border border-border-subtle bg-surface-quiet p-4">
           <div className="flex gap-2">
             <label className="min-w-0 flex-1">
               <span className="sr-only">
@@ -2577,7 +2577,7 @@ export function MeetingDetailPage() {
                 onChange={(event) =>
                   setSelectedMemberId(event.target.value)
                 }
-                className="h-9 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-2 text-sm text-on-surface outline-none focus:border-primary"
+                className="h-9 w-full rounded-lg border border-border-control bg-surface px-2 text-sm text-text outline-none focus:border-focus"
               >
                 <option value="">
                   {availableMembers.length > 0
@@ -2603,28 +2603,28 @@ export function MeetingDetailPage() {
                 !selectedMemberId
               }
               onClick={() => void handleAddParticipant()}
-              className="inline-flex h-9 items-center justify-center rounded-lg bg-primary px-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-45"
+              className="inline-flex h-9 items-center justify-center rounded-lg bg-accent px-3 text-sm font-semibold text-text-inverse disabled:cursor-not-allowed disabled:opacity-45"
             >
               Add
             </button>
           </div>
 
-          <div className="mt-4 divide-y divide-outline-variant">
+          <div className="mt-4 divide-y divide-border-subtle">
             {sortedParticipants.map((participant) => (
               <div
                 key={participant.id}
                 className="flex items-center gap-3 py-2.5"
               >
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-surface-container-high text-[10px] font-semibold text-on-surface">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-surface-muted text-[10px] font-semibold text-text">
                   {getInitials(participant.user)}
                 </div>
 
                 <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-medium text-on-surface">
+                  <div className="truncate text-sm font-medium text-text">
                     {getPersonName(participant.user)}
                   </div>
 
-                  <div className="truncate text-xs text-on-surface-variant">
+                  <div className="truncate text-xs text-text-muted">
                     @
                     {participant.user.username}
                   </div>
@@ -2639,7 +2639,7 @@ export function MeetingDetailPage() {
                   onClick={() =>
                     void handleRemoveParticipant(participant)
                   }
-                  className="flex h-8 w-8 items-center justify-center rounded-lg text-on-surface-variant transition hover:bg-error-container hover:text-error disabled:opacity-45"
+                  className="flex h-8 w-8 items-center justify-center rounded-lg text-text-muted transition hover:bg-danger-bg hover:text-danger disabled:opacity-45"
                 >
                   <span aria-hidden="true" className="material-symbols-outlined text-[18px]">
                     close
@@ -2686,7 +2686,7 @@ export function MeetingDetailPage() {
 
       {/* Structure editing banner */}
       {structureEditing && canPrepare && (
-        <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-border-subtle bg-surface-subtle px-4 py-3">
+        <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-border-subtle bg-surface-quiet px-4 py-3">
           <span aria-hidden="true" className="material-symbols-outlined text-[18px] text-text-muted">
             edit_note
           </span>
@@ -3846,7 +3846,7 @@ export function MeetingDetailPage() {
                   {/* Section edit form */}
                   {canPrepare &&
                     editingSectionId === section.id && (
-                      <div className="mt-3 rounded-xl border border-border-subtle bg-surface-subtle p-4">
+                      <div className="mt-3 rounded-xl border border-border-subtle bg-surface-quiet p-4">
                         <div className="flex flex-wrap items-end gap-3">
                           <label className="min-w-40 flex-1">
                             <span className="mb-1 block text-xs font-medium text-text-muted">
@@ -3918,7 +3918,7 @@ export function MeetingDetailPage() {
                           {/* Item editing form */}
                           {canPrepare &&
                             editingItemId === item.id ? (
-                            <div className="rounded-xl border border-border-subtle bg-surface-subtle p-4">
+                            <div className="rounded-xl border border-border-subtle bg-surface-quiet p-4">
                               <label className="block">
                                 <span className="mb-1 block text-xs font-medium text-text-muted">
                                   Title
@@ -4642,7 +4642,7 @@ export function MeetingDetailPage() {
 
       {deleteDialogOpen && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-on-surface/25 px-4 py-8 backdrop-blur-[2px]"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/25 px-4 py-8 backdrop-blur-[2px]"
           onMouseDown={(event) => {
             if (
               event.target === event.currentTarget &&
@@ -4656,17 +4656,17 @@ export function MeetingDetailPage() {
             role="dialog"
             aria-modal="true"
             aria-labelledby="meeting-delete-title"
-            className="w-full max-w-md overflow-hidden rounded-2xl border border-outline-variant bg-surface-container-lowest shadow-xl"
+            className="w-full max-w-md overflow-hidden rounded-2xl border border-border-subtle bg-surface shadow-xl"
           >
             <div className="px-6 py-5">
               <h2
                 id="meeting-delete-title"
-                className="text-lg font-semibold tracking-tight text-on-surface"
+                className="text-lg font-semibold tracking-tight text-text"
               >
                 Delete meeting?
               </h2>
 
-              <p className="mt-2 text-sm text-on-surface-variant">
+              <p className="mt-2 text-sm text-text-muted">
                 This permanently deletes this meeting and its
                 agenda/protocol content. Work Items created from this
                 meeting will not be deleted.
@@ -4675,19 +4675,19 @@ export function MeetingDetailPage() {
               {actionError && (
                 <p
                   role="alert"
-                  className="mt-3 rounded-lg bg-error-container px-3 py-2 text-sm text-error"
+                  className="mt-3 rounded-lg bg-danger-bg px-3 py-2 text-sm text-danger"
                 >
                   {actionError}
                 </p>
               )}
             </div>
 
-            <div className="flex justify-end gap-2 border-t border-outline-variant px-6 py-4">
+            <div className="flex justify-end gap-2 border-t border-border-subtle px-6 py-4">
               <button
                 type="button"
                 disabled={deletingMeeting}
                 onClick={() => setDeleteDialogOpen(false)}
-                className="inline-flex h-9 items-center rounded-lg px-3.5 text-sm font-medium text-on-surface-variant outline-none transition hover:bg-surface-container-high focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-60"
+                className="inline-flex h-9 items-center rounded-lg px-3.5 text-sm font-medium text-text-muted outline-none transition hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus/40 disabled:opacity-60"
               >
                 Cancel
               </button>
@@ -4696,7 +4696,7 @@ export function MeetingDetailPage() {
                 type="button"
                 disabled={deletingMeeting}
                 onClick={() => void handleDeleteMeeting()}
-                className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-error-container px-3.5 text-sm font-semibold text-on-error-container outline-none transition hover:bg-error-container/80 focus-visible:ring-2 focus-visible:ring-error focus-visible:ring-offset-2 disabled:opacity-60"
+                className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-danger-subtle px-3.5 text-sm font-semibold text-danger outline-none transition hover:bg-danger-bg focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 disabled:opacity-60"
               >
                 {deletingMeeting && (
                   <span
@@ -4858,7 +4858,7 @@ export function MeetingDetailPage() {
           </Suspense>
         ) : (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
-            <div className="flex items-center gap-2 rounded-xl border border-outline-variant bg-surface-container-lowest px-5 py-4 text-sm text-on-surface-variant shadow-xl">
+            <div className="flex items-center gap-2 rounded-xl border border-border-subtle bg-surface px-5 py-4 text-sm text-text-muted shadow-xl">
               <span aria-hidden="true" className="material-symbols-outlined animate-spin text-[18px]">
                 refresh
               </span>
