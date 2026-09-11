@@ -193,11 +193,11 @@ export function MeetingListPage() {
     <div className="w-full px-6 py-8 lg:px-8 lg:py-10 xl:px-10">
       <header className="flex items-start justify-between gap-6">
         <div>
-          <h1 className="text-3xl font-semibold tracking-tight text-on-surface">
+          <h1 className="text-3xl font-semibold tracking-tight text-text">
             Meetings
           </h1>
 
-          <p className="mt-1.5 text-sm leading-6 text-on-surface-variant">
+          <p className="mt-1.5 text-sm leading-6 text-text-muted">
             {activeResearchGroup
               ? `Meetings in ${activeResearchGroup.name}.`
               : 'Research Group Meetings and follow-up work.'}
@@ -214,7 +214,7 @@ export function MeetingListPage() {
             setCreateError(null)
             setCreateDialogOpen(true)
           }}
-          className="inline-flex h-10 shrink-0 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-45"
+          className="inline-flex h-10 shrink-0 items-center gap-2 rounded-lg bg-accent px-4 text-sm font-semibold text-text-inverse shadow-sm transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-45"
         >
           <span className="material-symbols-outlined text-[19px]">
             add
@@ -225,7 +225,7 @@ export function MeetingListPage() {
         <button
           type="button"
           onClick={() => navigate('/meetings/series')}
-          className="inline-flex h-10 shrink-0 items-center gap-2 rounded-lg border border-outline-variant bg-surface-container-lowest px-4 text-sm font-semibold text-on-surface transition hover:bg-surface-container-low"
+          className="inline-flex h-10 shrink-0 items-center gap-2 rounded-lg border border-border-subtle bg-surface px-4 text-sm font-semibold text-text transition hover:bg-surface-hover"
         >
           <span className="material-symbols-outlined text-[19px]">
             event_repeat
@@ -235,36 +235,36 @@ export function MeetingListPage() {
       </header>
 
       {pageLoading ? (
-        <div className="mt-8 flex min-h-64 items-center justify-center rounded-xl border border-outline-variant bg-surface-container-lowest">
-          <span className="material-symbols-outlined mr-2 animate-spin text-[20px] text-on-surface-variant">
+        <div className="mt-8 flex min-h-64 items-center justify-center rounded-xl border border-border-subtle bg-surface-quiet">
+          <span className="material-symbols-outlined mr-2 animate-spin text-[20px] text-text-muted">
             refresh
           </span>
 
-          <span className="text-sm text-on-surface-variant">
+          <span className="text-sm text-text-muted">
             Loading meetings…
           </span>
         </div>
       ) : pageError ? (
         <div
           role="alert"
-          className="mt-8 flex min-h-64 flex-col items-center justify-center rounded-xl border border-outline-variant bg-surface-container-lowest px-6 py-10 text-center"
+          className="mt-8 flex min-h-64 flex-col items-center justify-center rounded-xl border border-border-subtle bg-surface-quiet px-6 py-10 text-center"
         >
-          <span className="material-symbols-outlined text-[28px] text-error">
+          <span className="material-symbols-outlined text-[28px] text-danger">
             cloud_off
           </span>
 
-          <h2 className="mt-3 text-base font-semibold text-on-surface">
+          <h2 className="mt-3 text-base font-semibold text-text">
             Meetings couldn't be loaded
           </h2>
 
-          <p className="mt-1 max-w-md text-sm text-on-surface-variant">
+          <p className="mt-1 max-w-md text-sm text-text-muted">
             {pageError}
           </p>
 
           <button
             type="button"
             onClick={() => void loadMeetings()}
-            className="mt-4 inline-flex h-9 items-center gap-2 rounded-lg border border-outline-variant px-4 text-sm font-semibold text-on-surface transition hover:bg-surface-container-low"
+            className="mt-4 inline-flex h-9 items-center gap-2 rounded-lg border border-border-subtle px-4 text-sm font-semibold text-text transition hover:bg-surface-hover"
           >
             <span className="material-symbols-outlined text-[18px]">
               refresh
@@ -273,22 +273,22 @@ export function MeetingListPage() {
           </button>
         </div>
       ) : activeResearchGroupId == null ? (
-        <div className="mt-8 rounded-xl border border-dashed border-outline-variant bg-surface-container-lowest px-6 py-12 text-center">
-          <p className="text-sm text-on-surface-variant">
+        <div className="mt-8 rounded-xl border border-dashed border-border-default bg-surface-quiet px-6 py-12 text-center">
+          <p className="text-sm text-text-muted">
             No research group is currently available.
           </p>
         </div>
       ) : sortedMeetings.length === 0 ? (
-        <div className="mt-8 flex min-h-64 flex-col items-center justify-center rounded-xl border border-dashed border-outline-variant bg-surface-container-lowest px-6 py-12 text-center">
-          <span className="material-symbols-outlined text-[30px] text-on-surface-variant">
+        <div className="mt-8 flex min-h-64 flex-col items-center justify-center rounded-xl border border-dashed border-border-default bg-surface-quiet px-6 py-12 text-center">
+          <span className="material-symbols-outlined text-[30px] text-text-muted">
             groups
           </span>
 
-          <h2 className="mt-3 text-base font-semibold text-on-surface">
+          <h2 className="mt-3 text-base font-semibold text-text">
             No meetings yet
           </h2>
 
-          <p className="mt-1 text-sm text-on-surface-variant">
+          <p className="mt-1 text-sm text-text-muted">
             Create the first meeting for this research group.
           </p>
 
@@ -298,7 +298,7 @@ export function MeetingListPage() {
               setCreateError(null)
               setCreateDialogOpen(true)
             }}
-            className="mt-5 inline-flex h-9 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-white"
+            className="mt-5 inline-flex h-9 items-center gap-2 rounded-lg bg-accent px-4 text-sm font-semibold text-text-inverse"
           >
             <span className="material-symbols-outlined text-[18px]">
               add
@@ -307,26 +307,26 @@ export function MeetingListPage() {
           </button>
         </div>
       ) : (
-        <section className="mt-8 overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest">
-          <div className="grid grid-cols-[minmax(280px,1fr)_220px_140px_120px] border-b border-outline-variant bg-surface-container-low px-6 py-2.5">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-on-surface-variant">
+        <section className="mt-8 overflow-hidden rounded-xl border border-border-subtle bg-surface-quiet">
+          <div className="grid grid-cols-[minmax(280px,1fr)_220px_140px_120px] border-b border-border-subtle bg-surface-header px-6 py-2.5">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-text-muted">
               Meeting
             </div>
 
-            <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-on-surface-variant">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-text-muted">
               Scheduled
             </div>
 
-            <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-on-surface-variant">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-text-muted">
               Status
             </div>
 
-            <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-on-surface-variant">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-text-muted">
               People
             </div>
           </div>
 
-          <div className="divide-y divide-outline-variant/60">
+          <div className="divide-y divide-border-subtle">
             {sortedMeetings.map((meeting) => (
               <button
                 key={meeting.id}
@@ -334,31 +334,31 @@ export function MeetingListPage() {
                 onClick={() =>
                   navigate(`/meetings/${meeting.id}`)
                 }
-                className="grid w-full grid-cols-[minmax(280px,1fr)_220px_140px_120px] items-center gap-4 px-6 py-4 text-left transition hover:bg-surface-container-low"
+                className="grid w-full grid-cols-[minmax(280px,1fr)_220px_140px_120px] items-center gap-4 px-6 py-4 text-left transition hover:bg-surface-hover"
               >
                 <div className="min-w-0">
-                  <div className="truncate text-sm font-semibold text-on-surface">
+                  <div className="truncate text-sm font-semibold text-text">
                     {meeting.title}
                   </div>
 
-                  <div className="mt-1 text-xs text-on-surface-variant">
+                  <div className="mt-1 text-xs text-text-muted">
                     Meeting #{meeting.id}
                   </div>
                 </div>
 
-                <div className="text-sm text-on-surface-variant">
+                <div className="text-sm text-text-muted">
                   {formatMeetingDate(
                     meeting.scheduledAt,
                   )}
                 </div>
 
                 <div>
-                  <span className="inline-flex rounded-full bg-surface-container-high px-2.5 py-1 text-xs font-medium text-on-surface">
+                  <span className="inline-flex rounded-full bg-surface-muted px-2.5 py-1 text-xs font-medium text-text">
                     {statusLabels[meeting.status]}
                   </span>
                 </div>
 
-                <div className="text-sm text-on-surface-variant">
+                <div className="text-sm text-text-muted">
                   {meeting.participantIds.length}
                 </div>
               </button>

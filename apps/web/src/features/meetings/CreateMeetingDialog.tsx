@@ -366,25 +366,25 @@ export function CreateMeetingDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="create-meeting-title"
-        className="max-h-[calc(100vh-2rem)] w-full max-w-lg overflow-y-auto rounded-xl border border-outline-variant bg-surface-container-lowest shadow-xl"
+        className="max-h-[calc(100vh-2rem)] w-full max-w-lg overflow-y-auto rounded-xl border border-border-default bg-surface shadow-xl"
       >
         <form onSubmit={handleSubmit}>
-          <div className="border-b border-outline-variant px-6 py-5">
+          <div className="border-b border-border-subtle px-6 py-5">
             <h2
               id="create-meeting-title"
-              className="text-lg font-semibold text-on-surface"
+              className="text-lg font-semibold text-text"
             >
               New meeting
             </h2>
 
-            <p className="mt-1 text-sm text-on-surface-variant">
+            <p className="mt-1 text-sm text-text-muted">
               Create a Research Group Meeting or a Project Meeting.
             </p>
           </div>
 
           <div className="space-y-5 px-6 py-5">
             <label className="block">
-              <span className="mb-1.5 block text-sm font-medium text-on-surface">
+              <span className="mb-1.5 block text-sm font-medium text-text">
                 Research group
               </span>
 
@@ -395,7 +395,7 @@ export function CreateMeetingDialog({
                   setProjectId('')
                   setSeriesId('')
                 }}
-                className="h-10 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
+                className="h-10 w-full rounded-lg border border-border-control bg-surface px-3 text-sm text-text outline-none focus:border-focus focus:ring-2 focus:ring-focus/15"
               >
                 {groups.map((group) => (
                   <option
@@ -411,7 +411,7 @@ export function CreateMeetingDialog({
             <div>
               <label
                 htmlFor="create-meeting-participants"
-                className="mb-1.5 block text-sm font-medium text-on-surface"
+                className="mb-1.5 block text-sm font-medium text-text"
               >
                 Participants
               </label>
@@ -419,7 +419,7 @@ export function CreateMeetingDialog({
               <div className="relative">
                 <span
                   aria-hidden="true"
-                  className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[18px] text-on-surface-variant"
+                  className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[18px] text-text-muted"
                 >
                   search
                 </span>
@@ -432,13 +432,13 @@ export function CreateMeetingDialog({
                   }
                   placeholder="Search people..."
                   aria-describedby="create-meeting-participants-help"
-                  className="h-10 w-full rounded-lg border border-outline-variant bg-surface-container-lowest pl-10 pr-3 text-sm text-on-surface outline-none transition placeholder:text-on-surface-variant/60 focus:border-primary focus:ring-2 focus:ring-primary/15"
+                  className="h-10 w-full rounded-lg border border-border-control bg-surface pl-10 pr-3 text-sm text-text outline-none transition placeholder:text-text-muted/60 focus:border-focus focus:ring-2 focus:ring-focus/15"
                 />
               </div>
 
               <p
                 id="create-meeting-participants-help"
-                className="mt-1.5 text-xs text-on-surface-variant"
+                className="mt-1.5 text-xs text-text-muted"
               >
                 Search by name or username. Enter at least 2 characters.
               </p>
@@ -446,10 +446,10 @@ export function CreateMeetingDialog({
               {participantQuery.trim().length >= 2 && (
                 <div
                   aria-live="polite"
-                  className="mt-2 max-h-44 overflow-y-auto rounded-xl border border-outline-variant"
+                  className="mt-2 max-h-44 overflow-y-auto rounded-xl border border-border-default bg-surface shadow-lg"
                 >
                   {searchingParticipants ? (
-                    <div className="flex items-center gap-2 px-4 py-3 text-sm text-on-surface-variant">
+                    <div className="flex items-center gap-2 px-4 py-3 text-sm text-text-muted">
                       <span
                         aria-hidden="true"
                         className="material-symbols-outlined animate-spin text-[18px]"
@@ -459,37 +459,37 @@ export function CreateMeetingDialog({
                       Searching…
                     </div>
                   ) : participantSearchError ? (
-                    <div role="alert" className="px-4 py-3 text-sm text-error">
+                    <div role="alert" className="px-4 py-3 text-sm text-danger">
                       {participantSearchError}
                     </div>
                   ) : availableParticipantCandidates.length > 0 ? (
-                    <div className="divide-y divide-outline-variant">
+                    <div className="divide-y divide-border-subtle">
                       {availableParticipantCandidates.map((candidate) => (
                         <button
                           key={candidate.id}
                           type="button"
                           onClick={() => selectParticipant(candidate)}
-                          className="flex w-full items-center gap-3 px-4 py-3 text-left transition hover:bg-surface-container-low focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"
+                          className="flex w-full items-center gap-3 px-4 py-3 text-left transition hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus"
                         >
-                          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-surface-container-high text-[11px] font-semibold text-on-surface">
+                          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-surface-muted text-[11px] font-semibold text-text">
                             {getPersonInitials(candidate)}
                           </span>
                           <span className="min-w-0 flex-1">
-                            <span className="block truncate text-sm font-medium text-on-surface">
+                            <span className="block truncate text-sm font-medium text-text">
                               {getPersonName(candidate)}
                             </span>
-                            <span className="block truncate text-xs text-on-surface-variant">
+                            <span className="block truncate text-xs text-text-muted">
                               @{candidate.username}
                             </span>
                           </span>
-                          <span className="text-xs font-semibold text-primary">
+                          <span className="text-xs font-semibold text-accent-text">
                             Add
                           </span>
                         </button>
                       ))}
                     </div>
                   ) : (
-                    <div className="px-4 py-3 text-sm text-on-surface-variant">
+                    <div className="px-4 py-3 text-sm text-text-muted">
                       {participantCandidates.length > 0
                         ? 'All matching people are selected.'
                         : 'No matching people found.'}
@@ -508,7 +508,7 @@ export function CreateMeetingDialog({
                     <span
                       key={participant.id}
                       role="listitem"
-                      className="inline-flex min-w-0 items-center gap-1.5 rounded-full bg-primary-fixed px-3 py-1.5 text-sm text-on-primary-fixed"
+                      className="inline-flex min-w-0 items-center gap-1.5 rounded-full bg-accent-subtle px-3 py-1.5 text-sm text-accent-text"
                     >
                       <span className="max-w-40 truncate">
                         {getPersonName(participant)}
@@ -523,7 +523,7 @@ export function CreateMeetingDialog({
                             ),
                           )
                         }
-                        className="-mr-1 flex h-5 w-5 items-center justify-center rounded-full text-on-primary-fixed/70 transition hover:bg-on-primary-fixed/10 hover:text-on-primary-fixed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                        className="-mr-1 flex h-5 w-5 items-center justify-center rounded-full text-accent-text/70 transition hover:bg-accent-text/10 hover:text-accent-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
                       >
                         <span
                           aria-hidden="true"
@@ -541,7 +541,7 @@ export function CreateMeetingDialog({
             <div>
               <label
                 htmlFor="create-meeting-project"
-                className="mb-1.5 block text-sm font-medium text-on-surface"
+                className="mb-1.5 block text-sm font-medium text-text"
               >
                 Project
               </label>
@@ -554,7 +554,7 @@ export function CreateMeetingDialog({
                   setProjectId(event.target.value)
                   setSeriesId('')
                 }}
-                className="h-10 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
+                className="h-10 w-full rounded-lg border border-border-control bg-surface px-3 text-sm text-text outline-none focus:border-focus focus:ring-2 focus:ring-focus/15"
               >
                 <option value="">No project (Research Group Meeting)</option>
 
@@ -570,7 +570,7 @@ export function CreateMeetingDialog({
 
               <p
                 id="create-meeting-project-help"
-                className="mt-1.5 text-xs text-on-surface-variant"
+                className="mt-1.5 text-xs text-text-muted"
               >
                 {scope === 'project'
                   ? 'This will be a Project Meeting.'
@@ -581,7 +581,7 @@ export function CreateMeetingDialog({
             <div>
               <label
                 htmlFor="create-meeting-template"
-                className="mb-1.5 block text-sm font-medium text-on-surface"
+                className="mb-1.5 block text-sm font-medium text-text"
               >
                 Meeting template
               </label>
@@ -593,7 +593,7 @@ export function CreateMeetingDialog({
                 onChange={(event) =>
                   setSeriesId(event.target.value)
                 }
-                className="h-10 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
+                className="h-10 w-full rounded-lg border border-border-control bg-surface px-3 text-sm text-text outline-none focus:border-focus focus:ring-2 focus:ring-focus/15"
               >
                 <option value="">No template</option>
 
@@ -609,7 +609,7 @@ export function CreateMeetingDialog({
 
               <p
                 id="create-meeting-template-help"
-                className="mt-1.5 text-xs text-on-surface-variant"
+                className="mt-1.5 text-xs text-text-muted"
               >
                 {seriesId === ''
                   ? 'Creates a standalone meeting.'
@@ -618,7 +618,7 @@ export function CreateMeetingDialog({
             </div>
 
             <label className="block">
-              <span className="mb-1.5 block text-sm font-medium text-on-surface">
+              <span className="mb-1.5 block text-sm font-medium text-text">
                 Title
               </span>
 
@@ -630,12 +630,12 @@ export function CreateMeetingDialog({
                   setTitle(event.target.value)
                 }
                 placeholder="Weekly Sync"
-                className="h-10 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none transition placeholder:text-on-surface-variant/60 focus:border-primary focus:ring-2 focus:ring-primary/15"
+                className="h-10 w-full rounded-lg border border-border-control bg-surface px-3 text-sm text-text outline-none transition placeholder:text-text-muted/60 focus:border-focus focus:ring-2 focus:ring-focus/15"
               />
             </label>
 
             <label className="block">
-              <span className="mb-1.5 block text-sm font-medium text-on-surface">
+              <span className="mb-1.5 block text-sm font-medium text-text">
                 Date and time
               </span>
 
@@ -645,7 +645,7 @@ export function CreateMeetingDialog({
                 onChange={(event) =>
                   setScheduledAt(event.target.value)
                 }
-                className="h-10 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15"
+                className="h-10 w-full rounded-lg border border-border-control bg-surface px-3 text-sm text-text outline-none transition focus:border-focus focus:ring-2 focus:ring-focus/15"
               />
             </label>
           </div>
@@ -653,18 +653,18 @@ export function CreateMeetingDialog({
           {submitError && (
             <div
               role="alert"
-              className="border-t border-error/20 bg-error-container/35 px-6 py-3 text-sm text-error"
+              className="border-t border-danger-subtle bg-danger-bg px-6 py-3 text-sm text-danger"
             >
               {submitError}
             </div>
           )}
 
-          <div className="flex items-center justify-end gap-3 border-t border-outline-variant bg-surface-container-low/45 px-6 py-4">
+          <div className="flex items-center justify-end gap-3 border-t border-border-subtle bg-surface-hover/30 px-6 py-4">
             <button
               type="button"
               disabled={submitting}
               onClick={onClose}
-              className="h-9 rounded-lg px-4 text-sm font-medium text-on-surface-variant transition hover:bg-surface-container-high hover:text-on-surface disabled:opacity-45"
+              className="h-9 rounded-lg px-4 text-sm font-medium text-text-muted transition hover:bg-surface-hover hover:text-text disabled:opacity-45"
             >
               Cancel
             </button>
@@ -677,7 +677,7 @@ export function CreateMeetingDialog({
                 !scheduledAt ||
                 !researchGroupId
               }
-              className="inline-flex h-9 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-45"
+              className="inline-flex h-9 items-center gap-2 rounded-lg bg-accent px-4 text-sm font-semibold text-text-inverse shadow-sm transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-45"
             >
               <span className="material-symbols-outlined text-[18px]">
                 add

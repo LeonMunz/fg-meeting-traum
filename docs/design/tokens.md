@@ -31,6 +31,9 @@ in migrated components.
 | `surface-subtle` | `#F9F9FB` |
 | `surface-muted` | `#F0F0F3` |
 | `surface-hover` | `#E8E8EC` |
+| `surface-quiet` | `#FFFFFF` |
+| `surface-header` | `#F9F9FB` |
+| `surface-chrome` | `#FFFFFF` |
 
 ### Text
 | Token | Value |
@@ -76,7 +79,9 @@ in migrated components.
 Dark Mode overrides the functional tokens at `html[data-theme='dark']`.
 The shell maps `surface-subtle` to the darker sunken Sidebar,
 `surface-hover` to hover/raised treatment, and `surface-muted` to selected and
-active treatment. This uses the existing vocabulary; no new token is required.
+active treatment. `surface-quiet`, `surface-header`, and `surface-chrome`
+preserve their existing Light roles while keeping large Dark content surfaces
+and translucent chrome closer to the canvas.
 
 | Token | Dark value |
 |---|---|
@@ -85,6 +90,9 @@ active treatment. This uses the existing vocabulary; no new token is required.
 | `surface-subtle` | `#111113` |
 | `surface-muted` | `#2E3135` |
 | `surface-hover` | `#272A2D` |
+| `surface-quiet` | `#1E2023` |
+| `surface-header` | `#1B1D20` |
+| `surface-chrome` | `#1B1D20` |
 | `text` | `#EDEEF0` |
 | `text-muted` | `#AFB3BA` |
 | `text-inverse` | `#FFFFFF` |

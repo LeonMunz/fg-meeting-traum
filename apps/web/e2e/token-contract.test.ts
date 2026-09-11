@@ -38,6 +38,9 @@ const tokens: Record<string, string> = {
   'color-surface-subtle': '#f9f9fb',
   'color-surface-muted': '#f0f0f3',
   'color-surface-hover': '#e8e8ec',
+  'color-surface-quiet': '#ffffff',
+  'color-surface-header': '#f9f9fb',
+  'color-surface-chrome': '#ffffff',
 
   // Text
   'color-text': '#1c2024',
@@ -89,6 +92,9 @@ const darkTokens: Record<string, string> = {
   'color-surface-subtle': '#111113',
   'color-surface-muted': '#2e3135',
   'color-surface-hover': '#272a2d',
+  'color-surface-quiet': '#1e2023',
+  'color-surface-header': '#1b1d20',
+  'color-surface-chrome': '#1b1d20',
   'color-text': '#edeef0',
   'color-text-muted': '#afb3ba',
   'color-text-inverse': '#ffffff',
