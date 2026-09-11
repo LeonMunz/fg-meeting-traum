@@ -121,6 +121,47 @@ correctly in both themes without static Light-only legacy classes.
 | `border-standalone` | `#C7C4D8` | `#43484E` | Standalone card / button / empty-state border (Light = legacy `outline-variant`) |
 | `border-structural` | `#C7C4D8` | `#363A3F` | Structural border for lists, cards, dividers, tab bar, and banners (Light = legacy `outline-variant`) |
 | `border-field` | `#777587` | `#696E77` | Form-control (input / radio-card) border (Light = legacy `outline`) |
+| `card-selected-bg` | `rgba(53,37,205,.05)` | `#2E3135` | Selected Work Item (Board card / List row) fill — neutral in Dark |
+| `card-selected-ring` | `rgba(53,37,205,.55)` | `#43484E` | Selected Work Item outline ring |
+| `drag-target-bg` | `rgba(53,37,205,.06)` | `#272A2D` | Board column highlighted as a drag target (fill) |
+| `drag-target-ring` | `rgba(53,37,205,.4)` | `#43484E` | Board drag-target inset ring |
+| `workspace` | `#FFFFFF` | `#18191B` | Work Items board workspace body (Light = frozen panel surface; Dark = project canvas) |
+| `board-column` | `rgba(239,244,255,.4)` | `transparent` | Work Items board column rest surface (open/transparent in Dark) |
+| `segmented-bg` | `#EFF4FF` | `#1E2023` | Board/List segmented control container |
+| `segmented-selected` | `#FFFFFF` | `#2E3135` | Segmented control active selection (neutral in Dark) |
+| `segmented-selected-text` | `#0B1C30` | `#EDEEF0` | Segmented control active selection text |
+| `text-work-faded-70` | `#7E7D88` | `#70757C` | Work Items faded metadata (board column counts; Light = `on-surface-variant/70`) |
+| `text-work-faded-75` | `#747480` | `#70757C` | Work Items faded metadata (list header labels; Light = `on-surface-variant/75`) |
+| `text-work-placeholder` | `#908F99` | `#70757C` | Work Items search placeholder (Light = `on-surface-variant/60`) |
+| `text-work-faded-80` | `#6B6A77` | `#70757C` | Work Items list type icon (Light = `on-surface-variant/80`) |
+| `work-items-header` | `#FFFFFF` | `#1B1D20` | Work Items header band (Light = frozen white panel; Dark = chrome) |
+| `work-item-error` | `#BA1A1A` | `#CE2C31` | Work Items error/danger text (Light = legacy `error`) |
+| `work-item-error-bg` | `#FFF2F1` | `#2A1A1C` | Work Items error banner fill (Light = `error-container/35`) |
+| `work-item-error-border` | `#E7AFAF` | `#5A2B2E` | Work Items emphasized/blocked border (Light = `error/35`) |
+
+**Legacy-visual bridges (Work Items Board/List).** The HEAD Board/List rendered
+several roles through legacy Material tokens that are *static* across themes
+(no Dark override). These bridges reproduce the exact frozen Light visual while
+giving each bounded role a theme-aware Dark value. None alter a global
+functional token.
+
+| Role | Light | Dark | Purpose |
+|---|---|---|---|
+| `work-content-text` | `#0B1C30` | `#EDEEF0` | Strong content text (Light = legacy `on-surface`, distinct from canonical `text` `#1C2024`) |
+| `work-content-muted` | `#464555` | `#AFB3BA` | Ordinary muted metadata (Light = legacy `on-surface-variant`, distinct from canonical `text-muted`) |
+| `work-surface-support` | `#DCE9FF` | `#2E3135` | Neutral support fill — count / readonly badges, avatar + empty-state icon (Light = legacy `surface-container-high`) |
+| `work-surface-hover` | `#EFF4FF` @45% | `#272A2D` | Work Item card / List row hover (Light = legacy `surface-container-low/45`) |
+| `work-surface-toolbar` | `#EFF4FF` @35% | `#1B1D20` | Filter / toolbar band (Light = legacy `surface-container-low/35`) |
+| `action-hover-solid` | `#3525CD` @90% | `#5472E4` | New Work Item button hover (Light = legacy `primary/90`; Dark = action-hover) |
+| `interaction-primary` | `#3525CD` | `#3E63DD` | Legacy-primary interaction accent — insertion indicator, in-progress status (Light = legacy `primary`) |
+| `focus-ring-primary` | `#3525CD` | `#3E63DD` | Form-control focus border / ring (Light = legacy `primary` and `primary/15`) |
+
+**Semantic success text.** The Work Item Done status glyph needed a readable
+semantic green in Dark while keeping the exact legacy Light value.
+
+| Role | Light | Dark | Purpose |
+|---|---|---|---|
+| `success-text` | `#047857` | `#3DD68C` | Semantic success text — Work Item Done status (Light = legacy `text-emerald-700`). Distinct from the `success` fill token, which is unchanged. |
 
 Note the two distinct "selected" fills: the **chip** uses a light
 secondary-container tint (`#DAE2FD`) while the **option card** composites

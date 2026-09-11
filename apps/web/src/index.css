@@ -44,6 +44,10 @@
   /* Semantic — meaning only */
   --color-success: #218358;
   --color-success-bg: #f4fbf6;
+  /* Semantic success text. Light reproduces the legacy Work Item Done
+   * `text-emerald-700` exactly; Dark is the approved semantic success text.
+   * Distinct from the `success` fill token (untouched). */
+  --color-success-text: #047857;
   --color-warning: #ab6400;
   --color-warning-bg: #fefbe9;
   --color-danger: #ce2c31;
@@ -112,6 +116,86 @@
   /* Form-control (input / select / radio-card) border. Light preserves the
    * legacy outline value; Dark uses the canonical dark control border. */
   --color-border-field: #777587;
+
+  /* Selected Work Item (Board card / List row). Light preserves the legacy
+   * primary-tinted selected treatment; Dark uses a restrained neutral
+   * (selection stays neutral; keyboard focus separately uses `focus`). */
+  --color-card-selected-bg: rgba(53, 37, 205, 0.05);
+  --color-card-selected-ring: rgba(53, 37, 205, 0.55);
+
+  /* Board column highlighted as a drag target. Light preserves the legacy
+   * primary tint; Dark uses a restrained neutral. */
+  --color-drag-target-bg: rgba(53, 37, 205, 0.06);
+  --color-drag-target-ring: rgba(53, 37, 205, 0.4);
+
+  /* Work Items board workspace body. Light preserves the frozen panel
+   * surface; Dark resolves to the project canvas so the Board reads as an
+   * open workspace rather than a raised card. */
+  --color-workspace: #ffffff;
+  /* Work Items board column rest surface. Light preserves the legacy
+   * surface-container-low/40 tint; Dark is open (transparent) on the canvas. */
+  --color-board-column: rgba(239, 244, 255, 0.4);
+  /* Work Items segmented control container. Light preserves the legacy
+   * surface-container-low fill; Dark uses the quiet surface. */
+  --color-segmented-bg: #eff4ff;
+  /* Work Items neutral segmented selection. Light preserves the frozen
+   * raised white pill; Dark uses the canonical selected neutral. */
+  --color-segmented-selected: #ffffff;
+  --color-segmented-selected-text: #0b1c30;
+  /* Work Items faded metadata (column counts, list header labels). Light
+   * preserves the legacy on-surface-variant at 70%/75%; Dark calibrates. */
+  --color-text-work-faded-70: #7e7d88;
+  --color-text-work-faded-75: #747480;
+  /* Work Items input placeholder (legacy on-surface-variant/60). */
+  --color-text-work-placeholder: #908f99;
+  /* Work Items list type icon (legacy on-surface-variant/80). */
+  --color-text-work-faded-80: #6b6a77;
+  /* Work Items header band (title / segmented / New-work-item row). Light
+   * preserves the frozen white panel; Dark uses the approved chrome. */
+  --color-work-items-header: #ffffff;
+  /* Work Items error/danger. Light preserves the legacy error color and its
+   * composited banner treatment; Dark uses the approved danger treatment. */
+  --color-work-item-error: #ba1a1a;
+  --color-work-item-error-bg: #fff2f1;
+  --color-work-item-error-border: #e7afaf;
+
+  /* ── Legacy-visual bridges for the Work Items Board/List migration.
+   *
+   * HEAD rendered these roles through legacy Material tokens that are STATIC
+   * across themes (they have no Dark override). Each bridge below preserves
+   * the exact frozen Light visual while giving the bounded Work Items roles a
+   * theme-aware Dark value. None of these alter a global functional token. */
+
+  /* Strong content text. HEAD = legacy `on-surface` #0B1C30 (static in Dark).
+   * Distinct from canonical `text` (#1C2024) which is NOT Light-exact here. */
+  --color-work-content-text: #0b1c30;
+  /* Ordinary muted metadata. HEAD = legacy `on-surface-variant` #464555
+   * (static in Dark). Distinct from canonical `text-muted` (#60646C). The
+   * exact 60/70/75/80 faded roles remain separate because their composites
+   * differ from this base value. */
+  --color-work-content-muted: #464555;
+  /* Neutral support surface (count / readonly badges, avatar + empty-state
+   * icon fills). HEAD = legacy `surface-container-high` #DCE9FF (static in
+   * Dark). Distinct from canonical `surface-muted` (#F0F0F3). */
+  --color-work-surface-support: #dce9ff;
+  /* Interactive hover (Work Item card + List row). HEAD = legacy
+   * `surface-container-low/45` composited #EFF4FF @45% (static in Dark). */
+  --color-work-surface-hover: #eff4ff73;
+  /* Filter / toolbar band. HEAD = legacy `surface-container-low/35` composited
+   * #EFF4FF @35% (static in Dark). Distinct from `work-items-header` (#FFF). */
+  --color-work-surface-toolbar: #eff4ff59;
+  /* Primary action solid hover. HEAD = legacy `primary/90` #3525CD @90%.
+   * Dark resolves to the approved action hover. */
+  --color-action-hover-solid: #3525cde6;
+  /* Legacy-primary interaction accent. HEAD = legacy `primary` #3525CD
+   * (static in Dark). Used where the HEAD interaction tint must stay #3525CD
+   * in Light but follow the interaction accent in Dark (insertion indicator,
+   * in-progress status). */
+  --color-interaction-primary: #3525cd;
+  /* Form-control focus ring/border. HEAD = legacy `primary` #3525CD and
+   * `primary/15`. Light must stay #3525CD; Dark follows the interaction
+   * accent. */
+  --color-focus-ring-primary: #3525cd;
   /* COMPATIBILITY — legacy Material-style tokens, retained until feature
    * screens are migrated. Do not consume these in new shell code. */
   --color-primary: #3525cd;
@@ -183,6 +267,7 @@ html[data-theme='dark'] {
   --color-focus: #3e63dd;
 
   --color-status-active-bg: #2e3135;
+  --color-success-text: #3dd68c;
   --color-status-active-text: #edef0;
 
   --color-action: #3e63dd;
@@ -204,6 +289,34 @@ html[data-theme='dark'] {
   --color-border-standalone: #43484e;
   --color-border-structural: #363a3f;
   --color-border-field: #696e77;
+
+  --color-card-selected-bg: #2e3135;
+  --color-card-selected-ring: #43484e;
+  --color-drag-target-bg: #272a2d;
+  --color-drag-target-ring: #43484e;
+  --color-workspace: #18191b;
+  --color-board-column: transparent;
+  --color-segmented-bg: #1e2023;
+  --color-segmented-selected: #2e3135;
+  --color-segmented-selected-text: #edeef0;
+  --color-text-work-faded-70: #70757c;
+  --color-text-work-faded-75: #70757c;
+  --color-text-work-placeholder: #70757c;
+  --color-text-work-faded-80: #70757c;
+  --color-work-items-header: #1b1d20;
+  --color-work-item-error: #ce2c31;
+  --color-work-item-error-bg: #2a1a1c;
+  --color-work-item-error-border: #5a2b2e;
+
+  /* Legacy-visual bridges (Dark) — see Light @theme block for rationale. */
+  --color-work-content-text: #edeef0;
+  --color-work-content-muted: #afb3ba;
+  --color-work-surface-support: #2e3135;
+  --color-work-surface-hover: #272a2d;
+  --color-work-surface-toolbar: #1b1d20;
+  --color-action-hover-solid: #5472e4;
+  --color-interaction-primary: #3e63dd;
+  --color-focus-ring-primary: #3e63dd;
   color-scheme: dark;
 }
 

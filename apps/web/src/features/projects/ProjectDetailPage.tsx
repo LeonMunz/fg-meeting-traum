@@ -2159,18 +2159,8 @@ export function ProjectDetailPage() {
         )
       : null
 
-  const workItemInspectorOpen =
-    workItemDrawerState?.mode === 'edit'
-
   return (
-    <div
-      className={[
-        'w-full px-6 py-8 lg:px-8 lg:py-10 xl:px-10',
-        workItemInspectorOpen
-          ? 'xl:pr-[552px]'
-          : '',
-      ].join(' ')}
-    >
+    <div className="w-full px-6 py-8 lg:px-8 lg:py-10 xl:px-10">
       <Link
         to={`/projects?group=${project.researchGroupId}`}
         className="inline-flex items-center gap-1.5 text-sm font-medium text-text-muted transition hover:text-link-hover"
@@ -3589,18 +3579,18 @@ function ProjectWorkItemsPanel({
 
   if (items.length === 0) {
     return (
-      <section className="mt-6 rounded-xl border border-outline-variant bg-surface-container-lowest shadow-sm">
+      <section className="mt-6 rounded-xl border border-border-structural bg-surface-quiet shadow-sm">
         <div className="px-6 py-8">
-          <h2 className="text-lg font-semibold tracking-tight text-on-surface">
+          <h2 className="text-lg font-semibold tracking-tight text-work-content-text">
             Work Items
           </h2>
 
           <div className="mt-8 max-w-md">
-            <p className="text-sm font-medium text-on-surface">
+            <p className="text-sm font-medium text-work-content-text">
               No work items yet.
             </p>
 
-            <p className="mt-1 text-sm leading-6 text-on-surface-variant">
+            <p className="mt-1 text-sm leading-6 text-work-content-muted">
               Create the first piece of project work.
             </p>
 
@@ -3608,7 +3598,7 @@ function ProjectWorkItemsPanel({
               <button
                 type="button"
                 onClick={onCreate}
-                className="mt-5 inline-flex h-9 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-primary/90"
+                className="mt-5 inline-flex h-9 items-center gap-2 rounded-lg bg-action px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-action-hover-solid"
               >
                 <span
                   aria-hidden="true"
@@ -3626,20 +3616,20 @@ function ProjectWorkItemsPanel({
   }
 
   return (
-    <section className="mt-6 overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest shadow-sm">
-      <div className="flex items-start justify-between gap-8 border-b border-outline-variant px-6 py-5">
+    <section className="mt-6 overflow-hidden rounded-xl border border-border-structural bg-surface-quiet shadow-sm">
+      <div className="flex items-start justify-between gap-8 border-b border-border-structural bg-work-items-header px-6 py-5">
         <div>
           <div className="flex items-center gap-3">
-            <h2 className="text-lg font-semibold tracking-tight text-on-surface">
+            <h2 className="text-lg font-semibold tracking-tight text-work-content-text">
               Work Items
             </h2>
 
-            <span className="inline-flex min-w-6 items-center justify-center rounded-full bg-surface-container-high px-2 py-0.5 text-[11px] font-semibold text-on-surface-variant">
+            <span className="inline-flex min-w-6 items-center justify-center rounded-full bg-work-surface-support px-2 py-0.5 text-[11px] font-semibold text-work-content-muted">
               {items.length}
             </span>
           </div>
 
-          <p className="mt-1 text-sm text-on-surface-variant">
+          <p className="mt-1 text-sm text-work-content-muted">
             Plan and track the work that belongs to this project.
           </p>
         </div>
@@ -3649,7 +3639,7 @@ function ProjectWorkItemsPanel({
             <button
               type="button"
               onClick={onCreate}
-              className="inline-flex h-9 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-primary/90"
+              className="inline-flex h-9 shrink-0 items-center gap-2 whitespace-nowrap rounded-lg bg-action px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-action-hover-solid"
             >
               <span className="material-symbols-outlined text-[18px]">
                 add
@@ -3659,7 +3649,7 @@ function ProjectWorkItemsPanel({
           )}
 
           {readOnly && (
-            <span className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-surface-container-high px-3 text-xs font-semibold text-on-surface-variant">
+            <span className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-work-surface-support px-3 text-xs font-semibold text-work-content-muted">
               <span className="material-symbols-outlined text-[17px]">
                 visibility
               </span>
@@ -3667,7 +3657,7 @@ function ProjectWorkItemsPanel({
             </span>
           )}
 
-          <div className="inline-flex rounded-lg border border-outline-variant bg-surface-container-low p-1">
+          <div className="inline-flex rounded-lg border border-border-structural bg-segmented-bg p-1">
             <button
               type="button"
               onClick={() => setView('board')}
@@ -3678,8 +3668,8 @@ function ProjectWorkItemsPanel({
               className={[
                 'inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-sm font-medium transition',
                 view === 'board'
-                  ? 'bg-surface-container-lowest text-on-surface shadow-sm'
-                  : 'text-on-surface-variant hover:text-on-surface',
+                  ? 'bg-segmented-selected text-segmented-selected-text shadow-sm'
+                  : 'text-work-content-muted hover:text-work-content-text',
               ].join(' ')}
             >
               <span
@@ -3698,8 +3688,8 @@ function ProjectWorkItemsPanel({
               className={[
                 'inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-sm font-medium transition',
                 view === 'list'
-                  ? 'bg-surface-container-lowest text-on-surface shadow-sm'
-                  : 'text-on-surface-variant hover:text-on-surface',
+                  ? 'bg-segmented-selected text-segmented-selected-text shadow-sm'
+                  : 'text-work-content-muted hover:text-work-content-text',
               ].join(' ')}
             >
               <span
@@ -3714,12 +3704,12 @@ function ProjectWorkItemsPanel({
         </div>
       </div>
 
-      <div className="border-b border-outline-variant bg-surface-container-low/35 px-6 py-3">
+      <div className="border-b border-border-structural bg-work-surface-toolbar px-6 py-3">
         <div className="flex flex-wrap items-center gap-2.5">
           <label className="relative block w-56 shrink-0">
             <span className="sr-only">Search work items</span>
 
-            <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[18px] text-on-surface-variant">
+            <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[18px] text-work-content-muted">
               search
             </span>
 
@@ -3728,7 +3718,7 @@ function ProjectWorkItemsPanel({
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Search..."
-              className="h-9 w-full rounded-lg border border-outline-variant bg-surface-container-lowest pl-10 pr-3 text-sm text-on-surface outline-none transition placeholder:text-on-surface-variant/60 focus:border-primary focus:ring-2 focus:ring-primary/15"
+              className="h-9 w-full rounded-lg border border-border-field bg-surface pl-10 pr-3 text-sm text-work-content-text outline-none transition placeholder:text-text-work-placeholder focus:border-focus-ring-primary focus:ring-2 focus:ring-focus-ring-primary/15"
             />
           </label>
 
@@ -3738,7 +3728,7 @@ function ProjectWorkItemsPanel({
             onChange={(event) =>
               setAssigneeFilter(event.target.value)
             }
-            className="h-9 min-w-32 rounded-lg border border-outline-variant bg-surface-container-lowest px-2.5 text-sm font-medium text-on-surface outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15"
+            className="h-9 min-w-32 rounded-lg border border-border-field bg-surface px-2.5 text-sm font-medium text-work-content-text outline-none transition focus:border-focus-ring-primary focus:ring-2 focus:ring-focus-ring-primary/15"
           >
             <option value="all">Anyone</option>
 
@@ -3757,7 +3747,7 @@ function ProjectWorkItemsPanel({
                 event.target.value as WorkItemsTypeFilter,
               )
             }
-            className="h-9 min-w-28 rounded-lg border border-outline-variant bg-surface-container-lowest px-2.5 text-sm font-medium text-on-surface outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15"
+            className="h-9 min-w-28 rounded-lg border border-border-field bg-surface px-2.5 text-sm font-medium text-work-content-text outline-none transition focus:border-focus-ring-primary focus:ring-2 focus:ring-focus-ring-primary/15"
           >
             {typeFilters.map((filter) => (
               <option key={filter.value} value={filter.value}>
@@ -3766,20 +3756,20 @@ function ProjectWorkItemsPanel({
             ))}
           </select>
 
-          <label className="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-2.5 text-sm font-medium text-on-surface-variant transition hover:bg-surface-container-high hover:text-on-surface">
+          <label className="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-2.5 text-sm font-medium text-work-content-muted transition hover:bg-work-surface-hover hover:text-work-content-text">
             <input
               type="checkbox"
               checked={blockedOnly}
               onChange={(event) =>
                 setBlockedOnly(event.target.checked)
               }
-              className="h-4 w-4 rounded border-outline accent-primary"
+              className="h-4 w-4 rounded border-border-field accent-control-accent"
             />
             Blocked
           </label>
 
           <div className="ml-auto flex items-center gap-3">
-            <span className="text-xs text-on-surface-variant">
+            <span className="text-xs text-work-content-muted">
               {filteredItems.length}{' '}
               {filteredItems.length === 1 ? 'item' : 'items'}
             </span>
@@ -3788,7 +3778,7 @@ function ProjectWorkItemsPanel({
               <button
                 type="button"
                 onClick={clearFilters}
-                className="inline-flex h-9 items-center gap-1.5 rounded-lg px-2.5 text-sm font-medium text-primary transition hover:bg-primary-fixed"
+                className="inline-flex h-9 items-center gap-1.5 rounded-lg px-2.5 text-sm font-medium text-link-hover transition hover:bg-action-hover-subtle"
               >
                 <span className="material-symbols-outlined text-[17px]">
                   filter_alt_off
@@ -3803,7 +3793,7 @@ function ProjectWorkItemsPanel({
       {view === 'board' && statusDropError && (
         <div
           role="alert"
-          className="flex items-start gap-2.5 border-b border-error/20 bg-error-container/35 px-6 py-3 text-sm text-error"
+          className="flex items-start gap-2.5 border-b border-work-item-error-border bg-work-item-error-bg px-6 py-3 text-sm text-work-item-error"
         >
           <span
             aria-hidden="true"
@@ -3817,7 +3807,7 @@ function ProjectWorkItemsPanel({
           <button
             type="button"
             onClick={onDismissStatusDropError}
-            className="shrink-0 text-xs font-semibold text-error underline-offset-2 hover:underline"
+            className="shrink-0 text-xs font-semibold text-work-item-error underline-offset-2 hover:underline"
           >
             Dismiss
           </button>
@@ -3826,24 +3816,24 @@ function ProjectWorkItemsPanel({
 
       {filteredItems.length === 0 ? (
         <div className="flex min-h-64 flex-col items-center justify-center px-6 py-12 text-center">
-          <div className="flex h-11 w-11 items-center justify-center rounded-full bg-surface-container-high text-on-surface-variant">
+          <div className="flex h-11 w-11 items-center justify-center rounded-full bg-work-surface-support text-work-content-muted">
             <span className="material-symbols-outlined text-[22px]">
               search_off
             </span>
           </div>
 
-          <h3 className="mt-4 text-sm font-semibold text-on-surface">
+          <h3 className="mt-4 text-sm font-semibold text-work-content-text">
             No matching work items
           </h3>
 
-          <p className="mt-1 max-w-sm text-sm leading-6 text-on-surface-variant">
+          <p className="mt-1 max-w-sm text-sm leading-6 text-work-content-muted">
             No work items match the current search and filters.
           </p>
 
           <button
             type="button"
             onClick={clearFilters}
-            className="mt-4 inline-flex h-9 items-center gap-2 rounded-lg px-3 text-sm font-semibold text-primary transition hover:bg-primary-fixed"
+            className="mt-4 inline-flex h-9 items-center gap-2 rounded-lg px-3 text-sm font-semibold text-link-hover transition hover:bg-action-hover-subtle"
           >
             <span className="material-symbols-outlined text-[18px]">
               filter_alt_off
@@ -3852,7 +3842,7 @@ function ProjectWorkItemsPanel({
           </button>
         </div>
       ) : view === 'board' ? (
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto bg-workspace">
           <div
             className="grid min-w-max gap-3 p-4"
             style={{
@@ -3965,7 +3955,7 @@ function ProjectWorkItemsPanel({
                 <div
                   data-board-insertion-indicator
                   aria-hidden="true"
-                  className="h-0.5 shrink-0 rounded-full bg-primary"
+                  className="h-0.5 shrink-0 rounded-full bg-interaction-primary"
                 />
               ) : null
 
@@ -3979,16 +3969,16 @@ function ProjectWorkItemsPanel({
                 className={[
                   'flex min-h-[26rem] min-w-0 flex-col rounded-lg transition-colors',
                   isDragOver
-                    ? 'bg-primary/[0.06] ring-1 ring-inset ring-primary/40'
-                    : 'bg-surface-container-low/40',
+                    ? 'bg-drag-target-bg ring-1 ring-inset ring-drag-target-ring'
+                    : 'bg-board-column',
                 ].join(' ')}
               >
                 <div className="flex items-center gap-1.5 px-3 py-2.5">
-                  <span className="text-[13px] font-semibold text-on-surface">
+                  <span className="text-[13px] font-semibold text-work-content-text">
                     {column.label}
                   </span>
 
-                  <span className="text-xs text-on-surface-variant/70">
+                  <span className="text-xs text-text-work-faded-70">
                     {columnItems.length}
                   </span>
                 </div>
@@ -4086,19 +4076,19 @@ const workItemStatusDisplay: Record<
 > = {
   todo: {
     glyph: '○',
-    className: 'text-on-surface-variant',
+    className: 'text-text-muted',
   },
   in_progress: {
     glyph: '◐',
-    className: 'text-primary',
+    className: 'text-interaction-primary',
   },
   review: {
     glyph: '●',
-    className: 'text-on-surface',
+    className: 'text-text',
   },
   done: {
     glyph: '✓',
-    className: 'text-emerald-700',
+    className: 'text-success-text',
   },
 }
 
@@ -4191,12 +4181,12 @@ function WorkItemBoardCard({
           : undefined
       }
       className={[
-        'relative rounded-lg border bg-surface-container-lowest px-3 py-2.5 transition hover:bg-surface-container-low/45',
+        'relative rounded-lg border bg-surface px-3 py-2.5 transition hover:bg-work-surface-hover',
         needsEmphasis
-          ? 'border-error/35'
-          : 'border-outline-variant/50',
+          ? 'border-work-item-error-border'
+          : 'border-border-structural/50',
         selected
-          ? 'outline outline-2 -outline-offset-2 outline-primary/55 bg-primary/5 shadow-sm'
+          ? 'outline outline-2 -outline-offset-2 outline-card-selected-ring bg-card-selected-bg shadow-sm'
           : '',
         dragging ? 'opacity-40' : '',
         readOnly ? '' : 'cursor-grab active:cursor-grabbing',
@@ -4206,21 +4196,21 @@ function WorkItemBoardCard({
         <span
           title={item.typeLabel}
           aria-label={item.typeLabel}
-          className="material-symbols-outlined mt-0.5 shrink-0 text-[15px] text-on-surface-variant"
+          className="material-symbols-outlined mt-0.5 shrink-0 text-[15px] text-work-content-muted"
         >
           {workItemTypeIcon(item.type)}
         </span>
 
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-start gap-2">
-            <h3 className="min-w-0 flex-1 text-sm font-semibold leading-5 text-on-surface">
+            <h3 className="min-w-0 flex-1 text-sm font-semibold leading-5 text-work-content-text">
               {item.title}
             </h3>
 
             {isBlocked && (
               <span
                 title={item.blockedReason ?? undefined}
-                className="mt-0.5 shrink-0 text-[11px] font-semibold text-error"
+                className="mt-0.5 shrink-0 text-[11px] font-semibold text-work-item-error"
               >
                 · Blocked
               </span>
@@ -4261,8 +4251,8 @@ function WorkItemBoardCard({
             className={[
               'shrink-0 text-[11px]',
               isOverdue
-                ? 'font-semibold text-error'
-                : 'font-normal text-on-surface-variant',
+                ? 'font-semibold text-work-item-error'
+                : 'font-normal text-work-content-muted',
             ].join(' ')}
           >
             {dueText}
@@ -4280,7 +4270,7 @@ function WorkItemAssignees({
 }) {
   if (assignees.length === 0) {
     return (
-      <span className="text-xs font-normal text-on-surface-variant">
+      <span className="text-xs font-normal text-work-content-muted">
         Unassigned
       </span>
     )
@@ -4298,14 +4288,14 @@ function WorkItemAssignees({
         {visibleAssignees.map((assignee) => (
           <div
             key={assignee.id}
-            className="flex h-[22px] w-[22px] items-center justify-center rounded-full border border-surface-container-lowest bg-surface-container-high text-[8px] font-semibold text-on-surface"
+            className="flex h-[22px] w-[22px] items-center justify-center rounded-full border border-surface bg-work-surface-support text-[8px] font-semibold text-work-content-text"
           >
             {assignee.initials}
           </div>
         ))}
       </div>
 
-      <span className="truncate text-xs font-normal text-on-surface-variant">
+      <span className="truncate text-xs font-normal text-work-content-muted">
         {assignees[0].name}
         {additionalCount > 0 ? ` +${additionalCount}` : ''}
       </span>
@@ -4338,26 +4328,26 @@ function WorkItemsList({
             gridColumns,
           ].join(' ')}
         >
-          <div className="text-[11px] font-normal text-on-surface-variant/75">
+          <div className="text-[11px] font-normal text-text-work-faded-75">
             Work item
           </div>
 
-          <div className="text-[11px] font-normal text-on-surface-variant/75">
+          <div className="text-[11px] font-normal text-text-work-faded-75">
             Status
           </div>
 
-          <div className="text-[11px] font-normal text-on-surface-variant/75">
+          <div className="text-[11px] font-normal text-text-work-faded-75">
             Assignee
           </div>
 
-          <div className="text-[11px] font-normal text-on-surface-variant/75">
+          <div className="text-[11px] font-normal text-text-work-faded-75">
             Due
           </div>
 
           <div aria-hidden="true" />
         </div>
 
-        <div className="border-t border-outline-variant/40">
+        <div className="border-t border-border-structural/40">
           {items.map((item, index) => {
             const status = workItemStatusDisplay[item.status]
             const due = getWorkItemDueDisplay(item)
@@ -4380,14 +4370,14 @@ function WorkItemsList({
                 }}
                 data-work-item-id={item.id}
                 className={[
-                  'grid h-[54px] items-center px-6 transition-colors hover:bg-surface-container-low/45',
+                  'grid h-[54px] items-center px-6 transition-colors hover:bg-work-surface-hover',
                   gridColumns,
                   selectedWorkItemId ===
                   item.id
-                    ? 'outline outline-1 -outline-offset-1 outline-primary/55 bg-primary/5'
+                    ? 'outline outline-1 -outline-offset-1 outline-card-selected-ring bg-card-selected-bg'
                     : '',
                   index > 0
-                    ? 'border-t border-outline-variant/25'
+                    ? 'border-t border-border-structural/25'
                     : '',
                 ].join(' ')}
               >
@@ -4395,19 +4385,19 @@ function WorkItemsList({
                   <span
                     title={item.typeLabel}
                     aria-label={item.typeLabel}
-                    className="material-symbols-outlined shrink-0 text-[15px] text-on-surface-variant/80"
+                    className="material-symbols-outlined shrink-0 text-[15px] text-text-work-faded-80"
                   >
                     {workItemTypeIcon(item.type)}
                   </span>
 
-                  <span className="truncate text-sm font-semibold text-on-surface">
+                  <span className="truncate text-sm font-semibold text-work-content-text">
                     {item.title}
                   </span>
 
                   {item.blockedReason && (
                     <span
                       title={item.blockedReason}
-                      className="shrink-0 text-[11px] font-medium text-error"
+                      className="shrink-0 text-[11px] font-medium text-work-item-error"
                     >
                       · Blocked
                     </span>
@@ -4427,7 +4417,7 @@ function WorkItemsList({
                     {status.glyph}
                   </span>
 
-                  <span className="text-on-surface-variant">
+                  <span className="text-work-content-muted">
                     {workItemStatusLabels[item.status]}
                   </span>
                 </div>
@@ -4438,8 +4428,8 @@ function WorkItemsList({
                   className={[
                     'text-xs',
                     due.attention
-                      ? 'font-medium text-error'
-                      : 'font-normal text-on-surface-variant',
+                      ? 'font-medium text-work-item-error'
+                      : 'font-normal text-work-content-muted',
                   ].join(' ')}
                 >
                   {due.label}
