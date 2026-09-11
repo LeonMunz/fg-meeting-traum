@@ -392,12 +392,12 @@ export function MeetingSeriesDetailPage() {
   if (loading) {
     return (
       <div className="w-full px-6 py-8 lg:px-8 lg:py-10 xl:px-10">
-        <div className="flex min-h-72 items-center justify-center rounded-xl border border-outline-variant bg-surface-container-lowest">
-          <span className="material-symbols-outlined mr-2 animate-spin text-[20px] text-on-surface-variant">
+        <div className="flex min-h-72 items-center justify-center rounded-xl border border-border-subtle bg-surface-quiet">
+          <span className="material-symbols-outlined mr-2 animate-spin text-[20px] text-text-muted">
             refresh
           </span>
 
-          <span className="text-sm text-on-surface-variant">
+          <span className="text-sm text-text-muted">
             Loading series…
           </span>
         </div>
@@ -413,7 +413,7 @@ export function MeetingSeriesDetailPage() {
           onClick={() =>
             navigate('/meetings/series')
           }
-          className="inline-flex items-center gap-2 text-sm font-medium text-on-surface-variant hover:text-primary"
+          className="inline-flex items-center gap-2 text-sm font-medium text-text-muted hover:text-accent-text"
         >
           <span className="material-symbols-outlined text-[18px]">
             arrow_back
@@ -423,17 +423,17 @@ export function MeetingSeriesDetailPage() {
 
         <div
           role="alert"
-          className="mt-6 flex min-h-64 flex-col items-center justify-center rounded-xl border border-outline-variant bg-surface-container-lowest px-6 py-10 text-center"
+          className="mt-6 flex min-h-64 flex-col items-center justify-center rounded-xl border border-border-subtle bg-surface-quiet px-6 py-10 text-center"
         >
-          <span className="material-symbols-outlined text-[28px] text-error">
+          <span className="material-symbols-outlined text-[28px] text-danger">
             error
           </span>
 
-          <h1 className="mt-3 text-lg font-semibold text-on-surface">
+          <h1 className="mt-3 text-lg font-semibold text-text">
             Template unavailable
           </h1>
 
-          <p className="mt-1 text-sm text-on-surface-variant">
+          <p className="mt-1 text-sm text-text-muted">
             {loadError}
           </p>
         </div>
@@ -448,7 +448,7 @@ export function MeetingSeriesDetailPage() {
         onClick={() =>
           navigate('/meetings/series')
         }
-        className="inline-flex items-center gap-2 text-sm font-medium text-on-surface-variant transition hover:text-primary"
+        className="inline-flex items-center gap-2 text-sm font-medium text-text-muted transition hover:text-accent-text"
       >
         <span className="material-symbols-outlined text-[18px]">
           arrow_back
@@ -456,14 +456,14 @@ export function MeetingSeriesDetailPage() {
         Meeting Templates
       </button>
 
-      <header className="mt-5 border-b border-outline-variant pb-6">
+      <header className="mt-5 border-b border-border-subtle pb-6">
         <div className="flex flex-wrap items-center gap-3">
-          <h1 className="text-3xl font-semibold tracking-tight text-on-surface">
+          <h1 className="text-3xl font-semibold tracking-tight text-text">
             Template Structure
           </h1>
 
           {series && (
-            <span className="inline-flex rounded-full bg-surface-container-high px-2.5 py-1 text-xs font-medium text-on-surface-variant">
+            <span className="inline-flex rounded-full bg-surface-muted px-2.5 py-1 text-xs font-medium text-text-muted">
               {series.scope === 'group'
                 ? 'Research Group Meeting'
                 : 'Project Meeting'}
@@ -471,7 +471,7 @@ export function MeetingSeriesDetailPage() {
           )}
         </div>
 
-        <p className="mt-1.5 text-sm text-on-surface-variant">
+        <p className="mt-1.5 text-sm text-text-muted">
           {series?.title}. Edit the default sections for this meeting template.
           New occurrences will snapshot these sections.
         </p>
@@ -480,7 +480,7 @@ export function MeetingSeriesDetailPage() {
       {actionError && (
         <div
           role="alert"
-          className="mt-5 rounded-lg bg-error-container px-4 py-3 text-sm text-error"
+          className="mt-5 rounded-lg bg-danger-bg px-4 py-3 text-sm text-danger"
         >
           {actionError}
         </div>
@@ -491,17 +491,17 @@ export function MeetingSeriesDetailPage() {
         <section>
           <div className="flex items-end justify-between gap-6">
             <div>
-              <h2 className="text-lg font-semibold text-on-surface">
+              <h2 className="text-lg font-semibold text-text">
                 Sections
               </h2>
 
-              <p className="mt-1 text-sm text-on-surface-variant">
+              <p className="mt-1 text-sm text-text-muted">
                 Drag to reorder. Only active sections are
                 snapshotted into new occurrences.
               </p>
             </div>
 
-            <div className="text-sm text-on-surface-variant">
+            <div className="text-sm text-text-muted">
               {sections.length}{' '}
               {sections.length === 1
                 ? 'section'
@@ -512,11 +512,11 @@ export function MeetingSeriesDetailPage() {
           {/* Add section form */}
           <form
             onSubmit={handleCreateSection}
-            className="mt-5 rounded-xl border border-outline-variant bg-surface-container-lowest p-5"
+            className="mt-5 rounded-xl border border-border-subtle bg-surface-quiet p-5"
           >
             <div className="grid gap-4">
               <label>
-                <span className="mb-1.5 block text-sm font-medium text-on-surface">
+                <span className="mb-1.5 block text-sm font-medium text-text">
                   Section name
                 </span>
 
@@ -529,12 +529,12 @@ export function MeetingSeriesDetailPage() {
                     )
                   }
                   placeholder="e.g. Check-In"
-                  className="h-10 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
+                  className="h-10 w-full rounded-lg border border-border-control bg-surface px-3 text-sm text-text outline-none focus:border-focus focus:ring-2 focus:ring-focus/15"
                 />
               </label>
 
               <label>
-                <span className="mb-1.5 block text-sm font-medium text-on-surface">
+                <span className="mb-1.5 block text-sm font-medium text-text">
                   Description
                 </span>
 
@@ -547,7 +547,7 @@ export function MeetingSeriesDetailPage() {
                     )
                   }
                   placeholder="Optional"
-                  className="h-10 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
+                  className="h-10 w-full rounded-lg border border-border-control bg-surface px-3 text-sm text-text outline-none focus:border-focus focus:ring-2 focus:ring-focus/15"
                 />
               </label>
             </div>
@@ -556,7 +556,7 @@ export function MeetingSeriesDetailPage() {
               <button
                 type="submit"
                 disabled={creatingSection}
-                className="inline-flex h-9 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-white transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-45"
+                className="inline-flex h-9 items-center gap-2 rounded-lg bg-action px-4 text-sm font-semibold text-text-inverse transition hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-45"
               >
                 <span className="material-symbols-outlined text-[18px]">
                   add
@@ -571,16 +571,16 @@ export function MeetingSeriesDetailPage() {
 
           {/* Section list */}
           {sections.length === 0 ? (
-            <div className="mt-5 rounded-xl border border-dashed border-outline-variant bg-surface-container-lowest px-6 py-12 text-center">
-              <span className="material-symbols-outlined text-[28px] text-on-surface-variant">
+            <div className="mt-5 rounded-xl border border-dashed border-border-default bg-surface-quiet px-6 py-12 text-center">
+              <span className="material-symbols-outlined text-[28px] text-text-muted">
                 view_kanban
               </span>
 
-              <p className="mt-3 text-sm font-medium text-on-surface">
+              <p className="mt-3 text-sm font-medium text-text">
                 No sections yet
               </p>
 
-              <p className="mt-1 text-sm text-on-surface-variant">
+              <p className="mt-1 text-sm text-text-muted">
                 Add the first section above.
               </p>
             </div>
@@ -603,8 +603,8 @@ export function MeetingSeriesDetailPage() {
                   className={[
                     'rounded-xl border p-4 transition',
                     draggingId === section.id
-                      ? 'border-primary/40 bg-primary/5'
-                      : 'border-outline-variant bg-surface-container-lowest',
+                      ? 'border-border-default bg-surface-muted'
+                      : 'border-border-subtle bg-surface hover:bg-surface-hover',
                     !section.isActive
                       ? 'opacity-60'
                       : '',
@@ -616,7 +616,7 @@ export function MeetingSeriesDetailPage() {
                     <div>
                       <div className="grid gap-3">
                         <label>
-                          <span className="mb-1 block text-xs font-medium text-on-surface-variant">
+                          <span className="mb-1 block text-xs font-medium text-text-muted">
                             Name
                           </span>
 
@@ -631,12 +631,12 @@ export function MeetingSeriesDetailPage() {
                                   .value,
                               )
                             }
-                            className="h-9 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none focus:border-primary"
+                            className="h-9 w-full rounded-lg border border-border-control bg-surface px-3 text-sm text-text outline-none focus:border-focus"
                           />
                         </label>
 
                         <label>
-                          <span className="mb-1 block text-xs font-medium text-on-surface-variant">
+                          <span className="mb-1 block text-xs font-medium text-text-muted">
                             Description
                           </span>
 
@@ -653,7 +653,7 @@ export function MeetingSeriesDetailPage() {
                                   .value,
                               )
                             }
-                            className="h-9 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none focus:border-primary"
+                            className="h-9 w-full rounded-lg border border-border-control bg-surface px-3 text-sm text-text outline-none focus:border-focus"
                           />
                         </label>
                       </div>
@@ -666,7 +666,7 @@ export function MeetingSeriesDetailPage() {
                               null,
                             )
                           }
-                          className="h-8 rounded-lg border border-outline-variant px-3 text-xs font-semibold text-on-surface transition hover:bg-surface-container-low"
+                          className="h-8 rounded-lg border border-border-subtle px-3 text-xs font-semibold text-text transition hover:bg-surface-hover"
                         >
                           Cancel
                         </button>
@@ -680,7 +680,7 @@ export function MeetingSeriesDetailPage() {
                           onClick={() =>
                             void handleSaveEdit()
                           }
-                          className="h-8 rounded-lg bg-primary px-3 text-xs font-semibold text-white transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-45"
+                          className="h-8 rounded-lg bg-action px-3 text-xs font-semibold text-text-inverse transition hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-45"
                         >
                           {savingSection
                             ? 'Saving…'
@@ -691,29 +691,29 @@ export function MeetingSeriesDetailPage() {
                   ) : (
                     /* View mode */
                     <div className="flex items-center gap-3">
-                      <span className="material-symbols-outlined text-[18px] text-on-surface-variant cursor-grab">
+                      <span className="material-symbols-outlined cursor-grab text-[18px] text-text-muted">
                         drag_indicator
                       </span>
 
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
-                          <span className="text-xs font-medium text-on-surface-variant">
+                          <span className="text-xs font-medium text-text-muted">
                             #{section.position + 1}
                           </span>
 
-                          <span className="text-sm font-semibold text-on-surface">
+                          <span className="text-sm font-semibold text-text">
                             {section.name}
                           </span>
 
                           {!section.isActive && (
-                            <span className="inline-flex rounded-full bg-surface-container-high px-2 py-0.5 text-[10px] font-medium text-on-surface-variant">
+                            <span className="inline-flex rounded-full bg-surface-muted px-2 py-0.5 text-[10px] font-medium text-text-muted">
                               Inactive
                             </span>
                           )}
                         </div>
 
                         {section.description && (
-                          <p className="mt-0.5 text-xs text-on-surface-variant">
+                          <p className="mt-0.5 text-xs text-text-muted">
                             {section.description}
                           </p>
                         )}
@@ -727,7 +727,7 @@ export function MeetingSeriesDetailPage() {
                               section,
                             )
                           }
-                          className="flex h-8 w-8 items-center justify-center rounded-lg text-on-surface-variant transition hover:bg-surface-container-low"
+                          className="flex h-8 w-8 items-center justify-center rounded-lg text-text-muted transition hover:bg-surface-hover"
                         >
                           <span className="material-symbols-outlined text-[18px]">
                             edit
@@ -744,8 +744,8 @@ export function MeetingSeriesDetailPage() {
                           className={[
                             'flex h-8 w-8 items-center justify-center rounded-lg transition',
                             section.isActive
-                              ? 'text-on-surface-variant hover:bg-surface-container-low'
-                              : 'text-primary hover:bg-primary/10',
+                              ? 'text-text-muted hover:bg-surface-hover'
+                              : 'text-action hover:bg-action/10',
                           ].join(' ')}
                         >
                           <span className="material-symbols-outlined text-[18px]">
@@ -765,13 +765,13 @@ export function MeetingSeriesDetailPage() {
 
         {/* Sidebar: Create occurrence */}
         <aside>
-          <div className="rounded-xl border border-outline-variant bg-surface-container-lowest">
-            <div className="border-b border-outline-variant px-5 py-4">
-              <h2 className="text-base font-semibold text-on-surface">
+          <div className="overflow-hidden rounded-xl border border-border-subtle bg-surface">
+            <div className="border-b border-border-subtle bg-surface-header px-5 py-4">
+              <h2 className="text-base font-semibold text-text">
                 New Occurrence
               </h2>
 
-              <p className="mt-1 text-xs text-on-surface-variant">
+              <p className="mt-1 text-xs text-text-muted">
                 Create a meeting from this template. Active
                 sections will be snapshotted.
               </p>
@@ -783,7 +783,7 @@ export function MeetingSeriesDetailPage() {
             >
               <div className="grid gap-4">
                 <label>
-                  <span className="mb-1.5 block text-sm font-medium text-on-surface">
+                  <span className="mb-1.5 block text-sm font-medium text-text">
                     Title
                   </span>
 
@@ -796,12 +796,12 @@ export function MeetingSeriesDetailPage() {
                       )
                     }
                     placeholder="Uses template name"
-                    className="h-10 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
+                    className="h-10 w-full rounded-lg border border-border-control bg-surface px-3 text-sm text-text outline-none focus:border-focus focus:ring-2 focus:ring-focus/15"
                   />
                 </label>
 
                 <label>
-                  <span className="mb-1.5 block text-sm font-medium text-on-surface">
+                  <span className="mb-1.5 block text-sm font-medium text-text">
                     Date & Time
                   </span>
 
@@ -813,7 +813,7 @@ export function MeetingSeriesDetailPage() {
                         event.target.value,
                       )
                     }
-                    className="h-10 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
+                    className="h-10 w-full rounded-lg border border-border-control bg-surface px-3 text-sm text-text outline-none focus:border-focus focus:ring-2 focus:ring-focus/15"
                   />
                 </label>
               </div>
@@ -822,7 +822,7 @@ export function MeetingSeriesDetailPage() {
                 <button
                   type="submit"
                   disabled={creatingOccurrence}
-                  className="w-full inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-white transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-45"
+                  className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-action px-4 text-sm font-semibold text-text-inverse transition hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-45"
                 >
                   <span className="material-symbols-outlined text-[18px]">
                     event
@@ -837,13 +837,13 @@ export function MeetingSeriesDetailPage() {
           </div>
 
           {/* Active sections preview */}
-          <div className="mt-5 rounded-xl border border-outline-variant bg-surface-container-lowest">
-            <div className="border-b border-outline-variant px-5 py-4">
-              <h2 className="text-base font-semibold text-on-surface">
+          <div className="mt-5 overflow-hidden rounded-xl border border-border-subtle bg-surface">
+            <div className="border-b border-border-subtle bg-surface-header px-5 py-4">
+              <h2 className="text-base font-semibold text-text">
                 Snapshot Preview
               </h2>
 
-              <p className="mt-1 text-xs text-on-surface-variant">
+              <p className="mt-1 text-xs text-text-muted">
                 Active sections that will be copied into
                 new occurrences.
               </p>
@@ -852,11 +852,11 @@ export function MeetingSeriesDetailPage() {
             <div className="p-5">
               {sections.filter((s) => s.isActive)
                 .length === 0 ? (
-                <p className="text-sm text-on-surface-variant">
+                <p className="text-sm text-text-muted">
                   No active sections.
                 </p>
               ) : (
-                <ol className="list-decimal space-y-1 pl-4 text-sm text-on-surface">
+                <ol className="list-decimal space-y-1 pl-4 text-sm text-text">
                   {sections
                     .filter((s) => s.isActive)
                     .map((s) => (

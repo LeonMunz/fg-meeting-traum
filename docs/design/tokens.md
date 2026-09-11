@@ -74,6 +74,28 @@ in migrated components.
 | `danger-bg` | `#FFF7F7` |
 | `danger-subtle` | `#FEEBEC` |
 
+### Lifecycle (themeable state roles)
+
+| Token | Value |
+|---|---|
+| `status-active-bg` | `#ECFDF5` |
+| `status-active-text` | `#065F46` |
+
+The active-lifecycle badge needs a different physical treatment per theme: a
+soft green tint in Light and a restrained neutral in Dark (where a light
+green/white pill would read as a bright island on the dark surface). It is
+deliberately separate from `success-bg`, which must not be redefined for this.
+
+### Primary action
+
+| Token | Value |
+|---|---|
+| `action` | `#3525CD` |
+| `action-hover` | `#3525CD` |
+
+Primary action buttons keep the frozen legacy Light treatment; Dark themes the
+same role to the approved interaction accent.
+
 ## Dark mapping — FG Dark, Dim Slate
 
 Dark Mode overrides the functional tokens at `html[data-theme='dark']`.
@@ -105,6 +127,10 @@ and translucent chrome closer to the canvas.
 | `accent-subtle` | `#15224C` |
 | `accent-selected` | `#15224C` |
 | `focus` | `#3E63DD` |
+| `status-active-bg` | `#2E3135` |
+| `status-active-text` | `#EDEEF0` |
+| `action` | `#3E63DD` |
+| `action-hover` | `#5472E4` |
 
 The initial slice themes the document, App Shell, Sidebar, TopBar, navigation,
 and global Settings Appearance surface. Feature pages that still use the

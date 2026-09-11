@@ -49,6 +49,16 @@
   --color-danger: #ce2c31;
   --color-danger-bg: #fff7f7;
   --color-danger-subtle: #feebec;
+
+  /* Lifecycle — active state (distinct physical treatment per theme: a soft
+   * green tint in Light, a restrained neutral in Dark to avoid a light island). */
+  --color-status-active-bg: #ecfdf5;
+  --color-status-active-text: #065f46;
+
+  /* Primary action — the legacy Light button treatment (#3525CD) is frozen;
+   * Dark themes it to the approved interaction accent. */
+  --color-action: #3525cd;
+  --color-action-hover: #3525cd;
   /* COMPATIBILITY — legacy Material-style tokens, retained until feature
    * screens are migrated. Do not consume these in new shell code. */
   --color-primary: #3525cd;
@@ -118,6 +128,12 @@ html[data-theme='dark'] {
   --color-accent-selected: #15224c;
 
   --color-focus: #3e63dd;
+
+  --color-status-active-bg: #2e3135;
+  --color-status-active-text: #edef0;
+
+  --color-action: #3e63dd;
+  --color-action-hover: #5472e4;
   color-scheme: dark;
 }
 

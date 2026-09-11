@@ -70,6 +70,12 @@ const tokens: Record<string, string> = {
   'color-danger': '#ce2c31',
   'color-danger-bg': '#fff7f7',
   'color-danger-subtle': '#feebec',
+
+  // Lifecycle / primary action (themeable roles with distinct Light/Dark values)
+  'color-status-active-bg': '#ecfdf5',
+  'color-status-active-text': '#065f46',
+  'color-action': '#3525cd',
+  'color-action-hover': '#3525cd',
 }
 
 describe('functional color tokens', () => {
@@ -107,6 +113,12 @@ const darkTokens: Record<string, string> = {
   'color-accent-subtle': '#15224c',
   'color-accent-selected': '#15224c',
   'color-focus': '#3e63dd',
+
+  // Lifecycle / primary action Dark treatment
+  'color-status-active-bg': '#2e3135',
+  'color-status-active-text': '#edef0',
+  'color-action': '#3e63dd',
+  'color-action-hover': '#5472e4',
 }
 
 describe('FG Dark — Dim Slate tokens', () => {
