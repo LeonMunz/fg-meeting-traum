@@ -18,6 +18,19 @@ const indexCss = readFileSync(
   'utf-8',
 )
 
+const indexHtml = readFileSync(
+  resolve(dirname(fileURLToPath(import.meta.url)), '../index.html'),
+  'utf-8',
+)
+
+const lightTheme = indexCss.match(
+  /@theme\s*{([\s\S]*?)\n}/,
+)?.[1]
+
+const darkTheme = indexCss.match(
+  /html\[data-theme='dark'\]\s*{([\s\S]*?)\n}/,
+)?.[1]
+
 const tokens: Record<string, string> = {
   // Neutral structure
   'color-canvas': '#fcfcfd',
@@ -57,10 +70,61 @@ const tokens: Record<string, string> = {
 }
 
 describe('functional color tokens', () => {
+  it('contains the canonical Light and Dark theme layers', () => {
+    expect(lightTheme).toBeDefined()
+    expect(darkTheme).toBeDefined()
+  })
+
   it.each(Object.entries(tokens))(
-    'defines --%s with the approved value',
+    'keeps the Light --%s value unchanged',
     (name, expected) => {
-      expect(indexCss).toContain(`--${name}: ${expected};`)
+      expect(lightTheme).toContain(`--${name}: ${expected};`)
     },
   )
+})
+
+const darkTokens: Record<string, string> = {
+  'color-canvas': '#18191b',
+  'color-surface': '#212225',
+  'color-surface-subtle': '#111113',
+  'color-surface-muted': '#2e3135',
+  'color-surface-hover': '#272a2d',
+  'color-text': '#edeef0',
+  'color-text-muted': '#afb3ba',
+  'color-text-inverse': '#ffffff',
+  'color-border-subtle': '#363a3f',
+  'color-border-default': '#43484e',
+  'color-border-control': '#696e77',
+  'color-accent': '#3e63dd',
+  'color-accent-hover': '#5472e4',
+  'color-accent-text': '#9eb1ff',
+  'color-accent-subtle': '#15224c',
+  'color-accent-selected': '#15224c',
+  'color-focus': '#3e63dd',
+}
+
+describe('FG Dark — Dim Slate tokens', () => {
+  it.each(Object.entries(darkTokens))(
+    'maps --%s to %s',
+    (name, expected) => {
+      expect(darkTheme).toContain(`--${name}: ${expected};`)
+    },
+  )
+})
+
+describe('appearance bootstrap contract', () => {
+  it('defaults to Dark and resolves storage before the React module', () => {
+    const bootstrapPosition = indexHtml.indexOf(
+      "window.localStorage.getItem(storageKey)",
+    )
+    const reactModulePosition = indexHtml.indexOf(
+      'src="/src/main.tsx"',
+    )
+
+    expect(indexHtml).toContain("let appearance = 'dark'")
+    expect(bootstrapPosition).toBeGreaterThan(-1)
+    expect(reactModulePosition).toBeGreaterThan(bootstrapPosition)
+    expect(indexHtml).not.toContain('prefers-color-scheme')
+    expect(indexHtml).not.toContain('matchMedia')
+  })
 })

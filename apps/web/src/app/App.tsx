@@ -3,6 +3,8 @@ import { Navigate, Route, Routes } from 'react-router'
 import { SessionProvider } from '../api/SessionProvider'
 import { useSession } from '../api/useSession'
 import { AppShell } from '../components/layout/AppShell'
+import { AppearanceProvider } from '../features/appearance/AppearanceProvider'
+import { AppearanceSettingsPage } from '../features/appearance/AppearanceSettingsPage'
 import { LoginPage } from '../features/auth/LoginPage'
 import { DashboardPage } from '../features/dashboard/DashboardPage'
 import { MyWorkPage } from '../features/my-work/MyWorkPage'
@@ -226,7 +228,7 @@ function AppRoutes() {
 
                 <Route
                   path="/settings"
-                  element={<PlaceholderPage title="Settings" />}
+                  element={<AppearanceSettingsPage />}
                 />
 
                 <Route
@@ -249,8 +251,10 @@ function AppRoutes() {
 
 export function App() {
   return (
-    <SessionProvider>
-      <AppRoutes />
-    </SessionProvider>
+    <AppearanceProvider>
+      <SessionProvider>
+        <AppRoutes />
+      </SessionProvider>
+    </AppearanceProvider>
   )
 }

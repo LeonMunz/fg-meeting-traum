@@ -8,10 +8,52 @@
       content="width=device-width, initial-scale=1.0"
     />
 
+    <script>
+      ;(() => {
+        const storageKey = 'fg-workspace.appearance'
+        let appearance = 'dark'
+
+        try {
+          const stored = window.localStorage.getItem(storageKey)
+
+          if (stored === 'dark' || stored === 'light') {
+            appearance = stored
+          }
+        } catch {
+          // Device-local preference failures fall back to Dark.
+        }
+
+        document.documentElement.dataset.theme = appearance
+      })()
+    </script>
+
+    <style>
+      html[data-theme='dark'] {
+        background: #18191b;
+        color-scheme: dark;
+      }
+
+      html[data-theme='light'] {
+        background: #fcfcfd;
+        color-scheme: light;
+      }
+    </style>
+
     <meta
       name="theme-color"
-      content="#f8f9ff"
+      content="#18191b"
     />
+
+    <script>
+      document
+        .querySelector('meta[name="theme-color"]')
+        ?.setAttribute(
+          'content',
+          document.documentElement.dataset.theme === 'light'
+            ? '#f8f9ff'
+            : '#18191b',
+        )
+    </script>
 
     <meta
       name="description"

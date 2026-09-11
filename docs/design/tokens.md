@@ -3,6 +3,12 @@
 Canonical, neutral-first color foundation for the frontend
 (`apps/web/src/index.css`, `@theme` block).
 
+FG Workspace defaults to **Dark**. **Light** preserves the existing approved
+product palette documented below without value changes. Appearance is a
+device-local browser preference with exactly `dark` and `light` choices; it is
+not account or domain state. The root `data-theme` attribute switches semantic
+tokens centrally, so components continue to consume the same token vocabulary.
+
 ## Rule
 
 > **Neutral defines structure. Accent defines interaction and active
@@ -64,6 +70,37 @@ in migrated components.
 | `danger` | `#CE2C31` |
 | `danger-bg` | `#FFF7F7` |
 | `danger-subtle` | `#FEEBEC` |
+
+## Dark mapping — FG Dark, Dim Slate
+
+Dark Mode overrides the functional tokens at `html[data-theme='dark']`.
+The shell maps `surface-subtle` to the darker sunken Sidebar,
+`surface-hover` to hover/raised treatment, and `surface-muted` to selected and
+active treatment. This uses the existing vocabulary; no new token is required.
+
+| Token | Dark value |
+|---|---|
+| `canvas` | `#18191B` |
+| `surface` | `#212225` |
+| `surface-subtle` | `#111113` |
+| `surface-muted` | `#2E3135` |
+| `surface-hover` | `#272A2D` |
+| `text` | `#EDEEF0` |
+| `text-muted` | `#AFB3BA` |
+| `text-inverse` | `#FFFFFF` |
+| `border-subtle` | `#363A3F` |
+| `border-default` | `#43484E` |
+| `border-control` | `#696E77` |
+| `accent` | `#3E63DD` |
+| `accent-hover` | `#5472E4` |
+| `accent-text` | `#9EB1FF` |
+| `accent-subtle` | `#15224C` |
+| `accent-selected` | `#15224C` |
+| `focus` | `#3E63DD` |
+
+The initial slice themes the document, App Shell, Sidebar, TopBar, navigation,
+and global Settings Appearance surface. Feature pages that still use the
+compatibility tokens require their own later Dark migration.
 
 ## Keyboard focus
 
