@@ -181,7 +181,7 @@ test(
     ).toHaveCount(0)
 
     // --------------------------------------------------------
-    // Placeholder group pages use the same explicit scope.
+    // Future group sections stay visible without exposing routes.
     // --------------------------------------------------------
 
     await selectResearchGroup(
@@ -189,24 +189,40 @@ test(
       'Robotics Lab',
     )
 
-    await page
-      .getByRole('link', {
-        name: /People/,
-      })
+    const groupNavigation = page.getByRole(
+      'navigation',
+      { name: 'Research group navigation' },
+    )
+
+    for (const label of [
+      'Calendar',
+      'KVP',
+      'Knowledge',
+      'Data',
+      'People',
+    ]) {
+      await expect(
+        groupNavigation
+          .getByRole('link')
+          .filter({ hasText: label }),
+      ).toHaveCount(0)
+
+      await expect(
+        groupNavigation
+          .getByText(label, { exact: true })
+          .locator('..'),
+      ).toHaveAttribute('aria-disabled', 'true')
+    }
+
+    await groupNavigation
+      .getByText('People', { exact: true })
       .click()
 
     await expect(page).toHaveURL(
       new RegExp(
-        `/people\\?group=${roboticsGroupId}$`,
+        `/projects\\?group=${roboticsGroupId}$`,
       ),
     )
-
-    await expect(
-      page.getByText(
-        'People in Robotics Lab.',
-        { exact: true },
-      ),
-    ).toBeVisible()
 
     // --------------------------------------------------------
     // URLs remain authoritative across separate browser tabs.

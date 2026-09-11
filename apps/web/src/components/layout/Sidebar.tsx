@@ -23,39 +23,35 @@ const groupNavigation = [
     icon: 'folder_open',
   },
   {
-    label: 'Goals',
-    path: '/goals',
-    icon: 'ads_click',
-  },
-  {
     label: 'Meetings',
     path: '/meetings',
     icon: 'groups',
   },
   {
+    label: 'Calendar',
+    icon: 'calendar_today',
+    disabled: true,
+  },
+  {
     label: 'KVP',
-    path: '/kvp',
     icon: 'database',
+    disabled: true,
   },
   {
     label: 'Knowledge',
-    path: '/knowledge',
     icon: 'library_books',
+    disabled: true,
   },
   {
     label: 'Data',
-    path: '/data',
     icon: 'storage',
-  },
-  {
-    label: 'Calendar',
-    path: '/calendar',
-    icon: 'calendar_today',
+    badge: 'AI',
+    disabled: true,
   },
   {
     label: 'People',
-    path: '/people',
     icon: 'group',
+    disabled: true,
   },
 ]
 
@@ -139,22 +135,51 @@ export function Sidebar() {
           <ResearchGroupSelector />
 
           {activeResearchGroupId != null && (
-            <nav className="mt-2 flex flex-col gap-1 pl-3">
-              {groupNavigation.map((item) => (
-                <NavLink
-                  key={item.path}
-                  to={`${item.path}?group=${activeResearchGroupId}`}
-                  className={({ isActive }) =>
-                    navClasses(isActive)
-                  }
-                >
-                  <span className="material-symbols-outlined text-[19px]">
-                    {item.icon}
-                  </span>
+            <nav
+              aria-label="Research group navigation"
+              className="mt-2 flex flex-col gap-1 pl-3"
+            >
+              {groupNavigation.map((item) => {
+                if ('path' in item) {
+                  return (
+                    <NavLink
+                      key={item.path}
+                      to={`${item.path}?group=${activeResearchGroupId}`}
+                      className={({ isActive }) =>
+                        navClasses(isActive)
+                      }
+                    >
+                      <span className="material-symbols-outlined text-[19px]">
+                        {item.icon}
+                      </span>
 
-                  <span>{item.label}</span>
-                </NavLink>
-              ))}
+                      <span>{item.label}</span>
+                    </NavLink>
+                  )
+                }
+
+                return (
+                  <span
+                    key={item.label}
+                    aria-disabled="true"
+                    className="flex cursor-default items-center gap-3 rounded-lg px-3 py-2 text-sm text-text-muted"
+                  >
+                    <span className="material-symbols-outlined text-[19px] opacity-70">
+                      {item.icon}
+                    </span>
+
+                    <span className="line-through decoration-border-control">
+                      {item.label}
+                    </span>
+
+                    {'badge' in item && (
+                      <span className="rounded border border-border-default px-1 py-0.5 text-[10px] font-medium leading-none tracking-wide text-text-muted">
+                        {item.badge}
+                      </span>
+                    )}
+                  </span>
+                )
+              })}
             </nav>
           )}
         </div>
