@@ -271,9 +271,9 @@ const roleIcon: Record<ProjectRole, string> = {
 }
 
 const roleClass: Record<ProjectRole, string> = {
-  owner: 'bg-primary-fixed text-primary',
-  member: 'bg-secondary-container text-on-surface',
-  viewer: 'bg-surface-container-high text-on-surface-variant',
+  owner: 'bg-role-owner-bg text-role-owner-text',
+  member: 'bg-surface-muted text-text-muted',
+  viewer: 'bg-surface-muted text-text-muted',
 }
 
 const tabs: Array<{
@@ -1116,7 +1116,7 @@ export function ProjectDetailPage() {
       <div className="mx-auto w-full max-w-[1440px] px-6 py-10 lg:px-10">
         <Link
           to="/projects"
-          className="inline-flex items-center gap-1.5 text-sm font-medium text-on-surface-variant transition hover:text-primary"
+          className="inline-flex items-center gap-1.5 text-sm font-medium text-text-muted transition hover:text-link-hover"
         >
           <span className="material-symbols-outlined text-[18px]">
             arrow_back
@@ -1126,19 +1126,19 @@ export function ProjectDetailPage() {
 
         <div
           role="alert"
-          className="mt-8 flex min-h-80 flex-col items-center justify-center rounded-xl border border-outline-variant bg-surface-container-lowest px-6 py-12 text-center shadow-sm"
+          className="mt-8 flex min-h-80 flex-col items-center justify-center rounded-xl border border-border-structural bg-surface-quiet px-6 py-12 text-center"
         >
-          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-error-container text-error">
+          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-danger-bg text-danger">
             <span className="material-symbols-outlined text-[23px]">
               cloud_off
             </span>
           </div>
 
-          <h1 className="mt-4 text-base font-semibold text-on-surface">
+          <h1 className="mt-4 text-base font-semibold text-text">
             Project couldn't be loaded
           </h1>
 
-          <p className="mt-1 max-w-md text-sm leading-6 text-on-surface-variant">
+          <p className="mt-1 max-w-md text-sm leading-6 text-text-muted">
             Something went wrong while loading this project. Try again or
             return to your projects.
           </p>
@@ -1146,7 +1146,7 @@ export function ProjectDetailPage() {
           <div className="mt-5 flex items-center gap-3">
             <Link
               to="/projects"
-              className="inline-flex h-9 items-center justify-center rounded-lg px-4 text-sm font-medium text-on-surface-variant transition hover:bg-surface-container-high hover:text-on-surface"
+              className="inline-flex h-9 items-center justify-center rounded-lg px-4 text-sm font-medium text-text-muted transition hover:bg-surface-hover hover:text-text"
             >
               Back to projects
             </Link>
@@ -1154,7 +1154,7 @@ export function ProjectDetailPage() {
             <button
               type="button"
               onClick={clearPreviewState}
-              className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-primary/90"
+              className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-action px-4 text-sm font-semibold text-text-inverse shadow-sm transition hover:bg-action-hover"
             >
               <span className="material-symbols-outlined text-[18px]">
                 refresh
@@ -1172,7 +1172,7 @@ export function ProjectDetailPage() {
       <div className="mx-auto w-full max-w-[1440px] px-6 py-10 lg:px-10">
         <Link
           to="/projects"
-          className="inline-flex items-center gap-1.5 text-sm font-medium text-on-surface-variant transition hover:text-primary"
+          className="inline-flex items-center gap-1.5 text-sm font-medium text-text-muted transition hover:text-link-hover"
         >
           <span className="material-symbols-outlined text-[18px]">
             arrow_back
@@ -1180,25 +1180,25 @@ export function ProjectDetailPage() {
           Projects
         </Link>
 
-        <div className="mt-8 flex min-h-80 flex-col items-center justify-center rounded-xl border border-dashed border-outline-variant bg-surface-container-lowest px-6 py-12 text-center">
-          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-surface-container-high text-on-surface-variant">
+        <div className="mt-8 flex min-h-80 flex-col items-center justify-center rounded-xl border border-dashed border-border-standalone bg-surface-quiet px-6 py-12 text-center">
+          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-surface-muted text-text-muted">
             <span className="material-symbols-outlined text-[23px]">
               folder_off
             </span>
           </div>
 
-          <h1 className="mt-4 text-base font-semibold text-on-surface">
+          <h1 className="mt-4 text-base font-semibold text-text">
             Project not found
           </h1>
 
-          <p className="mt-1 max-w-md text-sm leading-6 text-on-surface-variant">
+          <p className="mt-1 max-w-md text-sm leading-6 text-text-muted">
             This project may no longer exist or may not be available to your
             account.
           </p>
 
           <Link
             to="/projects"
-            className="mt-5 inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-primary/90"
+            className="mt-5 inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-action px-4 text-sm font-semibold text-text-inverse shadow-sm transition hover:bg-action-hover"
           >
             <span className="material-symbols-outlined text-[18px]">
               arrow_back
@@ -2173,7 +2173,7 @@ export function ProjectDetailPage() {
     >
       <Link
         to={`/projects?group=${project.researchGroupId}`}
-        className="inline-flex items-center gap-1.5 text-sm font-medium text-on-surface-variant transition hover:text-primary"
+        className="inline-flex items-center gap-1.5 text-sm font-medium text-text-muted transition hover:text-link-hover"
       >
         <span
           aria-hidden="true"
@@ -2195,12 +2195,12 @@ export function ProjectDetailPage() {
                 ].join(' ')}
               />
 
-              <span className="font-mono text-[11px] font-medium uppercase tracking-[0.12em] text-on-surface-variant">
+              <span className="font-mono text-[11px] font-medium uppercase tracking-[0.12em] text-text-muted">
                 {statusLabel[projectStatus]}
               </span>
             </div>
 
-            <h1 className="mt-2 text-3xl font-semibold tracking-tight text-on-surface lg:text-[34px]">
+            <h1 className="mt-2 text-3xl font-semibold tracking-tight text-text lg:text-[34px]">
               {projectName}
             </h1>
 
@@ -2212,20 +2212,20 @@ export function ProjectDetailPage() {
                 <div
                   key={member.id}
                   title={member.name}
-                  className="flex h-9 w-9 items-center justify-center rounded-full border-2 border-background bg-surface-container-high text-[10px] font-semibold text-on-surface"
+                  className="flex h-9 w-9 items-center justify-center rounded-full border-2 border-canvas bg-surface-muted text-[10px] font-semibold text-text"
                 >
                   {member.initials}
                 </div>
               ))}
 
               {members.length > 4 && (
-                <div className="flex h-9 w-9 items-center justify-center rounded-full border-2 border-background bg-secondary-container text-[10px] font-semibold text-on-surface">
+                <div className="flex h-9 w-9 items-center justify-center rounded-full border-2 border-canvas bg-surface-muted text-[10px] font-semibold text-text-muted">
                   +{members.length - 4}
                 </div>
               )}
             </div>
 
-            <div className="h-6 w-px bg-outline-variant" />
+            <div className="h-6 w-px bg-border-structural" />
 
             <span
               className={[
@@ -2238,7 +2238,7 @@ export function ProjectDetailPage() {
           </div>
         </div>
 
-        <nav className="mt-8 flex gap-7 overflow-x-auto border-b border-outline-variant">
+        <nav className="mt-8 flex gap-7 overflow-x-auto border-b border-border-structural">
           {tabs.map((tab) => {
             const selected = activeTab === tab.id
 
@@ -2250,8 +2250,8 @@ export function ProjectDetailPage() {
                 className={[
                   'relative shrink-0 pb-3 text-sm font-medium transition',
                   selected
-                    ? 'text-primary'
-                    : 'text-on-surface-variant hover:text-on-surface',
+                    ? 'text-tab-active'
+                    : 'text-text-muted hover:text-text',
                 ].join(' ')}
               >
                 {tab.label}
@@ -2259,7 +2259,7 @@ export function ProjectDetailPage() {
                 {selected && (
                   <span
                     aria-hidden="true"
-                    className="absolute inset-x-0 bottom-0 h-0.5 bg-primary"
+                    className="absolute inset-x-0 bottom-0 h-0.5 bg-tab-active"
                   />
                 )}
               </Link>
@@ -2269,17 +2269,17 @@ export function ProjectDetailPage() {
       </header>
 
       {isArchived && (
-        <div className="mt-6 flex items-start gap-3 rounded-xl border border-outline-variant bg-surface-container-low px-4 py-3.5">
-          <span className="material-symbols-outlined mt-0.5 text-[19px] text-on-surface-variant">
+        <div className="mt-6 flex items-start gap-3 rounded-xl border border-border-structural bg-surface-quiet px-4 py-3.5">
+          <span className="material-symbols-outlined mt-0.5 text-[19px] text-text-muted">
             archive
           </span>
 
           <div>
-            <div className="text-sm font-medium text-on-surface">
+            <div className="text-sm font-medium text-text">
               Archived project
             </div>
 
-            <p className="mt-0.5 text-xs leading-5 text-on-surface-variant">
+            <p className="mt-0.5 text-xs leading-5 text-text-muted">
               This project is kept for reference and is read-only.
               {canManageProjectLifecycle
                 ? ' Restore it from Settings to continue working.'
@@ -2290,16 +2290,16 @@ export function ProjectDetailPage() {
       )}
 
       {isViewer && !isArchived && (
-        <div className="mt-6 flex items-start gap-3 rounded-xl border border-outline-variant bg-surface-container-low px-4 py-3.5">
-          <span className="material-symbols-outlined mt-0.5 text-[19px] text-on-surface-variant">
+        <div className="mt-6 flex items-start gap-3 rounded-xl border border-border-structural bg-surface-quiet px-4 py-3.5">
+          <span className="material-symbols-outlined mt-0.5 text-[19px] text-text-muted">
             visibility
           </span>
 
           <div>
-            <div className="text-sm font-medium text-on-surface">
+            <div className="text-sm font-medium text-text">
               Viewer access
             </div>
-            <p className="mt-0.5 text-xs leading-5 text-on-surface-variant">
+            <p className="mt-0.5 text-xs leading-5 text-text-muted">
               You can inspect this project, but editing actions are read-only.
             </p>
           </div>
@@ -4488,12 +4488,12 @@ function ProjectDetailSkeleton() {
       aria-label="Loading project"
       className="mx-auto w-full max-w-[1440px] px-6 py-8 lg:px-10 lg:py-10"
     >
-      <div className="h-4 w-20 animate-pulse rounded bg-surface-container-high" />
+      <div className="h-4 w-20 animate-pulse rounded bg-surface-hover" />
 
       <div className="mt-7 flex items-start justify-between">
         <div>
-          <div className="h-3 w-28 animate-pulse rounded bg-surface-container-high" />
-          <div className="mt-3 h-9 w-96 animate-pulse rounded bg-surface-container-high" />
+          <div className="h-3 w-28 animate-pulse rounded bg-surface-hover" />
+          <div className="mt-3 h-9 w-96 animate-pulse rounded bg-surface-hover" />
         </div>
 
         <div className="flex items-center gap-4">
@@ -4501,51 +4501,51 @@ function ProjectDetailSkeleton() {
             {Array.from({ length: 4 }).map((_, index) => (
               <div
                 key={index}
-                className="h-9 w-9 animate-pulse rounded-full border-2 border-background bg-surface-container-high"
+                className="h-9 w-9 animate-pulse rounded-full border-2 border-canvas bg-surface-hover"
               />
             ))}
           </div>
 
-          <div className="h-6 w-px bg-outline-variant" />
+          <div className="h-6 w-px bg-border-structural" />
 
-          <div className="h-7 w-20 animate-pulse rounded-full bg-surface-container-high" />
+          <div className="h-7 w-20 animate-pulse rounded-full bg-surface-hover" />
         </div>
       </div>
 
-      <div className="mt-9 flex gap-7 border-b border-outline-variant pb-3">
-        <div className="h-4 w-16 animate-pulse rounded bg-surface-container-high" />
-        <div className="h-4 w-20 animate-pulse rounded bg-surface-container-high" />
-        <div className="h-4 w-16 animate-pulse rounded bg-surface-container-high" />
-        <div className="h-4 w-16 animate-pulse rounded bg-surface-container-high" />
+      <div className="mt-9 flex gap-7 border-b border-border-structural pb-3">
+        <div className="h-4 w-16 animate-pulse rounded bg-surface-hover" />
+        <div className="h-4 w-20 animate-pulse rounded bg-surface-hover" />
+        <div className="h-4 w-16 animate-pulse rounded bg-surface-hover" />
+        <div className="h-4 w-16 animate-pulse rounded bg-surface-hover" />
       </div>
 
       <div className="mt-6 grid grid-cols-12 gap-6">
-        <div className="col-span-8 overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest">
-          <div className="border-b border-outline-variant px-6 py-4">
-            <div className="h-4 w-32 animate-pulse rounded bg-surface-container-high" />
-            <div className="mt-2 h-3 w-44 animate-pulse rounded bg-surface-container-low" />
+        <div className="col-span-8 overflow-hidden rounded-xl border border-border-structural bg-surface-quiet">
+          <div className="border-b border-border-structural px-6 py-4">
+            <div className="h-4 w-32 animate-pulse rounded bg-surface-hover" />
+            <div className="mt-2 h-3 w-44 animate-pulse rounded bg-surface-hover" />
           </div>
 
           <div className="px-6 py-6">
-            <div className="h-3 w-20 animate-pulse rounded bg-surface-container-high" />
-            <div className="mt-4 h-3 w-full max-w-2xl animate-pulse rounded bg-surface-container-low" />
-            <div className="mt-2 h-3 w-4/5 max-w-xl animate-pulse rounded bg-surface-container-low" />
+            <div className="h-3 w-20 animate-pulse rounded bg-surface-hover" />
+            <div className="mt-4 h-3 w-full max-w-2xl animate-pulse rounded bg-surface-hover" />
+            <div className="mt-2 h-3 w-4/5 max-w-xl animate-pulse rounded bg-surface-hover" />
           </div>
         </div>
 
-        <div className="col-span-4 overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest">
-          <div className="border-b border-outline-variant px-5 py-4">
-            <div className="h-4 w-28 animate-pulse rounded bg-surface-container-high" />
-            <div className="mt-2 h-3 w-36 animate-pulse rounded bg-surface-container-low" />
+        <div className="col-span-4 overflow-hidden rounded-xl border border-border-structural bg-surface-quiet">
+          <div className="border-b border-border-structural px-5 py-4">
+            <div className="h-4 w-28 animate-pulse rounded bg-surface-hover" />
+            <div className="mt-2 h-3 w-36 animate-pulse rounded bg-surface-hover" />
           </div>
 
           <div className="space-y-4 px-5 py-5">
             {Array.from({ length: 3 }).map((_, index) => (
               <div key={index} className="flex gap-3">
-                <div className="h-8 w-8 animate-pulse rounded-full bg-surface-container-high" />
+                <div className="h-8 w-8 animate-pulse rounded-full bg-surface-hover" />
                 <div className="flex-1">
-                  <div className="h-3 w-36 animate-pulse rounded bg-surface-container-high" />
-                  <div className="mt-2 h-3 w-24 animate-pulse rounded bg-surface-container-low" />
+                  <div className="h-3 w-36 animate-pulse rounded bg-surface-hover" />
+                  <div className="mt-2 h-3 w-24 animate-pulse rounded bg-surface-hover" />
                 </div>
               </div>
             ))}
@@ -4553,25 +4553,25 @@ function ProjectDetailSkeleton() {
         </div>
       </div>
 
-      <div className="mt-6 overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest">
-        <div className="border-b border-outline-variant px-6 py-4">
-          <div className="h-4 w-24 animate-pulse rounded bg-surface-container-high" />
-          <div className="mt-2 h-3 w-72 animate-pulse rounded bg-surface-container-low" />
+      <div className="mt-6 overflow-hidden rounded-xl border border-border-structural bg-surface-quiet">
+        <div className="border-b border-border-structural px-6 py-4">
+          <div className="h-4 w-24 animate-pulse rounded bg-surface-hover" />
+          <div className="mt-2 h-3 w-72 animate-pulse rounded bg-surface-hover" />
         </div>
 
-        <div className="border-b border-outline-variant px-6 py-3">
-          <div className="h-9 w-52 animate-pulse rounded-lg bg-surface-container-high" />
+        <div className="border-b border-border-structural px-6 py-3">
+          <div className="h-9 w-52 animate-pulse rounded-lg bg-surface-hover" />
         </div>
 
         {Array.from({ length: 3 }).map((_, index) => (
           <div
             key={index}
-            className="grid grid-cols-[minmax(0,1fr)_130px_150px_110px] items-center gap-3 border-b border-outline-variant px-6 py-4 last:border-b-0"
+            className="grid grid-cols-[minmax(0,1fr)_130px_150px_110px] items-center gap-3 border-b border-border-structural px-6 py-4 last:border-b-0"
           >
-            <div className="h-4 w-3/4 animate-pulse rounded bg-surface-container-high" />
-            <div className="h-4 w-16 animate-pulse rounded bg-surface-container-low" />
-            <div className="h-4 w-20 animate-pulse rounded bg-surface-container-low" />
-            <div className="h-4 w-16 animate-pulse rounded bg-surface-container-low" />
+            <div className="h-4 w-3/4 animate-pulse rounded bg-surface-hover" />
+            <div className="h-4 w-16 animate-pulse rounded bg-surface-hover" />
+            <div className="h-4 w-20 animate-pulse rounded bg-surface-hover" />
+            <div className="h-4 w-16 animate-pulse rounded bg-surface-hover" />
           </div>
         ))}
       </div>

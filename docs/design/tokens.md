@@ -96,6 +96,38 @@ deliberately separate from `success-bg`, which must not be redefined for this.
 Primary action buttons keep the frozen legacy Light treatment; Dark themes the
 same role to the approved interaction accent.
 
+### Themeable state roles
+
+These roles are consumed only by migrated screens (Projects). Each carries a
+**Light value that exactly reproduces the legacy frozen treatment** and a
+**Dark value from the approved FG Dark hierarchy**, so the same class renders
+correctly in both themes without static Light-only legacy classes.
+
+| Token | Light | Dark | Purpose |
+|---|---|---|---|
+| `role-owner-bg` | `#E2DFFF` | `#2E3135` | Ownership (Owner) role badge background |
+| `role-owner-text` | `#3525CD` | `#EDEEF0` | Ownership (Owner) role badge text |
+| `selected-neutral-bg` | `#DAE2FD` | `#2E3135` | Neutral "selected" chip (filter / archive) background |
+| `selected-neutral-text` | `#0B1C30` | `#EDEEF0` | Neutral "selected" chip text |
+| `option-selected-bg` | `#F2F1FF` | `#2E3135` | Selected Create-project option-card fill (Light = `primary-fixed/45` over the card surface) |
+| `option-selected-text` | `#0B1C30` | `#EDEEF0` | Selected Create-project option-card text |
+| `tab-active` | `#3525CD` | `#EDEEF0` | Active Project tab text + underline (neutral in Dark; distinct from keyboard focus) |
+| `overlay-scrim` | `rgba(11,28,48,.25)` | `rgba(0,0,0,.5)` | Modal dialog scrim |
+| `surface-footer` | `rgba(239,244,255,.45)` | `rgba(39,42,45,.3)` | Raised dialog footer band |
+| `text-faded` | `rgba(70,69,85,.65)` | `#70757C` | Faded secondary metadata (e.g. archived markers) |
+| `link-hover` | `#3525CD` | `#9EB1FF` | Interactive text / back-link hover |
+| `control-accent` | `#3525CD` | `#3E63DD` | Native form-control accent (radio) |
+| `action-hover-subtle` | `#E2DFFF` | `#272A2D` | Subtle hover tint for a text-only action button |
+| `border-standalone` | `#C7C4D8` | `#43484E` | Standalone card / button / empty-state border (Light = legacy `outline-variant`) |
+| `border-structural` | `#C7C4D8` | `#363A3F` | Structural border for lists, cards, dividers, tab bar, and banners (Light = legacy `outline-variant`) |
+| `border-field` | `#777587` | `#696E77` | Form-control (input / radio-card) border (Light = legacy `outline`) |
+
+Note the two distinct "selected" fills: the **chip** uses a light
+secondary-container tint (`#DAE2FD`) while the **option card** composites
+`primary-fixed` at 45% over the card surface (`#F2F1FF`). They are kept as
+separate roles because their Light values differ; Dark converges both to the
+restrained neutral `#2E3135`.
+
 ## Dark mapping — FG Dark, Dim Slate
 
 Dark Mode overrides the functional tokens at `html[data-theme='dark']`.

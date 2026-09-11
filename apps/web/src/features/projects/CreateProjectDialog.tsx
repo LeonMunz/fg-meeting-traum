@@ -71,7 +71,7 @@ export function CreateProjectDialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-on-surface/25 px-4 py-8 backdrop-blur-[2px]"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-overlay-scrim px-4 py-8 backdrop-blur-[2px]"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) {
           handleClose()
@@ -82,18 +82,18 @@ export function CreateProjectDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="create-project-title"
-        className="w-full max-w-lg overflow-hidden rounded-2xl border border-outline-variant bg-surface-container-lowest shadow-xl"
+        className="w-full max-w-lg overflow-hidden rounded-2xl border border-border-structural bg-surface shadow-xl"
       >
-        <div className="flex items-start justify-between border-b border-outline-variant px-6 py-5">
+        <div className="flex items-start justify-between border-b border-border-structural px-6 py-5">
           <div>
             <h2
               id="create-project-title"
-              className="text-lg font-semibold tracking-tight text-on-surface"
+              className="text-lg font-semibold tracking-tight text-text"
             >
               Create project
             </h2>
 
-            <p className="mt-1 text-sm text-on-surface-variant">
+            <p className="mt-1 text-sm text-text-muted">
               Create a separate workspace for a research project.
             </p>
           </div>
@@ -102,7 +102,7 @@ export function CreateProjectDialog({
             type="button"
             onClick={handleClose}
             aria-label="Close dialog"
-            className="flex h-8 w-8 items-center justify-center rounded-lg text-on-surface-variant transition hover:bg-surface-container-high hover:text-on-surface"
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-text-muted transition hover:bg-surface-hover hover:text-text"
           >
             <span className="material-symbols-outlined text-[20px]">
               close
@@ -115,7 +115,7 @@ export function CreateProjectDialog({
             <div>
               <label
                 htmlFor="project-name"
-                className="mb-1.5 block text-sm font-medium text-on-surface"
+                className="mb-1.5 block text-sm font-medium text-text"
               >
                 Project name
               </label>
@@ -127,7 +127,7 @@ export function CreateProjectDialog({
                 value={name}
                 onChange={(event) => setName(event.target.value)}
                 placeholder="e.g. Quantum Materials Study"
-                className="h-10 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none transition placeholder:text-on-surface-variant/60 focus:border-primary focus:ring-2 focus:ring-primary/15"
+                className="h-10 w-full rounded-lg border border-border-field bg-surface px-3 text-sm text-text outline-none transition placeholder:text-text-muted/60 focus:border-focus focus:ring-2 focus:ring-focus/15"
               />
             </div>
 
@@ -135,12 +135,12 @@ export function CreateProjectDialog({
               <div className="mb-1.5 flex items-center justify-between">
                 <label
                   htmlFor="project-description"
-                  className="block text-sm font-medium text-on-surface"
+                  className="block text-sm font-medium text-text"
                 >
                   Description
                 </label>
 
-                <span className="text-xs text-on-surface-variant">
+                <span className="text-xs text-text-muted">
                   Optional
                 </span>
               </div>
@@ -151,12 +151,12 @@ export function CreateProjectDialog({
                 onChange={(event) => setDescription(event.target.value)}
                 placeholder="What is this project about?"
                 rows={3}
-                className="w-full resize-none rounded-lg border border-outline-variant bg-surface-container-lowest px-3 py-2.5 text-sm leading-5 text-on-surface outline-none transition placeholder:text-on-surface-variant/60 focus:border-primary focus:ring-2 focus:ring-primary/15"
+                className="w-full resize-none rounded-lg border border-border-field bg-surface px-3 py-2.5 text-sm leading-5 text-text outline-none transition placeholder:text-text-muted/60 focus:border-focus focus:ring-2 focus:ring-focus/15"
               />
             </div>
 
             <fieldset>
-              <legend className="mb-2 block text-sm font-medium text-on-surface">
+              <legend className="mb-2 block text-sm font-medium text-text">
                 Initial status
               </legend>
 
@@ -165,8 +165,8 @@ export function CreateProjectDialog({
                   className={[
                     'flex cursor-pointer items-start gap-3 rounded-xl border p-3.5 transition',
                     status === 'active'
-                      ? 'border-primary bg-primary-fixed/45 ring-1 ring-primary/20'
-                      : 'border-outline-variant hover:bg-surface-container-low',
+                      ? 'border-border-field bg-option-selected-bg text-option-selected-text'
+                      : 'border-border-field hover:bg-surface-hover',
                   ].join(' ')}
                 >
                   <input
@@ -175,16 +175,16 @@ export function CreateProjectDialog({
                     value="active"
                     checked={status === 'active'}
                     onChange={() => setStatus('active')}
-                    className="mt-0.5 accent-primary"
+                    className="mt-0.5 accent-control-accent"
                   />
 
                   <span>
-                    <span className="flex items-center gap-1.5 text-sm font-medium text-on-surface">
+                    <span className="flex items-center gap-1.5 text-sm font-medium text-text">
                       <span className="h-2 w-2 rounded-full bg-emerald-500" />
                       Active
                     </span>
 
-                    <span className="mt-1 block text-xs leading-4 text-on-surface-variant">
+                    <span className="mt-1 block text-xs leading-4 text-text-muted">
                       Work can start immediately.
                     </span>
                   </span>
@@ -194,8 +194,8 @@ export function CreateProjectDialog({
                   className={[
                     'flex cursor-pointer items-start gap-3 rounded-xl border p-3.5 transition',
                     status === 'paused'
-                      ? 'border-primary bg-primary-fixed/45 ring-1 ring-primary/20'
-                      : 'border-outline-variant hover:bg-surface-container-low',
+                      ? 'border-border-field bg-option-selected-bg text-option-selected-text'
+                      : 'border-border-field hover:bg-surface-hover',
                   ].join(' ')}
                 >
                   <input
@@ -204,16 +204,16 @@ export function CreateProjectDialog({
                     value="paused"
                     checked={status === 'paused'}
                     onChange={() => setStatus('paused')}
-                    className="mt-0.5 accent-primary"
+                    className="mt-0.5 accent-control-accent"
                   />
 
                   <span>
-                    <span className="flex items-center gap-1.5 text-sm font-medium text-on-surface">
+                    <span className="flex items-center gap-1.5 text-sm font-medium text-text">
                       <span className="h-2 w-2 rounded-full bg-amber-500" />
                       Paused
                     </span>
 
-                    <span className="mt-1 block text-xs leading-4 text-on-surface-variant">
+                    <span className="mt-1 block text-xs leading-4 text-text-muted">
                       Set up now and activate later.
                     </span>
                   </span>
@@ -221,13 +221,13 @@ export function CreateProjectDialog({
               </div>
             </fieldset>
 
-            <div className="rounded-lg bg-surface-container-low px-4 py-3">
+            <div className="rounded-lg bg-surface-quiet px-4 py-3">
               <div className="flex gap-2.5">
-                <span className="material-symbols-outlined mt-0.5 text-[18px] text-on-surface-variant">
+                <span className="material-symbols-outlined mt-0.5 text-[18px] text-text-muted">
                   lock
                 </span>
 
-                <p className="text-xs leading-5 text-on-surface-variant">
+                <p className="text-xs leading-5 text-text-muted">
                   You will be the project owner. Members and their roles can be
                   managed from the project afterwards.
                 </p>
@@ -235,11 +235,11 @@ export function CreateProjectDialog({
             </div>
           </div>
 
-          <div className="flex items-center justify-end gap-3 border-t border-outline-variant bg-surface-container-low/45 px-6 py-4">
+          <div className="flex items-center justify-end gap-3 border-t border-border-structural bg-surface-footer px-6 py-4">
             <button
               type="button"
               onClick={handleClose}
-              className="h-9 rounded-lg px-4 text-sm font-medium text-on-surface-variant transition hover:bg-surface-container-high hover:text-on-surface"
+              className="h-9 rounded-lg px-4 text-sm font-medium text-text-muted transition hover:bg-surface-hover hover:text-text"
             >
               Cancel
             </button>
@@ -247,7 +247,7 @@ export function CreateProjectDialog({
             <button
               type="submit"
               disabled={!name.trim()}
-              className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-45"
+              className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-action px-4 text-sm font-semibold text-text-inverse shadow-sm transition hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-45"
             >
               <span className="material-symbols-outlined text-[18px]">
                 add

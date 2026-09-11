@@ -76,6 +76,25 @@ const tokens: Record<string, string> = {
   'color-status-active-text': '#065f46',
   'color-action': '#3525cd',
   'color-action-hover': '#3525cd',
+
+  // Project role badge (ownership/role pill) + neutral selection — themeable roles
+  // with distinct Light/Dark physical values.
+  'color-role-owner-bg': '#e2dfff',
+  'color-role-owner-text': '#3525cd',
+  'color-selected-neutral-bg': '#dae2fd',
+  'color-selected-neutral-text': '#0b1c30',
+  'color-option-selected-bg': '#f2f1ff',
+  'color-option-selected-text': '#0b1c30',
+  'color-tab-active': '#3525cd',
+  'color-overlay-scrim': 'rgba(11, 28, 48, 0.25)',
+  'color-surface-footer': 'rgba(239, 244, 255, 0.45)',
+  'color-text-faded': 'rgba(70, 69, 85, 0.65)',
+  'color-link-hover': '#3525cd',
+  'color-control-accent': '#3525cd',
+  'color-action-hover-subtle': '#e2dfff',
+  'color-border-standalone': '#c7c4d8',
+  'color-border-structural': '#c7c4d8',
+  'color-border-field': '#777587',
 }
 
 describe('functional color tokens', () => {
@@ -119,6 +138,23 @@ const darkTokens: Record<string, string> = {
   'color-status-active-text': '#edef0',
   'color-action': '#3e63dd',
   'color-action-hover': '#5472e4',
+
+  'color-role-owner-bg': '#2e3135',
+  'color-role-owner-text': '#edeef0',
+  'color-selected-neutral-bg': '#2e3135',
+  'color-selected-neutral-text': '#edeef0',
+  'color-option-selected-bg': '#2e3135',
+  'color-option-selected-text': '#edeef0',
+  'color-tab-active': '#edeef0',
+  'color-overlay-scrim': 'rgba(0, 0, 0, 0.5)',
+  'color-surface-footer': 'rgba(39, 42, 45, 0.3)',
+  'color-text-faded': '#70757c',
+  'color-link-hover': '#9eb1ff',
+  'color-control-accent': '#3e63dd',
+  'color-action-hover-subtle': '#272a2d',
+  'color-border-standalone': '#43484e',
+  'color-border-structural': '#363a3f',
+  'color-border-field': '#696e77',
 }
 
 describe('FG Dark — Dim Slate tokens', () => {

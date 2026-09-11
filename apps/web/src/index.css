@@ -59,6 +59,59 @@
    * Dark themes it to the approved interaction accent. */
   --color-action: #3525cd;
   --color-action-hover: #3525cd;
+
+  /* Project role badge — ownership/role pill. Light preserves the legacy
+   * primary treatment; Dark uses a restrained neutral to avoid a bright island. */
+  --color-role-owner-bg: #e2dfff;
+  --color-role-owner-text: #3525cd;
+
+  /* Neutral "selected" state for filter/archive chips. Light preserves the
+   * legacy secondary-container tint; Dark themes it to a restrained neutral. */
+  --color-selected-neutral-bg: #dae2fd;
+  --color-selected-neutral-text: #0b1c30;
+
+  /* "Selected" fill for a Create-project status option card. Distinct from the
+   * chip role: Light composites primary-fixed/45 over the card surface (#f2f1ff),
+   * Dark uses a restrained neutral. */
+  --color-option-selected-bg: #f2f1ff;
+  --color-option-selected-text: #0b1c30;
+
+  /* Active Project tab (text + underline). Light keeps the legacy violet
+   * primary indicator; Dark uses a restrained neutral (Active != Focus). */
+  --color-tab-active: #3525cd;
+
+  /* Modal dialog scrim. Light preserves the legacy on-surface/25 overlay;
+   * Dark uses a stronger neutral overlay. */
+  --color-overlay-scrim: rgba(11, 28, 48, 0.25);
+
+  /* Dialog footer surface tint. Light preserves the legacy
+   * surface-container-low/45 band; Dark uses a calibrated neutral. */
+  --color-surface-footer: rgba(239, 244, 255, 0.45);
+
+  /* Faded secondary text (reduced-opacity metadata, e.g. archived markers).
+   * Light composites on-surface-variant/65; Dark uses a calibrated faded value. */
+  --color-text-faded: rgba(70, 69, 85, 0.65);
+
+  /* Interactive text/link hover color. Light preserves the legacy primary
+   * hover; Dark uses the calibrated accent text. */
+  --color-link-hover: #3525cd;
+  /* Form control (radio) accent. Light preserves the legacy primary accent;
+   * Dark uses the calibrated interaction accent. */
+  --color-control-accent: #3525cd;
+  /* Subtle hover tint for a text-only action button. Light preserves the legacy
+   * primary-fixed tint; Dark uses a restrained neutral hover. */
+  --color-action-hover-subtle: #e2dfff;
+
+  /* Standalone card / button / empty-state border. Light preserves the legacy
+   * outline-variant value; Dark uses the canonical dark default border. */
+  --color-border-standalone: #c7c4d8;
+  /* Structural border for lists, cards, dividers, tab bar, and banners.
+   * Light preserves the legacy outline-variant value; Dark uses the canonical
+   * subtle structural border. */
+  --color-border-structural: #c7c4d8;
+  /* Form-control (input / select / radio-card) border. Light preserves the
+   * legacy outline value; Dark uses the canonical dark control border. */
+  --color-border-field: #777587;
   /* COMPATIBILITY — legacy Material-style tokens, retained until feature
    * screens are migrated. Do not consume these in new shell code. */
   --color-primary: #3525cd;
@@ -134,6 +187,23 @@ html[data-theme='dark'] {
 
   --color-action: #3e63dd;
   --color-action-hover: #5472e4;
+
+  --color-role-owner-bg: #2e3135;
+  --color-role-owner-text: #edeef0;
+  --color-selected-neutral-bg: #2e3135;
+  --color-selected-neutral-text: #edeef0;
+  --color-option-selected-bg: #2e3135;
+  --color-option-selected-text: #edeef0;
+  --color-tab-active: #edeef0;
+  --color-overlay-scrim: rgba(0, 0, 0, 0.5);
+  --color-surface-footer: rgba(39, 42, 45, 0.3);
+  --color-text-faded: #70757c;
+  --color-link-hover: #9eb1ff;
+  --color-control-accent: #3e63dd;
+  --color-action-hover-subtle: #272a2d;
+  --color-border-standalone: #43484e;
+  --color-border-structural: #363a3f;
+  --color-border-field: #696e77;
   color-scheme: dark;
 }
 
