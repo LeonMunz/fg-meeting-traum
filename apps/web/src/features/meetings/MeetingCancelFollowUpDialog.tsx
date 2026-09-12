@@ -154,7 +154,7 @@ export function MeetingCancelFollowUpDialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-on-surface/25 px-4 py-8 backdrop-blur-[2px]"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-overlay-scrim px-4 py-8 backdrop-blur-[2px]"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget && !cancelling) {
           close()
@@ -168,25 +168,25 @@ export function MeetingCancelFollowUpDialog({
         aria-labelledby="cancel-follow-up-title"
         aria-describedby="cancel-follow-up-prompt"
         onKeyDown={handleTabTrap}
-        className="w-full max-w-md overflow-hidden rounded-2xl border border-outline-variant bg-surface-container-lowest shadow-xl"
+        className="w-full max-w-md overflow-hidden rounded-2xl border border-border-structural bg-surface shadow-xl"
       >
-        <div className="border-b border-outline-variant px-6 py-5">
+        <div className="border-b border-border-subtle px-6 py-5">
           <h2
             id="cancel-follow-up-title"
-            className="text-lg font-semibold tracking-tight text-on-surface"
+            className="text-lg font-semibold tracking-tight text-text"
           >
             Cancel follow-up?
           </h2>
           <p
             id="cancel-follow-up-prompt"
-            className="mt-1 text-sm text-on-surface-variant"
+            className="mt-1 text-sm text-text-muted"
           >
             This will remove the scheduled follow-up from {schedule.targetMeetingTitle} · {formatMeetingDateCompact(schedule.targetMeetingScheduledAt)}.
           </p>
-          <p className="mt-2 text-sm font-medium text-on-surface">
+          <p className="mt-2 text-sm font-medium text-text">
             {schedule.targetMeetingSectionName}
           </p>
-          <p className="mt-1 text-xs text-on-surface-variant">
+          <p className="mt-1 text-xs text-text-muted">
             If the generated agenda item has already been changed, it will be kept as a normal agenda item.
           </p>
         </div>
@@ -194,19 +194,19 @@ export function MeetingCancelFollowUpDialog({
         {error != null && (
           <p
             role="alert"
-            className="mx-6 mt-4 rounded-lg bg-error-container px-3 py-2 text-sm text-error"
+            className="mx-6 mt-4 rounded-lg bg-danger-bg px-3 py-2 text-sm text-danger"
           >
             {error}
           </p>
         )}
 
-        <div className="mt-5 flex items-center justify-end gap-3 border-t border-outline-variant bg-surface-container-low/45 px-6 py-4">
+        <div className="mt-5 flex items-center justify-end gap-3 border-t border-border-subtle bg-surface-footer px-6 py-4">
           <button
             ref={neutralRef}
             type="button"
             disabled={cancelling}
             onClick={close}
-            className="h-9 rounded-lg px-4 text-sm font-medium text-on-surface-variant outline-none transition hover:bg-surface-container-high hover:text-on-surface focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-60"
+            className="h-9 rounded-lg px-4 text-sm font-medium text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-60"
           >
             Keep follow-up
           </button>
@@ -215,7 +215,7 @@ export function MeetingCancelFollowUpDialog({
             type="button"
             disabled={cancelling}
             onClick={() => void confirm()}
-            className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-error-container px-4 text-sm font-semibold text-on-error-container outline-none transition hover:bg-error-container/80 focus-visible:ring-2 focus-visible:ring-error focus-visible:ring-offset-2 disabled:opacity-60"
+            className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-danger px-4 text-sm font-semibold text-text-inverse outline-none transition hover:bg-danger/80 focus-visible:ring-2 focus-visible:ring-danger focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:bg-action-disabled-bg disabled:text-action-disabled-text disabled:hover:bg-action-disabled-bg"
           >
             {cancelling && (
               <span
