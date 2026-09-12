@@ -4,7 +4,10 @@ import {
   itemResultingWork,
 } from './shared'
 
-import { ITEM_OUTCOME_META } from './agendaStatus'
+import {
+  AGENDA_STATUS_META,
+  ITEM_OUTCOME_META,
+} from './agendaStatus'
 
 import type {
   ApiLinkedWorkItem,
@@ -18,9 +21,14 @@ import type {
 export function LinkedWorkButton({
   linked,
   onOpen,
+  meta,
 }: {
   linked: ApiLinkedWorkItem
   onOpen: (linked: ApiLinkedWorkItem) => void
+  // Optional explicit meta line. The Protocol relation renders
+  // Project · Assignee · Status (canonical contract); the
+  // Outcomes rows keep their existing order.
+  meta?: string
 }) {
   return (
     <button
@@ -42,13 +50,14 @@ export function LinkedWorkButton({
         </span>
 
         <span className="block truncate text-[11px] text-text-muted">
-          {[
-            linked.assigneeNames.length > 0
-              ? linked.assigneeNames.join(', ')
-              : 'Unassigned',
-            linked.projectName,
-            linked.statusName,
-          ].join(' · ')}
+          {meta ??
+            [
+              linked.assigneeNames.length > 0
+                ? linked.assigneeNames.join(', ')
+                : 'Unassigned',
+              linked.projectName,
+              linked.statusName,
+            ].join(' · ')}
         </span>
       </span>
     </button>
@@ -66,11 +75,11 @@ function NoteEntry({
 }) {
   return (
     <li className="min-w-0">
-      <p className="whitespace-pre-wrap text-sm leading-6 text-text">
+      <p className="whitespace-pre-wrap text-sm leading-relaxed text-text">
         {note.content}
       </p>
 
-      <p className="mt-1.5 text-[11px] text-text-muted">
+      <p className="mt-1.5 text-[11px] text-text-tertiary">
         {getPersonName(note.author)} ·{' '}
         {formatNoteTime(note.createdAt)}
       </p>
@@ -87,6 +96,13 @@ function NoteEntry({
             <LinkedWorkButton
               linked={note.linkedWorkItem}
               onOpen={onOpenLinkedWork}
+              meta={[
+                note.linkedWorkItem.projectName,
+                note.linkedWorkItem.assigneeNames.length > 0
+                  ? note.linkedWorkItem.assigneeNames.join(', ')
+                  : 'Unassigned',
+                note.linkedWorkItem.statusName,
+              ].join(' · ')}
             />
           </div>
         </div>
@@ -197,6 +213,28 @@ interface ProtocolProps {
   onOpenLinkedWork: (linked: ApiLinkedWorkItem) => void
 }
 
+/* ── Exception marker: only non-done outcomes ─────────
+   Plain-unicode symbols from the shared Live Agenda mapping
+   (AGENDA_STATUS_META) — never an icon-font ligature, so no
+   raw icon/enum name can leak into the record. Ordinary Done
+   items render NO marker: the Protocol is a document, and the
+   signal is reserved for exceptions. */
+
+function ProtocolOutcomeMarker({
+  outcome,
+}: {
+  outcome: 'follow_up' | 'not_discussed'
+}) {
+  const meta = AGENDA_STATUS_META[outcome]
+
+  return (
+    <span className="inline-flex shrink-0 items-baseline gap-1 text-xs font-medium text-text-muted">
+      <span aria-hidden="true">{meta.symbol}</span>
+      {meta.label}
+    </span>
+  )
+}
+
 export function CompletedMeetingProtocol({
   sections,
   itemsBySection,
@@ -212,7 +250,7 @@ export function CompletedMeetingProtocol({
         Protocol
       </h2>
 
-      <div className="mt-5 max-w-[800px] space-y-10">
+      <div className="mt-5 max-w-3xl space-y-10">
         {sections.length === 0 ? (
           <p className="text-sm text-text-muted">
             No agenda sections.
@@ -236,7 +274,7 @@ export function CompletedMeetingProtocol({
                     No items
                   </p>
                 ) : (
-                  <ul className="mt-4 space-y-6">
+                  <ul className="mt-4 space-y-8">
                     {sectionItems.map((item, itemIndex) => {
                       const notes = item.notes ?? []
                       const directWork = itemResultingWork(
@@ -261,35 +299,25 @@ export function CompletedMeetingProtocol({
                           <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
                             <span
                               aria-hidden="true"
-                              className="shrink-0 select-none text-xs tabular-nums text-text-muted"
+                              className="shrink-0 select-none text-xs tabular-nums text-text-tertiary"
                             >
                               {itemIndex + 1}
                             </span>
 
-                            <h4 className="min-w-0 flex-1 break-words text-[15px] font-medium text-text">
+                            <h4 className="min-w-0 break-words text-[15px] font-medium text-text">
                               {item.title}
                             </h4>
 
-                            {item.outcome === 'done' ||
-                            item.outcome === 'follow_up' ||
-                            item.outcome === 'not_discussed' ? (
-                              <span
-                                aria-hidden="true"
-                                className={[
-                                  'ml-auto inline-flex shrink-0 items-center gap-1 text-xs font-medium',
-                                  item.outcome === 'done'
-                                    ? 'text-success'
-                                    : 'text-text-muted',
-                                ].join(' ')}
-                              >
-                                <span
-                                  aria-hidden="true"
-                                  className="material-symbols-outlined text-[13px]"
-                                >
-                                  {ITEM_OUTCOME_META[item.outcome].icon}
-                                </span>
-                                {ITEM_OUTCOME_META[item.outcome].label}
-                              </span>
+                            {/* Exception state beside the title —
+                                ordinary Done items carry none. */}
+                            {item.outcome === 'follow_up' ? (
+                              <ProtocolOutcomeMarker
+                                outcome="follow_up"
+                              />
+                            ) : item.outcome === 'not_discussed' ? (
+                              <ProtocolOutcomeMarker
+                                outcome="not_discussed"
+                              />
                             ) : null}
                           </div>
 

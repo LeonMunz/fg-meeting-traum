@@ -1197,36 +1197,30 @@ describe('Outcomes', () => {
 /* ── 10-17. Protocol ─────────────────────────────────────────── */
 
 describe('Protocol', () => {
-  it('shows a small Done Success marker on done items', () => {
+  it('renders no outcome/status label on ordinary done items', () => {
     const item = makeItem({ outcome: 'done' })
-    renderRecap({ sortedItems: [item] })
+    const { container } = renderRecap({ sortedItems: [item] })
 
+    // The item title is still the record heading...
     expect(
       screen.getByRole('heading', {
         name: 'GPU procurement',
       }),
     ).toBeVisible()
-    // Done gets a small Success signal (icon + visible label),
-    // not a large green card/panel.
-    const done = screen.getByText('Done', { exact: true })
-    expect(done).toHaveClass('text-success')
-  })
-  it('uses a Success signal for Done items in the Protocol', () => {
-    const item = makeItem({
-      id: 6,
-      title: 'Done item',
-      outcome: 'done',
-    })
-    const { container } = renderRecap({ sortedItems: [item] })
-
-    const done = screen.getByText('Done', { exact: true })
-    // Small Success signal — not a large green card/panel.
-    expect(done).toHaveClass('text-success')
-    expect(done.closest('section')!.className).not.toContain(
+    // ...and the Protocol is a document: an ordinary Done item
+    // carries no status label, no symbol, and no success tint.
+    expect(
+      screen.queryByText('Done', { exact: true }),
+    ).not.toBeInTheDocument()
+    expect(container.textContent ?? '').not.toContain(
+      '✓',
+    )
+    expect(container.innerHTML).not.toContain(
+      'text-success',
+    )
+    expect(container.innerHTML).not.toContain(
       'bg-success',
     )
-    // No green surface anywhere in the recap for a Done item.
-    expect(container.innerHTML).not.toContain('bg-success')
   })
 
   it('keeps Follow-up neutral (no Amber / warning treatment)', () => {
@@ -1246,22 +1240,89 @@ describe('Protocol', () => {
     expect(text).not.toContain('follow_up')
   })
 
-  it('renders the valid followup Material Symbol (never raw FOLLOW_UP)', () => {
+  it('renders the follow-up marker as plain unicode (never raw FOLLOW_UP)', () => {
     const item = makeItem({
       id: 4,
       title: 'Sample holder issue',
       outcome: 'follow_up',
     })
+    renderRecap({ sortedItems: [item] })
+
+    // The Protocol marker is a plain-unicode symbol from the
+    // shared Live Agenda mapping — independent of any
+    // icon font, so no raw ligature/enum name can leak.
+    const protocol = screen.getByRole('heading', {
+      name: 'Protocol',
+    }).closest('section')!
+    expect(
+      within(protocol).getByText('↻', {
+        exact: true,
+      }),
+    ).toBeVisible()
+    expect(screen.getByText('Follow-up', { exact: true })).toBeVisible()
+
+    const protocolText = protocol.textContent ?? ''
+    expect(protocolText).not.toContain('FOLLOW_UP')
+    expect(protocolText).not.toContain('followup')
+    expect(protocolText).not.toContain('follow_up')
+    // No icon-font element anywhere in the Protocol record.
+    expect(
+      protocol.querySelector('.material-symbols-outlined'),
+    ).toBeNull()
+  })
+
+  it('keeps the exception state beside the item title, not in a far-right column', () => {
+    const item = makeItem({
+      id: 4,
+      title: 'Sample holder issue',
+      outcome: 'follow_up',
+    })
+    renderRecap({ sortedItems: [item] })
+
+    const heading = screen.getByRole('heading', {
+      name: 'Sample holder issue',
+    })
+    const row = heading.parentElement!
+    // The marker shares the item heading row (right after the
+    // title), not a dedicated status column.
+    expect(
+      within(row).getByText('Follow-up', { exact: true }),
+    ).toBeVisible()
+    expect(row).not.toHaveClass('ml-auto')
+    const protocol = screen.getByRole('heading', {
+      name: 'Protocol',
+    }).closest('section')!
+    expect(
+      protocol.querySelector('[class*="ml-auto"]'),
+    ).toBeNull()
+  })
+
+  it('constrains the Protocol content to a document reading width', () => {
+    const item = makeItem({ outcome: 'done' })
+    renderRecap({ sortedItems: [item] })
+
+    const protocol = screen.getByRole('heading', {
+      name: 'Protocol',
+    }).closest('section')!
+    // Document-like max width from the existing scale, left
+    // aligned inside the page layout.
+    expect(protocol.querySelector('.max-w-3xl')).not.toBeNull()
+  })
+
+  it('uses only the subtle semantic border for Protocol separators', () => {
+    const item = makeItem({
+      notes: [makeNote()],
+    })
     const { container } = renderRecap({ sortedItems: [item] })
 
-    // The icon element carries the valid "followup" ligature and is
-    // hidden from assistive technology; the visible label stays.
-    const icon = container.querySelector(
-      '.material-symbols-outlined',
+    // Bare `border-subtle` is a dead utility in this repository;
+    // every separator must resolve through `border-border-subtle`.
+    expect(container.innerHTML).not.toMatch(
+      /(^|[^-])border-subtle(?![-\w])/,
     )
-    expect(icon?.textContent?.trim()).toBe('followup')
-    expect(icon).toHaveAttribute('aria-hidden', 'true')
-    expect(screen.getByText('Follow-up', { exact: true })).toBeVisible()
+    expect(container.innerHTML).toContain(
+      'border-border-subtle',
+    )
   })
 
   it('shows Not discussed for not_discussed items', () => {
@@ -1276,6 +1337,10 @@ describe('Protocol', () => {
       screen.getByText('Not discussed', {
         exact: true,
       }),
+    ).toBeVisible()
+    // Plain-unicode open marker, not an icon-font ligature.
+    expect(
+      screen.getByText('○', { exact: true }),
     ).toBeVisible()
   })
 
@@ -1381,6 +1446,13 @@ describe('Protocol', () => {
       within(noteRow).getByRole('button', {
         name: 'Open linked work item: Prepare purchase request',
       }),
+    ).toBeVisible()
+    // The relation meta line is Project · Assignee · Status.
+    expect(
+      within(noteRow).getByText(
+        'Paper XYZ · Chris Dev · In progress',
+        { exact: true },
+      ),
     ).toBeVisible()
     // The other Note has no linked work.
     const otherRow = screen
