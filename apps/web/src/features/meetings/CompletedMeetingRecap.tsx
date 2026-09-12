@@ -2,11 +2,11 @@ import {
   formatNoteTime,
   getPersonName,
   itemResultingWork,
+  formatMeetingDateShort,
 } from './shared'
 
 import {
   AGENDA_STATUS_META,
-  ITEM_OUTCOME_META,
 } from './agendaStatus'
 
 import type {
@@ -25,9 +25,9 @@ export function LinkedWorkButton({
 }: {
   linked: ApiLinkedWorkItem
   onOpen: (linked: ApiLinkedWorkItem) => void
-  // Optional explicit meta line. The Protocol relation renders
-  // Project · Assignee · Status (canonical contract); the
-  // Outcomes rows keep their existing order.
+  // Optional explicit meta line (Project · Assignee · Status,
+  // the canonical relation contract). Callers without an
+  // explicit meta keep the compact fallback order.
   meta?: string
 }) {
   return (
@@ -35,21 +35,21 @@ export function LinkedWorkButton({
       type="button"
       onClick={() => onOpen(linked)}
       aria-label={`Open linked work item: ${linked.title}`}
-      className="flex w-full items-start gap-2 rounded-md px-1 py-0.5 text-left outline-none transition hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus"
+      className="flex min-h-[38px] w-full items-start gap-2 rounded-md py-0.5 text-left outline-none transition hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus"
     >
       <span
         aria-hidden="true"
-        className="material-symbols-outlined mt-px text-[15px] text-text-muted"
+        className="material-symbols-outlined mt-px text-[18px] text-text-muted"
       >
         task_alt
       </span>
 
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm text-text">
+        <span className="block truncate text-[13px] leading-[18px] font-semibold text-text">
           {linked.title}
         </span>
 
-        <span className="block truncate text-[11px] text-text-muted">
+        <span className="mt-0.5 block truncate text-[11px] leading-4 text-text-muted">
           {meta ??
             [
               linked.assigneeNames.length > 0
@@ -64,6 +64,41 @@ export function LinkedWorkButton({
   )
 }
 
+/* ── Follow-up scheduled-destination line (Outcomes) ────────── */
+
+// Mirrors the authoritative Live-view wording and uses only
+// fields that are part of the canonical followUpSchedule
+// payload as compact destination metadata:
+// "<Meeting> · <Date> · <Section>". The Follow-ups anchor
+// already carries the semantics, so the row lists only
+// trustworthy target fields; missing optional parts are
+// omitted rather than invented.
+//
+// Lifecycle semantics (docs/domain/meetings.md, section 18):
+// - "scheduled": the concrete target is active -> line.
+// - "needs_reschedule": the original references are retained
+//   for history only; the target is no longer valid -> no
+//   line (it would falsely imply an active schedule).
+// - "cancelled": the server excludes cancelled records from
+//   followUpSchedule, and cancelling reverts the source
+//   outcome to not_discussed, so this cannot be observed
+//   here.
+function followUpScheduleLine(
+  schedule: NonNullable<ApiMeetingItem['followUpSchedule']>,
+): string | null {
+  if (schedule.status !== 'scheduled') {
+    return null
+  }
+
+  return [
+    schedule.targetMeetingTitle,
+    formatMeetingDateShort(schedule.targetMeetingScheduledAt),
+    schedule.targetMeetingSectionName,
+  ]
+    .filter(Boolean)
+    .join(' · ')
+}
+
 /* ── One Note entry: protocol text + quiet attribution ──────── */
 
 function NoteEntry({
@@ -75,11 +110,11 @@ function NoteEntry({
 }) {
   return (
     <li className="min-w-0">
-      <p className="whitespace-pre-wrap text-sm leading-relaxed text-text">
+      <p className="whitespace-pre-wrap text-[14px] leading-[22px] text-text">
         {note.content}
       </p>
 
-      <p className="mt-1.5 text-[11px] text-text-tertiary">
+      <p className="mt-1 text-[11px] leading-4 text-text-muted">
         {getPersonName(note.author)} ·{' '}
         {formatNoteTime(note.createdAt)}
       </p>
@@ -88,7 +123,7 @@ function NoteEntry({
           produced, rendered at its origin. */}
       {note.linkedWorkItem != null && (
         <div className="mt-1.5">
-          <p className="text-[11px] font-medium text-text-muted">
+          <p className="text-[11px] leading-4 font-semibold text-text-tertiary">
             Resulting work
           </p>
 
@@ -150,23 +185,30 @@ export function CompletedMeetingOutcomes({
 
   return (
     <section aria-label="Outcomes">
-      <h2 className="text-base font-semibold text-text">
+      <h2 className="text-[20px] leading-7 font-semibold text-text">
         Outcomes
       </h2>
 
-      <div className="mt-3 space-y-5">
+      <div className="mt-4 space-y-5">
         {workItems.length > 0 && (
           <div>
-            <p className="text-[13px] font-semibold text-text-muted">
+            <p className="text-[11px] leading-4 font-semibold text-text-muted">
               Resulting work
             </p>
 
-            <ul className="mt-1.5 space-y-0.5">
+            <ul className="mt-2 space-y-1.5">
               {workItems.map((linked) => (
                 <li key={linked.id}>
                   <LinkedWorkButton
                     linked={linked}
                     onOpen={onOpenLinkedWork}
+                    meta={[
+                      linked.projectName,
+                      linked.assigneeNames.length > 0
+                        ? linked.assigneeNames.join(', ')
+                        : 'Unassigned',
+                      linked.statusName,
+                    ].join(' · ')}
                   />
                 </li>
               ))}
@@ -176,25 +218,13 @@ export function CompletedMeetingOutcomes({
 
         {followUps.length > 0 && (
           <div>
-            <p className="text-[13px] font-semibold text-text-muted">
+            <p className="text-[11px] leading-4 font-semibold text-text-muted">
               Follow-ups
             </p>
 
-            <ul className="mt-1.5 space-y-1">
+            <ul className="mt-2 space-y-1.5">
               {followUps.map((item) => (
-                <li key={item.id} className="min-w-0">
-                  <span className="flex items-baseline gap-2 text-sm text-text">
-                    <span
-                      aria-hidden="true"
-                      className="material-symbols-outlined shrink-0 self-center text-[14px] text-text-muted"
-                    >
-                      {ITEM_OUTCOME_META.follow_up.icon}
-                    </span>
-                    <span className="min-w-0 break-words">
-                      {item.title}
-                    </span>
-                  </span>
-                </li>
+                <FollowUpRow key={item.id} item={item} />
               ))}
             </ul>
           </div>
@@ -205,6 +235,46 @@ export function CompletedMeetingOutcomes({
 }
 
 /* ── Protocol: the complete historical record ────────────────── */
+
+/* One Follow-up row: title plus its truthful secondary line.
+   outcome=follow_up without an active schedule is a valid
+   user-visible state (legacy outcome-only action and
+   pre-scheduling history) and its secondary line says exactly
+   that; a needs_reschedule schedule keeps no destination line. */
+function FollowUpRow({ item }: { item: ApiMeetingItem }) {
+  const secondary = item.followUpSchedule == null
+    ? 'Follow-up not scheduled'
+    : followUpScheduleLine(item.followUpSchedule)
+
+  return (
+    <li className="min-w-0">
+      <div className="flex items-start gap-2">
+        {/* Stable plain-unicode marker from the
+            shared Agenda mapping — never an icon-font
+            ligature, so no raw icon/enum name can leak
+            into the summary. */}
+        <span
+          aria-hidden="true"
+          className="shrink-0 select-none text-[14px] leading-5 text-text-muted"
+        >
+          {AGENDA_STATUS_META.follow_up.symbol}
+        </span>
+
+        <div className="min-w-0">
+          <p className="break-words text-[13px] leading-[18px] font-semibold text-text">
+            {item.title}
+          </p>
+
+          {secondary != null && (
+            <p className="mt-0.5 break-words text-[11px] leading-4 text-text-muted">
+              {secondary}
+            </p>
+          )}
+        </div>
+      </div>
+    </li>
+  )
+}
 
 interface ProtocolProps {
   sections: ApiMeetingSection[]
@@ -228,8 +298,8 @@ function ProtocolOutcomeMarker({
   const meta = AGENDA_STATUS_META[outcome]
 
   return (
-    <span className="inline-flex shrink-0 items-baseline gap-1 text-xs font-medium text-text-muted">
-      <span aria-hidden="true">{meta.symbol}</span>
+    <span className="inline-flex shrink-0 items-baseline gap-1 text-[11px] leading-4 font-medium text-text-muted">
+      <span aria-hidden="true" className="text-[12px]">{meta.symbol}</span>
       {meta.label}
     </span>
   )
@@ -244,13 +314,13 @@ export function CompletedMeetingProtocol({
   return (
     <section
       aria-label="Protocol"
-      className="min-w-0 border-t border-border-subtle pt-8"
+      className="min-w-0 border-t border-border-subtle pt-7"
     >
-      <h2 className="text-base font-semibold text-text">
+      <h2 className="text-[20px] leading-7 font-semibold text-text">
         Protocol
       </h2>
 
-      <div className="mt-5 max-w-3xl space-y-10">
+      <div className="mt-5 space-y-10">
         {sections.length === 0 ? (
           <p className="text-sm text-text-muted">
             No agenda sections.
@@ -265,7 +335,7 @@ export function CompletedMeetingProtocol({
                 key={section.id}
                 aria-label={section.name}
               >
-                <h3 className="border-b border-border-subtle pb-2 text-lg font-semibold tracking-tight text-text">
+                <h3 className="border-b border-border-subtle pb-2 text-base leading-6 font-semibold text-text">
                   {section.name}
                 </h3>
 
@@ -274,7 +344,7 @@ export function CompletedMeetingProtocol({
                     No items
                   </p>
                 ) : (
-                  <ul className="mt-4 space-y-8">
+                  <ul className="mt-[18px] space-y-7">
                     {sectionItems.map((item, itemIndex) => {
                       const notes = item.notes ?? []
                       const directWork = itemResultingWork(
@@ -294,76 +364,87 @@ export function CompletedMeetingProtocol({
                         (linked) => !noteWorkIds.has(linked.id),
                       )
 
+                      // Two-column mini-layout: a narrow number
+                      // column, then one content column so title,
+                      // exception state, Notes, note bodies,
+                      // attribution, and Resulting work all start
+                      // on the same axis.
                       return (
-                        <li key={item.id} className="min-w-0">
-                          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                            <span
-                              aria-hidden="true"
-                              className="shrink-0 select-none text-xs tabular-nums text-text-tertiary"
-                            >
-                              {itemIndex + 1}
-                            </span>
+                        <li
+                          key={item.id}
+                          className="grid min-w-0 grid-cols-[20px_minmax(0,1fr)] items-baseline gap-x-3"
+                        >
+                          <span
+                            aria-hidden="true"
+                            className="select-none text-[11px] leading-5 tabular-nums text-text-tertiary"
+                          >
+                            {itemIndex + 1}
+                          </span>
 
-                            <h4 className="min-w-0 break-words text-[15px] font-medium text-text">
-                              {item.title}
-                            </h4>
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                              <h4 className="min-w-0 break-words text-[14px] leading-5 font-semibold text-text">
+                                {item.title}
+                              </h4>
 
-                            {/* Exception state beside the title —
-                                ordinary Done items carry none. */}
-                            {item.outcome === 'follow_up' ? (
-                              <ProtocolOutcomeMarker
-                                outcome="follow_up"
-                              />
-                            ) : item.outcome === 'not_discussed' ? (
-                              <ProtocolOutcomeMarker
-                                outcome="not_discussed"
-                              />
-                            ) : null}
-                          </div>
+                              {/* Exception state beside the
+                                  title — ordinary Done items
+                                  carry none. */}
+                              {item.outcome === 'follow_up' ? (
+                                <ProtocolOutcomeMarker
+                                  outcome="follow_up"
+                                />
+                              ) : item.outcome === 'not_discussed' ? (
+                                <ProtocolOutcomeMarker
+                                  outcome="not_discussed"
+                                />
+                              ) : null}
+                            </div>
 
-                          {/* Direct MeetingItem -> Work Item links,
-                              rendered at the owning item (Work
-                              already shown at its Note is not
-                              repeated here). */}
-                          {itemLevelWork.length > 0 && (
-                            <div className="mt-2 pl-5">
-                              <p className="text-[11px] font-medium text-text-muted">
-                                Resulting work
-                              </p>
+                            {/* Notes: protocol text, fully
+                                visible, attribution secondary. */}
+                            {notes.length > 0 && (
+                              <div className="mt-3">
+                                <p className="text-[11px] leading-4 font-semibold text-text-tertiary">
+                                  Notes
+                                </p>
 
-                              <div className="mt-0.5">
-                                {itemLevelWork.map((linked) => (
-                                  <LinkedWorkButton
-                                    key={linked.id}
-                                    linked={linked}
-                                    onOpen={onOpenLinkedWork}
-                                  />
-                                ))}
+                                <ul className="mt-2 space-y-4">
+                                  {notes.map((note) => (
+                                    <NoteEntry
+                                      key={note.id}
+                                      note={note}
+                                      onOpenLinkedWork={
+                                        onOpenLinkedWork
+                                      }
+                                    />
+                                  ))}
+                                </ul>
                               </div>
-                            </div>
-                          )}
+                            )}
 
-                          {/* Notes: protocol text, fully
-                              visible, attribution secondary. */}
-                          {notes.length > 0 && (
-                            <div className="mt-3 pl-5">
-                              <p className="text-[11px] font-semibold uppercase tracking-wide text-text-muted">
-                                Notes
-                              </p>
+                            {/* Direct MeetingItem -> Work Item
+                                links, rendered at the owning item
+                                (Work already shown at its Note is
+                                not repeated here). */}
+                            {itemLevelWork.length > 0 && (
+                              <div className="mt-3">
+                                <p className="text-[11px] leading-4 font-semibold text-text-tertiary">
+                                  Resulting work
+                                </p>
 
-                              <ul className="mt-2.5 space-y-5">
-                                {notes.map((note) => (
-                                  <NoteEntry
-                                    key={note.id}
-                                    note={note}
-                                    onOpenLinkedWork={
-                                      onOpenLinkedWork
-                                    }
-                                  />
-                                ))}
-                              </ul>
-                            </div>
-                          )}
+                                <div className="mt-1.5">
+                                  {itemLevelWork.map((linked) => (
+                                    <LinkedWorkButton
+                                      key={linked.id}
+                                      linked={linked}
+                                      onOpen={onOpenLinkedWork}
+                                    />
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
                         </li>
                       )
                     })}
@@ -401,10 +482,16 @@ export function CompletedMeetingRecap({
 }: CompletedMeetingRecapProps) {
   // Content only: the page header owns the Meeting identity,
   // Completed state, metadata, and the outcome-count line.
+  // One identical document width (840px) for Outcomes, the
+  // Outcomes to Protocol divider, and the Protocol record;
+  // left-aligned, right side stays open.
   return (
-    <div data-completed-recap>
+    <div
+      data-completed-recap
+      className="w-full max-w-[840px]"
+    >
       {/* 1. Outcomes (only when there is actual content) */}
-      <div className="mt-8">
+      <div className="mt-7">
         <CompletedMeetingOutcomes
           items={sortedItems}
           workById={workById}
@@ -413,7 +500,7 @@ export function CompletedMeetingRecap({
       </div>
 
       {/* 2. Full protocol */}
-      <div className="mt-8">
+      <div className="mt-4">
         <CompletedMeetingProtocol
           sections={sortedSections}
           itemsBySection={itemsBySection}

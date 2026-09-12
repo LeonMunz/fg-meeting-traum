@@ -638,7 +638,12 @@ describe('MeetingDetailPage shared header color semantics', () => {
       // The className attribute follows the onClick prop on the
       // same <button>.
       const after = fileSource.slice(idx, idx + 400)
-      const value = after.match(/className="([^"]*)"/)?.[1]
+      // (the nav className is a template literal in the
+      // Completed state, so the window covers the full value)
+      const afterWide = fileSource.slice(idx, idx + 700)
+      const value =
+        after.match(/className="([^"]*)"/)?.[1] ??
+        afterWide.match(/className={`([^`]*)`}/)?.[1]
       expect(value).toMatch(/text-text-muted/)
       expect(value).toContain('hover:bg-surface-hover')
       expect(value).toContain('hover:text-text')

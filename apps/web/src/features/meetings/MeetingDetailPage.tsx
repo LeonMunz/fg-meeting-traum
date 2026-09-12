@@ -2403,21 +2403,20 @@ export function MeetingDetailPage() {
 
   const completedRecapHeader = isCompleted && (
     <>
-      <h1 className="min-w-0 break-words text-2xl font-semibold tracking-tight text-text">
+      <h1 className="min-w-0 break-words text-[28px] leading-[34px] font-semibold text-text">
         {meeting.title}
       </h1>
 
-      <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-text-muted">
-        <span aria-hidden="true" className="material-symbols-outlined text-[14px]">
-          check_circle
-        </span>
+      <span className="mt-1 inline-flex shrink-0 items-center gap-1 text-xs leading-4 font-medium text-text-muted">
+        {/* Plain-unicode check: stable without an icon font. */}
+        <span aria-hidden="true" className="select-none text-[14px]">✓</span>
         Completed
       </span>
     </>
   )
 
   const completedRecapMetaLine = isCompleted && (
-    <p className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-sm text-text-muted">
+    <p className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[13px] leading-5 text-text-muted">
       <span>{formatMeetingDateCompact(meeting.scheduledAt)}</span>
       {completedDurationLabel != null && (
         <>
@@ -2443,22 +2442,37 @@ export function MeetingDetailPage() {
 
 
   return (
+    // The Completed view is one deliberate document: Back nav,
+    // Header (incl. Reopen/More), Outcomes, the
+    // Outcomes-to-Protocol divider, and the Protocol record all
+    // share the exact 840px width, left aligned inside the
+    // unchanged Workspace shell. Other Meeting states keep the
+    // full page width.
     <div className="mx-auto w-full max-w-5xl px-6 py-8 lg:px-8 lg:py-10 xl:px-10">
+      <div
+        className={
+          isCompleted ? 'w-full max-w-[840px]' : undefined
+        }
+      >
       {/* Header */}
       <nav>
         <button
           type="button"
           onClick={() => navigate('/meetings')}
-          className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-sm font-medium text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
+          className={`inline-flex items-center gap-1.5 rounded-lg px-2 py-1 font-medium text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface ${
+            isCompleted
+              ? 'text-[13px] leading-5'
+              : 'text-sm'
+          }`}
         >
-          <span aria-hidden="true" className="material-symbols-outlined text-[18px]">
+          <span aria-hidden="true" className={`material-symbols-outlined ${isCompleted ? 'text-[16px]' : 'text-[18px]'}`}>
             arrow_back
           </span>
           Meetings
         </button>
       </nav>
 
-      <header className="mt-4 flex flex-wrap items-start justify-between gap-x-8 gap-y-4">
+      <header className={`${isCompleted ? 'mt-5' : 'mt-4'} flex flex-wrap items-start justify-between gap-x-8 gap-y-4`}>
         <div className="min-w-0 flex-1">
           {(completedRecapHeader || null) ?? (
             <h1 className="truncate text-3xl font-semibold tracking-tight text-text">
@@ -2500,13 +2514,13 @@ export function MeetingDetailPage() {
 
           {isCompleted &&
             completedOutcomeCounts.length > 0 && (
-              <p className="mt-1.5 text-[13px] text-text-muted">
+              <p className="mt-1 text-xs leading-[18px] text-text-muted">
                 {completedOutcomeCounts.join(' · ')}
               </p>
             )}
         </div>
 
-        <div className="flex shrink-0 items-center gap-2.5">
+        <div className={`flex shrink-0 items-center ${isCompleted ? 'gap-2' : 'gap-2.5'}`}>
           {isLive && (
             <span className="inline-flex items-center gap-1.5 text-sm font-medium text-accent-text" role="status">
               <span aria-hidden="true" className="material-symbols-outlined animate-pulse text-[18px]">
@@ -2521,7 +2535,7 @@ export function MeetingDetailPage() {
               type="button"
               disabled={updatingMeeting}
               onClick={() => void handleReopenMeeting()}
-              className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[13px] font-medium text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus disabled:opacity-60"
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[13px] leading-[18px] font-medium text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus disabled:opacity-60"
             >
               <span aria-hidden="true" className="material-symbols-outlined text-[16px]">
                 replay
@@ -4883,6 +4897,7 @@ export function MeetingDetailPage() {
           </div>
         )
       )}
+      </div>
     </div>
   )
 }

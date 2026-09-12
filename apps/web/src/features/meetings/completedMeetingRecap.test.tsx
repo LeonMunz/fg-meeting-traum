@@ -405,6 +405,33 @@ describe('Completed recap content', () => {
     ).toBeTruthy()
   })
 
+  it('shares one identical document width between Outcomes and Protocol', () => {
+    const item = makeItem({
+      outcome: 'follow_up',
+      title: 'Sample holder issue',
+    })
+    renderRecap({ sortedItems: [item] })
+
+    const outcomes = screen
+      .getByRole('heading', { name: 'Outcomes' })
+      .closest('section')!
+    const protocol = screen
+      .getByRole('heading', { name: 'Protocol' })
+      .closest('section')!
+
+    // Both document regions terminate at the same 840px width
+    // contract, owned by the same element, so Outcomes, the
+    // divider, and the Protocol share one right edge.
+    const widthOf = (element: Element) =>
+      element.closest(
+        '[class*="max-w-[840px]"]',
+      )
+    const outcomesWidth = widthOf(outcomes)
+    const protocolWidth = widthOf(protocol)
+    expect(outcomesWidth).not.toBeNull()
+    expect(protocolWidth).toBe(outcomesWidth)
+  })
+
   it('does not render a second Meeting identity inside the recap', () => {
     renderRecap()
 
@@ -592,6 +619,35 @@ describe('Completed Meeting single header (page level)', () => {
     ).toHaveLength(1)
   })
 
+  it('renders a quiet Completed state with a plain-unicode check', async () => {
+    renderCompletedPage()
+
+    await screen.findByRole('heading', {
+      name: 'FG Weekly',
+      level: 1,
+    })
+    const completed = screen.getByText('Completed', {
+      exact: true,
+    })
+    // The small check glyph accompanies the label ...
+    expect(completed).toHaveTextContent(
+      '✓',
+    )
+    // The Completed row is deliberately separated from the
+    // metadata row below it (three-row header grouping).
+    expect(completed).toHaveClass('mt-1')
+    // ...and is plain unicode, not an icon-font ligature.
+    expect(
+      completed.querySelector(
+        '.material-symbols-outlined',
+      ),
+    ).toBeNull()
+    // Quiet secondary treatment, no status badge.
+    expect(completed).toHaveClass(
+      'text-text-muted',
+    )
+  })
+
   it('renders the participant count exactly once', async () => {
     renderCompletedPage()
 
@@ -703,6 +759,39 @@ describe('Completed Meeting single header (page level)', () => {
     )
   })
 
+  it('keeps the header (incl. Reopen) inside the Completed document width', async () => {
+    const { container } = renderCompletedPage()
+
+    await screen.findByRole('heading', {
+      name: 'FG Weekly',
+      level: 1,
+    })
+    // The Completed document wrapper carries the exact 840px
+    // width contract ...
+    const widthRoot = container.querySelector(
+      '[class*="max-w-[840px]"]',
+    )
+    expect(widthRoot).not.toBeNull()
+    // ...and the header (title + Reopen) sits inside it, so
+    // the action belongs to the record, not the outer canvas.
+    expect(
+      widthRoot!.querySelector('header'),
+    ).not.toBeNull()
+    const reopen = screen.getByRole('button', {
+      name: 'Reopen meeting',
+    })
+    expect(widthRoot!.contains(reopen)).toBe(true)
+    // ...and the recap content shares the same wrapper.
+    expect(
+      widthRoot!.querySelector('[data-completed-recap]'),
+    ).not.toBeNull()
+    // Reopen stays neutral/secondary.
+    expect(reopen.className).toContain('text-text-muted')
+    expect(reopen.className).not.toContain(
+      'bg-accent',
+    )
+  })
+
   it('shows non-zero outcome counts once in the header', async () => {
     const linked = makeLinked()
     const workItem = makeItem({
@@ -734,6 +823,62 @@ describe('Completed Meeting single header (page level)', () => {
         '1 resulting work item · 1 follow-up',
       ),
     ).toHaveLength(1)
+  })
+
+  it('pluralizes the outcome count line for multiple items', async () => {
+    const linkedA = makeLinked({
+      id: 7,
+      title: 'Work A',
+    })
+    const linkedB = makeLinked({
+      id: 8,
+      title: 'Work B',
+    })
+    const w1 = makeItem({
+      id: 3,
+      outcome: 'done',
+      notes: [
+        makeNote({
+          id: 1,
+          meetingItemId: 3,
+          linkedWorkItem: linkedA,
+        }),
+      ],
+    })
+    const w2 = makeItem({
+      id: 6,
+      outcome: 'done',
+      position: 30,
+      notes: [
+        makeNote({
+          id: 2,
+          meetingItemId: 6,
+          linkedWorkItem: linkedB,
+        }),
+      ],
+    })
+    const f1 = makeItem({
+      id: 4,
+      title: 'Follow A',
+      outcome: 'follow_up',
+    })
+    const f2 = makeItem({
+      id: 5,
+      title: 'Follow B',
+      outcome: 'follow_up',
+      position: 20,
+    })
+    renderCompletedPage([w1, w2, f1, f2])
+
+    await screen.findByRole('heading', {
+      name: 'FG Weekly',
+      level: 1,
+    })
+    expect(
+      screen.getByText(
+        '2 resulting work items · 2 follow-ups',
+      ),
+    ).toBeVisible()
   })
 
   it('keeps the recap content (protocol items, notes, linked work) unchanged', async () => {
@@ -1015,8 +1160,9 @@ describe('Outcomes', () => {
       name: 'Open linked work item: Prepare purchase request',
     })
     expect(row).toBeVisible()
+    // Relation meta order: Project · Assignee · Status.
     expect(section).toHaveTextContent(
-      'Chris Dev · Paper XYZ · In progress',
+      'Paper XYZ · Chris Dev · In progress',
     )
   })
 
@@ -1044,8 +1190,9 @@ describe('Outcomes', () => {
         name: 'Open linked work item: Direct item work',
       }),
     ).toBeVisible()
+    // Relation meta order: Project · Assignee · Status.
     expect(section).toHaveTextContent(
-      'Unassigned · Paper XYZ · Todo',
+      'Paper XYZ · Unassigned · Todo',
     )
   })
 
@@ -1141,6 +1288,197 @@ describe('Outcomes', () => {
     expect(
       within(section).getByText('Follow-ups'),
     ).toBeVisible()
+  })
+
+  it('renders Resulting work metadata as Project · Assignee · Status', () => {
+    const linked = makeLinked()
+    const item = makeItem({
+      outcome: 'not_discussed',
+      notes: [
+        makeNote({ linkedWorkItem: linked }),
+      ],
+    })
+    renderRecap({
+      sortedItems: [item],
+      workById: new Map([[linked.id, linked]]),
+    })
+
+    const section = screen
+      .getByRole('heading', { name: 'Outcomes' })
+      .closest('section')!
+    expect(
+      within(section).getByText(
+        'Paper XYZ · Chris Dev · In progress',
+        { exact: true },
+      ),
+    ).toBeVisible()
+  })
+
+  it('renders follow-ups with the stable plain-unicode ↻ marker (never a raw ligature/enum)', () => {
+    const item = makeItem({
+      id: 4,
+      title: 'Sample holder issue',
+      outcome: 'follow_up',
+    })
+    renderRecap({ sortedItems: [item] })
+
+    const section = screen
+      .getByRole('heading', { name: 'Outcomes' })
+      .closest('section')!
+    expect(
+      within(section).getByText('↻', {
+        exact: true,
+      }),
+    ).toBeVisible()
+
+    const text = section.textContent ?? ''
+    expect(text).not.toContain('FOLLOW_UP')
+    expect(text).not.toContain('followup')
+    expect(text).not.toContain('follow_up')
+    // No icon-font ligature anywhere in the Outcomes summary.
+    expect(
+      section.querySelectorAll(
+        '.material-symbols-outlined',
+      ),
+    ).toHaveLength(0)
+  })
+
+  it('renders the scheduled follow-up destination from canonical schedule data', () => {
+    const item = makeItem({
+      id: 4,
+      title: 'Sample holder issue',
+      outcome: 'follow_up',
+      followUpSchedule: {
+        id: 50,
+        status: 'scheduled',
+        sourceMeetingItemId: 4,
+        sourceOutcome: 'follow_up',
+        targetMeetingId: 12,
+        targetMeetingTitle: 'FG Weekly',
+        targetMeetingScheduledAt:
+          '2026-09-17T09:30:00Z',
+        targetMeetingSectionId: 7,
+        targetMeetingSectionName: 'Check-In',
+        targetMeetingItemId: 81,
+        createdAt: '2026-08-27T10:05:00Z',
+        updatedAt: '2026-08-27T10:05:00Z',
+      },
+    })
+    renderRecap({ sortedItems: [item] })
+
+    const section = screen
+      .getByRole('heading', { name: 'Outcomes' })
+      .closest('section')!
+    // Compact destination metadata "<Meeting> · <Date> ·
+    // <Section>" — no "Scheduled for" prefix, because the
+    // Follow-ups anchor already carries the semantics. The
+    // date fragment depends on the environment timezone, so
+    // assert the stable surrounding wording.
+    expect(
+      within(section).getByText(
+        /FG Weekly · [A-Z][a-z]{2} \d{1,2} · Check-In/,
+      ),
+    ).toBeVisible()
+    expect(section.textContent ?? '').not.toContain(
+      'Scheduled for',
+    )
+  })
+
+  it('renders the truthful fallback for an unscheduled follow-up', () => {
+    const item = makeItem({
+      id: 4,
+      title: 'Sample holder issue',
+      outcome: 'follow_up',
+      followUpSchedule: null,
+    })
+    renderRecap({ sortedItems: [item] })
+
+    const section = screen
+      .getByRole('heading', { name: 'Outcomes' })
+      .closest('section')!
+    expect(
+      within(section).getByText('Sample holder issue'),
+    ).toBeVisible()
+    // outcome=follow_up without an active schedule is a valid
+    // user-visible state; its secondary line says exactly
+    // that, with no fabricated destination metadata.
+    expect(
+      within(section).getByText('Follow-up not scheduled', {
+        exact: true,
+      }),
+    ).toBeVisible()
+    expect(section.textContent ?? '').not.toContain(
+      'Scheduled for',
+    )
+  })
+
+  it('does not present an active destination for a needs_reschedule follow-up', () => {
+    const item = makeItem({
+      id: 4,
+      title: 'Sample holder issue',
+      outcome: 'follow_up',
+      followUpSchedule: {
+        id: 50,
+        status: 'needs_reschedule',
+        sourceMeetingItemId: 4,
+        sourceOutcome: 'follow_up',
+        targetMeetingId: 12,
+        targetMeetingTitle: 'FG Weekly',
+        targetMeetingScheduledAt:
+          '2026-09-17T09:30:00Z',
+        targetMeetingSectionId: 7,
+        targetMeetingSectionName: 'Check-In',
+        targetMeetingItemId: 81,
+        createdAt: '2026-08-27T10:05:00Z',
+        updatedAt: '2026-08-27T10:05:00Z',
+      },
+    })
+    renderRecap({ sortedItems: [item] })
+
+    const section = screen
+      .getByRole('heading', { name: 'Outcomes' })
+      .closest('section')!
+    expect(
+      within(section).getByText('Sample holder issue'),
+    ).toBeVisible()
+    // The original references are history only: no active
+    // destination claim and no unscheduled fallback.
+    const text = section.textContent ?? ''
+    expect(text).not.toContain('FG Weekly')
+    expect(text).not.toContain('Check-In')
+    expect(text).not.toContain('Follow-up not scheduled')
+  })
+
+  it('keeps the Resulting work anchors natural-cased and subordinate', () => {
+    const linked = makeLinked()
+    const item = makeItem({
+      outcome: 'not_discussed',
+      notes: [
+        makeNote({ linkedWorkItem: linked }),
+      ],
+    })
+    renderRecap({
+      sortedItems: [item],
+      workById: new Map([[linked.id, linked]]),
+    })
+
+    // The Outcomes anchor and the Note-local Protocol
+    // anchor are both quiet content labels.
+    const anchors = screen.getAllByText(
+      'Resulting work',
+      { exact: true },
+    )
+    expect(anchors.length).toBeGreaterThanOrEqual(1)
+    for (const anchor of anchors) {
+      expect(anchor).toHaveClass('font-semibold')
+      expect(anchor).toHaveClass('leading-4')
+      expect(anchor.className).not.toContain(
+        'uppercase',
+      )
+      expect(anchor.className).not.toMatch(
+        /tracking-/,
+      )
+    }
   })
 
   it('keeps outcome counts out of the recap content (header owns them)', () => {
@@ -1304,9 +1642,13 @@ describe('Protocol', () => {
     const protocol = screen.getByRole('heading', {
       name: 'Protocol',
     }).closest('section')!
-    // Document-like max width from the existing scale, left
-    // aligned inside the page layout.
-    expect(protocol.querySelector('.max-w-3xl')).not.toBeNull()
+    // Document-like max width of the shared Completed document
+    // (840px), owned by the recap's single width wrapper.
+    expect(
+      protocol.closest(
+        '[class*="max-w-[840px]"]',
+      ),
+    ).not.toBeNull()
   })
 
   it('uses only the subtle semantic border for Protocol separators', () => {
@@ -1415,6 +1757,282 @@ describe('Protocol', () => {
     expect(
       screen.getByText(/Alex Dev \u00b7 \d{2}:\d{2}/),
     ).toBeVisible()
+    // Attribution is readable secondary text, not an
+    // overly-faint tertiary, without opacity stacking.
+    expect(
+      screen.getByText(/Alex Dev \u00b7 \d{2}:\d{2}/),
+    ).toHaveClass('text-text-muted')
+    expect(
+      screen.getByText(/Alex Dev \u00b7 \d{2}:\d{2}/)
+        .className,
+    ).not.toMatch(/opacity/)
+  })
+
+  it('renders the Notes anchor in natural casing as a quiet content label', () => {
+    const item = makeItem({
+      notes: [makeNote()],
+    })
+    renderRecap({ sortedItems: [item] })
+
+    const notes = screen.getByText('Notes', {
+      exact: true,
+    })
+    // Small, semibold, tertiary — an informational
+    // content anchor, not a table/system heading.
+    expect(notes).toHaveClass('font-semibold')
+    expect(notes).toHaveClass('leading-4')
+    expect(notes).toHaveClass('text-text-tertiary')
+    expect(notes.className).not.toContain(
+      'uppercase',
+    )
+    expect(notes.className).not.toMatch(
+      /tracking-/,
+    )
+    expect(
+      screen.queryByText('NOTES'),
+    ).not.toBeInTheDocument()
+  })
+
+  it('keeps long Protocol rhythm slightly dense (sections, items, notes)', () => {
+    const firstSection = makeSection()
+    const secondSection = makeSection({
+      id: 2,
+      name: 'KVP',
+      position: 20,
+    })
+    const itemA = makeItem({
+      id: 3,
+      position: 10,
+      notes: [
+        makeNote({
+          id: 11,
+          content: 'First note.',
+        }),
+        makeNote({
+          id: 12,
+          content: 'Second note.',
+        }),
+      ],
+    })
+    const itemB = makeItem({
+      id: 6,
+      position: 20,
+    })
+    const itemC = makeItem({
+      id: 7,
+      meetingSectionId: 2,
+      position: 10,
+    })
+    renderRecap({
+      sortedSections: [firstSection, secondSection],
+      sortedItems: [itemA, itemB, itemC],
+    })
+
+    const protocol = screen
+      .getByRole('heading', { name: 'Protocol' })
+      .closest('section')!
+    // Final editorial rhythm:
+    // Section -> Section 40px (space-y-10),
+    // item -> item 28px (space-y-7),
+    // note -> note 16px (space-y-4).
+    expect(
+      protocol.querySelector('.space-y-10'),
+    ).not.toBeNull()
+    expect(
+      protocol.querySelector('.space-y-7'),
+    ).not.toBeNull()
+    expect(
+      protocol.querySelector('.space-y-4'),
+    ).not.toBeNull()
+    // Section heading -> divider 8px (pb-2); divider ->
+    // first agenda item 18px (mt-[18px]).
+    expect(
+      screen.getByRole('heading', { name: 'TOPs' }),
+    ).toHaveClass('pb-2')
+    expect(
+      protocol.querySelector('ul[class*="mt-[18px]"]'),
+    ).not.toBeNull()
+    // Note text -> attribution 4px (mt-1).
+    const attributions = screen.getAllByText(
+      /Alex Dev \u00b7 \d{2}:\d{2}/,
+    )
+    expect(attributions.length).toBe(2)
+    for (const attribution of attributions) {
+      expect(attribution).toHaveClass('mt-1')
+    }
+  })
+
+  it('aligns agenda-item content on one axis after the number column', () => {
+    const item = makeItem({
+      notes: [
+        makeNote({ content: 'First note.' }),
+      ],
+    })
+    renderRecap({ sortedItems: [item] })
+
+    const protocol = screen
+      .getByRole('heading', { name: 'Protocol' })
+      .closest('section')!
+    const itemBlock = within(protocol)
+      .getByRole('heading', {
+        name: 'GPU procurement',
+      })
+      .closest('li')!
+    // Stable two-column mini-layout: a narrow number column
+    // (2rem), then one content column.
+    expect(itemBlock.className).toContain(
+      'grid-cols-[20px_minmax(0,1fr)]',
+    )
+    const number = itemBlock.querySelector('span')!
+    expect(number.textContent).toBe('1')
+    const content =
+      number.nextElementSibling as HTMLElement
+    expect(content).not.toBeNull()
+    // Notes anchor, note body, and attribution all start on
+    // the same content axis.
+    const notes = screen.getByText('Notes', {
+      exact: true,
+    })
+    const noteBody = screen.getByText('First note.', {
+      exact: true,
+    })
+    const attribution = screen.getAllByText(
+      /Alex Dev \u00b7 \d{2}:\d{2}/,
+    )[0]
+    expect(content.contains(notes)).toBe(true)
+    expect(content.contains(noteBody)).toBe(true)
+    expect(content.contains(attribution)).toBe(true)
+  })
+
+  it('places item-level Resulting work after the Notes block', () => {
+    const direct = makeLinked({
+      id: 31,
+      title: 'Direct work from item',
+      statusName: 'In review',
+      assigneeNames: ['Alex Dev'],
+    })
+    const item = makeItem({
+      workItemIds: [direct.id],
+      notes: [
+        makeNote({
+          content: 'Quotation B was agreed.',
+        }),
+      ],
+    })
+    renderRecap({
+      sortedItems: [item],
+      workById: new Map([[direct.id, direct]]),
+    })
+
+    const protocol = screen
+      .getByRole('heading', { name: 'Protocol' })
+      .closest('section')!
+    const itemBlock = within(protocol)
+      .getByRole('heading', {
+        name: 'GPU procurement',
+      })
+      .closest('li')!
+    const notes = within(itemBlock).getByText(
+      'Notes',
+      { exact: true },
+    )
+    const work = within(itemBlock).getByText(
+      'Resulting work',
+      { exact: true },
+    )
+    expect(
+      notes.compareDocumentPosition(work) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it('separates block, section, and micro-label hierarchy', () => {
+    const item = makeItem({
+      notes: [makeNote()],
+    })
+    renderRecap({ sortedItems: [item] })
+
+    // Block headings (Outcomes / Protocol): 20/28/600,
+    // primary text — stronger than section headings ...
+    const block = screen.getByRole('heading', {
+      name: 'Protocol',
+    })
+    expect(block).toHaveClass('text-[20px]')
+    expect(block).toHaveClass('leading-7')
+    expect(block).toHaveClass('font-semibold')
+    expect(block).toHaveClass('text-text')
+
+    // ... which are stronger than section headings ...
+    const section = screen.getByRole('heading', {
+      name: 'TOPs',
+    })
+    expect(section).toHaveClass('text-base')
+    expect(section).toHaveClass('leading-6')
+    expect(section).toHaveClass('font-semibold')
+    expect(section).toHaveClass('text-text')
+    expect(section).toHaveClass(
+      'border-border-subtle',
+    )
+
+    // ... which are stronger than the quiet micro labels.
+    const micro = screen.getByText('Notes', {
+      exact: true,
+    })
+    expect(micro).toHaveClass('text-[11px]')
+    expect(micro).toHaveClass('font-semibold')
+    expect(micro).toHaveClass('text-text-tertiary')
+  })
+
+  it('keeps the Outcomes block on the final compact contract', () => {
+    const linked = makeLinked()
+    const item = makeItem({
+      outcome: 'not_discussed',
+      notes: [
+        makeNote({ linkedWorkItem: linked }),
+      ],
+    })
+    renderRecap({
+      sortedItems: [item],
+      workById: new Map([[linked.id, linked]]),
+    })
+
+    // Block heading 20/28/600.
+    const heading = screen.getByRole('heading', {
+      name: 'Outcomes',
+    })
+    expect(heading).toHaveClass('text-[20px]')
+    expect(heading).toHaveClass('leading-7')
+    expect(heading).toHaveClass('font-semibold')
+
+    // Subsection label 11/16/600, natural casing.
+    const outcomes =
+      heading.closest('section')!
+    const label = within(outcomes).getByText(
+      'Resulting work',
+      { exact: true },
+    )
+    expect(label).toHaveClass('text-[11px]')
+    expect(label).toHaveClass('leading-4')
+    expect(label).toHaveClass('font-semibold')
+    expect(label.className).not.toContain(
+      'uppercase',
+    )
+
+    // Work rows: 38px min height, cardless, 13px semibold
+    // title, 11px secondary metadata.
+    const row = within(outcomes).getByRole('button', {
+      name: 'Open linked work item: Prepare purchase request',
+    })
+    expect(row).toHaveClass('min-h-[38px]')
+    expect(row.className).not.toContain(
+      'border',
+    )
+    expect(
+      within(outcomes).getByText(
+        'Paper XYZ · Chris Dev · In progress',
+        { exact: true },
+      ),
+    ).toHaveClass('text-[11px]')
   })
 
   it('renders Note-linked Work under the exact owning Note', () => {

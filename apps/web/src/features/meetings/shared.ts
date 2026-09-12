@@ -44,6 +44,21 @@ export function formatMeetingDateCompact(value: string) {
   return `${dayPart} · ${timePart}`
 }
 
+// Compact "Sep 17" date form (no weekday, no time) used for
+// scheduled follow-up destinations in the Completed Outcomes.
+export function formatMeetingDateShort(value: string) {
+  const date = new Date(value)
+
+  if (Number.isNaN(date.getTime())) {
+    return value
+  }
+
+  return new Intl.DateTimeFormat('en', {
+    month: 'short',
+    day: 'numeric',
+  }).format(date)
+}
+
 export function formatNoteTime(value: string) {
   const date = new Date(value)
 
