@@ -48,6 +48,7 @@ vi.mock('../../api/meetings', async (importOriginal) => {
     listMeetingParticipants: vi.fn(),
     listMeetingItems: vi.fn(),
     listMeetingSections: vi.fn(),
+    createMeetingItem: vi.fn(),
     focusMeetingItem: vi.fn(),
     markMeetingItemDone: vi.fn(),
     reopenMeetingItem: vi.fn(),
@@ -1535,6 +1536,126 @@ describe('Live Meeting selection (decoupled from current)', () => {
         name: 'Make Beta current',
       }),
     ).toBeNull()
+  })
+
+  it('renders Selected (non-current) rows with the quiet neutral surface while Current stays Indigo', async () => {
+    const fake = new FakeLiveMeeting(
+      makeMeeting({ currentMeetingItemId: 2 }),
+      BASE_ITEMS,
+    )
+    renderLivePage(fake)
+    await waitForLive()
+
+    // The current row keeps its Indigo hierarchy: an accent bar
+    // over the accent surface.
+    expect(selectRow('Beta')).toHaveClass(
+      'border-accent',
+      'bg-accent-subtle',
+    )
+
+    // Select the non-current item Alpha.
+    fireEvent.click(selectRow('Alpha'))
+    await waitFor(() => {
+      expect(
+        screen.getByRole('main', { name: 'Agenda item' }),
+      ).toHaveTextContent('Alpha')
+    })
+
+    // Selected-only: the quiet neutral surface (the established
+    // hover-strength fill) with no border and no Accent
+    // treatment of any kind.
+    expect(selectRow('Alpha')).toHaveClass(
+      'bg-surface-hover',
+      'border-transparent',
+    )
+    expect(selectRow('Alpha')).not.toHaveClass(
+      'bg-accent-subtle',
+      'border-accent',
+      'bg-accent-selected',
+    )
+
+    // Selecting never promotes a row to Current treatment:
+    // Current keeps its Indigo hierarchy on Beta.
+    expect(selectRow('Beta')).toHaveClass(
+      'border-accent',
+      'bg-accent-subtle',
+    )
+    expect(selectRow('Beta')).not.toHaveClass('bg-surface-hover')
+
+    // Unselected rows stay transparent (only the quiet hover lift).
+    expect(selectRow('Omega')).not.toHaveClass(
+      'bg-surface-hover',
+      'bg-surface-muted',
+    )
+  })
+
+  it('keeps the Live quick-add an inline row: Enter creates, Escape cancels', async () => {
+    const fake = new FakeLiveMeeting(
+      makeMeeting({ currentMeetingItemId: 2 }),
+      BASE_ITEMS,
+    )
+    vi.mocked(
+      meetingsApi.createMeetingItem,
+    ).mockImplementation(
+      async (
+        _meetingId: number,
+        payload: {
+          meetingSectionId: number
+          title: string
+        },
+      ) =>
+        makeItem({
+          id: 9,
+          title: payload.title,
+          meetingSectionId: payload.meetingSectionId,
+          position: fake.items.length,
+        }),
+    )
+    renderLivePage(fake)
+    await waitForLive()
+
+    // Open the composer under the Agenda section.
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Add item' }),
+    )
+    const input = screen.getByLabelText('Add item to Agenda')
+    await waitFor(() => expect(input).toBeVisible())
+
+    // An invalid (empty) item never submits, even via Enter.
+    fireEvent.submit(input.closest('form')!)
+    expect(
+      vi.mocked(meetingsApi.createMeetingItem),
+    ).not.toHaveBeenCalled()
+
+    // Escape cancels: the composer collapses back to the
+    // quiet trigger and nothing was created.
+    fireEvent.keyDown(input, { key: 'Escape' })
+    expect(screen.queryByLabelText('Add item to Agenda')).toBeNull()
+    expect(
+      screen.getByRole('button', { name: 'Add item' }),
+    ).toBeTruthy()
+    expect(
+      vi.mocked(meetingsApi.createMeetingItem),
+    ).not.toHaveBeenCalled()
+
+    // Reopen and submit a valid title via Enter: the item is
+    // created, appears in the rail, and the composer collapses.
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Add item' }),
+    )
+    const reopened = screen.getByLabelText('Add item to Agenda')
+    fireEvent.change(reopened, { target: { value: 'Zeta' } })
+    fireEvent.submit(reopened.closest('form')!)
+
+    await waitFor(() => {
+      expect(
+        vi.mocked(meetingsApi.createMeetingItem),
+      ).toHaveBeenCalledTimes(1)
+    })
+    expect(
+      screen.getByText('Zeta', { exact: true }),
+    ).toBeTruthy()
+    expect(screen.queryByLabelText('Add item to Agenda')).toBeNull()
   })
 describe('Live Meeting resolution controls follow the current outcome', () => {
   function expectOutcomeIcon(

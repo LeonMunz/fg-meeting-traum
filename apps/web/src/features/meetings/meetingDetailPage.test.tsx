@@ -472,6 +472,28 @@ describe('MeetingDetailPage Live visual polish', () => {
     expect(collapse).toBeGreaterThan(create)
   })
 
+  it('keeps the Live quick-add composer a quiet inline agenda row', () => {
+    // The opened composer reads as a temporarily editable agenda
+    // row: a 32px field on a semantic quiet surface with a
+    // subtle frame (never a control-strength outline), agenda-row
+    // typography, and a compact horizontal layout.
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'mt-1.5 flex items-center gap-1.5 pl-3 pr-2',
+    )
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'h-8 min-w-0 flex-1 rounded-md border border-border-subtle bg-surface-quiet px-2 text-sm leading-5 text-text outline-none placeholder:text-text-muted focus:border-focus focus:ring-2 focus:ring-focus',
+    )
+    // Keyboard focus stays on the established focus token.
+    expect(MEETING_DETAIL_SOURCE).not.toContain(
+      'focus:ring-white',
+    )
+    // The Add action is a small quiet text action with canonical
+    // focus, not a filled dominant button.
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'inline-flex h-8 items-center rounded-md px-2 text-xs font-medium text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus disabled:opacity-45',
+    )
+  })
+
   it('keeps an Accent treatment for the current Agenda row only', () => {
     // Current (persisted) is the primary chromatic state: an accent
     // left indicator over a subtle accent surface.
@@ -484,9 +506,16 @@ describe('MeetingDetailPage Live visual polish', () => {
   })
 
   it('keeps Selected (viewing) rows neutral, never Accent', () => {
-    // Selected != Current is local navigation: a neutral muted
-    // surface with no accent classes.
+    // Selected != Current is local navigation: a quiet neutral
+    // surface (the established hover-strength fill) with no
+    // border and no accent classes. It must stay clearly
+    // quieter than the Current row's Indigo treatment.
     expect(MEETING_DETAIL_SOURCE).toContain(
+      'border-l-2 border-transparent bg-surface-hover',
+    )
+    // The selected row is a quiet surface, not a strong/disabled
+    // navigation block: no stronger neutral fill and no border.
+    expect(MEETING_DETAIL_SOURCE).not.toContain(
       'border-l-2 border-transparent bg-surface-muted',
     )
     expect(MEETING_DETAIL_SOURCE).not.toContain(

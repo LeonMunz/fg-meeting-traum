@@ -2901,7 +2901,7 @@ export function MeetingDetailPage() {
                               isCurrent
                                 ? 'border-l-2 border-accent bg-accent-subtle'
                                 : isSelected
-                                  ? 'border-l-2 border-transparent bg-surface-muted'
+                                  ? 'border-l-2 border-transparent bg-surface-hover'
                                   : 'border-l-2 border-transparent hover:bg-surface-hover',
                             ].join(' ')
 
@@ -2958,7 +2958,7 @@ export function MeetingDetailPage() {
                             e.preventDefault()
                             void handleCreateItemInSection(section)
                           }}
-                          className="mt-1.5 flex items-center gap-1.5 px-2.5"
+                          className="mt-1.5 flex items-center gap-1.5 pl-3 pr-2"
                         >
                           <input
                             ref={quickAddInputRef}
@@ -2987,7 +2987,7 @@ export function MeetingDetailPage() {
                             }}
                             placeholder="Agenda item title"
                             aria-label={`Add item to ${section.name}`}
-                            className="h-8 min-w-0 flex-1 rounded-md border border-default bg-surface px-2.5 text-sm text-text outline-none focus:border-accent focus:ring-2 focus:ring-focus"
+                            className="h-8 min-w-0 flex-1 rounded-md border border-border-subtle bg-surface-quiet px-2 text-sm leading-5 text-text outline-none placeholder:text-text-muted focus:border-focus focus:ring-2 focus:ring-focus"
                           />
 
                           <button
@@ -2998,7 +2998,7 @@ export function MeetingDetailPage() {
                                 ''
                               ).trim()
                             }
-                            className="inline-flex h-8 items-center rounded-md px-2 text-sm font-medium text-accent-text transition hover:bg-accent-subtle disabled:opacity-45"
+                            className="inline-flex h-8 items-center rounded-md px-2 text-xs font-medium text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus disabled:opacity-45"
                           >
                             Add
                           </button>
