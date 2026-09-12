@@ -70,6 +70,10 @@ import {
   itemResultingWork,
   meetingDurationMinutes,
 } from './shared'
+import {
+  NoteLinkedWorkCard,
+  NoteLinkedWorkCaption,
+} from './noteLinkedWork'
 
 // The Work Item Inspector is the same shared drawer the Project
 // page uses; keep it out of the initial Meeting bundle.
@@ -3315,65 +3319,35 @@ export function MeetingDetailPage() {
                                     )}
                                   </p>
 
-                                  {/* Linked work: rendered
-                                      directly at the exact
-                                      source Note, same as before. */}
-                                  {(() => {
-                                    const linked =
-                                      note.linkedWorkItem
+                                  {/* Linked work: compact relation
+                                      card(s) directly beneath the
+                                      exact source Note. The Note
+                                      stays visually primary; the
+                                      generated Work Item reads as a
+                                      secondary linked entity that
+                                      opens the shared inspector. */}
+                                  {note.linkedWorkItem !=
+                                    null && (
+                                    <div>
+                                      <NoteLinkedWorkCaption />
 
-                                    if (
-                                      linked == null
-                                    ) {
-                                      return null
-                                    }
+                                      <NoteLinkedWorkCard
+                                        linked={note.linkedWorkItem}
+                                        onOpen={(linked) =>
+                                          openLinkedWorkInspector(
+                                            linked,
+                                          )
+                                        }
+                                      />
 
-                                    return (
-                                      <div className="mt-1.5 rounded-lg border border-subtle bg-surface-subtle px-2.5 py-2">
-                                        <p className="text-[11px] font-medium text-text-muted">
-                                          Linked work
+                                      {justLinkedNoteId ===
+                                      note.id && (
+                                        <p role="status" className="mt-1 text-[11px] font-medium text-success">
+                                          Work item created
                                         </p>
-
-                                        <button
-                                          type="button"
-                                          onClick={() =>
-                                            openLinkedWorkInspector(
-                                              linked,
-                                            )
-                                          }
-                                          aria-label={`Open linked work item: ${linked.title}`}
-                                          className="mt-1 flex w-full items-start gap-2 rounded-md text-left outline-none transition hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus"
-                                        >
-                                          <span aria-hidden="true" className="material-symbols-outlined mt-px text-[16px] text-text-muted">
-                                            check_box_outline_blank
-                                          </span>
-
-                                          <span className="min-w-0 flex-1">
-                                            <span className="block truncate text-sm text-text">
-                                              {linked.title}
-                                            </span>
-
-                                            <span className="block truncate text-[11px] text-text-muted">
-                                              {linked.projectName}
-                                              {' · '}
-                                              {linked.assigneeNames.length > 0
-                                                ? linked.assigneeNames.join(', ')
-                                                : 'Unassigned'}
-                                              {' · '}
-                                              {linked.statusName}
-                                            </span>
-                                          </span>
-                                        </button>
-
-                                        {justLinkedNoteId ===
-                                        note.id && (
-                                          <p role="status" className="mt-1 text-[11px] font-medium text-success">
-                                            Work item created
-                                          </p>
-                                        )}
-                                      </div>
-                                    )
-                                  })()}
+                                      )}
+                                    </div>
+                                  )}
 
                                   {(isLive ||
                                   (canCreateWorkFromNote &&

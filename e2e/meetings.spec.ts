@@ -2015,7 +2015,7 @@ test(
 
     await expect(
       noteBlock.getByText(
-        'Linked work',
+        'Linked work item',
         { exact: true },
       ),
     ).toBeVisible()

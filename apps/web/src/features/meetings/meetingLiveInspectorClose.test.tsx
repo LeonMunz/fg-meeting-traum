@@ -520,4 +520,49 @@ describe('Live Meeting linked Work Item inspector outside-click close', () => {
       }),
     ).toBeNull()
   })
+
+  it('renders a singular caption, the linked card and available metadata for one linked Work Item', async () => {
+    renderLivePage([makeItem()])
+    await waitForLive()
+
+    // Singular caption (one linked Work Item on the Note).
+    expect(
+      screen.getByText('Linked work item', { exact: true }),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByText('Linked work items', { exact: true }),
+    ).toBeNull()
+
+    // The card shows the Work Item title as primary text.
+    expect(
+      screen.getByText(LINKED_A.title),
+    ).toBeInTheDocument()
+
+    // Already-available metadata: Project · assignee · status.
+    expect(
+      screen.getByText(
+        'Lab Ops · Alex Dev · In progress',
+      ),
+    ).toBeInTheDocument()
+
+    // The card is the single clickable control for this item.
+    const card = linkedButton(LINKED_A.title)
+    expect(card).toBeInTheDocument()
+    expect(card).toContainElement(
+      screen.getByText(LINKED_A.title),
+    )
+  })
+
+  it('opens the correct inspector for the linked Work Item whose card was clicked', async () => {
+    renderLivePage([makeItem()])
+    await waitForLive()
+
+    await openInspectorFor(LINKED_A.title)
+
+    // The inspector opened in place for that exact Work Item.
+    expect(inspectorRegion()).toBeVisible()
+    expect(
+      screen.getByRole('button', { name: LINKED_A.title }),
+    ).toBeVisible()
+  })
 })
