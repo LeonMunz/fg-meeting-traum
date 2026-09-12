@@ -90,7 +90,7 @@ export function LinkPopover({
       ref={popoverRef}
       role="dialog"
       aria-label="Edit link"
-      className="absolute bottom-full left-0 z-10 mb-2 w-72 rounded-lg border border-outline-variant bg-surface-container-lowest p-2.5 shadow-lg"
+      className="absolute bottom-full left-0 z-10 mb-2 w-72 rounded-lg border border-border-default bg-surface p-2.5 shadow-lg shadow-color"
       onKeyDown={(event) => {
         if (event.key === 'Escape') {
           event.preventDefault()
@@ -104,7 +104,7 @@ export function LinkPopover({
       }}
     >
       <label className="block">
-        <span className="mb-1 block text-xs font-medium text-on-surface-variant">
+        <span className="mb-1 block text-xs font-medium text-control-foreground">
           Link URL
         </span>
 
@@ -114,7 +114,7 @@ export function LinkPopover({
           value={href}
           onChange={(event) => setHref(event.target.value)}
           placeholder="https://…"
-          className="h-8 w-full rounded-md border border-outline-variant bg-surface-container-lowest px-2.5 text-sm text-on-surface outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
+          className="h-8 w-full rounded-md border border-editor-boundary bg-surface px-2.5 text-sm text-text-primary placeholder:text-text-work-faded-55 outline-none focus:border-focus-ring-primary focus:ring-2 focus:ring-focus-ring-primary/15"
         />
       </label>
 
@@ -123,7 +123,7 @@ export function LinkPopover({
           <button
             type="button"
             onClick={removeLink}
-            className="h-7 rounded-md px-2 text-xs font-medium text-error transition hover:bg-error-container/40"
+            className="h-7 rounded-md px-2 text-xs font-medium text-work-item-error transition hover:bg-work-item-error-bg/60"
           >
             Remove
           </button>
@@ -132,7 +132,7 @@ export function LinkPopover({
         <button
           type="button"
           onClick={applyLink}
-          className="h-7 rounded-md bg-primary px-3 text-xs font-semibold text-on-primary transition hover:opacity-90"
+          className="h-7 rounded-md bg-action px-3 text-xs font-semibold text-white transition hover:bg-action-hover-solid disabled:cursor-not-allowed disabled:bg-action-disabled-bg disabled:text-action-disabled-text"
         >
           {existingHref ? 'Update' : 'Add'}
         </button>

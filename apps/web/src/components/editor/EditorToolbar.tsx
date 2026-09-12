@@ -39,9 +39,9 @@ function ToolbarButton({
       className={[
         'flex h-7 min-w-7 items-center justify-center rounded-md px-1.5 text-xs font-semibold transition',
         active
-          ? 'bg-primary/15 text-primary'
-          : 'text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface',
-        disabled ? 'cursor-not-allowed opacity-40' : '',
+          ? 'bg-control-active-surface text-control-active-foreground'
+          : 'text-text-tertiary hover:bg-control-hover-surface hover:text-control-hover-foreground',
+        disabled ? 'cursor-not-allowed text-control-disabled-foreground' : '',
       ].join(' ')}
     >
       {icon ? (
@@ -145,8 +145,8 @@ export function EditorBottomToolbar({
   const compact = variant === 'compact'
 
   return (
-    <div className="relative mt-2 flex flex-wrap items-center gap-2 border-t border-outline-variant/70 pt-2">
-      <span className="mr-1 text-[11px] text-on-surface-variant/80">
+    <div className="relative mt-2 flex flex-wrap items-center gap-2 border-t border-border-structural pt-2">
+      <span className="mr-1 text-[11px] text-text-tertiary">
         Markdown supported
       </span>
 
@@ -187,7 +187,7 @@ export function EditorBottomToolbar({
 
         <span
           aria-hidden="true"
-          className="mx-1 h-4 w-px bg-outline-variant"
+          className="mx-1 h-4 w-px bg-border-structural"
         />
 
         <ToolbarButton
@@ -217,7 +217,7 @@ export function EditorBottomToolbar({
 
             <span
               aria-hidden="true"
-              className="mx-1 h-4 w-px bg-outline-variant"
+              className="mx-1 h-4 w-px bg-border-structural"
             />
 
             <ToolbarButton
@@ -276,7 +276,7 @@ export function EditorBubbleToolbar({
       }
       role="toolbar"
       aria-label="Selection formatting"
-      className="flex items-center gap-0.5 rounded-lg border border-outline-variant bg-surface-container-lowest p-1 shadow-lg"
+      className="flex items-center gap-0.5 rounded-lg border border-border-default bg-surface p-1 shadow-lg shadow-color"
     >
       <ToolbarButton
         label="Bold"

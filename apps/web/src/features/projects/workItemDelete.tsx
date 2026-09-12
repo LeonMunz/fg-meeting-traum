@@ -32,13 +32,13 @@ export function WorkItemActionMenuItem({
       className={[
         'flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-sm outline-none',
         danger
-          ? 'text-error hover:bg-error-container/40 focus-visible:bg-error-container/40'
-          : 'text-on-surface hover:bg-surface-container-low focus-visible:bg-surface-container-low',
+          ? 'text-work-item-error hover:bg-work-item-error-bg focus-visible:bg-work-item-error-bg'
+          : 'text-work-content-text hover:bg-work-surface-row-hover focus-visible:bg-work-surface-row-hover',
       ].join(' ')}
     >
       <span
         aria-hidden="true"
-        className="material-symbols-outlined text-[17px] text-on-surface-variant"
+        className="material-symbols-outlined text-[17px] text-text-work-faded-70"
       >
         {icon}
       </span>
@@ -139,11 +139,11 @@ export function WorkItemActionMenuTrigger({
         aria-expanded={open}
         onClick={toggle}
         className={[
-          'flex items-center justify-center rounded-lg text-on-surface-variant outline-none transition hover:bg-surface-container-high focus-visible:bg-surface-container-high focus-visible:ring-2 focus-visible:ring-primary/30',
+          'flex items-center justify-center rounded-lg text-text-work-faded-70 outline-none transition hover:bg-work-surface-support focus-visible:bg-work-surface-support focus-visible:ring-2 focus-visible:ring-focus-ring-primary/30',
           isLarge
             ? 'h-9 w-9'
             : 'h-7 w-7',
-          open ? 'bg-surface-container-high' : '',
+          open ? 'bg-work-surface-support' : '',
         ].join(' ')}
       >
         <span
@@ -165,7 +165,7 @@ export function WorkItemActionMenuTrigger({
             top: position.top,
             left: position.left,
           }}
-          className="z-50 w-52 rounded-xl border border-outline-variant bg-surface-container-lowest p-1 shadow-lg shadow-on-surface/10"
+          className="z-50 w-52 rounded-xl border border-border-structural bg-surface p-1 shadow-lg shadow-on-surface/10"
         >
           <WorkItemActionMenuItem
             label="Delete work item"
@@ -206,7 +206,7 @@ export function WorkItemDeleteDialog({
       // would be treated as an "outside click" and close the open
       // inspector. Keep the inspector open while confirming deletion.
       data-work-item-inspector-keep-open="true"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-on-surface/25 px-4 py-8 backdrop-blur-[2px]"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-overlay-scrim px-4 py-8 backdrop-blur-[2px]"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget && !deleting) {
           onCancel()
@@ -217,17 +217,17 @@ export function WorkItemDeleteDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="work-item-delete-title"
-        className="w-full max-w-md overflow-hidden rounded-2xl border border-outline-variant bg-surface-container-lowest shadow-xl"
+        className="w-full max-w-md overflow-hidden rounded-2xl border border-border-structural bg-surface shadow-xl"
       >
         <div className="px-6 py-5">
           <h2
             id="work-item-delete-title"
-            className="text-lg font-semibold tracking-tight text-on-surface"
+            className="text-lg font-semibold tracking-tight text-work-content-text"
           >
             Delete work item?
           </h2>
 
-          <p className="mt-2 text-sm text-on-surface-variant">
+          <p className="mt-2 text-sm text-text-work-faded-70">
             This permanently deletes this work item and its activity.
             Related projects, meetings, and other work items will not be
             deleted.
@@ -236,19 +236,19 @@ export function WorkItemDeleteDialog({
           {error && (
             <p
               role="alert"
-              className="mt-3 rounded-lg bg-error-container px-3 py-2 text-sm text-error"
+              className="mt-3 rounded-lg bg-work-item-error-bg px-3 py-2 text-sm text-work-item-error"
             >
               {error}
             </p>
           )}
         </div>
 
-        <div className="flex justify-end gap-2 border-t border-outline-variant px-6 py-4">
+        <div className="flex justify-end gap-2 border-t border-border-structural px-6 py-4">
           <button
             type="button"
             disabled={deleting}
             onClick={onCancel}
-            className="inline-flex h-9 items-center rounded-lg px-3.5 text-sm font-medium text-on-surface-variant outline-none transition hover:bg-surface-container-high focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-60"
+            className="inline-flex h-9 items-center rounded-lg px-3.5 text-sm font-medium text-text-work-faded-70 outline-none transition hover:bg-work-surface-support focus-visible:ring-2 focus-visible:ring-focus-ring-primary/40 disabled:opacity-60"
           >
             Cancel
           </button>
@@ -257,7 +257,7 @@ export function WorkItemDeleteDialog({
             type="button"
             disabled={deleting}
             onClick={onConfirm}
-            className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-error-container px-3.5 text-sm font-semibold text-on-error-container outline-none transition hover:bg-error-container/80 focus-visible:ring-2 focus-visible:ring-error focus-visible:ring-offset-2 disabled:opacity-60"
+            className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-danger px-3.5 text-sm font-semibold text-white outline-none transition hover:bg-danger/80 focus-visible:ring-2 focus-visible:ring-danger focus-visible:ring-offset-2 disabled:opacity-60"
           >
             {deleting && (
               <span

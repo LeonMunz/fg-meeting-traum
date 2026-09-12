@@ -107,8 +107,8 @@ correctly in both themes without static Light-only legacy classes.
 |---|---|---|---|
 | `role-owner-bg` | `#E2DFFF` | `#2E3135` | Ownership (Owner) role badge background |
 | `role-owner-text` | `#3525CD` | `#EDEEF0` | Ownership (Owner) role badge text |
-| `selected-neutral-bg` | `#DAE2FD` | `#2E3135` | Neutral "selected" chip (filter / archive) background |
-| `selected-neutral-text` | `#0B1C30` | `#EDEEF0` | Neutral "selected" chip text |
+| `selected-support-bg` | `#DAE2FD` | `#2E3135` | Neutral "selected"/support chip (filter / archive) + Type segmented-card selected segment background |
+| `selected-support-text` | `#0B1C30` | `#EDEEF0` | Neutral "selected"/support chip text |
 | `option-selected-bg` | `#F2F1FF` | `#2E3135` | Selected Create-project option-card fill (Light = `primary-fixed/45` over the card surface) |
 | `option-selected-text` | `#0B1C30` | `#EDEEF0` | Selected Create-project option-card text |
 | `tab-active` | `#3525CD` | `#EDEEF0` | Active Project tab text + underline (neutral in Dark; distinct from keyboard focus) |
@@ -153,8 +153,88 @@ functional token.
 | `work-surface-hover` | `#EFF4FF` @45% | `#272A2D` | Work Item card / List row hover (Light = legacy `surface-container-low/45`) |
 | `work-surface-toolbar` | `#EFF4FF` @35% | `#1B1D20` | Filter / toolbar band (Light = legacy `surface-container-low/35`) |
 | `action-hover-solid` | `#3525CD` @90% | `#5472E4` | New Work Item button hover (Light = legacy `primary/90`; Dark = action-hover) |
-| `interaction-primary` | `#3525CD` | `#3E63DD` | Legacy-primary interaction accent — insertion indicator, in-progress status (Light = legacy `primary`) |
+| `interaction-primary` | `#3525CD` | `#3E63DD` | Legacy-primary interaction accent — insertion indicator, in-progress status, task-list checkbox accent (Light = legacy `primary`) |
+| `prose-link` | `#3525CD` | `#9EB1FF` | Prose text link (`.fg-prose a`); Light = legacy `primary`, the exact HEAD link foreground |
 | `focus-ring-primary` | `#3525CD` | `#3E63DD` | Form-control focus border / ring (Light = legacy `primary` and `primary/15`) |
+
+**Overlay soft scrim, drawer faded text, note band, row hover, and
+themeable shadow color.** The Work Item drawer migration retained the
+minimum set of roles whose HEAD Light values are NOT expressible by the
+existing functional tokens:
+
+- The create drawer is a dedicated right-side overlay, so its Light scrim is
+  `bg-black/30` (distinct from the centered-modal `overlay-scrim` =
+  `on-surface/25`); the delete dialog scrim IS `on-surface/25` and reuses
+  `overlay-scrim` directly.
+- The drawer's three legacy `on-surface-variant` @55/60/70 text tiers are
+  exact opaque composites over white (e.g. /60 = `#908F99`); the /60 value
+  equals `text-work-placeholder` but stays a distinct role because it must
+  theme to muted in Dark while the Board placeholder must not.
+- The quiet note band (read-only notice, "Created from" box) is
+  `surface-container-low/50` — a different Light alpha from
+  `work-surface-toolbar` (`/35`), so it is a distinct role.
+- Property-row hover is `surface-container-low` UNCOMPOSITED — different
+  from `work-surface-hover` (`/45`), so it is a distinct role.
+- Drawer popup shadows keep the native Tailwind geometries (sm/lg/xl/2xl)
+  byte-for-byte in Light; only the shadow COLOR is themed via
+  `--shadow-color`, so Dark gets a black shadow instead of the pale
+  `on-surface` glow with zero Light change.
+
+| Token | Light | Dark | Purpose |
+|---|---|---|---|
+| `overlay-soft-scrim` | `#000000` @30% | `#000000` @50% | Work Item create-drawer backdrop (right-side overlay) |
+| `text-work-faded-55` | `#9999A2` | `#70757C` | Drawer input placeholder (Light = `on-surface-variant/55` over white) |
+| `text-work-faded-60` | `#908F99` | `#70757C` | Drawer faded metadata: history timestamps, change labels, timeline dot (Light = `on-surface-variant/60`) |
+| `text-work-faded-70` | `#7E7D88` | `#70757C` | Drawer muted metadata: descriptions, timestamps, labels, loading/empty (Light = `on-surface-variant/70`) |
+| `work-surface-note` | `#F7FAFF` | `#1E2023` | Quiet note band (Light = `surface-container-low/50` over white) |
+| `work-surface-row-hover` | `#EFF4FF` | `#272A2D` | Drawer row / disabled-field hover (Light = `surface-container-low` uncomposited) |
+| `shadow-color` | `#000000` @100% | `#000000` @50% | Themeable shadow color for drawer-owned popups (native geometries preserved) |
+**Inspector control bridges.** The Work Item Inspector consumes a set of
+generic control/foreground bridge roles. Each Light value is the **exact
+HEAD rendering** of the corresponding state (the legacy Material tokens were
+static across themes, so their Light values survive verbatim — several as
+opaque composites over white: `#464555` = `on-surface-variant`, `#5C5B6A` =
+`on-surface-variant/80`, `#575666` = `on-surface-variant/40`, `#5C5D6B` =
+`primary/40`, `#1D2746` = `primary/15`, `#F8D0CE` = `error-container/40`,
+`#C7C4D8` = `outline-variant`, `#DCE9FF` = `surface-container-high`,
+`#FFFFFF` = `on-primary`). The Dark side uses the approved FG Dark
+hierarchy. No existing token is forced to serve both themes when its Light
+side does not match HEAD.
+
+| Token | Light (HEAD-exact) | Dark | Purpose |
+|---|---|---|---|
+| `text-primary` | `#0B1C30` | `#EDEEF0` | Strong content text (property values, chip name, editor input text, control hover foreground) |
+| `text-secondary` | `#464555` | `#AFB3BA` | Ordinary metadata (project crumb, chip initials / remove icon) |
+| `text-tertiary` | `#5C5B6A` | `#8B9098` | Quiet metadata: property labels (Type/Status/Assignees/Due date/Parent/Blocked), toolbar inactive text, "Markdown supported" hint, editor placeholder |
+| `control-foreground` | `#464555` | `#AFB3BA` | Normal interactive control icons (search, more_horiz, Link-popover label) |
+| `control-hover-foreground` | `#0B1C30` | `#EDEEF0` | Control icon foreground on hover |
+| `control-hover-surface` | `#DCE9FF` | `#272A2D` | Toolbar button hover background |
+| `control-active-foreground` | `#3525CD` | `#9EB1FF` | Active toolbar formatting state (text/icon) |
+| `control-active-surface` | `#1D2746` | `#15224C` | Active toolbar formatting state (background) |
+| `control-disabled-foreground` | `#575666` | `#696E77` | Disabled toolbar control (Light = `on-surface-variant/40`, exact HEAD disabled opacity composite) |
+| `action-disabled-bg` | `#5C5D6B` | `#2E3135` | Disabled Comment/Save fill (Light = `primary/40` over white, exact HEAD disabled-button composite) |
+| `action-disabled-text` | `#5C5D6B` | `#696E77` | Disabled Comment/Save text |
+| `quiet-action-foreground` | `#464555` | `#AFB3BA` | Cancel (default) |
+| `quiet-action-hover-foreground` | `#0B1C30` | `#EDEEF0` | Cancel hover text |
+| `quiet-action-hover-surface` | `#DCE9FF` | `#272A2D` | Cancel hover background |
+| `control-track-off` | `#DCE9FF` | `#3F444B` | Blocked toggle off-track (visible structural fill in Dark; HEAD filled track in Light) |
+| `editor-boundary` | `#C7C4D8` | `#43484E` | Interactive editor/input boundary (comment composer frame, Link-popover field) — subtle in Light (HEAD `outline-variant`), control-strength in Dark |
+
+**Shared editor prose (`.fg-prose`).** The default rules keep their exact
+HEAD Light rendering byte-for-byte — the legacy tokens they reference
+(`on-surface`, `on-surface-variant`, `primary`, `outline-variant`,
+`surface-container-high`) are static and Light-correct, and the Light
+placeholder opacity chain is preserved. A Dark-only override block
+(`html[data-theme='dark'] .fg-prose …`, appended after the defaults) maps
+each prose state to the theme-aware semantic tokens: body / headings /
+list / `pre code` → `text-primary`; blockquote + checked-task text →
+`text-secondary` (strike line → `border-subtle`); placeholder →
+`text-tertiary` (opacity reset to 1); links → `prose-link` (same 40%
+underline, same hover); task-list checkbox accent →
+`interaction-primary`; inline code / code-block fill →
+`work-surface-support`; quote bar / `<hr>` → `border-subtle`. The override
+is additive (higher specificity than the defaults), so Light `.fg-prose`
+rendering is exactly HEAD.
 
 **Semantic success text.** The Work Item Done status glyph needed a readable
 semantic green in Dark while keeping the exact legacy Light value.

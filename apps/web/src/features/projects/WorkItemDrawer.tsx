@@ -22,6 +22,7 @@ import type {
   ApiWorkItemComment,
   ApiWorkItemHistoryActor,
   ApiWorkItemHistoryChanges,
+  ApiWorkItemHistoryDefinitionRef,
   ApiWorkItemHistoryEvent,
   ApiWorkItemStatus,
   ApiWorkItemType,
@@ -170,6 +171,14 @@ function getTypeLabel(value: ApiWorkItemType): string {
     typeOptions.find((option) => option.value === value)
       ?.label ?? value
   )
+}
+
+// Definition names arrive pre-resolved in the history payload — use
+// them verbatim instead of re-deriving from hard-coded slugs.
+function getDefinitionRefName(
+  ref: ApiWorkItemHistoryDefinitionRef | null,
+): string {
+  return ref ? ref.name : 'None'
 }
 
 // Mirrors ProjectDetailPage's getPersonName display-name convention
@@ -328,6 +337,9 @@ function summarizeParentRef(
 const HISTORY_CHANGE_FIELD_ORDER = [
   'title',
   'description',
+  'typeDefinition',
+  'statusDefinition',
+  // Legacy fixed-slug keys — only present in older persisted events.
   'type',
   'status',
   'dueDate',
@@ -363,6 +375,24 @@ function describeHistoryFieldCompact(
     }
     case 'description':
       return { label: 'Description', text: 'Changed' }
+    case 'typeDefinition': {
+      const change = changes.typeDefinition
+      return {
+        label: 'Type',
+        text: change
+          ? `${getDefinitionRefName(change.from)} → ${getDefinitionRefName(change.to)}`
+          : '',
+      }
+    }
+    case 'statusDefinition': {
+      const change = changes.statusDefinition
+      return {
+        label: 'Status',
+        text: change
+          ? `${getDefinitionRefName(change.from)} → ${getDefinitionRefName(change.to)}`
+          : '',
+      }
+    }
     case 'type': {
       const change = changes.type
       return {
@@ -455,6 +485,34 @@ function describeSingleHistoryField(
         primary: `${actorName} changed the description`,
         lines: [],
       }
+    case 'typeDefinition': {
+      const change = changes.typeDefinition
+      return {
+        primary: `${actorName} changed type`,
+        lines: change
+          ? [
+              {
+                label: null,
+                text: `${getDefinitionRefName(change.from)} → ${getDefinitionRefName(change.to)}`,
+              },
+            ]
+          : [],
+      }
+    }
+    case 'statusDefinition': {
+      const change = changes.statusDefinition
+      return {
+        primary: `${actorName} changed status`,
+        lines: change
+          ? [
+              {
+                label: null,
+                text: `${getDefinitionRefName(change.from)} → ${getDefinitionRefName(change.to)}`,
+              },
+            ]
+          : [],
+      }
+    }
     case 'type': {
       const change = changes.type
       return {
@@ -684,6 +742,13 @@ function describeWorkItemHistoryEvent(
       describeHistoryFieldCompact(field, event.changes),
     ),
   }
+}
+
+// Exported for unit tests of the Activity/History presentation layer.
+export {
+  buildActivityFeed,
+  describeWorkItemHistoryEvent,
+  getChangedHistoryFields,
 }
 
 function getWorkItemHistoryErrorMessage(
@@ -1208,7 +1273,7 @@ function CreateWorkItemPanel({
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-black/30"
+      className="fixed inset-0 z-50 bg-overlay-soft-scrim"
       onMouseDown={(event) => {
         if (
           event.target ===
@@ -1223,23 +1288,23 @@ function CreateWorkItemPanel({
         role="dialog"
         aria-modal={true}
         aria-labelledby="work-item-drawer-title"
-        className="ml-auto flex h-full w-full max-w-[660px] flex-col border-l border-outline-variant bg-surface-container-lowest shadow-2xl"
+        className="ml-auto flex h-full w-full max-w-[660px] flex-col border-l border-border-structural bg-surface shadow-2xl shadow-color"
       >
         <form
           ref={formRef}
           onSubmit={handleSubmit}
           className="flex min-h-0 flex-1 flex-col"
         >
-          <header className="flex shrink-0 items-start justify-between gap-6 border-b border-outline-variant px-7 py-5">
+          <header className="flex shrink-0 items-start justify-between gap-6 border-b border-border-structural px-7 py-5">
             <div className="min-w-0">
               <h2
                 id="work-item-drawer-title"
-                className="text-lg font-semibold tracking-tight text-on-surface"
+                className="text-lg font-semibold tracking-tight text-work-content-text"
               >
                 New work item
               </h2>
 
-              <div className="mt-1 flex items-center gap-1.5 text-sm text-on-surface-variant">
+              <div className="mt-1 flex items-center gap-1.5 text-sm text-text-secondary">
                 <span
                   aria-hidden="true"
                   className="material-symbols-outlined text-[16px]"
@@ -1258,7 +1323,7 @@ function CreateWorkItemPanel({
               disabled={submitting}
               onClick={onClose}
               aria-label="Close work item"
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-on-surface-variant transition hover:bg-surface-container-high hover:text-on-surface disabled:cursor-wait disabled:opacity-50"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-text-work-faded-70 transition hover:bg-work-surface-support hover:text-work-content-text disabled:cursor-wait disabled:opacity-50"
             >
               <span className="material-symbols-outlined text-[20px]">
                 close
@@ -1268,7 +1333,7 @@ function CreateWorkItemPanel({
 
           <div className="min-h-0 flex-1 overflow-y-auto px-7 py-7">
             {readOnly && (
-              <div className="mb-6 rounded-lg bg-surface-container-low px-4 py-3 text-sm text-on-surface-variant">
+              <div className="mb-6 rounded-lg bg-work-surface-note px-4 py-3 text-sm text-text-work-faded-70">
                 This work item is read-only.
               </div>
             )}
@@ -1276,7 +1341,7 @@ function CreateWorkItemPanel({
             <div className="space-y-7">
               <div className="space-y-5">
                 <label className="block">
-                  <span className="mb-1.5 block text-sm font-medium text-on-surface">
+                  <span className="mb-1.5 block text-sm font-medium text-work-content-text">
                     Title
                   </span>
 
@@ -1291,14 +1356,14 @@ function CreateWorkItemPanel({
                       )
                     }
                     placeholder="What needs to be done?"
-                    className="h-11 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3.5 text-sm text-on-surface outline-none transition placeholder:text-on-surface-variant/55 focus:border-primary focus:ring-2 focus:ring-primary/15 disabled:cursor-default disabled:bg-surface-container-low disabled:text-on-surface-variant"
+                    className="h-11 w-full rounded-lg border border-border-structural bg-surface px-3.5 text-sm text-work-content-text outline-none transition placeholder:text-text-work-faded-55 focus:border-focus-ring-primary focus:ring-2 focus:ring-focus-ring-primary/15 disabled:cursor-default disabled:bg-work-surface-row-hover disabled:text-text-work-faded-70"
                   />
                 </label>
 
                 <label className="block">
-                  <span className="mb-1.5 block text-sm font-medium text-on-surface">
+                  <span className="mb-1.5 block text-sm font-medium text-work-content-text">
                     Description
-                    <span className="ml-1.5 font-normal text-on-surface-variant">
+                    <span className="ml-1.5 font-normal text-text-work-faded-70">
                       · Optional
                     </span>
                   </span>
@@ -1313,19 +1378,19 @@ function CreateWorkItemPanel({
                       )
                     }
                     placeholder="Add context, expected outcome, or relevant notes…"
-                    className="min-h-[128px] w-full resize-y rounded-lg border border-outline-variant bg-surface-container-lowest px-3.5 py-3 text-sm leading-6 text-on-surface outline-none transition placeholder:text-on-surface-variant/55 focus:border-primary focus:ring-2 focus:ring-primary/15 disabled:cursor-default disabled:bg-surface-container-low disabled:text-on-surface-variant"
+                    className="min-h-[128px] w-full resize-y rounded-lg border border-border-structural bg-surface px-3.5 py-3 text-sm leading-6 text-work-content-text outline-none transition placeholder:text-text-work-faded-55 focus:border-focus-ring-primary focus:ring-2 focus:ring-focus-ring-primary/15 disabled:cursor-default disabled:bg-work-surface-row-hover disabled:text-text-work-faded-70"
                   />
                 </label>
               </div>
 
               <fieldset>
-                <legend className="mb-2 text-sm font-medium text-on-surface">
+                <legend className="mb-2 text-sm font-medium text-work-content-text">
                   Type
                 </legend>
 
                 {activeTypeDefinitions.length > 0 ? (
                   <div
-                    className="grid gap-0 overflow-hidden rounded-lg border border-outline-variant"
+                    className="grid gap-0 overflow-hidden rounded-lg border border-border-structural"
                     style={{
                       gridTemplateColumns:
                         `repeat(${
@@ -1348,11 +1413,11 @@ function CreateWorkItemPanel({
                             className={[
                               'relative flex min-w-0 cursor-pointer items-center justify-center gap-1.5 px-2 py-2.5 text-xs font-medium transition',
                               index > 0
-                                ? 'border-l border-outline-variant'
+                                ? 'border-l border-border-structural'
                                 : '',
                               selected
-                                ? 'bg-secondary-container text-on-surface'
-                                : 'bg-surface-container-lowest text-on-surface-variant hover:bg-surface-container-low hover:text-on-surface',
+                                ? 'bg-selected-neutral-bg text-selected-neutral-text'
+                                : 'bg-surface text-text-work-faded-70 hover:bg-work-surface-row-hover hover:text-work-content-text',
                               readOnly
                                 ? 'cursor-default'
                                 : '',
@@ -1371,7 +1436,7 @@ function CreateWorkItemPanel({
                                   definition.id,
                                 )
                               }
-                              className="absolute inset-0 cursor-pointer appearance-none focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-primary disabled:cursor-default"
+                              className="absolute inset-0 cursor-pointer appearance-none focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-focus-ring-primary disabled:cursor-default"
                             />
 
                             <span
@@ -1392,7 +1457,7 @@ function CreateWorkItemPanel({
                     )}
                   </div>
                 ) : (
-                  <p className="rounded-lg border border-outline-variant bg-surface-container-lowest px-3 py-2.5 text-xs text-on-surface-variant">
+                  <p className="rounded-lg border border-border-structural bg-surface px-3 py-2.5 text-xs text-text-work-faded-70">
                     {readOnly
                       ? 'No type definitions.'
                       : 'No Work Item types are configured for this Project.'}
@@ -1402,7 +1467,7 @@ function CreateWorkItemPanel({
 
               <div className="grid grid-cols-2 gap-4">
                 <label>
-                  <span className="mb-1.5 block text-sm font-medium text-on-surface">
+                  <span className="mb-1.5 block text-sm font-medium text-work-content-text">
                     Status
                   </span>
 
@@ -1421,7 +1486,7 @@ function CreateWorkItemPanel({
                         Number(event.target.value),
                       )
                     }
-                    className="h-10 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15 disabled:cursor-default disabled:bg-surface-container-low disabled:text-on-surface-variant"
+                    className="h-10 w-full rounded-lg border border-border-structural bg-surface px-3 text-sm text-work-content-text outline-none transition focus:border-focus-ring-primary focus:ring-2 focus:ring-focus-ring-primary/15 disabled:cursor-default disabled:bg-work-surface-row-hover disabled:text-text-work-faded-70"
                   >
                     {activeStatusDefinitions.map(
                       (definition) => (
@@ -1437,7 +1502,7 @@ function CreateWorkItemPanel({
                 </label>
 
                 <label>
-                  <span className="mb-1.5 block text-sm font-medium text-on-surface">
+                  <span className="mb-1.5 block text-sm font-medium text-work-content-text">
                     Due date
                   </span>
 
@@ -1450,13 +1515,13 @@ function CreateWorkItemPanel({
                         event.target.value,
                       )
                     }
-                    className="h-10 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15 disabled:cursor-default disabled:bg-surface-container-low disabled:text-on-surface-variant"
+                    className="h-10 w-full rounded-lg border border-border-structural bg-surface px-3 text-sm text-work-content-text outline-none transition focus:border-focus-ring-primary focus:ring-2 focus:ring-focus-ring-primary/15 disabled:cursor-default disabled:bg-work-surface-row-hover disabled:text-text-work-faded-70"
                   />
                 </label>
               </div>
 
               <fieldset>
-                <legend className="mb-1.5 text-sm font-medium text-on-surface">
+                <legend className="mb-1.5 text-sm font-medium text-work-content-text">
                   Assignees
                 </legend>
 
@@ -1469,7 +1534,7 @@ function CreateWorkItemPanel({
                           key={
                             assignee.id
                           }
-                          className="inline-flex h-8 items-center gap-2 rounded-full bg-surface-container-high px-2.5 text-xs font-medium text-on-surface"
+                          className="inline-flex h-8 items-center gap-2 rounded-full bg-work-surface-support px-2.5 text-xs font-medium text-work-content-text"
                         >
                           <span className="flex h-5 w-5 items-center justify-center rounded-full bg-surface-container-lowest text-[8px] font-semibold">
                             {
@@ -1490,7 +1555,7 @@ function CreateWorkItemPanel({
                                 )
                               }
                               aria-label={`Remove ${assignee.name}`}
-                              className="material-symbols-outlined text-[14px] text-on-surface-variant hover:text-on-surface"
+                              className="material-symbols-outlined text-[14px] text-text-work-faded-70 hover:text-work-content-text"
                             >
                               close
                             </button>
@@ -1500,7 +1565,7 @@ function CreateWorkItemPanel({
                     )}
                   </div>
                 ) : readOnly ? (
-                  <p className="text-sm text-on-surface-variant">
+                  <p className="text-sm text-text-work-faded-70">
                     Unassigned
                   </p>
                 ) : null}
@@ -1518,7 +1583,7 @@ function CreateWorkItemPanel({
                             !current,
                         )
                       }
-                      className="flex h-10 w-full items-center justify-between rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface-variant transition hover:border-primary/40 hover:text-on-surface"
+                      className="flex h-10 w-full items-center justify-between rounded-lg border border-border-structural bg-surface px-3 text-sm text-text-work-faded-70 transition hover:border-focus-ring-primary/40 hover:text-work-content-text"
                     >
                       <span>
                         Add assignee…
@@ -1537,14 +1602,14 @@ function CreateWorkItemPanel({
                     </button>
 
                     {assigneePickerOpen && (
-                      <div className="mt-2 overflow-hidden rounded-lg border border-outline-variant bg-surface-container-lowest shadow-sm">
-                        <div className="border-b border-outline-variant p-2">
+                      <div className="mt-2 overflow-hidden rounded-lg border border-border-structural bg-surface shadow-sm shadow-color">
+                        <div className="border-b border-border-structural p-2">
                           <label className="relative block">
                             <span className="sr-only">
                               Search assignees
                             </span>
 
-                            <span className="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-[17px] text-on-surface-variant">
+                            <span className="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-[17px] text-control-foreground">
                               search
                             </span>
 
@@ -1564,7 +1629,7 @@ function CreateWorkItemPanel({
                                 )
                               }
                               placeholder="Search members…"
-                              className="h-9 w-full rounded-md border border-outline-variant bg-surface-container-lowest pl-9 pr-3 text-sm text-on-surface outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
+                              className="h-9 w-full rounded-md border border-border-structural bg-surface pl-9 pr-3 text-sm text-work-content-text outline-none focus:border-focus-ring-primary focus:ring-2 focus:ring-focus-ring-primary/15"
                             />
                           </label>
                         </div>
@@ -1586,7 +1651,7 @@ function CreateWorkItemPanel({
                                     key={
                                       assignee.id
                                     }
-                                    className="flex cursor-pointer items-center gap-3 px-3 py-2.5 transition hover:bg-surface-container-low"
+                                    className="flex cursor-pointer items-center gap-3 px-3 py-2.5 transition hover:bg-work-surface-row-hover"
                                   >
                                     <input
                                       type="checkbox"
@@ -1601,13 +1666,13 @@ function CreateWorkItemPanel({
                                       className="h-4 w-4 rounded border-outline accent-primary"
                                     />
 
-                                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-surface-container-high text-[9px] font-semibold text-on-surface">
+                                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-work-surface-support text-[9px] font-semibold text-work-content-text">
                                       {
                                         assignee.initials
                                       }
                                     </span>
 
-                                    <span className="min-w-0 flex-1 truncate text-sm font-medium text-on-surface">
+                                    <span className="min-w-0 flex-1 truncate text-sm font-medium text-work-content-text">
                                       {
                                         assignee.name
                                       }
@@ -1617,7 +1682,7 @@ function CreateWorkItemPanel({
                               },
                             )
                           ) : (
-                            <div className="px-3 py-4 text-sm text-on-surface-variant">
+                            <div className="px-3 py-4 text-sm text-text-work-faded-70">
                               No matching members.
                             </div>
                           )}
@@ -1629,7 +1694,7 @@ function CreateWorkItemPanel({
               </fieldset>
 
               <label className="block">
-                <span className="mb-1.5 block text-sm font-medium text-on-surface">
+                <span className="mb-1.5 block text-sm font-medium text-work-content-text">
                   Parent
                 </span>
 
@@ -1641,7 +1706,7 @@ function CreateWorkItemPanel({
                       event.target.value,
                     )
                   }
-                  className="h-10 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15 disabled:cursor-default disabled:bg-surface-container-low disabled:text-on-surface-variant"
+                  className="h-10 w-full rounded-lg border border-border-structural bg-surface px-3 text-sm text-work-content-text outline-none transition focus:border-focus-ring-primary focus:ring-2 focus:ring-focus-ring-primary/15 disabled:cursor-default disabled:bg-work-surface-row-hover disabled:text-text-work-faded-70"
                 >
                   <option value="">
                     No parent
@@ -1665,7 +1730,7 @@ function CreateWorkItemPanel({
               </label>
 
               <div>
-                <label className="inline-flex cursor-pointer items-center gap-2.5 text-sm font-medium text-on-surface">
+                <label className="inline-flex cursor-pointer items-center gap-2.5 text-sm font-medium text-work-content-text">
                   <input
                     type="checkbox"
                     checked={blocked}
@@ -1683,7 +1748,7 @@ function CreateWorkItemPanel({
 
                 {blocked && (
                   <label className="mt-4 block">
-                    <span className="mb-1.5 block text-sm font-medium text-on-surface">
+                    <span className="mb-1.5 block text-sm font-medium text-work-content-text">
                       Blocked reason
                     </span>
 
@@ -1702,7 +1767,7 @@ function CreateWorkItemPanel({
                         )
                       }
                       placeholder="What is preventing progress?"
-                      className="w-full resize-y rounded-lg border border-outline-variant bg-surface-container-lowest px-3.5 py-2.5 text-sm leading-6 text-on-surface outline-none transition placeholder:text-on-surface-variant/55 focus:border-primary focus:ring-2 focus:ring-primary/15 disabled:cursor-default disabled:bg-surface-container-low disabled:text-on-surface-variant"
+                      className="w-full resize-y rounded-lg border border-border-structural bg-surface px-3.5 py-2.5 text-sm leading-6 text-work-content-text outline-none transition placeholder:text-text-work-faded-55 focus:border-focus-ring-primary focus:ring-2 focus:ring-focus-ring-primary/15 disabled:cursor-default disabled:bg-work-surface-row-hover disabled:text-text-work-faded-70"
                     />
                   </label>
                 )}
@@ -1713,14 +1778,14 @@ function CreateWorkItemPanel({
           {submitError && (
             <div
               role="alert"
-              className="shrink-0 border-t border-error/20 bg-error-container/35 px-7 py-3 text-sm text-error"
+              className="shrink-0 border-t border-work-item-error-border bg-work-item-error-bg px-7 py-3 text-sm text-work-item-error"
             >
               {submitError}
             </div>
           )}
 
-          <footer className="flex shrink-0 items-center justify-between gap-4 border-t border-outline-variant bg-surface-container-low/45 px-7 py-4">
-            <span className="hidden text-xs text-on-surface-variant sm:block">
+          <footer className="flex shrink-0 items-center justify-between gap-4 border-t border-border-structural bg-surface-footer px-7 py-4">
+            <span className="hidden text-xs text-text-work-faded-70 sm:block">
               {readOnly
                 ? ''
                 : 'Ctrl/⌘ + Enter to save'}
@@ -1731,7 +1796,7 @@ function CreateWorkItemPanel({
                 <button
                   type="button"
                   onClick={onClose}
-                  className="h-9 rounded-lg px-4 text-sm font-medium text-on-surface transition hover:bg-surface-container-high"
+                  className="h-9 rounded-lg px-4 text-sm font-medium text-work-content-text transition hover:bg-work-surface-support"
                 >
                   Close
                 </button>
@@ -1743,7 +1808,7 @@ function CreateWorkItemPanel({
                       submitting
                     }
                     onClick={onClose}
-                    className="h-9 rounded-lg px-4 text-sm font-medium text-on-surface-variant transition hover:bg-surface-container-high hover:text-on-surface disabled:cursor-wait disabled:opacity-50"
+                    className="h-9 rounded-lg px-4 text-sm font-medium text-text-work-faded-70 transition hover:bg-work-surface-support hover:text-work-content-text disabled:cursor-wait disabled:opacity-50"
                   >
                     Cancel
                   </button>
@@ -1753,7 +1818,7 @@ function CreateWorkItemPanel({
                     disabled={
                       !canSubmit
                     }
-                    className="inline-flex h-9 items-center justify-center rounded-lg bg-primary px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-45"
+                    className="inline-flex h-9 items-center justify-center rounded-lg bg-action px-4 text-sm font-semibold text-white shadow-sm shadow-color transition hover:bg-action-hover-solid disabled:cursor-not-allowed disabled:opacity-45"
                   >
                     {submitting
                       ? 'Creating…'
@@ -1786,7 +1851,7 @@ function PropertyRow({
 }) {
   return (
     <div className="flex items-start gap-4 py-2">
-      <span className="w-24 shrink-0 pt-1.5 text-sm text-on-surface-variant">
+      <span className="w-24 shrink-0 pt-1.5 text-sm text-text-tertiary">
         {label}
       </span>
 
@@ -1798,9 +1863,9 @@ function PropertyRow({
 }
 
 const compactControlClassName =
-  'h-9 w-full rounded-lg border border-transparent bg-transparent px-2 text-sm font-medium text-on-surface outline-none transition hover:border-outline-variant hover:bg-surface-container-low focus:border-primary focus:bg-surface-container-lowest focus:ring-2 focus:ring-primary/15 disabled:cursor-default disabled:hover:border-transparent disabled:hover:bg-transparent'
+  'h-9 w-full rounded-lg border border-transparent bg-transparent px-2 text-sm font-medium text-work-content-text outline-none transition hover:border-border-structural hover:bg-work-surface-row-hover focus:border-focus-ring-primary focus:bg-surface focus:ring-2 focus:ring-focus-ring-primary/15 disabled:cursor-default disabled:hover:border-transparent disabled:hover:bg-transparent'
 
-function WorkItemInspector({
+export function WorkItemInspector({
   projectName,
   item,
   readOnly,
@@ -1926,10 +1991,9 @@ function WorkItemInspector({
   // RichMarkdownEditor below always starts from `item.blockedReason ??
   // ''` (canonical for an existing reason, empty for a fresh pending
   // block) and reports its live Markdown via onChange/onCommit, so
-  // there is nothing here that can go stale or race (see
-  // commitBlockedReasonEdit). Escape-suppresses-the-following-blur is
-  // likewise handled internally by RichMarkdownEditor itself, so no
-  // local "was this cancelled" ref is needed either.
+  // the editor owns the live draft. Turning the switch off cancels that
+  // draft before unmounting; ignore the resulting editor blur commit.
+  const blockedReasonCancelledRef = useRef(false)
 
   // A Work Item must never be canonically blocked without a non-empty
   // reason (blockedReason === null means unblocked; there is no
@@ -2736,6 +2800,7 @@ function WorkItemInspector({
       return
     }
 
+    blockedReasonCancelledRef.current = false
     setBlockedReasonEditing(true)
   }
 
@@ -2755,6 +2820,10 @@ function WorkItemInspector({
   // uses — the editor owns its own live document between renders, so
   // there is no local draft state to go stale or race.
   async function commitBlockedReasonEdit(markdown: string) {
+    if (blockedReasonCancelledRef.current) {
+      return
+    }
+
     const trimmed = markdown.trim()
     const current = item.blockedReason ?? ''
 
@@ -2798,10 +2867,13 @@ function WorkItemInspector({
     }
 
     if (nextBlocked) {
+      blockedReasonCancelledRef.current = false
       setBlockedReasonEditing(true)
       setPendingBlock(true)
       return
     }
+
+    blockedReasonCancelledRef.current = true
 
     // Turning off a not-yet-persisted pending block just cancels it
     // locally — there is nothing blocked to PATCH away yet.
@@ -2911,18 +2983,18 @@ function WorkItemInspector({
       <div
         role="region"
         aria-labelledby="work-item-drawer-title"
-        className="flex h-full w-full flex-col border-l border-outline-variant bg-surface-container-lowest shadow-2xl"
+        className="flex h-full w-full flex-col border-l border-border-structural bg-surface shadow-2xl shadow-color"
       >
-        <header className="flex shrink-0 items-start justify-between gap-6 border-b border-outline-variant px-7 py-5">
+        <header className="flex shrink-0 items-start justify-between gap-6 border-b border-border-structural px-7 py-5">
           <div className="min-w-0">
             <h2
               id="work-item-drawer-title"
-              className="text-lg font-semibold tracking-tight text-on-surface"
+              className="text-lg font-semibold tracking-tight text-work-content-text"
             >
               Work item
             </h2>
 
-            <div className="mt-1 flex items-center gap-1.5 text-sm text-on-surface-variant">
+            <div className="mt-1 flex items-center gap-1.5 text-sm text-text-secondary">
               <span
                 aria-hidden="true"
                 className="material-symbols-outlined text-[16px]"
@@ -2938,13 +3010,13 @@ function WorkItemInspector({
 
           <div className="flex shrink-0 items-center gap-3">
             {saveStatus === 'saving' && (
-              <span className="text-xs font-medium text-on-surface-variant">
+              <span className="text-xs font-medium text-text-work-faded-70">
                 Saving…
               </span>
             )}
 
             {saveStatus === 'saved' && (
-              <span className="text-xs font-medium text-on-surface-variant">
+              <span className="text-xs font-medium text-text-work-faded-70">
                 Saved
               </span>
             )}
@@ -2955,7 +3027,7 @@ function WorkItemInspector({
                 title={
                   saveError ?? undefined
                 }
-                className="max-w-[180px] truncate text-xs font-medium text-error"
+                className="max-w-[180px] truncate text-xs font-medium text-work-item-error"
               >
                 {saveError ??
                   'Could not save.'}
@@ -2978,7 +3050,7 @@ function WorkItemInspector({
               type="button"
               onClick={onClose}
               aria-label="Close work item"
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-on-surface-variant transition hover:bg-surface-container-high hover:text-on-surface"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-text-work-faded-70 transition hover:bg-work-surface-support hover:text-work-content-text"
             >
               <span className="material-symbols-outlined text-[20px]">
                 close
@@ -2989,14 +3061,14 @@ function WorkItemInspector({
 
         <div className="flex min-h-0 flex-1 flex-col px-7 py-7">
           {readOnly && (
-            <div className="mb-6 rounded-lg bg-surface-container-low px-4 py-3 text-sm text-on-surface-variant">
+            <div className="mb-6 rounded-lg bg-work-surface-note px-4 py-3 text-sm text-text-work-faded-70">
               This work item is read-only.
             </div>
           )}
 
-          <div className="min-h-0 shrink-0 space-y-7 overflow-y-auto">
+          <div className="min-h-0 flex-1 space-y-7 overflow-y-auto">
             <div>
-              <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-on-surface-variant">
+              <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-text-work-faded-70">
                 <span
                   aria-hidden="true"
                   className="material-symbols-outlined text-[15px]"
@@ -3051,7 +3123,7 @@ function WorkItemInspector({
                     void commitTitleEdit()
                   }}
                   aria-label="Work item title"
-                  className="-mx-3 w-full rounded-lg border border-primary bg-surface-container-lowest px-3 py-1.5 text-2xl font-semibold tracking-tight text-on-surface outline-none focus:ring-2 focus:ring-primary/15"
+                  className="-mx-3 w-full rounded-lg border border-focus-ring-primary bg-surface px-3 py-1.5 text-2xl font-semibold tracking-tight text-work-content-text outline-none focus:ring-2 focus:ring-focus-ring-primary/15"
                 />
               ) : (
                 <div
@@ -3082,10 +3154,10 @@ function WorkItemInspector({
                     }
                   }}
                   className={[
-                    '-mx-3 rounded-lg px-3 py-1.5 text-2xl font-semibold tracking-tight text-on-surface',
+                    '-mx-3 rounded-lg px-3 py-1.5 text-2xl font-semibold tracking-tight text-work-content-text',
                     readOnly
                       ? ''
-                      : 'cursor-text transition hover:bg-surface-container-low',
+                      : 'cursor-text transition hover:bg-work-surface-row-hover',
                   ].join(' ')}
                 >
                   {item.title}
@@ -3094,8 +3166,8 @@ function WorkItemInspector({
             </div>
 
             {item.meetingOrigin != null && (
-              <div className="rounded-lg border border-outline-variant/70 bg-surface-container-low/50 px-4 py-3">
-                <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-on-surface-variant">
+              <div className="rounded-lg border border-border-structural/70 bg-work-surface-note px-4 py-3">
+                <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-text-work-faded-70">
                   <span
                     aria-hidden="true"
                     className="material-symbols-outlined text-[15px]"
@@ -3106,13 +3178,13 @@ function WorkItemInspector({
                   <span>Created from</span>
                 </div>
 
-                <div className="mt-2 text-sm text-on-surface">
+                <div className="mt-2 text-sm text-work-content-text">
                   {
                     item.meetingOrigin
                       .meetingTitle
                   }
 
-                  <span className="text-on-surface-variant">
+                  <span className="text-text-work-faded-70">
                     {' · '}
                     {formatMeetingOriginDate(
                       item.meetingOrigin
@@ -3121,18 +3193,18 @@ function WorkItemInspector({
                   </span>
                 </div>
 
-                <div className="mt-1 text-xs text-on-surface-variant">
+                <div className="mt-1 text-xs text-text-work-faded-70">
                   {
                     item.meetingOrigin
                       .meetingItemTitle
                   }
                 </div>
 
-                <div className="mt-2 text-xs font-medium text-on-surface-variant">
+                <div className="mt-2 text-xs font-medium text-text-work-faded-70">
                   Source note
                 </div>
 
-                <p className="mt-1 whitespace-pre-wrap text-sm text-on-surface">
+                <p className="mt-1 whitespace-pre-wrap text-sm text-work-content-text">
                   {
                     item.meetingOrigin
                       .noteContent
@@ -3142,7 +3214,7 @@ function WorkItemInspector({
             )}
 
             <div>
-              <span className="mb-1.5 block text-sm font-medium text-on-surface">
+              <span className="mb-1.5 block text-sm font-medium text-work-content-text">
                 Description
               </span>
 
@@ -3159,7 +3231,7 @@ function WorkItemInspector({
                   onEscape={() =>
                     setDescriptionEditing(false)
                   }
-                  className="-mx-3.5 rounded-lg border border-primary bg-surface-container-lowest px-3.5 py-2.5 focus-within:ring-2 focus-within:ring-primary/15"
+                  className="-mx-3.5 rounded-lg border border-focus-ring-primary bg-surface px-3.5 py-2.5 focus-within:ring-2 focus-within:ring-focus-ring-primary/15"
                 />
               ) : (
                 <div
@@ -3205,10 +3277,10 @@ function WorkItemInspector({
                     '-mx-3.5 min-h-[44px] rounded-lg px-3.5 py-2.5',
                     item.description
                       ? ''
-                      : 'text-sm leading-6 text-on-surface-variant/70',
+                      : 'text-sm leading-6 text-text-work-faded-70',
                     readOnly
                       ? ''
-                      : 'transition hover:bg-surface-container-low',
+                      : 'transition hover:bg-work-surface-row-hover',
                   ].join(' ')}
                 >
                   {item.description ? (
@@ -3227,7 +3299,7 @@ function WorkItemInspector({
               )}
             </div>
 
-            <div className="border-t border-outline-variant pt-5">
+            <div className="border-t border-border-structural pt-5">
               <PropertyRow label="Type">
                 <select
                   value={item.type}
@@ -3304,9 +3376,9 @@ function WorkItemInspector({
                     (assignee) => (
                       <span
                         key={assignee.id}
-                        className="inline-flex h-7 items-center gap-1.5 rounded-full bg-surface-container-high py-0.5 pl-1 pr-2 text-xs font-medium text-on-surface"
+                        className="inline-flex h-7 items-center gap-1.5 rounded-full bg-work-surface-support py-0.5 pl-1 pr-2 text-xs font-medium text-text-primary transition hover:bg-work-surface-row-hover"
                       >
-                        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-surface-container-lowest text-[8px] font-semibold">
+                        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-surface text-[8px] font-semibold text-text-secondary">
                           {
                             assignee.initials
                           }
@@ -3323,7 +3395,7 @@ function WorkItemInspector({
                               )
                             }
                             aria-label={`Remove ${assignee.name}`}
-                            className="material-symbols-outlined text-[13px] text-on-surface-variant hover:text-on-surface"
+                            className="material-symbols-outlined text-[13px] text-control-foreground hover:text-text-primary"
                           >
                             close
                           </button>
@@ -3335,7 +3407,7 @@ function WorkItemInspector({
                   {selectedAssignees.length ===
                     0 &&
                     readOnly && (
-                      <span className="text-sm text-on-surface-variant">
+                      <span className="text-sm text-text-work-faded-70">
                         Unassigned
                       </span>
                     )}
@@ -3354,7 +3426,7 @@ function WorkItemInspector({
                               !current,
                           )
                         }
-                        className="flex h-7 items-center gap-1 rounded-full border border-dashed border-outline-variant px-2.5 text-xs font-medium text-on-surface-variant transition hover:border-primary/40 hover:text-on-surface"
+                        className="flex h-7 items-center gap-1 rounded-full border border-dashed border-border-structural px-2.5 text-xs font-medium text-text-work-faded-70 transition hover:border-focus-ring-primary/40 hover:text-work-content-text"
                       >
                         <span
                           aria-hidden="true"
@@ -3366,14 +3438,14 @@ function WorkItemInspector({
                       </button>
 
                       {assigneePickerOpen && (
-                        <div className="absolute right-0 z-10 mt-2 w-64 overflow-hidden rounded-lg border border-outline-variant bg-surface-container-lowest shadow-sm">
-                          <div className="border-b border-outline-variant p-2">
+                        <div className="absolute right-0 z-10 mt-2 w-64 overflow-hidden rounded-lg border border-border-structural bg-surface shadow-sm shadow-color">
+                          <div className="border-b border-border-structural p-2">
                             <label className="relative block">
                               <span className="sr-only">
                                 Search assignees
                               </span>
 
-                              <span className="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-[17px] text-on-surface-variant">
+                              <span className="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-[17px] text-control-foreground">
                                 search
                               </span>
 
@@ -3393,7 +3465,7 @@ function WorkItemInspector({
                                   )
                                 }
                                 placeholder="Search members…"
-                                className="h-9 w-full rounded-md border border-outline-variant bg-surface-container-lowest pl-9 pr-3 text-sm text-on-surface outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
+                                className="h-9 w-full rounded-md border border-border-structural bg-surface pl-9 pr-3 text-sm text-work-content-text outline-none focus:border-focus-ring-primary focus:ring-2 focus:ring-focus-ring-primary/15"
                               />
                             </label>
                           </div>
@@ -3415,7 +3487,7 @@ function WorkItemInspector({
                                       key={
                                         assignee.id
                                       }
-                                      className="flex cursor-pointer items-center gap-3 px-3 py-2.5 transition hover:bg-surface-container-low"
+                                      className="flex cursor-pointer items-center gap-3 px-3 py-2.5 transition hover:bg-work-surface-row-hover"
                                     >
                                       <input
                                         type="checkbox"
@@ -3430,13 +3502,13 @@ function WorkItemInspector({
                                         className="h-4 w-4 rounded border-outline accent-primary"
                                       />
 
-                                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-surface-container-high text-[9px] font-semibold text-on-surface">
+                                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-work-surface-support text-[9px] font-semibold text-work-content-text">
                                         {
                                           assignee.initials
                                         }
                                       </span>
 
-                                      <span className="min-w-0 flex-1 truncate text-sm font-medium text-on-surface">
+                                      <span className="min-w-0 flex-1 truncate text-sm font-medium text-work-content-text">
                                         {
                                           assignee.name
                                         }
@@ -3446,7 +3518,7 @@ function WorkItemInspector({
                                 },
                               )
                             ) : (
-                              <div className="px-3 py-4 text-sm text-on-surface-variant">
+                              <div className="px-3 py-4 text-sm text-text-work-faded-70">
                                 No matching members.
                               </div>
                             )}
@@ -3513,7 +3585,7 @@ function WorkItemInspector({
               </PropertyRow>
 
               <PropertyRow label="Blocked">
-                <div>
+                <div className="w-full">
                   <div className="flex items-center gap-3 py-1">
                     <button
                       type="button"
@@ -3523,6 +3595,13 @@ function WorkItemInspector({
                       }
                       aria-label="Blocked"
                       disabled={readOnly}
+                      onMouseDown={(event) => {
+                        // Let the toggle cancel the draft before editor blur
+                        // can change displayBlocked underneath this click.
+                        if (event.button === 0 && blockedReasonEditing) {
+                          event.preventDefault()
+                        }
+                      }}
                       onClick={() =>
                         handleBlockedToggle(
                           !displayBlocked,
@@ -3531,8 +3610,8 @@ function WorkItemInspector({
                       className={[
                         'relative h-6 w-11 shrink-0 rounded-full transition',
                         displayBlocked
-                          ? 'bg-primary'
-                          : 'bg-surface-container-high',
+                          ? 'bg-action'
+                          : 'bg-control-track-off',
                         readOnly
                           ? 'cursor-default'
                           : 'cursor-pointer',
@@ -3540,7 +3619,7 @@ function WorkItemInspector({
                     >
                       <span
                         className={[
-                          'absolute top-0.5 h-5 w-5 rounded-full bg-surface-container-lowest shadow transition',
+                          'absolute top-0.5 h-5 w-5 rounded-full bg-surface shadow-sm shadow-color transition',
                           displayBlocked
                             ? 'left-[22px]'
                             : 'left-0.5',
@@ -3548,7 +3627,7 @@ function WorkItemInspector({
                       />
                     </button>
 
-                    <span className="text-sm text-on-surface">
+                    <span className="text-sm text-work-content-text">
                       {displayBlocked
                         ? 'Yes'
                         : 'No'}
@@ -3577,7 +3656,7 @@ function WorkItemInspector({
                         onEscape={
                           cancelBlockedReasonEdit
                         }
-                        className="-mx-3 mt-2 rounded-lg border border-primary bg-surface-container-lowest px-3 py-2 focus-within:ring-2 focus-within:ring-primary/15"
+                        className="mt-2 w-full rounded-lg border border-focus-ring-primary bg-surface px-3 py-2 focus-within:ring-2 focus-within:ring-focus-ring-primary/15"
                       />
                     ) : (
                       <div
@@ -3624,13 +3703,13 @@ function WorkItemInspector({
                           }
                         }}
                         className={[
-                          '-mx-3 mt-2 rounded-lg px-3 py-2',
+                          'mt-2 w-full rounded-lg px-3 py-2',
                           item.blockedReason
                             ? ''
-                            : 'text-sm leading-6 text-on-surface-variant/70',
+                            : 'text-sm leading-6 text-text-work-faded-70',
                           readOnly
                             ? ''
-                            : 'transition hover:bg-surface-container-low',
+                            : 'transition hover:bg-work-surface-row-hover',
                         ].join(' ')}
                       >
                         {item.blockedReason ? (
@@ -3655,8 +3734,8 @@ function WorkItemInspector({
               </PropertyRow>
             </div>
 
-            <div className="mt-7 flex min-h-0 flex-1 flex-col border-t border-outline-variant pt-5">
-              <h3 className="mb-3 shrink-0 text-xs font-semibold uppercase tracking-wide text-on-surface-variant">
+            <div className="mt-7 flex min-h-0 flex-1 flex-col border-t border-border-structural pt-5">
+              <h3 className="mb-3 shrink-0 text-xs font-semibold uppercase tracking-wide text-text-work-faded-70">
                 Activity
               </h3>
 
@@ -3670,11 +3749,11 @@ function WorkItemInspector({
                           true,
                         )
                       }
-                      className="flex w-full items-center gap-2.5 rounded-lg px-1.5 py-1.5 text-left text-sm text-on-surface-variant transition hover:bg-surface-container-low"
+                      className="flex w-full items-center gap-2.5 rounded-lg px-1.5 py-1.5 text-left text-sm text-text-work-faded-70 transition hover:bg-work-surface-row-hover"
                     >
                       <span
                         aria-hidden="true"
-                        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/15 text-[11px] font-semibold text-primary"
+                        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-interaction-primary/15 text-[11px] font-semibold text-interaction-primary"
                       >
                         {currentUserInitials}
                       </span>
@@ -3682,7 +3761,7 @@ function WorkItemInspector({
                     </button>
                   ) : (
                     <div
-                      className="rounded-lg border border-outline-variant bg-surface-container-lowest p-2.5"
+                      className="rounded-lg border border-editor-boundary bg-surface-quiet p-2.5"
                       onKeyDown={(event) => {
                         // The editor's own contenteditable
                         // handleKeyDown doesn't preventDefault Cmd/Ctrl
@@ -3717,7 +3796,7 @@ function WorkItemInspector({
                       {commentSubmitError && (
                         <p
                           role="alert"
-                          className="mt-1 text-xs text-error"
+                          className="mt-1 text-xs text-work-item-error"
                         >
                           {commentSubmitError}
                         </p>
@@ -3729,7 +3808,7 @@ function WorkItemInspector({
                           onClick={
                             cancelCommentComposer
                           }
-                          className="h-8 rounded-md px-3 text-xs font-medium text-on-surface-variant transition hover:bg-surface-container-high hover:text-on-surface"
+                          className="h-8 rounded-md px-3 text-xs font-medium text-quiet-action-foreground transition hover:bg-quiet-action-hover-surface hover:text-quiet-action-hover-foreground"
                         >
                           Cancel
                         </button>
@@ -3745,7 +3824,7 @@ function WorkItemInspector({
                               'submitting'
                           }
                           onClick={submitComment}
-                          className="h-8 rounded-md bg-primary px-3 text-xs font-semibold text-on-primary transition hover:opacity-90 disabled:opacity-40"
+                          className="h-8 rounded-md bg-action px-3 text-xs font-semibold text-white transition hover:bg-action-hover-solid disabled:bg-action-disabled-bg disabled:text-action-disabled-text"
                         >
                           {commentSubmitStatus ===
                           'submitting'
@@ -3760,7 +3839,7 @@ function WorkItemInspector({
 
               {historyStatus === 'loading' &&
                 commentsStatus === 'loading' && (
-                  <p className="text-xs text-on-surface-variant/70">
+                  <p className="text-xs text-text-work-faded-70">
                     Loading activity…
                   </p>
                 )}
@@ -3768,9 +3847,9 @@ function WorkItemInspector({
               {historyStatus === 'error' && (
                 <div
                   role="alert"
-                  className="mb-2 flex items-center gap-2.5 text-xs text-on-surface-variant"
+                  className="mb-2 flex items-center gap-2.5 text-xs text-text-work-faded-70"
                 >
-                  <span className="text-error">
+                  <span className="text-work-item-error">
                     {historyError ??
                       'History could not be loaded.'}
                   </span>
@@ -3780,7 +3859,7 @@ function WorkItemInspector({
                     onClick={() =>
                       fetchHistory(item.id)
                     }
-                    className="font-medium text-primary underline-offset-2 hover:underline"
+                    className="font-medium text-link-hover underline-offset-2 hover:underline"
                   >
                     Retry
                   </button>
@@ -3790,9 +3869,9 @@ function WorkItemInspector({
               {commentsStatus === 'error' && (
                 <div
                   role="alert"
-                  className="mb-2 flex items-center gap-2.5 text-xs text-on-surface-variant"
+                  className="mb-2 flex items-center gap-2.5 text-xs text-text-work-faded-70"
                 >
-                  <span className="text-error">
+                  <span className="text-work-item-error">
                     {commentsError ??
                       'Comments could not be loaded.'}
                   </span>
@@ -3802,7 +3881,7 @@ function WorkItemInspector({
                     onClick={() =>
                       fetchComments(item.id)
                     }
-                    className="font-medium text-primary underline-offset-2 hover:underline"
+                    className="font-medium text-link-hover underline-offset-2 hover:underline"
                   >
                     Retry
                   </button>
@@ -3812,7 +3891,7 @@ function WorkItemInspector({
               {historyStatus !== 'loading' &&
                 commentsStatus !== 'loading' &&
                 activityFeed.length === 0 && (
-                  <p className="text-xs text-on-surface-variant/70">
+                  <p className="text-xs text-text-work-faded-70">
                     No activity yet.
                   </p>
                 )}
@@ -3848,7 +3927,7 @@ function WorkItemInspector({
                             <div className="flex flex-col items-center">
                               <span
                                 aria-hidden="true"
-                                className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-on-surface-variant/60"
+                                className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-text-work-faded-60"
                               />
 
                               {!isLast && (
@@ -3867,7 +3946,7 @@ function WorkItemInspector({
                                   : 'pb-3.5',
                               ].join(' ')}
                             >
-                              <p className="truncate text-sm text-on-surface">
+                              <p className="truncate text-sm text-work-content-text">
                                 {description.primary}
                               </p>
 
@@ -3881,9 +3960,9 @@ function WorkItemInspector({
                                       key={
                                         lineIndex
                                       }
-                                      className="mt-0.5 flex gap-2 text-xs text-on-surface-variant"
+                                      className="mt-0.5 flex gap-2 text-xs text-text-work-faded-70"
                                     >
-                                      <span className="w-16 shrink-0 text-on-surface-variant/60">
+                                      <span className="w-16 shrink-0 text-text-work-faded-60">
                                         {
                                           line.label
                                         }
@@ -3899,7 +3978,7 @@ function WorkItemInspector({
                                       key={
                                         lineIndex
                                       }
-                                      className="mt-0.5 truncate text-xs text-on-surface-variant"
+                                      className="mt-0.5 truncate text-xs text-text-work-faded-70"
                                     >
                                       {line.text}
                                     </p>
@@ -3910,7 +3989,7 @@ function WorkItemInspector({
                                 title={formatHistoryAbsoluteTime(
                                   event.createdAt,
                                 )}
-                                className="mt-1 text-[11px] text-on-surface-variant/60"
+                                className="mt-1 text-[11px] text-text-work-faded-60"
                               >
                                 {formatHistoryRelativeTime(
                                   event.createdAt,
@@ -3956,7 +4035,7 @@ function WorkItemInspector({
                         >
                           <span
                             aria-hidden="true"
-                            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-secondary-container text-[11px] font-semibold text-on-secondary-container"
+                            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-work-surface-support text-[11px] font-semibold text-work-content-text"
                           >
                             {getActorInitials(
                               comment.author,
@@ -3966,7 +4045,7 @@ function WorkItemInspector({
                           <div className="min-w-0 flex-1">
                             <div className="flex items-center justify-between gap-2">
                               <div className="flex min-w-0 items-baseline gap-2">
-                                <span className="truncate text-sm font-medium text-on-surface">
+                                <span className="truncate text-sm font-medium text-work-content-text">
                                   {getActorDisplayName(
                                     comment.author,
                                   )}
@@ -3975,7 +4054,7 @@ function WorkItemInspector({
                                   title={formatHistoryAbsoluteTime(
                                     comment.createdAt,
                                   )}
-                                  className="shrink-0 text-xs text-on-surface-variant/70"
+                                  className="shrink-0 text-xs text-text-work-faded-70"
                                 >
                                   {formatHistoryRelativeTime(
                                     comment.createdAt,
@@ -4007,7 +4086,7 @@ function WorkItemInspector({
                                               : comment.id,
                                         )
                                       }
-                                      className="flex h-6 w-6 items-center justify-center rounded text-on-surface-variant transition hover:bg-surface-container-high hover:text-on-surface"
+                                      className="flex h-6 w-6 items-center justify-center rounded text-control-foreground transition hover:bg-work-surface-row-hover hover:text-text-primary"
                                     >
                                       <span
                                         aria-hidden="true"
@@ -4019,7 +4098,7 @@ function WorkItemInspector({
 
                                     {commentActionsMenuOpenId ===
                                       comment.id && (
-                                      <div className="absolute right-0 z-10 mt-1 w-28 overflow-hidden rounded-lg border border-outline-variant bg-surface-container-lowest shadow-sm">
+                                      <div className="absolute right-0 z-10 mt-1 w-28 overflow-hidden rounded-lg border border-border-structural bg-surface shadow-sm shadow-color">
                                         <button
                                           type="button"
                                           onClick={() =>
@@ -4027,7 +4106,7 @@ function WorkItemInspector({
                                               comment,
                                             )
                                           }
-                                          className="block w-full px-3 py-2 text-left text-xs text-on-surface transition hover:bg-surface-container-low"
+                                          className="block w-full px-3 py-2 text-left text-xs text-work-content-text transition hover:bg-work-surface-row-hover"
                                         >
                                           Edit
                                         </button>
@@ -4038,7 +4117,7 @@ function WorkItemInspector({
                                               comment.id,
                                             )
                                           }
-                                          className="block w-full px-3 py-2 text-left text-xs text-error transition hover:bg-surface-container-low"
+                                          className="block w-full px-3 py-2 text-left text-xs text-work-item-error transition hover:bg-work-surface-row-hover"
                                         >
                                           Delete
                                         </button>
@@ -4050,7 +4129,7 @@ function WorkItemInspector({
 
                             {isEditingThis ? (
                               <div
-                                className="mt-1 rounded-md border border-outline-variant bg-surface-container-lowest p-2"
+                                className="mt-1 rounded-md border border-border-structural bg-surface p-2"
                                 onKeyDown={(
                                   event,
                                 ) => {
@@ -4083,7 +4162,7 @@ function WorkItemInspector({
                                 {commentEditError && (
                                   <p
                                     role="alert"
-                                    className="mt-1 text-xs text-error"
+                                    className="mt-1 text-xs text-work-item-error"
                                   >
                                     {
                                       commentEditError
@@ -4097,7 +4176,7 @@ function WorkItemInspector({
                                     onClick={
                                       cancelEditingComment
                                     }
-                                    className="h-7 rounded-md px-2.5 text-xs font-medium text-on-surface-variant transition hover:bg-surface-container-high hover:text-on-surface"
+                                    className="h-7 rounded-md px-2.5 text-xs font-medium text-quiet-action-foreground transition hover:bg-quiet-action-hover-surface hover:text-quiet-action-hover-foreground"
                                   >
                                     Cancel
                                   </button>
@@ -4114,7 +4193,7 @@ function WorkItemInspector({
                                     onClick={
                                       saveEditingComment
                                     }
-                                    className="h-7 rounded-md bg-primary px-2.5 text-xs font-semibold text-on-primary transition hover:opacity-90 disabled:opacity-40"
+                                    className="h-7 rounded-md bg-action px-2.5 text-xs font-semibold text-white transition hover:bg-action-hover-solid disabled:bg-action-disabled-bg disabled:text-action-disabled-text"
                                   >
                                     {commentEditStatus ===
                                     'saving'
@@ -4124,7 +4203,7 @@ function WorkItemInspector({
                                 </div>
                               </div>
                             ) : isConfirmingDeleteThis ? (
-                              <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-on-surface-variant">
+                              <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-work-faded-70">
                                 <span>
                                   Delete this
                                   comment?
@@ -4133,7 +4212,7 @@ function WorkItemInspector({
                                 {commentDeleteError && (
                                   <span
                                     role="alert"
-                                    className="text-error"
+                                    className="text-work-item-error"
                                   >
                                     {
                                       commentDeleteError
@@ -4146,7 +4225,7 @@ function WorkItemInspector({
                                   onClick={
                                     cancelDeleteComment
                                   }
-                                  className="font-medium text-on-surface-variant underline-offset-2 hover:underline"
+                                  className="font-medium text-text-work-faded-70 underline-offset-2 hover:underline"
                                 >
                                   Cancel
                                 </button>
@@ -4159,7 +4238,7 @@ function WorkItemInspector({
                                   onClick={
                                     confirmDeleteComment
                                   }
-                                  className="font-medium text-error underline-offset-2 hover:underline disabled:opacity-50"
+                                  className="font-medium text-work-item-error underline-offset-2 hover:underline disabled:opacity-50"
                                 >
                                   {commentDeleteStatus ===
                                   'deleting'

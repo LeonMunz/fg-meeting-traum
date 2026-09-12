@@ -221,9 +221,27 @@ export interface ApiWorkItemHistoryParentRef {
   title: string | null
 }
 
+// Project-configured type/status definition summary as stored in
+// AuditEvent.data["changes"] (see apps/api/work_items/services.py and
+// tests_history.py). `name` is the canonical display name; the UI must
+// never infer names from hard-coded slugs.
+export interface ApiWorkItemHistoryDefinitionRef {
+  id: number
+  name: string
+}
+
 export interface ApiWorkItemHistoryChanges {
   title?: ApiWorkItemHistoryFromTo<string>
   description?: { changed: true }
+  // Current backend contract (project-configured definitions).
+  typeDefinition?: ApiWorkItemHistoryFromTo<
+    ApiWorkItemHistoryDefinitionRef | null
+  >
+  statusDefinition?: ApiWorkItemHistoryFromTo<
+    ApiWorkItemHistoryDefinitionRef | null
+  >
+  // Legacy fixed-slug contract, kept optional for backward
+  // compatibility with older persisted events.
   type?: ApiWorkItemHistoryFromTo<ApiWorkItemType>
   status?: ApiWorkItemHistoryFromTo<ApiWorkItemStatus>
   dueDate?: ApiWorkItemHistoryFromTo<string | null>

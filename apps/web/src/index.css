@@ -70,7 +70,9 @@
   --color-role-owner-text: #3525cd;
 
   /* Neutral "selected" state for filter/archive chips. Light preserves the
-   * legacy secondary-container tint; Dark themes it to a restrained neutral. */
+   * legacy secondary-container tint; Dark themes it to a restrained neutral.
+   * The drawer's Type segmented-card selected segment reuses this role
+   * because it renders the identical secondary-container tint. */
   --color-selected-neutral-bg: #dae2fd;
   --color-selected-neutral-text: #0b1c30;
 
@@ -158,6 +160,44 @@
   --color-work-item-error: #ba1a1a;
   --color-work-item-error-bg: #fff2f1;
   --color-work-item-error-border: #e7afaf;
+  /* Prose text link. Light = legacy `primary` (#3525CD), the exact HEAD
+   * `.fg-prose a` foreground; Dark = readable accent text (#9EB1FF).
+   * Distinct from `link-hover`, which is the hover role for chrome text. */
+  --color-prose-link: #3525cd;
+
+  /* ── Inspector control bridges.
+   *
+   * The Work Item Inspector is migrated to the Dark token set while
+   * every one of these Light values is the EXACT HEAD rendering of the
+   * corresponding state (legacy Material tokens were static across
+   * themes, so their Light values survive verbatim as composites):
+   *   #464555 = on-surface-variant
+   *   #5C5B6A = on-surface-variant @80% over white
+   *   #575666 = on-surface-variant @40% over white
+   *   #5C5D6B = primary @40% over white
+   *   #1D2746 = primary @15% over white
+   *   #F8D0CE = error-container @40% over white
+   *   #C7C4D8 = outline-variant
+   *   #FFFFFF = on-primary / surface-container-lowest
+   * The Dark side uses the approved FG Dark hierarchy. These are the
+   * only new roles for this slice; no existing token is forced to
+   * serve both themes when its Light side does not match HEAD. */
+  --color-text-primary: #0b1c30;
+  --color-text-secondary: #464555;
+  --color-text-tertiary: #5c5b6a;
+  --color-control-foreground: #464555;
+  --color-control-hover-foreground: #0b1c30;
+  --color-control-hover-surface: #dce9ff;
+  --color-control-active-foreground: #3525cd;
+  --color-control-active-surface: #1d2746;
+  --color-control-disabled-foreground: #575666;
+  --color-action-disabled-bg: #5c5d6b;
+  --color-action-disabled-text: #5c5d6b;
+  --color-quiet-action-foreground: #464555;
+  --color-quiet-action-hover-foreground: #0b1c30;
+  --color-quiet-action-hover-surface: #dce9ff;
+  --color-control-track-off: #dce9ff;
+  --color-editor-boundary: #c7c4d8;
 
   /* ── Legacy-visual bridges for the Work Items Board/List migration.
    *
@@ -166,6 +206,33 @@
    * the exact frozen Light visual while giving the bounded Work Items roles a
    * theme-aware Dark value. None of these alter a global functional token. */
 
+  /* Overlay soft scrim for the Work Item create drawer — a dedicated
+   * right-side overlay (not a centered modal), so its Light scrim is
+   * `bg-black/30`, distinct from the modal `overlay-scrim`
+   * (`on-surface/25`). Dark matches the modal value. */
+  --color-overlay-soft-scrim: rgb(0 0 0 / 0.3);
+  /* Faded Work Item text — the drawer's three legacy
+   * `on-surface-variant` @55/60/70 tiers over white, as exact opaque
+   * composites. The /60 tier matches the Board `text-work-placeholder`
+   * value but stays a distinct role: this one must theme to muted in
+   * Dark, the placeholder one must not. */
+  --color-text-work-faded-55: #9999a2;
+  --color-text-work-faded-60: #908f99;
+  /* (text-work-faded-70 is declared above with the identical value.) */
+  /* Quiet tinted note band in the drawer (read-only notice, "Created from"
+   * box). HEAD = legacy `surface-container-low/50` over white; distinct
+   * from `work-surface-toolbar` (`/35`, a different Light alpha). */
+  --color-work-surface-note: #f7faff;
+  /* Drawer property-row hover (Type/Status/Due/Parent/title rows, picker
+   * rows, disabled field fill). HEAD = legacy `surface-container-low`
+   * UNCOMPOSITED; distinct from `work-surface-hover` (`/45`, a different
+   * Light alpha). */
+  --color-work-surface-row-hover: #eff4ff;
+  /* Themeable shadow COLOR (alpha-free) for drawer-owned popups. The
+   * native Tailwind shadow geometries (sm/lg/xl/2xl) are kept verbatim in
+   * Light; only the color is themed, so no Light shadow changes at all.
+   * HEAD glow = legacy `on-surface` @10% over white. */
+  --shadow-color: rgb(0 0 0 / 1);
   /* Strong content text. HEAD = legacy `on-surface` #0B1C30 (static in Dark).
    * Distinct from canonical `text` (#1C2024) which is NOT Light-exact here. */
   --color-work-content-text: #0b1c30;
@@ -307,7 +374,32 @@ html[data-theme='dark'] {
   --color-work-item-error: #ce2c31;
   --color-work-item-error-bg: #2a1a1c;
   --color-work-item-error-border: #5a2b2e;
+  --color-prose-link: #9eb1ff;
+  /* Inspector control bridges (Dark) — see Light @theme block. */
+  --color-text-primary: #edeef0;
+  --color-text-secondary: #afb3ba;
+  --color-text-tertiary: #8b9098;
+  --color-control-foreground: #afb3ba;
+  --color-control-hover-foreground: #edeef0;
+  --color-control-hover-surface: #272a2d;
+  --color-control-active-foreground: #9eb1ff;
+  --color-control-active-surface: #15224c;
+  --color-control-disabled-foreground: #696e77;
+  --color-action-disabled-bg: #2e3135;
+  --color-action-disabled-text: #696e77;
+  --color-quiet-action-foreground: #afb3ba;
+  --color-quiet-action-hover-foreground: #edeef0;
+  --color-quiet-action-hover-surface: #272a2d;
+  --color-control-track-off: #3f444b;
+  --color-editor-boundary: #43484e;
 
+  --color-overlay-soft-scrim: rgb(0 0 0 / 0.5);
+  --color-text-work-faded-55: #70757c;
+  --color-text-work-faded-60: #70757c;
+  /* (text-work-faded-70 is overridden above with the identical value.) */
+  --color-work-surface-note: #1e2023;
+  --color-work-surface-row-hover: #272a2d;
+  --shadow-color: rgb(0 0 0 / 0.5);
   /* Legacy-visual bridges (Dark) — see Light @theme block for rationale. */
   --color-work-content-text: #edeef0;
   --color-work-content-muted: #afb3ba;
@@ -534,4 +626,75 @@ button {
   color: var(--color-on-surface-variant);
   opacity: 0.65;
   pointer-events: none;
+}
+
+/* ── .fg-prose Dark override (Work Item Description + comment editor) ──
+ * The default rules above keep their exact HEAD Light rendering (the
+ * legacy tokens they reference are static and Light-correct). In Dark
+ * those same tokens resolve to the static Light values — near-black on
+ * the #212225 inspector surface — so the rendered/edited prose is only
+ * overridden here, additively, under the theme selector. Every value is
+ * an existing semantic token; no raw Dark hex, no `dark:` variants.
+ * Specificity: `html[data-theme='dark'] .fg-prose …` (0,2,1) beats the
+ * default rules (0,1,0 / 0,1,1), so only Dark is affected. */
+
+html[data-theme='dark'] .fg-prose,
+html[data-theme='dark'] .fg-prose h2,
+html[data-theme='dark'] .fg-prose h3,
+html[data-theme='dark'] .fg-prose pre code {
+  color: var(--color-text-primary);
+}
+
+/* Genuinely secondary prose: blockquote text and checked task items.
+ * The strike-through color follows the structural border role so the
+ * line stays visible while the text remains secondary. */
+html[data-theme='dark'] .fg-prose blockquote,
+html[data-theme='dark'] .fg-prose ul[data-type='taskList'] li[data-checked='true'] > div {
+  color: var(--color-text-secondary);
+}
+
+html[data-theme='dark'] .fg-prose blockquote {
+  border-left-color: var(--color-border-subtle);
+}
+
+html[data-theme='dark'] .fg-prose ul[data-type='taskList'] li[data-checked='true'] > div {
+  text-decoration-color: var(--color-border-subtle);
+}
+
+/* Editor placeholder: tertiary — visible but clearly quieter than
+ * typed content (replaces the Light opacity chain in Dark only). */
+html[data-theme='dark'] .fg-prose p.is-editor-empty:first-child::before,
+html[data-theme='dark'] .fg-prose .is-empty::before {
+  color: var(--color-text-tertiary);
+  opacity: 1;
+}
+
+/* Links: readable accent text (#9EB1FF) in Dark; the 40% underline and
+ * the "full-strength underline on hover" behavior mirror Light exactly
+ * (Light keeps HEAD `primary` #3525CD via the default rule). */
+html[data-theme='dark'] .fg-prose a,
+html[data-theme='dark'] .fg-prose a:hover {
+  color: var(--color-prose-link);
+  text-decoration-color: color-mix(in srgb, var(--color-prose-link) 40%, transparent);
+}
+
+html[data-theme='dark'] .fg-prose a:hover {
+  text-decoration-color: var(--color-prose-link);
+}
+
+/* Task-list checkbox: canonical interaction Indigo (#3E63DD) in Dark;
+ * Light keeps HEAD `primary` #3525CD via the default rule. */
+html[data-theme='dark'] .fg-prose ul[data-type='taskList'] input[type='checkbox'] {
+  accent-color: var(--color-interaction-primary);
+}
+
+/* Inline code / code blocks: quiet support surface, readable text. */
+html[data-theme='dark'] .fg-prose code,
+html[data-theme='dark'] .fg-prose pre {
+  background: var(--color-work-surface-support);
+}
+
+/* Horizontal rule: subtle structural separator. */
+html[data-theme='dark'] .fg-prose hr {
+  border-top-color: var(--color-border-subtle);
 }

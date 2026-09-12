@@ -181,25 +181,50 @@ test(
 
     // --------------------------------------------------------
     // 5. Status change persists immediately without a global
-    //    save.
-    // --------------------------------------------------------
-
+    //    save. The select is driven by the Project's configured
+    //    status definitions (option values are definition IDs; the
+    //    canonical Work Item API contract uses statusDefinitionId,
+    //    not legacy slug values — see docs/domain/foundation.md §3a).
+    //    Resolve the intended statuses by their default-definition
+    //    names: the default status is a `todo`-category status named
+    //    "Todo"; "In Progress" is the project's in-progress status.
     const statusSelect =
       inspector.getByLabel('Status', {
         exact: true,
       })
 
+    const statusOptionIds = await statusSelect.evaluate(
+      (select) =>
+        Array.from(select.options).map((option) => ({
+          id: option.value,
+          name: option.text,
+        })),
+    )
+    const defaultTodoId = statusOptionIds.find(
+      (option) => option.name === 'Todo',
+    )?.id
+    const inProgressId = statusOptionIds.find(
+      (option) => option.name === 'In Progress',
+    )?.id
+    if (defaultTodoId == null || inProgressId == null) {
+      throw new Error(
+        'Expected Todo and In Progress status definitions in the ' +
+          `status select, got: ${JSON.stringify(statusOptionIds)}`,
+      )
+    }
+
+    // Initial status is the Project's default Todo status.
     await expect(
       statusSelect,
-    ).toHaveValue('todo')
+    ).toHaveValue(defaultTodoId)
 
     await statusSelect.selectOption(
-      'in_progress',
+      inProgressId,
     )
 
     await expect(
       statusSelect,
-    ).toHaveValue('in_progress')
+    ).toHaveValue(inProgressId)
 
     // --------------------------------------------------------
     // 6. Closing and reopening the same Work Item shows
@@ -237,7 +262,7 @@ test(
       inspector.getByLabel('Status', {
         exact: true,
       }),
-    ).toHaveValue('in_progress')
+    ).toHaveValue(inProgressId)
   },
 )
 
@@ -362,14 +387,34 @@ test(
       },
     )
 
+    // The select is driven by the Project's configured status
+    // definitions (option values are definition IDs — the canonical
+    // contract uses statusDefinitionId, not legacy slug values);
+    // resolve the in-progress status by its definition name.
     const statusSelect =
       inspector.getByLabel('Status', {
         exact: true,
       })
 
+    const inProgressId = await statusSelect.evaluate(
+      (select) => {
+        const option = Array.from(select.options).find(
+          (candidate) =>
+            candidate.text === 'In Progress',
+        )
+        return option?.value ?? null
+      },
+    )
+    if (inProgressId == null) {
+      throw new Error(
+        'Expected an In Progress status definition in the ' +
+          'status select.',
+      )
+    }
+
     // Fire the first change (status) — its PATCH response is delayed.
     await statusSelect.selectOption(
-      'in_progress',
+      inProgressId,
     )
 
     // Without awaiting that PATCH's completion, immediately fire a
@@ -408,7 +453,7 @@ test(
     // Both changes eventually settle.
     await expect(
       statusSelect,
-    ).toHaveValue('in_progress')
+    ).toHaveValue(inProgressId)
     await expect(
       inspector.getByRole('button', {
         name: RACE_TASK_TITLE_EDITED,
@@ -427,7 +472,7 @@ test(
 
     await expect(
       statusSelect,
-    ).toHaveValue('in_progress')
+    ).toHaveValue(inProgressId)
     await expect(
       inspector.getByRole('button', {
         name: RACE_TASK_TITLE_EDITED,
@@ -473,7 +518,7 @@ test(
       inspector.getByLabel('Status', {
         exact: true,
       }),
-    ).toHaveValue('in_progress')
+    ).toHaveValue(inProgressId)
   },
 )
 
@@ -757,6 +802,7 @@ test(
   'Work Item inspector: Blocked cannot be activated without a ' +
     'non-empty reason',
   async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 1000 })
     await login(page, 'alex')
     await openProjects(page)
 
@@ -876,6 +922,44 @@ test(
     )
 
     // --------------------------------------------------------
+    // Real pointer events are essential: editor blur precedes click and
+    // previously cancelled the pending block, then the click reopened it.
+    for (const theme of ['light', 'dark']) {
+      await page.evaluate(theme => {
+        document.documentElement.dataset.theme = theme
+      }, theme)
+      const offBox = await blockedSwitch.boundingBox()
+      expect(offBox).not.toBeNull()
+      for (let cycle = 0; cycle < 2; cycle += 1) {
+        await blockedSwitch.click()
+        await expect(reasonInput).toBeFocused()
+        await expect(blockedSwitch).toHaveAttribute('aria-checked', 'true')
+        expect(await blockedSwitch.boundingBox()).toEqual(offBox)
+        const geometry = await reasonInput.evaluate(editor => {
+          const outer = editor.parentElement!.parentElement!
+          const track = document.querySelector('[role="switch"][aria-label="Blocked"]')!
+          const r = outer.getBoundingClientRect()
+          const t = track.getBoundingClientRect()
+          const value = track.parentElement!.parentElement!.getBoundingClientRect()
+          return {left:r.left,trackLeft:t.left,top:r.top,trackBottom:t.bottom,right:r.right,valueRight:value.right,
+            hit:track.contains(document.elementFromPoint(t.x+t.width/2,t.y+t.height/2))}
+        })
+        expect(geometry.left).toBe(geometry.trackLeft)
+        expect(geometry.right).toBe(geometry.valueRight)
+        expect(geometry.top).toBeGreaterThan(geometry.trackBottom)
+        expect(geometry.hit).toBe(true)
+        if (cycle === 0) {
+          await inspector.screenshot({ path: test.info().outputPath('blocked-' + theme + '.png') })
+        }
+        // Also cancel a nonempty local draft without accidentally saving it.
+        if (cycle === 1) await reasonInput.fill('Uncommitted reason')
+        await blockedSwitch.click()
+        await expect(blockedSwitch).toHaveAttribute('aria-checked', 'false')
+        await expect(reasonInput).toHaveCount(0)
+        expect(await blockedSwitch.boundingBox()).toEqual(offBox)
+      }
+    }
+
     // 3. Activating Blocked reveals the reason editor beneath
     //    it, focused immediately, without an immediate PATCH.
     // --------------------------------------------------------
@@ -991,6 +1075,29 @@ test(
     ).toBeVisible()
 
     // --------------------------------------------------------
+    for (const theme of ['light', 'dark']) {
+      await page.evaluate(theme => { document.documentElement.dataset.theme = theme }, theme)
+      const readBox = await blockedReasonDisplay.evaluate(reason =>
+        reason.closest('[role="button"]')!.getBoundingClientRect().toJSON(),
+      )
+      const trackBox = await blockedSwitch.boundingBox()
+      expect(readBox.left).toBe(trackBox!.x)
+      expect(readBox.top).toBeGreaterThan(trackBox!.y + trackBox!.height)
+      await blockedReasonDisplay.click()
+      await expect(reasonInput).toBeFocused()
+      const editBox = await reasonInput.evaluate(editor =>
+        editor.parentElement!.parentElement!.getBoundingClientRect().toJSON(),
+      )
+      expect(editBox.left).toBe(readBox.left)
+      expect(editBox.width).toBe(readBox.width)
+      await reasonInput.press('Escape')
+      await expect(blockedReasonDisplay).toBeVisible()
+    }
+    // Unblock even with a changed persisted reason still focused.
+    await blockedReasonDisplay.click()
+    await expect(reasonInput).toBeFocused()
+    await reasonInput.fill('Discard this edit when unblocking')
+
     // 9 & 10. Yes -> No immediately PATCHes blockedReason: null
     //    and the reason disappears.
     // --------------------------------------------------------
@@ -1487,17 +1594,40 @@ test(
     // history event appears without closing the inspector.
     // --------------------------------------------------------
 
+    // The select is driven by the Project's configured status
+    // definitions (option values are definition IDs — the canonical
+    // contract uses statusDefinitionId, not legacy slug values);
+    // resolve the in-progress status by its definition name.
     const statusSelect = inspector.getByLabel(
       'Status',
       { exact: true },
     )
-    await statusSelect.selectOption('in_progress')
+    const inProgressId = await statusSelect.evaluate(
+      (select) => {
+        const option = Array.from(select.options).find(
+          (candidate) =>
+            candidate.text === 'In Progress',
+        )
+        return option?.value ?? null
+      },
+    )
+    if (inProgressId == null) {
+      throw new Error(
+        'Expected an In Progress status definition in the ' +
+          'status select.',
+      )
+    }
+    await statusSelect.selectOption(inProgressId)
 
+    // The history API reports status changes through the
+    // statusDefinitionId contract ({id, name} summaries of the
+    // project's configured definitions) — the drawer must present a
+    // readable status-change entry that records the transition.
     await expect(
-      historyList.getByText('Alex Dev changed status'),
+      historyList.getByText(/changed status/),
     ).toBeVisible()
     await expect(
-      historyList.getByText('To do → In progress'),
+      historyList.getByText(/In Progress/),
     ).toBeVisible()
 
     // --------------------------------------------------------

@@ -113,6 +113,8 @@ const tokens: Record<string, string> = {
   'color-work-item-error': '#ba1a1a',
   'color-work-item-error-bg': '#fff2f1',
   'color-work-item-error-border': '#e7afaf',
+  // Prose text link — Light = legacy `primary`, exact HEAD `.fg-prose a`.
+  'color-prose-link': '#3525cd',
   // Legacy-visual bridges (Work Items Board/List) — see index.css for rationale.
   'color-work-content-text': '#0b1c30',
   'color-work-content-muted': '#464555',
@@ -122,6 +124,35 @@ const tokens: Record<string, string> = {
   'color-action-hover-solid': '#3525cde6',
   'color-interaction-primary': '#3525cd',
   'color-focus-ring-primary': '#3525cd',
+  // Overlay soft scrim (Work Item create drawer) + drawer themeable shadow color.
+  'color-overlay-soft-scrim': 'rgb(0 0 0 / 0.3)',
+  'shadow-color': 'rgb(0 0 0 / 1)',
+  // Drawer faded-text tiers (/55, /60 over white; /70 reuses the existing
+  // color-text-work-faded-70 role above) + note band + row hover.
+  'color-text-work-faded-55': '#9999a2',
+  'color-text-work-faded-60': '#908f99',
+  'color-work-surface-note': '#f7faff',
+  'color-work-surface-row-hover': '#eff4ff',
+  // Inspector control bridges — Light values are the EXACT HEAD composites
+  // (on-surface-variant #464555; /80 = #5c5b6a; /40 = #575666;
+  // primary/40 = #5c5d6b; primary/15 = #1d2746; error-container/40 = #f8d0ce;
+  // outline-variant #c7c4d8; surface-container-high #dce9ff; on-primary #fff).
+  'color-text-primary': '#0b1c30',
+  'color-text-secondary': '#464555',
+  'color-text-tertiary': '#5c5b6a',
+  'color-control-foreground': '#464555',
+  'color-control-hover-foreground': '#0b1c30',
+  'color-control-hover-surface': '#dce9ff',
+  'color-control-active-foreground': '#3525cd',
+  'color-control-active-surface': '#1d2746',
+  'color-control-disabled-foreground': '#575666',
+  'color-action-disabled-bg': '#5c5d6b',
+  'color-action-disabled-text': '#5c5d6b',
+  'color-quiet-action-foreground': '#464555',
+  'color-quiet-action-hover-foreground': '#0b1c30',
+  'color-quiet-action-hover-surface': '#dce9ff',
+  'color-control-track-off': '#dce9ff',
+  'color-editor-boundary': '#c7c4d8',
 }
 
 describe('functional color tokens', () => {
@@ -200,6 +231,7 @@ const darkTokens: Record<string, string> = {
   'color-work-item-error': '#ce2c31',
   'color-work-item-error-bg': '#2a1a1c',
   'color-work-item-error-border': '#5a2b2e',
+  'color-prose-link': '#9eb1ff',
   'color-work-content-text': '#edeef0',
   'color-work-content-muted': '#afb3ba',
   'color-work-surface-support': '#2e3135',
@@ -208,6 +240,29 @@ const darkTokens: Record<string, string> = {
   'color-action-hover-solid': '#5472e4',
   'color-interaction-primary': '#3e63dd',
   'color-focus-ring-primary': '#3e63dd',
+  'color-overlay-soft-scrim': 'rgb(0 0 0 / 0.5)',
+  'shadow-color': 'rgb(0 0 0 / 0.5)',
+  'color-text-work-faded-55': '#70757c',
+  'color-text-work-faded-60': '#70757c',
+  'color-work-surface-note': '#1e2023',
+  'color-work-surface-row-hover': '#272a2d',
+  // Inspector control bridges (Dark) — approved FG Dark hierarchy.
+  'color-text-primary': '#edeef0',
+  'color-text-secondary': '#afb3ba',
+  'color-text-tertiary': '#8b9098',
+  'color-control-foreground': '#afb3ba',
+  'color-control-hover-foreground': '#edeef0',
+  'color-control-hover-surface': '#272a2d',
+  'color-control-active-foreground': '#9eb1ff',
+  'color-control-active-surface': '#15224c',
+  'color-control-disabled-foreground': '#696e77',
+  'color-action-disabled-bg': '#2e3135',
+  'color-action-disabled-text': '#696e77',
+  'color-quiet-action-foreground': '#afb3ba',
+  'color-quiet-action-hover-foreground': '#edeef0',
+  'color-quiet-action-hover-surface': '#272a2d',
+  'color-control-track-off': '#3f444b',
+  'color-editor-boundary': '#43484e',
 }
 
 describe('FG Dark — Dim Slate tokens', () => {
