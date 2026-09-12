@@ -1946,6 +1946,96 @@ export function MeetingDetailPage() {
     setInspectorParentItems([])
   }
 
+  // Contextual-selection close for the linked Work Item inspector,
+  // mirroring the established Project view contract (see
+  // ProjectDetailPage's outside-click-close effect): while the
+  // non-modal edit inspector is open, a click landing on a genuine
+  // Meeting surface closes it — a click inside the inspector
+  // (its `data-work-item-inspector-boundary` subtree) or on another
+  // linked Work Item target never does.
+  //
+  // Registered on the CAPTURE phase for the same reason the Project
+  // view uses it: the DOM is still intact when the check runs, so
+  // an inspector interaction that mutates its own nodes (e.g. the
+  // title turning into an input) is never misread as "outside".
+  // The handler never calls stopPropagation/preventDefault, so
+  // every control's own click handler still runs normally
+  // afterward.
+  //
+  // No linked Work Item target carries `data-work-item-id` (that
+  // marker is the Project Board/List/Overview contract), so the
+  // only marker checked here is the boundary — and the close is
+  // guarded: it only clears state that still belongs to the item
+  // that was open when the listener ran. A click on another linked
+  // Work Item queues a switch to the new item first; by the time
+  // these functional updates apply, the guard no longer matches and
+  // the inspector is left to show the newly opened item.
+  useEffect(() => {
+    if (inspectorWorkItemId == null) {
+      return
+    }
+
+    const openItemId = inspectorWorkItemId
+    const openProjectId =
+      inspectorItem?.projectId ?? null
+
+    function handleDocumentClickCapture(
+      event: MouseEvent,
+    ) {
+      const target = event.target
+
+      if (!(target instanceof Element)) {
+        return
+      }
+
+      if (
+        target.closest(
+          '[data-work-item-inspector-boundary]',
+        )
+      ) {
+        return
+      }
+
+      setInspectorWorkItemId((current) =>
+        current === openItemId ? null : current,
+      )
+      setInspectorItem((current) =>
+        current != null && current.id === openItemId
+          ? null
+          : current,
+      )
+      setInspectorProject((current) =>
+        current != null &&
+        current.id === openProjectId
+          ? null
+          : current,
+      )
+      setInspectorConfiguration((current) =>
+        current != null ? null : current,
+      )
+      setInspectorAssignees((current) =>
+        current.length > 0 ? [] : current,
+      )
+      setInspectorParentItems((current) =>
+        current.length > 0 ? [] : current,
+      )
+    }
+
+    document.addEventListener(
+      'click',
+      handleDocumentClickCapture,
+      true,
+    )
+
+    return () => {
+      document.removeEventListener(
+        'click',
+        handleDocumentClickCapture,
+        true,
+      )
+    }
+  }, [inspectorItem, inspectorWorkItemId])
+
   // ── Completed recap: hydrate canonical display data for every
   // Work Item originating from this Meeting (direct
   // MeetingItem -> Work Item links + Note-linked primary Work
