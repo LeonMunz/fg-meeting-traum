@@ -19,6 +19,13 @@ import type {
 } from '../../api/types'
 import { formatMeetingDateCompact } from './shared'
 
+// Shared select treatment: semantic quiet control surface with the
+// default control border and the canonical Accent focus (2px ring,
+// offset onto the modal surface, no glow). Placeholder state is
+// selected per-select via the tertiary text token.
+const FOLLOW_UP_SELECT_CLASSES =
+  'h-10 w-full rounded-lg border border-border-default bg-surface-quiet px-3 text-sm outline-none focus:border-focus focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-surface'
+
 type MeetingFollowUpSchedulingDialogProps = {
   sourceItem: ApiMeetingItem | null
   returnFocusRef: RefObject<HTMLButtonElement | null>
@@ -190,7 +197,7 @@ export function MeetingFollowUpSchedulingDialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-on-surface/25 px-4 py-8 backdrop-blur-[2px]"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-overlay-scrim px-4 py-8 backdrop-blur-[2px]"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) close()
       }}
@@ -200,19 +207,19 @@ export function MeetingFollowUpSchedulingDialog({
         aria-modal="true"
         aria-labelledby="schedule-follow-up-title"
         aria-describedby="schedule-follow-up-prompt"
-        className="w-full max-w-md overflow-hidden rounded-2xl border border-outline-variant bg-surface-container-lowest shadow-xl"
+        className="w-full max-w-md overflow-hidden rounded-2xl border border-border-structural bg-surface shadow-xl"
       >
         <form onSubmit={(event) => void submit(event)}>
-          <div className="border-b border-outline-variant px-6 py-5">
+          <div className="border-b border-border-subtle px-6 py-5">
             <h2
               id="schedule-follow-up-title"
-              className="text-lg font-semibold tracking-tight text-on-surface"
+              className="text-lg font-semibold tracking-tight text-text"
             >
               Schedule follow-up
             </h2>
             <p
               id="schedule-follow-up-prompt"
-              className="mt-1 text-sm text-on-surface-variant"
+              className="mt-1 text-sm text-text-muted"
             >
               When should this come back?
             </p>
@@ -222,7 +229,7 @@ export function MeetingFollowUpSchedulingDialog({
             {loading ? (
               <p
                 role="status"
-                className="flex items-center gap-2 text-sm text-on-surface-variant"
+                className="flex items-center gap-2 text-sm text-text-muted"
               >
                 <span
                   aria-hidden="true"
@@ -233,11 +240,11 @@ export function MeetingFollowUpSchedulingDialog({
                 Loading planned meetings…
               </p>
             ) : hasNoMeetings ? (
-              <div className="rounded-lg bg-surface-container-low px-4 py-3">
-                <p className="text-sm font-medium text-on-surface">
+              <div className="rounded-lg bg-surface-quiet px-4 py-3">
+                <p className="text-sm font-medium text-text">
                   No planned meetings available.
                 </p>
-                <p className="mt-1 text-xs text-on-surface-variant">
+                <p className="mt-1 text-xs text-text-muted">
                   Create or schedule a future meeting first.
                 </p>
               </div>
@@ -246,7 +253,7 @@ export function MeetingFollowUpSchedulingDialog({
                 <div>
                   <label
                     htmlFor="follow-up-meeting"
-                    className="mb-1.5 block text-sm font-medium text-on-surface"
+                    className="mb-1.5 block text-sm font-medium text-text"
                   >
                     Meeting
                   </label>
@@ -268,7 +275,11 @@ export function MeetingFollowUpSchedulingDialog({
                       )
                       setError(null)
                     }}
-                    className="h-10 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
+                    className={
+                      meetingId === ''
+                        ? `${FOLLOW_UP_SELECT_CLASSES} text-text-tertiary`
+                        : `${FOLLOW_UP_SELECT_CLASSES} text-text`
+                    }
                   >
                     <option value="">Select a meeting</option>
                     {targets?.meetings.map((candidate) => (
@@ -282,7 +293,7 @@ export function MeetingFollowUpSchedulingDialog({
                 <div>
                   <label
                     htmlFor="follow-up-section"
-                    className="mb-1.5 block text-sm font-medium text-on-surface"
+                    className="mb-1.5 block text-sm font-medium text-text"
                   >
                     Section
                   </label>
@@ -294,7 +305,11 @@ export function MeetingFollowUpSchedulingDialog({
                       setSectionId(event.target.value)
                       setError(null)
                     }}
-                    className="h-10 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none focus:border-primary focus:ring-2 focus:ring-primary/15 disabled:cursor-not-allowed disabled:opacity-55"
+                    className={`${FOLLOW_UP_SELECT_CLASSES} ${
+                      sectionId === ''
+                        ? 'text-text-tertiary'
+                        : 'text-text'
+                    } disabled:cursor-not-allowed disabled:border-border-subtle disabled:text-control-disabled-foreground`}
                   >
                     <option value="">Select a section</option>
                     {selectedMeeting?.sections.map((section) => (
@@ -310,26 +325,26 @@ export function MeetingFollowUpSchedulingDialog({
             {error != null && (
               <p
                 role="alert"
-                className="rounded-lg bg-error-container px-3 py-2 text-sm text-error"
+                className="rounded-lg bg-danger-bg px-3 py-2 text-sm text-danger"
               >
                 {error}
               </p>
             )}
           </div>
 
-          <div className="flex items-center justify-end gap-3 border-t border-outline-variant bg-surface-container-low/45 px-6 py-4">
+          <div className="flex items-center justify-end gap-3 border-t border-border-subtle bg-surface-footer px-6 py-4">
             <button
               type="button"
               disabled={scheduling}
               onClick={close}
-              className="h-9 rounded-lg px-4 text-sm font-medium text-on-surface-variant outline-none transition hover:bg-surface-container-high hover:text-on-surface focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-60"
+              className="h-9 rounded-lg px-4 text-sm font-medium text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-60"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={!canSchedule}
-              className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-white shadow-sm outline-none transition hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-45"
+              className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-semibold text-text-inverse shadow-sm outline-none transition hover:bg-accent-hover focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:bg-action-disabled-bg disabled:text-action-disabled-text disabled:hover:bg-action-disabled-bg"
             >
               {scheduling && (
                 <span
