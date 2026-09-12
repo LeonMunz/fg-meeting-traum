@@ -42,11 +42,12 @@ afterEach(() => {
 
 describe('NoteLinkedWorkCaption', () => {
   // A Note has at most one primary linked Work Item (enforced by the
-  // existing unique constraint), so the caption is singular.
+  // existing unique constraint), so the caption is singular:
+  // "Linked work".
   it('renders the singular caption', () => {
     render(<NoteLinkedWorkCaption />)
     expect(
-      screen.getByText('Linked work item', { exact: true }),
+      screen.getByText('Linked work', { exact: true }),
     ).toBeInTheDocument()
   })
 })
@@ -86,6 +87,17 @@ describe('NoteLinkedWorkCard', () => {
     expect(
       screen.queryByText('Unassigned'),
     ).toBeNull()
+  })
+
+  it('keeps the card border on the semantic border-subtle token', () => {
+    // The token is --color-border-subtle, so the resolvable color
+    // utility is `border-border-subtle`; the bare spelling compiles
+    // to nothing and would leave the card border on currentColor.
+    render(<NoteLinkedWorkCard linked={BASE} onOpen={() => {}} />)
+    const card = screen.getByRole('button', {
+      name: 'Open linked work item: Prepare purchase request',
+    })
+    expect(card).toHaveClass('border-border-subtle')
   })
 
   it('is a single clickable control that invokes the open handler once with the linked item', () => {

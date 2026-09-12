@@ -3037,21 +3037,91 @@ export function MeetingDetailPage() {
           >
             {liveSelectedItem != null ? (
               <div>
-                {/* Small context line: Section · position */}
-                <p className="text-sm font-medium text-text-muted">
-                  {liveSelectedSection?.name ?? ''}
-                  {liveSelectedPosition > 0 && (
-                    <>
-                      {' · '}
-                      {liveSelectedPosition} of{' '}
-                      {(
-                        itemsBySection.get(
-                          liveSelectedSection!.id,
-                        ) ?? []
-                      ).length}
-                    </>
-                  )}
-                </p>
+                {/* Context row: "Section · x of y" (left) and the quiet
+                    Make-current / return actions (right, only while the
+                    viewed item is not the Meeting's current item).
+                    Keeping them in the same row preserves the reading
+                    order Context -> Title -> Notes. */}
+                <div className="flex min-w-0 items-center gap-3">
+                  <p className="truncate text-sm font-medium text-text-muted">
+                    {liveSelectedSection?.name ?? ''}
+                    {liveSelectedPosition > 0 && (
+                      <>
+                        {' · '}
+                        {liveSelectedPosition} of{' '}
+                        {(
+                          itemsBySection.get(
+                            liveSelectedSection!.id,
+                          ) ?? []
+                        ).length}
+                      </>
+                    )}
+                  </p>
+
+                  {!liveSelectionIsCurrent ? (
+                    <div className="ml-auto flex shrink-0 items-center gap-2">
+                      {liveCurrentItem != null && (
+                        <button
+                          type="button"
+                          onClick={handleReturnToCurrent}
+                          className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs font-medium text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus"
+                        >
+                          <span
+                            aria-hidden="true"
+                            className="material-symbols-outlined text-[13px]"
+                          >
+                            arrow_back
+                          </span>
+                          Return to current
+                        </button>
+                      )}
+
+                      {canManageLifecycle && (
+                        <button
+                          type="button"
+                          disabled={
+                            updatingItemId ===
+                            liveSelectedItem!.id
+                          }
+                          onClick={() =>
+                            void handleFocusItem(
+                              liveSelectedItem!,
+                            )
+                          }
+                          aria-label={`Make ${liveSelectedItem!.title} current`}
+                          title="Make this item the meeting's current item"
+                          className="inline-flex h-7 items-center gap-1 rounded-md border border-accent px-2 text-xs font-medium text-accent-text outline-none transition hover:bg-accent-subtle focus-visible:ring-2 focus-visible:ring-focus disabled:opacity-60"
+                        >
+                          {updatingItemId ===
+                          liveSelectedItem!.id ? (
+                            <span
+                              aria-hidden="true"
+                              className="material-symbols-outlined animate-spin text-[13px]"
+                            >
+                              refresh
+                            </span>
+                          ) : (
+                            <span
+                              aria-hidden="true"
+                              className="material-symbols-outlined text-[13px]"
+                            >
+                              center_focus_strong
+                            </span>
+                          )}
+                          {updatingItemId ===
+                          liveSelectedItem!.id
+                            ? 'Making current…'
+                            : 'Make current'}
+                        </button>
+                      )}
+
+                      <span className="sr-only">
+                        You are viewing a different item than the meeting's
+                        current item.
+                      </span>
+                    </div>
+                  ) : null}
+                </div>
 
                 {/* Informational feedback after a cancellation that
                     preserved an edited target; cleared by selection
@@ -3078,124 +3148,6 @@ export function MeetingDetailPage() {
                       >
                         Dismiss
                       </button>
-                    </span>
-                  </div>
-                )}
-
-                {/* Shown only while the user is viewing a non-current
-                    item. "Return to current" is purely local navigation —
-                    it re-points selection at the Meeting's actual current
-                    item and never mutates the domain; it is offered
-                    only while a current item actually exists to
-                    return to. "Make current" is the deliberate,
-                    domain-mutating alternative: it calls the canonical
-                    Focus action so the VIEWED item becomes the persisted
-                    current item. The Focus contract accepts an item of
-                    any outcome, so availability here mirrors the domain
-                    rule: the user may write the Meeting and the viewed
-                    item is not already current. */}
-                {!liveSelectionIsCurrent &&
-                  liveCurrentItem != null && (
-                  <div className="mt-3 flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={handleReturnToCurrent}
-                      className="inline-flex h-8 items-center gap-1.5 rounded-[10px] border border-default bg-surface px-3 text-[13px]! font-medium! text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
-                    >
-                      <span aria-hidden="true" className="material-symbols-outlined text-[14px]! text-text-muted">
-                        arrow_back
-                      </span>
-                      Return to current
-                    </button>
-
-                    {canManageLifecycle && (
-                      <button
-                        type="button"
-                        disabled={
-                          updatingItemId ===
-                          liveSelectedItem!.id
-                        }
-                        onClick={() =>
-                          void handleFocusItem(
-                            liveSelectedItem!,
-                          )
-                        }
-                        aria-label={`Make ${liveSelectedItem!.title} current`}
-                        title="Make this item the meeting's current item"
-                        className="inline-flex h-8 items-center gap-1.5 rounded-[10px] border border-accent bg-accent-subtle px-3 text-[13px]! font-medium! text-accent-text outline-none transition hover:border-accent-hover hover:text-accent focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-60"
-                      >
-                        {updatingItemId ===
-                        liveSelectedItem!.id ? (
-                          <span aria-hidden="true" className="material-symbols-outlined animate-spin text-[14px]!">
-                            refresh
-                          </span>
-                        ) : (
-                          <span aria-hidden="true" className="material-symbols-outlined text-[14px]!">
-                            center_focus_strong
-                          </span>
-                        )}
-                        {updatingItemId ===
-                        liveSelectedItem!.id
-                          ? 'Making current…'
-                          : 'Make current'}
-                      </button>
-                    )}
-
-                    <span className="sr-only">
-                      You are viewing a different item than the meeting's
-                      current item.
-                    </span>
-                  </div>
-                )}
-
-                {/* No current item exists, but the user is still
-                    viewing one (e.g. after the last open item was
-                    resolved while following current). The divergence
-                    hint is still true — the viewed item is NOT the
-                    current item (there is none) — so "Make current"
-                    remains the deliberate escape hatch, while
-                    "Return to current" is not offered: a navigation
-                    action with no target must not be presented as
-                    actionable. */}
-                {!liveSelectionIsCurrent &&
-                  liveCurrentItem == null && (
-                  <div className="mt-3 flex items-center gap-2">
-                    {canManageLifecycle && (
-                      <button
-                        type="button"
-                        disabled={
-                          updatingItemId ===
-                          liveSelectedItem!.id
-                        }
-                        onClick={() =>
-                          void handleFocusItem(
-                            liveSelectedItem!,
-                          )
-                        }
-                        aria-label={`Make ${liveSelectedItem!.title} current`}
-                        title="Make this item the meeting's current item"
-                        className="inline-flex h-8 items-center gap-1.5 rounded-[10px] border border-accent bg-accent-subtle px-3 text-[13px]! font-medium! text-accent-text outline-none transition hover:border-accent-hover hover:text-accent focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-60"
-                      >
-                        {updatingItemId ===
-                        liveSelectedItem!.id ? (
-                          <span aria-hidden="true" className="material-symbols-outlined animate-spin text-[14px]!">
-                            refresh
-                          </span>
-                        ) : (
-                          <span aria-hidden="true" className="material-symbols-outlined text-[14px]!">
-                            center_focus_strong
-                          </span>
-                        )}
-                        {updatingItemId ===
-                        liveSelectedItem!.id
-                          ? 'Making current…'
-                          : 'Make current'}
-                      </button>
-                    )}
-
-                    <span className="sr-only">
-                      You are viewing a different item than the meeting's
-                      current item.
                     </span>
                   </div>
                 )}
@@ -3309,7 +3261,7 @@ export function MeetingDetailPage() {
                                     {note.content}
                                   </p>
 
-                                  <p className="mt-1 text-[11px] text-text-muted/70">
+                                  <p className="mt-1 text-[11px] text-text-tertiary">
                                     {getPersonName(
                                       note.author,
                                     )}{' '}
@@ -3396,7 +3348,7 @@ export function MeetingDetailPage() {
 
                                             <span
                                               role="none"
-                                              className="my-1 border-t border-subtle"
+                                              className="my-1 border-t border-border-subtle"
                                             />
 
                                             <MenuItem
@@ -3433,7 +3385,7 @@ export function MeetingDetailPage() {
                       className={
                         (liveSelectedItem.notes ?? [])
                           .length > 0
-                          ? 'mt-5'
+                          ? 'mt-6'
                           : 'mt-2'
                       }
                     >
@@ -3519,7 +3471,7 @@ export function MeetingDetailPage() {
                       onClick={() =>
                         openNoteComposer(liveSelectedItem)
                       }
-                      className={`${(liveSelectedItem.notes ?? []).length > 0 ? 'mt-5' : 'mt-2'} inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-xs font-medium text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus`}
+                      className={`${(liveSelectedItem.notes ?? []).length > 0 ? 'mt-6' : 'mt-2'} inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-xs font-medium text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus`}
                     >
                       <span aria-hidden="true" className="material-symbols-outlined text-[14px]">
                         add
@@ -3533,7 +3485,7 @@ export function MeetingDetailPage() {
                 </div>
 
                 {liveSelectedItem.followUpSchedule != null && (
-                  <div className="mt-8 border-t border-subtle pt-5">
+                  <div className="mt-7 border-t border-border-subtle pt-4">
                     <div className="flex items-start gap-2 text-sm">
                       <span aria-hidden="true" className="material-symbols-outlined mt-0.5 text-[17px] text-text-muted">
                         event_repeat
@@ -3614,7 +3566,7 @@ export function MeetingDetailPage() {
 
                   if (canReopenSelected) {
                     return (
-                      <div className="mt-8 flex flex-wrap items-center gap-3 border-t border-subtle pt-5">
+                      <div className="mt-7 flex flex-wrap items-center gap-3 border-t border-border-subtle pt-4">
                         {statusNode}
                         <button
                           type="button"
@@ -3638,7 +3590,7 @@ export function MeetingDetailPage() {
                             }
                             aria-label={`Schedule follow-up for ${liveCurrentItem.title}`}
                             title="Schedule follow-up"
-                            className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-default bg-surface px-3 text-sm font-medium text-text outline-none transition hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-60"
+                            className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-default bg-surface px-3 text-sm font-medium text-text-muted outline-none transition hover:border-control hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-60"
                           >
                             <span aria-hidden="true" className="material-symbols-outlined text-[16px] text-text-muted">
                               event_repeat
@@ -3665,7 +3617,7 @@ export function MeetingDetailPage() {
                       }
                       aria-label={`Schedule follow-up for ${liveCurrentItem.title}`}
                       title="Schedule follow-up"
-                      className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-default bg-surface px-2.5 text-sm font-medium text-text outline-none transition hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-60"
+                      className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-default bg-surface px-2.5 text-sm font-medium text-text-muted outline-none transition hover:border-control hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-60"
                     >
                       <span aria-hidden="true" className="material-symbols-outlined text-[15px] text-text-muted">
                         event_repeat
@@ -3675,7 +3627,7 @@ export function MeetingDetailPage() {
                   )
 
                   return (
-                    <div className="mt-8 flex flex-wrap items-center gap-3 border-t border-subtle pt-5">
+                    <div className="mt-7 flex flex-wrap items-center gap-3 border-t border-border-subtle pt-4">
                       {currentOutcome === 'follow_up' ? (
                         <>
                           {statusNode}
@@ -3722,7 +3674,7 @@ export function MeetingDetailPage() {
                             }
                             aria-label={`Mark ${liveCurrentItem.title} as done`}
                             title="Done"
-                            className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-success px-2.5 text-sm font-semibold text-white outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-60"
+                            className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-success px-2.5 text-sm font-semibold text-white outline-none transition hover:brightness-110 focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-60"
                           >
                             {busy ? (
                               <span aria-hidden="true" className="material-symbols-outlined animate-spin text-[15px]">

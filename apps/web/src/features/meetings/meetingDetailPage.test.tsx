@@ -405,13 +405,13 @@ describe('MeetingDetailPage Live visual polish', () => {
       'className: "mt-2 space-y-5"',
     )
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'className: "mt-1 text-[11px] text-text-muted/70"',
+      'className: "mt-1 text-[11px] text-text-tertiary"',
     )
     expect(MEETING_DETAIL_SOURCE).toContain(
       'absolute right-2 top-1',
     )
     expect(MEETING_DETAIL_SOURCE).toContain(
-      '? "mt-5"',
+      '? "mt-6"',
     )
     expect(MEETING_DETAIL_SOURCE).toContain(
       ': "mt-2"',
@@ -527,13 +527,28 @@ describe('MeetingDetailPage Live visual polish', () => {
       'Change ${liveCurrentItem.title} to done',
     )
     // Compact (h-8) controls: Done carries the Success
-    // semantic; scheduling / Change-to transitions are neutral
-    // secondary controls.
+    // semantic with a slight clarity lift on hover; scheduling is
+    // the quietest control in the row (muted text, control-border
+    // hover), clearly secondary to Done.
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'h-8 items-center gap-1.5 rounded-lg bg-success px-2.5',
+      'h-8 items-center gap-1.5 rounded-lg bg-success px-2.5 text-sm font-semibold text-white outline-none transition hover:brightness-110',
+    )
+    // The Schedule-follow-up control (h-8 resolve row and h-9
+    // reopen row) stays a neutral secondary: default border, muted
+    // text, surface hover with a control-border lift.
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'h-8 items-center gap-1.5 rounded-lg border border-default bg-surface px-2.5 text-sm font-medium text-text-muted outline-none transition hover:border-control hover:bg-surface-hover',
     )
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'h-8 items-center gap-1.5 rounded-lg border border-default bg-surface px-2.5',
+      'h-9 items-center gap-1.5 rounded-lg border border-default bg-surface px-3 text-sm font-medium text-text-muted outline-none transition hover:border-control hover:bg-surface-hover',
+    )
+    // The Outcome-zone dividers sit on the semantic border-subtle
+    // token (Dark #363A3F), with the calibrated mt-7 / pt-4 rhythm.
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'mt-7 flex flex-wrap items-center gap-3 border-t border-border-subtle pt-4',
+    )
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'mt-7 border-t border-border-subtle pt-4',
     )
   })
 })
@@ -686,5 +701,14 @@ describe('MeetingDetailPage shared header color semantics', () => {
     expect(fileSource).toContain(
       'rounded-lg bg-danger-bg px-4 py-3 text-sm text-danger',
     )
+  })
+
+  it('never uses the dead border-subtle utility (borders stay semantic)', () => {
+    // The token is --color-border-subtle, so the color utility is
+    // `border-border-subtle`. A bare `border-subtle` compiles to
+    // nothing and leaves the 1px border on currentColor — the
+    // Live-detail dividers then rendered near-white in Dark.
+    expect(fileSource).not.toMatch(/(^|\s)border-subtle(\s|"|')/)
+    expect(fileSource).not.toContain('hover:border-subtle')
   })
 })

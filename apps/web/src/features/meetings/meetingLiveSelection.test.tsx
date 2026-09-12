@@ -486,7 +486,7 @@ describe('Live Meeting selection (decoupled from current)', () => {
     ).not.toHaveBeenCalled()
   })
 
-  it('renders divergence actions as compact controls below the metadata', async () => {
+  it('renders divergence actions as quiet controls in the context row', async () => {
     const fake = new FakeLiveMeeting(
       makeMeeting({ currentMeetingItemId: 2 }),
       BASE_ITEMS,
@@ -507,41 +507,50 @@ describe('Live Meeting selection (decoupled from current)', () => {
     const makeCurrent = workspace().getByRole('button', {
       name: 'Make Alpha current',
     })
-    const actionRow = returnToCurrent.parentElement
     const title = workspace().getByRole('heading', {
       name: 'Alpha',
     })
+    const actionsWrapper = returnToCurrent.parentElement as HTMLElement
 
+    // Both quiet actions live in the same horizontal context row
+    // (right-aligned), not on a separate row between context and
+    // title: the wrapper is a flex row sibling of the "x of y"
+    // context text, and the title heading comes after it.
+    expect(actionsWrapper).toHaveClass('ml-auto', 'flex', 'shrink-0')
+    expect(returnToCurrent.parentElement).toBe(actionsWrapper)
+    expect(makeCurrent.parentElement).toBe(actionsWrapper)
+    const contextText = actionsWrapper.previousElementSibling as HTMLElement
+    expect(contextText.tagName).toBe('P')
+    expect(contextText.textContent).toContain('of')
+
+    // Quiet secondary treatment: compact, muted, not a dominant CTA.
     expect(returnToCurrent).toHaveClass(
-      'h-8',
-      'gap-1.5',
-      'rounded-[10px]',
-      'border-default',
-      'bg-surface',
-      'px-3',
-      'text-[13px]!',
-      'font-medium!',
+      'h-7',
+      'gap-1',
+      'rounded-md',
+      'px-2',
+      'text-xs',
+      'font-medium',
       'text-text-muted',
       'hover:bg-surface-hover',
       'focus-visible:ring-2',
       'focus-visible:ring-focus',
     )
     expect(makeCurrent).toHaveClass(
-      'h-8',
-      'gap-1.5',
-      'rounded-[10px]',
+      'h-7',
+      'gap-1',
+      'rounded-md',
       'border-accent',
-      'bg-accent-subtle',
-      'px-3',
-      'text-[13px]!',
-      'font-medium!',
+      'px-2',
+      'text-xs',
+      'font-medium',
       'text-accent-text',
-      'hover:border-accent-hover',
-      'hover:text-accent',
+      'hover:bg-accent-subtle',
       'focus-visible:ring-2',
       'focus-visible:ring-focus',
     )
-    expect(returnToCurrent).not.toHaveClass('bg-accent')
+    // Make current is an accent-outline secondary action, not a
+    // filled dominant CTA.
     expect(makeCurrent).not.toHaveClass(
       'bg-accent',
       'font-semibold',
@@ -551,11 +560,10 @@ describe('Live Meeting selection (decoupled from current)', () => {
       returnToCurrent.querySelector(
         '.material-symbols-outlined',
       ),
-    ).toHaveClass('text-[14px]!')
+    ).toHaveClass('text-[13px]')
     expect(
       makeCurrent.querySelector('.material-symbols-outlined'),
-    ).toHaveClass('text-[14px]!')
-    expect(actionRow).toHaveClass('mt-3', 'gap-2')
+    ).toHaveClass('text-[13px]')
     expect(title).toHaveClass('mt-3', 'text-2xl')
     expect(
       screen.getByRole('button', { name: 'End meeting' }),

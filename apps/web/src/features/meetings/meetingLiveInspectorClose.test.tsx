@@ -527,7 +527,7 @@ describe('Live Meeting linked Work Item inspector outside-click close', () => {
 
     // Singular caption (one linked Work Item on the Note).
     expect(
-      screen.getByText('Linked work item', { exact: true }),
+      screen.getByText('Linked work', { exact: true }),
     ).toBeInTheDocument()
     expect(
       screen.queryByText('Linked work items', { exact: true }),

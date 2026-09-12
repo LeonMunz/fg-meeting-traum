@@ -39,7 +39,7 @@ export function NoteLinkedWorkCard({
       type="button"
       onClick={() => onOpen(linked)}
       aria-label={`Open linked work item: ${linked.title}`}
-      className="mt-1.5 flex w-full items-center gap-2.5 rounded-xl border border-subtle bg-surface px-3.5 py-3 text-left outline-none transition hover:border-default hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
+      className="mt-1.5 flex w-full items-center gap-2.5 rounded-lg border border-border-subtle bg-surface px-3 py-2.5 text-left outline-none transition hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
     >
       {/* Neutral relation glyph. The canonical payload carries no
           Work Item type/icon, so we do not fabricate one; the shared
@@ -65,14 +65,14 @@ export function NoteLinkedWorkCard({
 }
 
 /* Quiet caption above the linked Work Item card. No container or
-   border — just a small muted label so the relation reads as
+   border — just a small tertiary label so the relation reads as
    secondary to the Note above it. A Note has at most one primary
    linked Work Item (enforced by the existing unique constraint), so
-   the caption is singular. */
+   the caption is singular: "Linked work". */
 export function NoteLinkedWorkCaption(): ReactNode {
   return (
-    <p className="text-[11px] font-medium text-text-muted">
-      Linked work item
+    <p className="text-[11px] font-medium text-text-tertiary">
+      Linked work
     </p>
   )
 }
