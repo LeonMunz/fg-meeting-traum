@@ -6,7 +6,16 @@ from django.contrib import admin
 from django.urls import path
 from django.views.decorators.csrf import csrf_protect
 
-from accounts.views import CSRFEndpoint, LoginView, LogoutView, MeView
+from accounts.views import (
+    CSRFEndpoint,
+    LoginView,
+    LogoutView,
+    MeView,
+    SessionListView,
+    SessionRevokeAllView,
+    SessionRevokeOthersView,
+    SessionRevokeView,
+)
 from config.health import HealthCheckView
 from projects.views import (
     ProjectArchiveView,
@@ -98,6 +107,10 @@ urlpatterns = [
     path('api/auth/login/', csrf_protect_view(LoginView), name='login'),
     path('api/auth/logout/', csrf_protect_view(LogoutView), name='logout'),
     path('api/auth/me/', MeView.as_view(), name='me'),
+    path('api/auth/sessions/', SessionListView.as_view(), name='sessions-list'),
+    path('api/auth/sessions/<uuid:session_id>/revoke/', SessionRevokeView.as_view(), name='session-revoke'),
+    path('api/auth/sessions/revoke-others/', SessionRevokeOthersView.as_view(), name='sessions-revoke-others'),
+    path('api/auth/sessions/revoke-all/', SessionRevokeAllView.as_view(), name='sessions-revoke-all'),
     path('api/research-groups/', ResearchGroupListView.as_view(), name='research-groups-list'),
     path('api/research-groups/<int:pk>/', ResearchGroupDetailView.as_view(), name='research-groups-detail'),
     path('api/research-groups/<int:group_id>/member-candidates/', ResearchGroupMemberCandidateListView.as_view(), name='research-group-member-candidates'),

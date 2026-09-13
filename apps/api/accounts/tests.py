@@ -10,9 +10,13 @@ Covers:
 - Protected API default auth requirement
 """
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.contrib.sessions.models import Session
 from django.test import Client, TestCase
 from rest_framework.test import APIClient, APITestCase
+
+from .models import UserSession
 
 User = get_user_model()
 
@@ -224,3 +228,151 @@ class ProtectedAPIDefaultTest(APITestCase):
     def test_unauthenticated_request_to_protected_endpoint_fails(self):
         response = self.client.get('/api/auth/me/')
         self.assertEqual(response.status_code, 401)
+
+
+class InactiveLoginTest(APITestCase):
+    """Inactive accounts must not authenticate."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            username="inactiveuser",
+            password="InactivePass1!",
+        )
+
+    def test_inactive_user_login_fails(self):
+        self.user.is_active = False
+        self.user.save(update_fields=["is_active"])
+        response = self.client.post(
+            '/api/auth/login/',
+            data={
+                "username": "inactiveuser",
+                "password": "InactivePass1!",
+            },
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 401)
+        # No session was established for the inactive user.
+        self.assertFalse(
+            UserSession.objects.filter(user=self.user).exists()
+        )
+
+
+class SessionFixationAndLogoutTest(TestCase):
+    """Session-fixation and server-side logout invalidation.
+
+    Uses the plain Django Client for cookie-level precision (multiple
+    independent "browsers" via separate Client instances).
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="fixuser",
+            password="FixPass1!",
+        )
+
+    def _login(self, client):
+        client.get('/api/auth/csrf/')
+        csrf_token = client.cookies['csrftoken'].value
+        return client.post(
+            '/api/auth/login/',
+            data={"username": "fixuser", "password": "FixPass1!"},
+            content_type='application/json',
+            HTTP_X_CSRFTOKEN=csrf_token,
+        )
+
+    def test_login_rotates_the_pre_login_session_key(self):
+        client = Client()
+        # Establish a pre-login (anonymous) session with a real key.
+        client.session.save()
+        pre_login_key = client.session.session_key
+        self.assertIsNotNone(pre_login_key)
+
+        response = self._login(client)
+        self.assertEqual(response.status_code, 200)
+        post_login_key = client.session.session_key
+
+        self.assertNotEqual(pre_login_key, post_login_key)
+        # The pre-login session row is gone (Django flush + cycle).
+        self.assertFalse(
+            Session.objects.filter(pk=pre_login_key).exists()
+        )
+        # The registry points at the post-rotation key only.
+        self.assertEqual(
+            list(
+                UserSession.objects.filter(user=self.user)
+                .values_list("session_key", flat=True)
+            ),
+            [post_login_key],
+        )
+
+    def test_pre_login_session_cannot_authenticate_after_login(self):
+        client = Client()
+        client.session.save()
+        pre_login_key = client.session.session_key
+        response = self._login(client)
+        self.assertEqual(response.status_code, 200)
+
+        # A browser that still presents the pre-login session cookie is
+        # anonymous.
+        attacker = Client()
+        attacker.cookies[settings.SESSION_COOKIE_NAME] = pre_login_key
+        me = attacker.get('/api/auth/me/')
+        self.assertEqual(me.status_code, 401)
+
+    def test_login_response_does_not_expose_session_credential(self):
+        client = Client()
+        response = self._login(client)
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertNotIn(client.session.session_key, str(body))
+        self.assertNotIn("sessionKey", body)
+        self.assertNotIn("session", body)
+
+    def test_logout_invalidates_the_current_session_server_side(self):
+        client = Client()
+        self._login(client)
+        session_key = client.session.session_key
+        self.assertTrue(
+            Session.objects.filter(pk=session_key).exists()
+        )
+
+        client.get('/api/auth/csrf/')
+        csrf_token = client.cookies['csrftoken'].value
+        response = client.post(
+            '/api/auth/logout/',
+            data={},
+            content_type='application/json',
+            HTTP_X_CSRFTOKEN=csrf_token,
+        )
+        self.assertEqual(response.status_code, 200)
+
+        # The Django session row and the registry row are both gone.
+        self.assertFalse(
+            Session.objects.filter(pk=session_key).exists()
+        )
+        self.assertFalse(
+            UserSession.objects.filter(session_key=session_key).exists()
+        )
+
+    def test_logged_out_session_replay_cannot_authenticate(self):
+        client = Client()
+        self._login(client)
+        session_key = client.session.session_key
+
+        client.get('/api/auth/csrf/')
+        csrf_token = client.cookies['csrftoken'].value
+        client.post(
+            '/api/auth/logout/',
+            data={},
+            content_type='application/json',
+            HTTP_X_CSRFTOKEN=csrf_token,
+        )
+
+        # A browser replaying the logged-out session cookie is anonymous.
+        replayer = Client()
+        replayer.cookies[settings.SESSION_COOKIE_NAME] = session_key
+        me = replayer.get('/api/auth/me/')
+        self.assertEqual(me.status_code, 401)
+        protected = replayer.get('/api/auth/sessions/')
+        self.assertEqual(protected.status_code, 401)

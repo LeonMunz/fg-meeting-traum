@@ -1,7 +1,7 @@
 # FG Workspace — Current Implementation State
 
 **Checkpoint:** Meetings + persistent Meeting Notes + Note → Work Item traceability + Meeting Templates + configurable Project Work Items + Board ordering
-**Last verified:** 2026-09-10
+**Last verified:** 2026-09-13
 **Branch:** `feature/meeting-next`
 
 This document answers one question: *what is actually implemented in the
@@ -99,6 +99,19 @@ Markers:
 - **IMPLEMENTED** — neutral-first functional color token vocabulary in `apps/web/src/index.css` (`canvas`, `surface*`, `text*`, `border-*`, `accent*`, `focus`, `success/warning/danger*`). Rule: neutral defines structure; Accent defines interaction/active focus; semantic colors communicate meaning only. Canonical contract: `docs/design/tokens.md`; value contract enforced by `apps/web/e2e/token-contract.test.ts` (`npm run test:tokens --workspace=web`).
 - **IMPLEMENTED** — App Shell, Sidebar, TopBar, and the shell-level Research Group selector migrated to the functional tokens: neutral structural surfaces, neutral active/hover navigation (no large Accent nav fill), canonical 2px `focus-visible` keyboard ring.
 - **COMPATIBILITY** — legacy Material-style tokens (`primary`, `surface`, `on-surface`, `outline`, `error`, `surface-container-*`) are retained in `@theme` with their **original pre-migration values**, so unmigrated feature screens (Meetings, Projects, Work Items, Dashboard, Research Group settings, `.fg-prose` editor) keep their previous appearance. Legacy tokens are a temporary compatibility layer; migration is feature-by-feature (functional tokens for migrated code, legacy tokens for the rest). A temporary `--color-legacy-surface: #F8F9FF` token preserves the exact historical surface of the one unmigrated Dashboard card (the old Material `surface` name is now owned by the functional `surface` = `#FFFFFF`); it is used only there and removed when Dashboard is migrated. Full policy: `docs/design/tokens.md`.
+
+## Authentication & Sessions
+
+Canonical domain reference: `docs/domain/authentication-sessions.md`.
+
+- **IMPLEMENTED** — Django-backed browser authentication (`login` / `logout` / `me` + CSRF endpoint) with server-side DB sessions; HttpOnly session cookie with `SameSite=Lax`; Secure cookies and CSRF transport via the production settings module `config.settings_production` (local HTTP development keeps Secure off explicitly).
+- **IMPLEMENTED** — session-fixation protection: login rotates the session identifier (Django `login()`); a pre-login/anonymous session cookie cannot authenticate after login.
+- **IMPLEMENTED** — logout invalidates the current session server-side (Django session row + registry row); replaying the logged-out session cookie does not authenticate.
+- **IMPLEMENTED** — revocable multi-session foundation: `accounts.UserSession` server-side registry (metadata only; non-secret `public_id` UUID; the raw Django session key is never exposed; registry rows never grant authentication) with lazy registration for sessions created outside the login endpoint.
+- **IMPLEMENTED** — session-management API (backend contract only, no UI): `GET /api/auth/sessions/` (own active sessions: `id`, `createdAt`, `isCurrent`; expired/revoked never listed), `POST /api/auth/sessions/{id}/revoke/` (non-leaking 404 for unknown or foreign ids; revoked browser is anonymous on next request), `POST /api/auth/sessions/revoke-others/` (current session kept), `POST /api/auth/sessions/revoke-all/` (includes current session).
+- **IMPLEMENTED** — CSRF enforced on all browser-authenticated mutations (login/logout via `csrf_protect`; all other API mutations via DRF `SessionAuthentication`); pinned by real-enforcement tests (`Client(enforce_csrf_checks=True)`).
+- **IMPLEMENTED** — inactive accounts cannot log in, and an already-authenticated session no longer authenticates once the account becomes inactive (401 on every API endpoint, including the session-management API); deactivation is not revocation (the Django session row is retained until normal expiry or explicit revocation).
+- **NOT IMPLEMENTED (deferred)** — session-management/account-security UI, password reset/change, e-mail verification, rate limiting, full ACTIVE/SUSPENDED/DEACTIVATED lifecycle, sudo/recent-auth, passkeys, SSO, API tokens, audit-log subsystem.
 
 ## Authorization / multi-user
 

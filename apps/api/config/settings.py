@@ -54,6 +54,7 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'accounts.middleware.SessionRegistryMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
@@ -149,6 +150,22 @@ REST_FRAMEWORK = {
         'rest_framework.permissions.IsAuthenticated',
     ],
 }
+
+# Session / CSRF cookie contract (local HTTP development).
+#
+# - The session cookie is the bearer credential: it must never be readable
+#   by application JavaScript (HttpOnly) and is SameSite=Lax as defense in
+#   depth (CSRF protection remains the real CSRF mechanism).
+# - Secure stays OFF in local HTTP development; the production contract
+#   (Secure cookies) lives in config/settings_production.py.
+# - The CSRF cookie MUST remain readable by JavaScript: the SPA reads the
+#   token from document.cookie (apps/web/src/api/client.ts) and sends it as
+#   X-CSRFToken on unsafe requests.
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SECURE = False  # explicit for local HTTP development
+SESSION_COOKIE_SAMESITE = "Lax"
+CSRF_COOKIE_HTTPONLY = False
+CSRF_COOKIE_SAMESITE = "Lax"
 
 # Canonical development origins for the normal Vite dev server.
 # Workstation-specific origins must not be added here; keep overrides out of tracked settings.
