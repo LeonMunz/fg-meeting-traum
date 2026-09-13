@@ -221,9 +221,14 @@ describe('Work Item inspector rail reservation', () => {
 
     renderPage()
 
-    await waitFor(() =>
-      expect(workItemsSection()).toBeVisible(),
-    )
+    // Behavioral sync: the open-button only exists once the fixture
+    // Work Item has actually reached the rendered list. Waiting for the
+    // section alone is not enough — right after the project loads, the
+    // panel briefly renders its empty state before the work-items
+    // fetch effect starts, which made the old wait race the load.
+    await screen.findByRole('button', {
+      name: 'Open Rail task',
+    })
 
     // Closed: no rail reserved, panel is full width.
     expect(workItemsSection()).not.toHaveClass(
