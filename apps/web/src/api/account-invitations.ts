@@ -68,3 +68,20 @@ export async function revokeAccountInvitation(
     {},
   )
 }
+
+/**
+ * Accept an existing-account invitation with its raw token.
+ *
+ * Server-authoritative: the authenticated account's normalized email
+ * must match the invited email; terminal (accepted/revoked/expired)
+ * tokens fail. Consumes the invitation exactly once and grants no
+ * ResearchGroup/Project membership.
+ */
+export async function acceptAccountInvitation(
+  token: string,
+): Promise<ApiAccountInvitation & { acceptedUserId: number }> {
+  return apiPost<ApiAccountInvitation & { acceptedUserId: number }>(
+    '/api/account-invitations/accept/',
+    { token },
+  )
+}
