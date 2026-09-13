@@ -17,7 +17,7 @@ async function login(
     .fill(username)
 
   await page
-    .getByLabel('Password')
+    .getByLabel('Password', { exact: true })
     .fill(PASSWORD)
 
   await page
