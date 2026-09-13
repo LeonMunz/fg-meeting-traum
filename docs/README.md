@@ -11,6 +11,9 @@ The documentation is intentionally split by concern so humans and coding agents 
 | Product vision, scope, product milestones | `product.md` |
 | Technical stack, architecture, boundaries, development strategy | `architecture.md` |
 | Identity, Research Group, Project, Membership, Work Item, Board | `domain/foundation.md` |
+| Browser authentication, sessions, cookies, CSRF | `domain/authentication-sessions.md` |
+| Membership & authorization invariants (scopes, capabilities, ownership) | `domain/authorization.md` |
+| Global account invitations (token bootstrap, lifecycle, non-membership) | `domain/account-invitations.md` |
 | Meetings, Meeting Templates, Sections, Items, lifecycle, meeting→work | `domain/meetings.md` |
 | Current implemented vs. not-yet-implemented checkpoint | `CURRENT_STATE.md` |
 | Testing, seed/reset, Living Lab, deployment, privacy | `living-lab.md` |

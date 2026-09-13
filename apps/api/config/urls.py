@@ -7,6 +7,9 @@ from django.urls import path
 from django.views.decorators.csrf import csrf_protect
 
 from accounts.views import (
+    AccountInvitationAcceptView,
+    AccountInvitationListCreateView,
+    AccountInvitationRevokeView,
     CSRFEndpoint,
     LoginView,
     LogoutView,
@@ -111,6 +114,10 @@ urlpatterns = [
     path('api/auth/sessions/<uuid:session_id>/revoke/', SessionRevokeView.as_view(), name='session-revoke'),
     path('api/auth/sessions/revoke-others/', SessionRevokeOthersView.as_view(), name='sessions-revoke-others'),
     path('api/auth/sessions/revoke-all/', SessionRevokeAllView.as_view(), name='sessions-revoke-all'),
+    # Account Invitations (global account credential bootstrap; no membership)
+    path('api/account-invitations/', AccountInvitationListCreateView.as_view(), name='account-invitations-list'),
+    path('api/account-invitations/accept/', AccountInvitationAcceptView.as_view(), name='account-invitation-accept'),
+    path('api/account-invitations/<uuid:public_id>/revoke/', AccountInvitationRevokeView.as_view(), name='account-invitation-revoke'),
     path('api/research-groups/', ResearchGroupListView.as_view(), name='research-groups-list'),
     path('api/research-groups/<int:pk>/', ResearchGroupDetailView.as_view(), name='research-groups-detail'),
     path('api/research-groups/<int:group_id>/member-candidates/', ResearchGroupMemberCandidateListView.as_view(), name='research-group-member-candidates'),

@@ -4,6 +4,14 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.middleware.csrf import get_token as csrf_get_token
 
+from .invitation_services import (
+    AccountInvitationDomainError,
+    accept_account_invitation,
+    create_account_invitation,
+    list_account_invitations,
+    revoke_account_invitation,
+    serialize_account_invitation,
+)
 from .services import (
     list_user_sessions,
     register_user_session,
@@ -154,3 +162,93 @@ class SessionRevokeAllView(APIView):
     def post(self, request):
         revoke_all_sessions(request.user)
         return Response({"detail": "All sessions revoked"})
+
+
+class AccountInvitationListCreateView(APIView):
+    """List (GET) or create (POST) the current user's account invitations.
+
+    Creation requires an authenticated active account, returns the raw
+    token exactly once (201), and atomically replaces any existing
+    effective pending invitation for the same normalized email. Listing
+    returns only the current user's invitations with their effective
+    lifecycle state — never the raw token or its digest.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        rows = list_account_invitations(request.user)
+        return Response({
+            "invitations": [
+                serialize_account_invitation(row) for row in rows
+            ],
+        })
+
+    def post(self, request):
+        invited_email = request.data.get("targetEmail") or ""
+        try:
+            invitation, raw_token = create_account_invitation(
+                actor=request.user, invited_email=invited_email
+            )
+        except AccountInvitationDomainError as exc:
+            return Response({"error": exc.message}, status=400)
+        data = serialize_account_invitation(invitation)
+        data["token"] = raw_token
+        return Response(data, status=201)
+
+
+class AccountInvitationRevokeView(APIView):
+    """Revoke one of the current user's still-pending invitations.
+
+    Unknown ids and ids of other inviters answer the same non-leaking
+    404. An invitation that is no longer effectively pending cannot be
+    revoked and also answers 404 (no state is revealed).
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, public_id):
+        try:
+            invitation = revoke_account_invitation(
+                actor=request.user, public_id=public_id
+            )
+        except AccountInvitationDomainError as exc:
+            return Response({"error": exc.message}, status=400)
+        if invitation is None:
+            return Response(
+                {"error": "Invitation not found"},
+                status=404,
+            )
+        return Response({"detail": "Invitation revoked"})
+
+
+class AccountInvitationAcceptView(APIView):
+    """Accept an account invitation with its raw token.
+
+    Existing-account flow: binds the invitation to the authenticated
+    current user (normalized email must match the invited email). No new
+    account and no ResearchGroup/Project membership is created. The future
+    registration flow calls the same domain service.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    _STATUS_BY_CODE = {
+        "not_found": 404,
+        "expired": 410,
+        "email_mismatch": 400,
+    }
+
+    def post(self, request):
+        try:
+            invitation = accept_account_invitation(
+                actor=request.user, token=request.data.get("token")
+            )
+        except AccountInvitationDomainError as exc:
+            return Response(
+                {"error": exc.message},
+                status=self._STATUS_BY_CODE.get(exc.code, 400),
+            )
+        data = serialize_account_invitation(invitation)
+        data["acceptedUserId"] = invitation.accepted_by_id
+        return Response(data)

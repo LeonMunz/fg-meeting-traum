@@ -1,6 +1,6 @@
 # FG Workspace — Current Implementation State
 
-**Checkpoint:** Meetings + persistent Meeting Notes + Note → Work Item traceability + Meeting Templates + configurable Project Work Items + Board ordering
+**Checkpoint:** Meetings + persistent Meeting Notes + Note → Work Item traceability + Meeting Templates + configurable Project Work Items + Board ordering + global account invitation foundation
 **Last verified:** 2026-09-13
 **Branch:** `feature/meeting-next`
 
@@ -112,6 +112,20 @@ Canonical domain reference: `docs/domain/authentication-sessions.md`.
 - **IMPLEMENTED** — CSRF enforced on all browser-authenticated mutations (login/logout via `csrf_protect`; all other API mutations via DRF `SessionAuthentication`); pinned by real-enforcement tests (`Client(enforce_csrf_checks=True)`).
 - **IMPLEMENTED** — inactive accounts cannot log in, and an already-authenticated session no longer authenticates once the account becomes inactive (401 on every API endpoint, including the session-management API); deactivation is not revocation (the Django session row is retained until normal expiry or explicit revocation).
 - **NOT IMPLEMENTED (deferred)** — session-management/account-security UI, password reset/change, e-mail verification, rate limiting, full ACTIVE/SUSPENDED/DEACTIVATED lifecycle, sudo/recent-auth, passkeys, SSO, API tokens, audit-log subsystem.
+
+## Account Invitations
+
+Canonical domain reference: `docs/domain/account-invitations.md`.
+
+- **IMPLEMENTED** — global account invitation foundation: `accounts.AccountInvitation` (stable `public_id` UUID, inviter, normalized invited email, one-way SHA-256 token digest, lifecycle state, created/expiry/accepted/revoked timestamps). The raw token is cryptographically random (`secrets`), single-use, **never persisted**, never in `repr`, never in list serialization or logs; it is returned exactly once by the creation response (e-mail delivery deferred).
+- **IMPLEMENTED** — API (browser-authenticated, real CSRF enforcement, active accounts only): `GET /api/account-invitations/` (own invitations with effective state, no secrets, other inviters never listed), `POST /api/account-invitations/` (201 + raw token once; `400` invalid email), `POST /api/account-invitations/{publicId}/revoke/` (own + effectively pending only; non-leaking 404), `POST /api/account-invitations/accept/` (existing-account flow: resolves token by digest, requires normalized authenticated-user email == invited email, atomically sets `accepted` + `accepted_at` + `accepted_by`; 404 unknown/terminal, 410 expired, 400 mismatch).
+- **IMPLEMENTED** — canonical normalization: trim + lowercase (shared helper); stored emails are normalized; User email storage format intentionally unchanged (no User-email uniqueness introduced).
+- **IMPLEMENTED** — lifecycle centralized in the service layer: `pending → accepted | revoked | expired`; terminal states never reactivate; exactly 7-day lifetime; effective expiry (a pending row at/past `expires_at` behaves as expired everywhere and is persisted as `expired` by state-evaluating operations; no scheduler).
+- **IMPLEMENTED** — replacement: creating for the same normalized email atomically invalidates the effective pending invitation (old token unusable immediately; system replacement transitions it to `revoked`, already-expired rows to `expired`) and issues a fresh token; may be triggered by a different active inviter.
+- **IMPLEMENTED** — structural invariants: unique `public_id`, unique `token_digest`, and a partial unique index limiting to one `pending` row per normalized email (migration `accounts/0003`).
+- **IMPLEMENTED** — concurrency (real PostgreSQL row locks / constraints, threaded tests): concurrent acceptance of one token leaves exactly one `accepted` transition with `accepted_by` set once; concurrent creation for one normalized email leaves at most one pending invitation and at most one usable token.
+- **IMPLEMENTED (guarantee, pinned by tests)** — acceptance creates no User and no `ResearchGroupMembership` / `ProjectMembership`; the token grants no access to any ResearchGroup, Project, Work Item, or Meeting (authentication ≠ membership; deny-by-default authorization untouched).
+- **NOT IMPLEMENTED (deferred)** — e-mail delivery, registration/signup flow redeeming an invitation (must call the same acceptance service after creating/authenticating the matching account), invitation UI, membership invitations, invitation rate limiting, invitation audit history.
 
 ## Authorization / multi-user
 
