@@ -10,6 +10,7 @@ from .invitation_services import (
     accept_account_invitation,
     create_account_invitation,
     list_account_invitations,
+    check_registration_password_policy,
     preview_account_invitation,
     register_account_from_invitation,
     revoke_account_invitation,
@@ -257,6 +258,20 @@ class AccountInvitationAcceptView(APIView):
         return Response(data)
 
 
+# Stable status mapping for registration failure discriminators; shared by
+# registration and the non-consuming password-policy check so both speak
+# the same contract.
+REGISTRATION_FAILURE_STATUS = {
+    "invalid_token": 404,
+    "already_used": 410,
+    "revoked": 410,
+    "expired": 410,
+    "account_exists": 409,
+    "username": 400,
+    "password": 400,
+}
+
+
 class RegisterView(APIView):
     """Invite-only self-service registration.
 
@@ -275,16 +290,6 @@ class RegisterView(APIView):
 
     permission_classes = [AllowAny]
 
-    _STATUS_BY_CODE = {
-        "invalid_token": 404,
-        "already_used": 410,
-        "revoked": 410,
-        "expired": 410,
-        "account_exists": 409,
-        "username": 400,
-        "password": 400,
-    }
-
     def post(self, request):
         # Fail-closed: the invited email must never be client-supplied.
         if "email" in request.data:
@@ -299,9 +304,15 @@ class RegisterView(APIView):
                 password=request.data.get("password"),
             )
         except RegistrationDomainError as exc:
+            payload = {"error": exc.message, "code": exc.code}
+            # A password failure carries the same per-validator
+            # requirement states as the live policy endpoint, so the
+            # frontend can reconcile the final authoritative failure.
+            if exc.requirements is not None:
+                payload["requirements"] = exc.requirements
             return Response(
-                {"error": exc.message, "code": exc.code},
-                status=self._STATUS_BY_CODE.get(exc.code, 400),
+                payload,
+                status=REGISTRATION_FAILURE_STATUS.get(exc.code, 400),
             )
 
         # Authenticate with the normal revocable Django session
@@ -341,5 +352,41 @@ class RegistrationInvitationPreviewView(APIView):
             return Response(
                 {"error": exc.message},
                 status=404 if exc.code == "invalid_token" else 400,
+            )
+        return Response(data)
+
+
+class RegistrationPasswordPolicyView(APIView):
+    """Non-consuming live password-policy check for invite-only registration.
+
+    Unauthenticated browser mutation; CSRF is enforced by ``csrf_protect``
+    in ``urls.py`` (the same pattern as register and the invitation
+    preview). The candidate password is only ever passed to Django's
+    configured password validators server-side: it is never echoed,
+    persisted, or logged. ``username`` / ``password`` may be empty strings
+    (partially completed form state), which is valid candidate input, not a
+    malformed request.
+    """
+
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        # Fail-closed, consistent with registration: the invited email is
+        # server-authoritative and never client-supplied.
+        if "email" in request.data:
+            return Response(
+                {"error": "The e-mail address cannot be provided."},
+                status=400,
+            )
+        try:
+            data = check_registration_password_policy(
+                token=request.data.get("token"),
+                username=request.data.get("username"),
+                password=request.data.get("password"),
+            )
+        except RegistrationDomainError as exc:
+            return Response(
+                {"error": exc.message, "code": exc.code},
+                status=REGISTRATION_FAILURE_STATUS.get(exc.code, 400),
             )
         return Response(data)

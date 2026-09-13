@@ -9,6 +9,7 @@ DRF SessionAuthentication — both paths are exercised here.
 from django.contrib.auth import get_user_model
 from django.test import Client, TestCase
 
+from .invitation_services import create_account_invitation
 from .models import UserSession
 
 User = get_user_model()
@@ -124,3 +125,45 @@ class RealCSRFEnforcementTest(TestCase):
             HTTP_X_CSRFTOKEN=token,
         )
         self.assertEqual(response.status_code, 201)
+
+class RegistrationPasswordPolicyCSRFTest(TestCase):
+    """The non-consuming password-policy POST is CSRF-protected like the
+    other public mutation-style auth endpoints (no csrf_exempt shortcut)."""
+
+    def setUp(self):
+        self.inviter = User.objects.create_user(
+            username="policycsrfinviter",
+            email="policycsrfinviter@example.com",
+            password=PASSWORD,
+        )
+        self.invitation, self.token = create_account_invitation(
+            actor=self.inviter, invited_email="policycsrf@example.com"
+        )
+        self.client = Client(enforce_csrf_checks=True)
+
+    def _body(self):
+        return {
+            "token": self.token,
+            "username": "policycsrfuser",
+            "password": "PolicyPass1!",
+        }
+
+    def test_policy_post_without_csrf_is_rejected(self):
+        response = self.client.post(
+            "/api/auth/registration-password-policy/",
+            data=self._body(),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_policy_post_with_csrf_succeeds(self):
+        self.client.get("/api/auth/csrf/")
+        token = self.client.cookies["csrftoken"].value
+        response = self.client.post(
+            "/api/auth/registration-password-policy/",
+            data=self._body(),
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=token,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["valid"])

@@ -29,7 +29,10 @@ import secrets
 from datetime import timedelta
 
 from django.contrib.auth import get_user_model
-from django.contrib.auth.password_validation import validate_password
+from django.contrib.auth.password_validation import (
+    get_default_password_validators,
+    validate_password,
+)
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from django.db import IntegrityError, transaction
@@ -42,6 +45,34 @@ from .models import AccountInvitation
 User = get_user_model()
 
 INVITATION_LIFETIME = timedelta(days=7)
+
+# Django's stable validation-code identifiers, keyed by configured
+# validator class name. These are the codes Django's own
+# ``ValidationError`` carries (see ``django.contrib.auth.
+# password_validation``); they only identify a requirement and encode no
+# policy — the satisfied/not decision always comes from running the
+# configured validator itself. Unknown future validators fall back to
+# their lowercased class name.
+_VALIDATOR_CODE_BY_CLASS = {
+    "UserAttributeSimilarityValidator": "password_too_similar",
+    "MinimumLengthValidator": "password_too_short",
+    "CommonPasswordValidator": "password_too_common",
+    "NumericPasswordValidator": "password_entirely_numeric",
+}
+
+# Stable, non-leaking failure messages shared by registration and the
+# non-consuming password-policy check (same discriminators, same words).
+_REGISTRATION_FAILURE_MESSAGES = {
+    "invalid_token": "This invitation token is invalid or unknown.",
+    "already_used": "This invitation has already been used.",
+    "revoked": "This invitation has been revoked.",
+    "expired": "This invitation has expired.",
+    "account_exists": (
+        "An account with this e-mail address already exists. Please sign in."
+    ),
+    "username": "The username is invalid or already in use.",
+    "password": "The password does not meet the requirements.",
+}
 
 # Bounded, deterministic retry around the empty-row insert race on the
 # partial unique index (concurrent first invitations for the same email).
@@ -68,11 +99,18 @@ class RegistrationDomainError(Exception):
     ``code`` is a stable machine-readable discriminator the API layer maps
     onto status codes: ``invalid_token`` / ``already_used`` / ``revoked`` /
     ``expired`` / ``account_exists`` / ``username`` / ``password``.
+
+    ``requirements`` is present only for the ``password`` failure: the
+    per-validator requirement states produced by
+    ``evaluate_password_requirements`` (the same evaluator the
+    registration-password-policy endpoint uses), so a final registration
+    failure reconciles with the live policy contract.
     """
 
-    def __init__(self, message, code="invalid"):
+    def __init__(self, message, code="invalid", requirements=None):
         self.message = message
         self.code = code
+        self.requirements = requirements
         super().__init__(message)
 
 
@@ -355,10 +393,13 @@ def _try_create_registration_user(username, password, email):
 
     Validates the username through the model's canonical validation and the
     password through Django's configured validators, both against the
-    account being created. Returns ``(code, user)``:
-    - ``("created", user)`` on success;
-    - ``("username", None)`` when the username is invalid or already taken;
-    - ``("password", None)`` when the password fails Django's validators.
+    account being created. Returns ``(code, user, requirements)``:
+    - ``("created", user, None)`` on success;
+    - ``("username", None, None)`` when the username is invalid or already
+      taken;
+    - ``("password", None, requirements)`` when the password fails
+      Django's validators, with the per-validator requirement states from
+      ``evaluate_password_requirements``.
 
     Called inside the caller's atomic block; a failure writes nothing, so
     the surrounding transaction — and any PENDING invitation — is left intact.
@@ -370,18 +411,26 @@ def _try_create_registration_user(username, password, email):
         # is excluded from the field validation here.
         user.full_clean(exclude=["password"])
     except ValidationError:
-        return ("username", None)
+        return ("username", None, None)
     try:
         validate_password(password, user)
     except ValidationError:
-        return ("password", None)
+        # Same evaluator as the registration-password-policy endpoint, so
+        # the registration failure reconciles with the live policy result.
+        return (
+            "password",
+            None,
+            evaluate_password_requirements(
+                password, username=username, email=email
+            ),
+        )
     user.set_password(password)
     try:
         user.save()
     except IntegrityError:
         # Concurrent same-username registration lost the race.
-        return ("username", None)
-    return ("created", user)
+        return ("username", None, None)
+    return ("created", user, None)
 
 
 def accept_account_invitation(*, actor, token):
@@ -475,31 +524,169 @@ def register_account_from_invitation(*, token, username, password):
                 "accepted": "already_used",
                 "revoked": "revoked",
             }.get(state, "invalid_token")
-            outcome = (code, None)
+            outcome = (code, None, None)
         elif _existing_user_for_normalized_email(invitation.invited_email):
-            outcome = ("account_exists", None)
+            outcome = ("account_exists", None, None)
         else:
-            code, user = _try_create_registration_user(
+            code, user, requirements = _try_create_registration_user(
                 username, password, invitation.invited_email
             )
             if code == "created":
                 _mark_invitation_accepted(invitation, user, now)
-            outcome = (code, user)
+            outcome = (code, user, requirements)
 
     if outcome[0] == "created":
         return outcome[1]
-    messages = {
-        "invalid_token": "This invitation token is invalid or unknown.",
-        "already_used": "This invitation has already been used.",
-        "revoked": "This invitation has been revoked.",
-        "expired": "This invitation has expired.",
-        "account_exists": (
-            "An account with this e-mail address already exists. Please sign in."
+    code, _user, requirements = outcome
+    raise RegistrationDomainError(
+        _REGISTRATION_FAILURE_MESSAGES[code],
+        code=code,
+        requirements=requirements,
+    )
+
+
+def evaluate_password_requirements(password, *, username, email):
+    """Evaluate each configured Django password validator individually.
+
+    Builds the same transient candidate ``User`` identity that registration
+    validation uses (client-supplied ``username``, invitation-authoritative
+    ``email``, blank first/last name) and runs every validator from
+    ``get_default_password_validators()`` — the canonical set used by
+    ``validate_password`` — against it. No policy is reproduced here: a
+    requirement is satisfied if and only if the configured validator itself
+    accepts the candidate password, so a given token + username + password
+    candidate yields exactly the result actual registration would compute.
+
+    Returns ``[{code, label, satisfied}, ...]`` in
+    ``AUTH_PASSWORD_VALIDATORS`` order: ``code`` is Django's stable
+    validation code for that validator, ``label`` is the validator's
+    configured help text (so configured parameters, e.g. the minimum
+    length, are reflected without any frontend-owned copy), and
+    ``satisfied`` is the validator's own verdict. The candidate password is
+    only passed to the validators; it is never stored, logged, serialized,
+    or echoed back.
+    """
+    user = User(username=username, email=email)
+    requirements = []
+    for validator in get_default_password_validators():
+        try:
+            validator.validate(password, user)
+            satisfied = True
+        except ValidationError:
+            satisfied = False
+        validator_class = type(validator).__name__
+        requirements.append(
+            {
+                "code": _VALIDATOR_CODE_BY_CLASS.get(
+                    validator_class, validator_class.lower()
+                ),
+                "label": validator.get_help_text(),
+                "satisfied": satisfied,
+            }
+        )
+    return requirements
+
+
+def _resolve_invitation_read_only(raw_token):
+    """Read-only invitation resolution for strictly non-mutating operations.
+
+    Reuses the canonical token digesting (``digest_invitation_token``) and
+    the canonical effective-expiration rule (``effective_status``) but
+    acquires **no** mutation-oriented row lock and **persists no** lifecycle
+    transition: an effectively expired PENDING row is reported as
+    ``"expired"`` while remaining PENDING in the database. The
+    state-evaluating ``EXPIRED`` persistence belongs to the mutation-aware
+    resolver (``_resolve_locked_invitation``) used by preview, acceptance,
+    and registration.
+
+    Returns ``(state, invitation)`` where ``state`` is one of
+    ``"missing"`` / ``"pending"`` / ``"expired"`` / ``"accepted"`` /
+    ``"revoked"`` and ``invitation`` is the (PENDING) row for the
+    ``"pending"`` state and ``None`` otherwise. A row already persisted as
+    EXPIRED collapses to ``"missing"`` — the same canonical terminal
+    interpretation the mutation-aware resolver applies.
+    """
+    raw_token = str(raw_token or "").strip()
+    if not raw_token:
+        return ("missing", None)
+
+    invitation = AccountInvitation.objects.filter(
+        token_digest=digest_invitation_token(raw_token)
+    ).first()
+    if invitation is None:
+        return ("missing", None)
+
+    if invitation.status == AccountInvitation.Status.PENDING:
+        if effective_status(invitation) == AccountInvitation.Status.EXPIRED:
+            # Effectively expired PENDING: canonical expired semantics,
+            # but the row is left untouched (no EXPIRED persistence).
+            return ("expired", None)
+        return ("pending", invitation)
+    if invitation.status in (
+        AccountInvitation.Status.ACCEPTED,
+        AccountInvitation.Status.REVOKED,
+    ):
+        return (invitation.status, None)
+    return ("missing", None)  # persisted EXPIRED: canonical terminal collapse
+
+
+def check_registration_password_policy(*, token, username, password):
+    """Strictly read-only live password-policy check for a registration
+    candidate.
+
+    Resolves the invitation through the canonical token/digest rules and
+    the canonical effective-expiration rule (``_resolve_invitation_read_only``)
+    without acquiring mutation-oriented row locks and without persisting
+    any invitation lifecycle transition: repeated checks are side-effect
+    free, and an effectively expired PENDING invitation is reported as
+    expired while remaining PENDING in the database. It performs no
+    consumption, no acceptance, no User creation, and no membership or
+    permission change. The invited email is server-authoritative: the
+    candidate identity evaluated by Django's configured validators is the
+    same transient ``User`` that registration would create, so the browser
+    cannot substitute another email.
+
+    Empty ``username`` / ``password`` are valid candidate form state (the
+    live UI validates while the form is being filled), not malformed
+    requests.
+
+    For a non-pending invitation the same stable discriminators as
+    registration are raised (``invalid_token`` / ``already_used`` /
+    ``revoked`` / ``expired``). For a pending invitation it returns
+    ``{"valid", "requirements", "accountExists"}``: ``valid`` is true only
+    when every configured validator passes; ``requirements`` is the
+    per-validator state from ``evaluate_password_requirements``; and
+    ``accountExists`` mirrors the registration-preview contract for an
+    invitation whose normalized email already belongs to an account
+    (registration would still fail with ``account_exists``; no new account
+    path is introduced).
+    """
+    username = "" if username is None else str(username)
+    password = "" if password is None else str(password)
+
+    state, invitation = _resolve_invitation_read_only(token)
+    if state != "pending":
+        code = {
+            "expired": "expired",
+            "accepted": "already_used",
+            "revoked": "revoked",
+        }.get(state, "invalid_token")
+        raise RegistrationDomainError(
+            _REGISTRATION_FAILURE_MESSAGES[code], code=code
+        )
+
+    requirements = evaluate_password_requirements(
+        password,
+        username=username,
+        email=invitation.invited_email,
+    )
+    return {
+        "valid": all(r["satisfied"] for r in requirements),
+        "requirements": requirements,
+        "accountExists": _existing_user_for_normalized_email(
+            invitation.invited_email
         ),
-        "username": "The username is invalid or already in use.",
-        "password": "The password does not meet the requirements.",
     }
-    raise RegistrationDomainError(messages[outcome[0]], code=outcome[0])
 
 
 def preview_account_invitation(token):

@@ -60,7 +60,14 @@ create:
 - **`password`** — validated by Django's configured `AUTH_PASSWORD_VALIDATORS`
   (`UserAttributeSimilarity`, `MinimumLength`, `Common`, `Numeric`), run via
   `validate_password(password, user)` against the account being created,
-  then stored with `set_password`.
+  then stored with `set_password`. The configured validators are the
+  **authoritative** password policy: nothing in the browser (or any other
+  client) may duplicate the similarity behavior or the common-password
+  database. Live UI validation of the in-progress candidate password uses
+  `POST /api/auth/registration-password-policy/` (§13a), which evaluates
+  exactly these validators; final registration revalidates the password
+  through the same Django path, so live validation never weakens backend
+  enforcement.
 
 No new display-name / profile field is introduced. `first_name` / `last_name`
 remain blank-optional and are not required by registration.
@@ -160,16 +167,17 @@ unchanged.
 
 ## 10. CSRF / unauthenticated security
 
-Registration and the invitation preview are **unauthenticated browser
-mutations** (POST). As with login, they are explicitly CSRF-protected via the
-`csrf_protect` pattern in `config/urls.py` (DRF's `csrf_exempt` flag is
-removed and the view is wrapped with `csrf_protect`). There is no
-`csrf_exempt` shortcut.
+Registration, the invitation preview, and the password-policy check are
+**unauthenticated browser mutations** (POST). As with login, they are
+explicitly CSRF-protected via the `csrf_protect` pattern in `config/urls.py`
+(DRF's `csrf_exempt` flag is removed and the view is wrapped with
+`csrf_protect`). There is no `csrf_exempt` shortcut.
 
 Browser contract:
 
 1. the caller obtains a CSRF token from `GET /api/auth/csrf/`;
-2. a registration/preview POST without a valid CSRF token is rejected;
+2. a registration / preview / password-policy POST without a valid CSRF
+   token is rejected;
 3. a POST with a valid CSRF token may proceed.
 
 The invitation preview endpoint (POST, non-consuming except for persisting an
@@ -209,15 +217,65 @@ Unauthenticated, CSRF-protected (no `csrf_exempt`):
 | `POST /api/auth/register/` | Body `{token, username, password}`. `201` on success with the same safe user representation as the existing auth APIs (`id`, `username`, `firstName`, `lastName`, `email`), leaving the browser authenticated. A client-supplied `email` is rejected (`400`). Failure discriminators (each with a stable `code` and non-leaking message): `404` `invalid_token`, `410` `already_used` / `revoked` / `expired`, `409` `account_exists`, `400` `username` / `password`. Never returns the token digest, the raw token, or any unrelated account id. |
 | `POST /api/auth/registration-invitation/` | **Non-consuming preview.** Body `{token}`. For an effective-pending token: `200` with `{status: "pending", usable: true, invitedEmail, expiresAt, accountExists}`. For a terminal token: `200` with `{status, usable: false}` (the invited email is not disclosed). For an unknown token: `404`. It does **not** authenticate, does **not** create or accept anything, and does **not** consume the invitation; it persists an effective `EXPIRED` transition consistent with the invitation lifecycle. |
 
+| `POST /api/auth/registration-password-policy/` | **Non-consuming live password policy check.** Body `{token, username, password}` (a client-supplied `email` is rejected fail-closed, like registration). For an effective-pending token: `200` with `{valid, requirements, accountExists}`. `requirements` is one entry per **configured** Django validator, in `AUTH_PASSWORD_VALIDATORS` order: `{code, label, satisfied}`, where `code` is Django's stable validation code (`password_too_similar`, `password_too_short`, `password_too_common`, `password_entirely_numeric` for the current configuration), `label` is the validator's configured help text, and `satisfied` is that validator's own verdict on the candidate password. `valid` is true only when every configured validator passes. `accountExists` mirrors the preview contract when the invited email already belongs to an account. Empty `username` / `password` are valid candidate form state, not malformed requests. Failure discriminators for non-pending invitations are the same as registration (`404` `invalid_token`, `410` `already_used` / `revoked` / `expired`). It does **not** authenticate, create, or accept anything and does **not** consume the invitation. It is **strictly read-only**: it acquires no mutation-oriented row locks and persists no invitation lifecycle transition — an effectively expired PENDING invitation is reported as `expired` while the row remains PENDING in the database. |
+
+See §13a for the evaluation semantics of this endpoint.
+
 Consumption rule: **only** a successful account-creation + acceptance
 consumes a valid invitation. Preview/open, username-validation failure,
 password-validation failure, an existing-account collision, and a malformed
 request do **not** consume it. Expiry is the exception: an effectively-expired
 invitation may and should transition to `EXPIRED`.
 
+
+### 13a. Password-policy evaluation semantics
+
+- **Registration remains invite-only.** No public signup is introduced; the
+  policy endpoint resolves the same pending invitation that registration
+  redeems, via the same canonical token/digest resolution as preview and
+  registration (unknown token → `invalid_token`; accepted → `already_used`;
+  revoked → `revoked`; an effectively expired PENDING invitation → `expired`
+  **without** persisting the transition — unlike preview and registration,
+  the policy endpoint is strictly read-only; a row already persisted as
+  `EXPIRED` collapses to `invalid_token` exactly as in the canonical flow).
+- **The backend validators are authoritative.** The endpoint evaluates the
+  candidate password with `get_default_password_validators()` — the
+  canonical set Django's `validate_password` uses — and reports each
+  validator's state individually. The similarity algorithm and the
+  common-password database live in Django and are **never** reproduced in
+  client code.
+- **Same candidate identity as registration.** The validators run against
+  a transient `User` with the client-supplied `username` and the
+  **invitation-authoritative** `invited_email` (blank first/last name),
+  exactly the identity registration validation uses. The invited email
+  therefore participates in
+  `UserAttributeSimilarityValidator`, and the browser cannot substitute
+  another email. For a given `token` + `username` + `password`, the
+  endpoint's result is exactly what actual registration would compute.
+- **Strictly read-only and side-effect free.** Repeated policy checks
+  never consume the token, never revoke or expire a pending invitation,
+  create no `User` and no membership, and never make a subsequent real
+  registration fail. A valid invitation remains fully usable after
+  arbitrary checks. The endpoint acquires no mutation-oriented row locks
+  and persists no `EXPIRED` transition — the state-evaluating `EXPIRED`
+  persistence belongs to preview and registration only.
+- **Registration failure parity.** A failed registration with a
+  non-satisfying password returns `{code: "password", error, requirements}`
+  where `requirements` is produced by the same per-validator evaluator and
+  schema as the policy endpoint. Registration remains authoritative even
+  after prior live validation: it revalidates the submitted password
+  through the same Django path, and live validation never weakens backend
+  enforcement.
+- **Password handling.** The candidate password is highly sensitive: it
+  travels only in the POST body (never a query string), is passed solely to
+  the configured validators, and is never echoed in a response, persisted,
+  logged, or included in exception text, audit/history, or telemetry.
+- **Rate limiting** of this endpoint is not part of this slice; possession
+  of the high-entropy single-use invitation token already bounds it to the
+  invitation flow (see §14).
+
 ## 14. Explicitly deferred (NOT implemented)
 
-- The frontend signup UI (this slice is backend-only; no UI is wired).
 - E-mail delivery of invitations, e-mail verification.
 - Password reset / recovery, passkeys, SSO.
 - Membership invitations (ResearchGroup / Project).
