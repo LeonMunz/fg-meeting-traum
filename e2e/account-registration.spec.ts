@@ -84,17 +84,37 @@ test('an invited person registers a new account through the registration page', 
   await expect(page.getByText(token)).toHaveCount(0)
   await expect(page).toHaveURL('http://127.0.0.1:4173/register')
 
-  // 6. Choose a username and password and register.
+  // 5b. While the password is empty, no requirement guidance is shown.
+  await expect(page.getByText('At least 8 characters')).toHaveCount(0)
+  await expect(page.getByText('Checking password requirements…')).toHaveCount(0)
+
+  // 6. An invalid candidate keeps Create account disabled.
   await page.getByLabel('Username').fill(newUsername)
+  await page.getByLabel('Password', { exact: true }).fill('short')
+  await expect(
+    page.getByRole('button', { name: 'Create account' }),
+  ).toBeDisabled()
+  // The failing requirement is visible below the password field, in the
+  // concise user-facing copy (never the raw Django help text).
+  await expect(page.getByText('At least 8 characters')).toBeVisible()
+  await expect(
+    page.getByText('Password must contain at least 8 characters.'),
+  ).toHaveCount(0)
+
+  // 7. A valid candidate satisfies the live policy and enables account
+  //    creation once the confirmation matches.
   await page.getByLabel('Password', { exact: true }).fill(PASSWORD)
   await page.getByLabel('Confirm password').fill(PASSWORD)
+  await expect(
+    page.getByRole('button', { name: 'Create account' }),
+  ).toBeEnabled()
   await page.getByRole('button', { name: 'Create account' }).click()
 
-  // 7. The browser enters the authenticated application.
+  // 8. The browser enters the authenticated application.
   await expect(page).toHaveURL('http://127.0.0.1:4173/')
   await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible()
 
-  // 8. /api/auth/me/ reflects the new account.
+  // 9. /api/auth/me/ reflects the new account.
   const meResp = await page.evaluate(async () => {
     const res = await fetch('/api/auth/me/', { credentials: 'same-origin' })
     return { status: res.status, data: await res.json() }
@@ -103,11 +123,11 @@ test('an invited person registers a new account through the registration page', 
   expect(meResp.data.username).toBe(newUsername)
   expect(meResp.data.email).toBe(invitedEmail)
 
-  // 9. Reload — the session survives.
+  // 10. Reload — the session survives.
   await page.reload()
   await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible()
 
-  // 10. No ResearchGroup (and thus no Project) membership was implicitly
+  // 11. No ResearchGroup (and thus no Project) membership was implicitly
   //     created for the new account.
   const groupsResp = await page.evaluate(async () => {
     const res = await fetch('/api/research-groups/', {

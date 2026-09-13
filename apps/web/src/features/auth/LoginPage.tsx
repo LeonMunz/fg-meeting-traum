@@ -4,6 +4,16 @@ import { useNavigate } from 'react-router'
 
 import { useSession } from '../../api/useSession'
 
+import {
+  AUTH_FIELD_ERROR_CLASSES,
+  AUTH_FIELD_LABEL_CLASSES,
+  AUTH_INPUT_BASE_CLASSES,
+  AUTH_INPUT_BORDER_DANGER,
+  AUTH_INPUT_BORDER_DEFAULT,
+  AUTH_PASSWORD_INPUT_TRAILING_CLASSES,
+  AUTH_PASSWORD_TOGGLE_CLASSES,
+} from './authFormStyles'
+
 /**
  * Canonical, user-facing copy for a backend authentication failure.
  * The backend's own error detail is intentionally never rendered.
@@ -15,12 +25,6 @@ interface FieldErrors {
   password: string | null
 }
 
-const INPUT_BASE_CLASSES = [
-  'h-10 w-full rounded border bg-surface-quiet px-3 text-sm leading-5 text-text',
-  'transition-colors',
-  'hover:border-border-control',
-  'focus:border-accent focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-1 focus:ring-offset-canvas',
-].join(' ')
 
 export function LoginPage() {
   const { login, loading, error } = useSession()
@@ -81,7 +85,7 @@ export function LoginPage() {
             <div>
               <label
                 htmlFor="login-username"
-                className="mb-1.5 block text-xs font-medium leading-[18px] text-text-muted"
+                className={AUTH_FIELD_LABEL_CLASSES}
               >
                 Username
               </label>
@@ -110,16 +114,16 @@ export function LoginPage() {
                     : undefined
                 }
                 className={[
-                  INPUT_BASE_CLASSES,
+                  AUTH_INPUT_BASE_CLASSES,
                   fieldErrors.username
-                    ? 'border-danger'
-                    : 'border-border-default',
+                    ? AUTH_INPUT_BORDER_DANGER
+                    : AUTH_INPUT_BORDER_DEFAULT,
                 ].join(' ')}
               />
               {fieldErrors.username && (
                 <p
                   id="login-username-error"
-                  className="mt-[5px] text-xs leading-4 text-danger"
+                  className={AUTH_FIELD_ERROR_CLASSES}
                 >
                   {fieldErrors.username}
                 </p>
@@ -129,7 +133,7 @@ export function LoginPage() {
             <div className="mt-[18px]">
               <label
                 htmlFor="login-password"
-                className="mb-1.5 block text-xs font-medium leading-[18px] text-text-muted"
+                className={AUTH_FIELD_LABEL_CLASSES}
               >
                 Password
               </label>
@@ -159,11 +163,11 @@ export function LoginPage() {
                       : undefined
                   }
                   className={[
-                    INPUT_BASE_CLASSES,
-                    'pr-10',
+                    AUTH_INPUT_BASE_CLASSES,
+                    AUTH_PASSWORD_INPUT_TRAILING_CLASSES,
                     fieldErrors.password
-                      ? 'border-danger'
-                      : 'border-border-default',
+                      ? AUTH_INPUT_BORDER_DANGER
+                      : AUTH_INPUT_BORDER_DEFAULT,
                   ].join(' ')}
                 />
                 <button
@@ -173,7 +177,7 @@ export function LoginPage() {
                     showPassword ? 'Hide password' : 'Show password'
                   }
                   aria-pressed={showPassword}
-                  className="absolute right-1 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded text-text-tertiary transition-colors hover:bg-surface-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-1 focus-visible:ring-offset-surface-quiet"
+                  className={AUTH_PASSWORD_TOGGLE_CLASSES}
                 >
                   <span className="material-symbols-outlined text-[18px]">
                     {showPassword ? 'visibility_off' : 'visibility'}
@@ -183,7 +187,7 @@ export function LoginPage() {
               {fieldErrors.password && (
                 <p
                   id="login-password-error"
-                  className="mt-[5px] text-xs leading-4 text-danger"
+                  className={AUTH_FIELD_ERROR_CLASSES}
                 >
                   {fieldErrors.password}
                 </p>
