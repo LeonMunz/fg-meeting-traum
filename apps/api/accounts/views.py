@@ -6,9 +6,12 @@ from django.middleware.csrf import get_token as csrf_get_token
 
 from .invitation_services import (
     AccountInvitationDomainError,
+    RegistrationDomainError,
     accept_account_invitation,
     create_account_invitation,
     list_account_invitations,
+    preview_account_invitation,
+    register_account_from_invitation,
     revoke_account_invitation,
     serialize_account_invitation,
 )
@@ -251,4 +254,92 @@ class AccountInvitationAcceptView(APIView):
             )
         data = serialize_account_invitation(invitation)
         data["acceptedUserId"] = invitation.accepted_by_id
+        return Response(data)
+
+
+class RegisterView(APIView):
+    """Invite-only self-service registration.
+
+    Unauthenticated browser mutation; CSRF is enforced by csrf_protect in
+    urls.py (the same pattern as login). The client supplies only the
+    user-created fields required by the current User model (username and
+    password); the invited email is authoritative and comes exclusively from
+    the invitation. A client-supplied authoritative ``email`` is rejected
+    fail-closed rather than silently trusted or ignored.
+
+    On success the new account is authenticated through the normal revocable
+    Django session architecture and the post-rotation session key is
+    registered in the UserSession registry — exactly like login. No
+    ResearchGroup or Project membership is created and no access is granted.
+    """
+
+    permission_classes = [AllowAny]
+
+    _STATUS_BY_CODE = {
+        "invalid_token": 404,
+        "already_used": 410,
+        "revoked": 410,
+        "expired": 410,
+        "account_exists": 409,
+        "username": 400,
+        "password": 400,
+    }
+
+    def post(self, request):
+        # Fail-closed: the invited email must never be client-supplied.
+        if "email" in request.data:
+            return Response(
+                {"error": "The e-mail address cannot be provided."},
+                status=400,
+            )
+        try:
+            user = register_account_from_invitation(
+                token=request.data.get("token"),
+                username=request.data.get("username"),
+                password=request.data.get("password"),
+            )
+        except RegistrationDomainError as exc:
+            return Response(
+                {"error": exc.message, "code": exc.code},
+                status=self._STATUS_BY_CODE.get(exc.code, 400),
+            )
+
+        # Authenticate with the normal revocable Django session
+        # architecture and register the post-rotation session key — the same
+        # path as login. login() rotates the session id (no fixation).
+        login(request, user)
+        register_user_session(user, request.session.session_key)
+
+        return Response(
+            {
+                "id": user.pk,
+                "username": user.username,
+                "firstName": user.first_name,
+                "lastName": user.last_name,
+                "email": user.email,
+            },
+            status=201,
+        )
+
+
+class RegistrationInvitationPreviewView(APIView):
+    """Non-consuming preview of a registration invitation token.
+
+    Lets a person without an account confirm a token is valid and see the
+    invited email, its expiry, and whether an account already exists, before
+    registering. It does not authenticate, does not create or accept
+    anything, and does not consume the invitation. CSRF is enforced by
+    csrf_protect in urls.py (unauthenticated browser POST).
+    """
+
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        try:
+            data = preview_account_invitation(request.data.get("token"))
+        except RegistrationDomainError as exc:
+            return Response(
+                {"error": exc.message},
+                status=404 if exc.code == "invalid_token" else 400,
+            )
         return Response(data)

@@ -12,27 +12,34 @@ Token security: the raw token is generated with ``secrets`` and persisted
 only as a one-way SHA-256 digest. The raw token is never stored, logged,
 serialized, or returned after the single creation response.
 
-Canonical email normalization (shared by invitation storage and
-acceptance matching): trim surrounding whitespace, then lowercase
-(case-insensitive comparison).
+Canonical email normalization (shared by invitation storage, acceptance
+matching, and registration collision detection): trim surrounding
+whitespace, then lowercase (case-insensitive comparison).
 
 Concurrency: at most one PENDING row per normalized email is enforced by a
 partial unique index (``uniq_account_invitation_pending_email``). Creation
 replaces the existing effective pending row atomically and retries
-narrowly around the empty-row insert race; acceptance locks the invitation
-row so at most one concurrent acceptance succeeds.
+narrowly around the empty-row insert race; acceptance and registration lock
+the invitation row so at most one concurrent transition of a token
+succeeds.
 """
 
 import hashlib
 import secrets
 from datetime import timedelta
 
+from django.contrib.auth import get_user_model
+from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from django.db import IntegrityError, transaction
+from django.db.models import CharField
+from django.db.models.expressions import RawSQL
 from django.utils import timezone
 
 from .models import AccountInvitation
+
+User = get_user_model()
 
 INVITATION_LIFETIME = timedelta(days=7)
 
@@ -47,6 +54,20 @@ class AccountInvitationDomainError(Exception):
     ``code`` is a stable machine-readable discriminator the API layer maps
     onto status codes (it never leaks which other email addresses are
     invited).
+    """
+
+    def __init__(self, message, code="invalid"):
+        self.message = message
+        self.code = code
+        super().__init__(message)
+
+
+class RegistrationDomainError(Exception):
+    """Raised when invite-only registration cannot proceed.
+
+    ``code`` is a stable machine-readable discriminator the API layer maps
+    onto status codes: ``invalid_token`` / ``already_used`` / ``revoked`` /
+    ``expired`` / ``account_exists`` / ``username`` / ``password``.
     """
 
     def __init__(self, message, code="invalid"):
@@ -249,6 +270,120 @@ def revoke_account_invitation(*, actor, public_id):
         return None
 
 
+def _resolve_locked_invitation(raw_token):
+    """Lock and evaluate the invitation for a raw token.
+
+    Must be called inside the caller's ``transaction.atomic`` block. Returns
+    ``(state, invitation, now)`` where ``state`` is one of:
+
+    - ``"missing"``   no row for this token digest;
+    - ``"accepted"``  terminal ACCEPTED;
+    - ``"revoked"``   terminal REVOKED;
+    - ``"expired"``   PENDING but at/past ``expires_at`` — the ``EXPIRED``
+                      transition is persisted by this state-evaluating read;
+    - ``"pending"``   effectively PENDING (usable).
+
+    ``invitation`` and ``now`` are meaningful for ``pending`` (the locked row
+    and the evaluation time) and for ``expired`` (the persisted row). The row
+    is held under ``select_for_update`` for the caller's transaction, so at
+    most one concurrent transition of the token succeeds.
+    """
+    raw_token = str(raw_token or "").strip()
+    if not raw_token:
+        return ("missing", None, None)
+
+    invitation = (
+        AccountInvitation.objects.select_for_update()
+        .filter(token_digest=digest_invitation_token(raw_token))
+        .first()
+    )
+    if invitation is None:
+        return ("missing", None, None)
+
+    if invitation.status == AccountInvitation.Status.ACCEPTED:
+        return ("accepted", None, None)
+    if invitation.status == AccountInvitation.Status.REVOKED:
+        return ("revoked", None, None)
+    if invitation.status == AccountInvitation.Status.PENDING:
+        now = timezone.now()
+        if invitation.expires_at <= now:
+            invitation.status = AccountInvitation.Status.EXPIRED
+            invitation.save(update_fields=["status"])
+            return ("expired", invitation, now)
+        return ("pending", invitation, now)
+
+    return ("missing", None, None)  # pragma: no cover - status is a closed set
+
+
+def _mark_invitation_accepted(invitation, user, now):
+    """Persist the terminal ACCEPTED transition for ``invitation``.
+
+    Shared by existing-account acceptance and registration so both use the
+    exact same lifecycle write.
+    """
+    invitation.status = AccountInvitation.Status.ACCEPTED
+    invitation.accepted_at = now
+    invitation.accepted_by = user
+    invitation.save(update_fields=["status", "accepted_at", "accepted_by"])
+
+
+def _existing_user_for_normalized_email(email):
+    """True when any existing User's normalized email equals ``email``.
+
+    ``email`` is the invitation's already-normalized (trim + lowercase)
+    invited email. The User email is not globally unique and this slice adds
+    no normalized-email index, so the comparison is a PostgreSQL expression
+    match on the stored column (``LOWER(BTRIM(email))``), mirroring
+    ``normalize_invitation_email``. This is a scan, not an index lookup; that
+    is accepted in this slice.
+    """
+    return (
+        User.objects.annotate(
+            _normalized_email=RawSQL(
+                "LOWER(BTRIM(email))",
+                [],
+                output_field=CharField(),
+            )
+        )
+        .filter(_normalized_email=email)
+        .exists()
+    )
+
+
+def _try_create_registration_user(username, password, email):
+    """Create and save the registration ``User``.
+
+    Validates the username through the model's canonical validation and the
+    password through Django's configured validators, both against the
+    account being created. Returns ``(code, user)``:
+    - ``("created", user)`` on success;
+    - ``("username", None)`` when the username is invalid or already taken;
+    - ``("password", None)`` when the password fails Django's validators.
+
+    Called inside the caller's atomic block; a failure writes nothing, so
+    the surrounding transaction — and any PENDING invitation — is left intact.
+    """
+    user = User(username=username, email=email)
+    try:
+        # Username + email are validated by the model; password is set
+        # separately (see validate_password / set_password below), so it
+        # is excluded from the field validation here.
+        user.full_clean(exclude=["password"])
+    except ValidationError:
+        return ("username", None)
+    try:
+        validate_password(password, user)
+    except ValidationError:
+        return ("password", None)
+    user.set_password(password)
+    try:
+        user.save()
+    except IntegrityError:
+        # Concurrent same-username registration lost the race.
+        return ("username", None)
+    return ("created", user)
+
+
 def accept_account_invitation(*, actor, token):
     """Bind the invitation for ``token`` to the authenticated actor.
 
@@ -257,9 +392,10 @@ def accept_account_invitation(*, actor, token):
     normalized email equal to the invitation's invited email. No User is
     created and no ResearchGroup or Project membership is created.
 
-    The future registration flow must create/authenticate a matching
-    account and then call this same service — token and lifecycle logic
-    must not be duplicated there.
+    Registration acceptance (``register_account_from_invitation``) shares the
+    same lifecycle internals (``_resolve_locked_invitation`` /
+    ``_mark_invitation_accepted``) — token and lifecycle logic is not
+    duplicated.
 
     Returns the ACCEPTED invitation. Raises ``AccountInvitationDomainError``:
     - ``not_found`` for an unknown token, or a token whose invitation is
@@ -274,49 +410,23 @@ def accept_account_invitation(*, actor, token):
     """
     _require_active_account(actor)
 
-    raw_token = str(token or "").strip()
-    if not raw_token:
-        raise AccountInvitationDomainError(
-            "An invitation token is required.", code="not_found"
-        )
-
     # The transaction commits on every outcome (failures are outcomes, not
     # exceptions inside the block) so the persisted EXPIRED transition —
     # made by this state-evaluating operation — survives.
     with transaction.atomic():
-        invitation = (
-            AccountInvitation.objects.select_for_update()
-            .filter(token_digest=digest_invitation_token(raw_token))
-            .first()
-        )
-        if invitation is None:
-            outcome = ("not_found", None)
-        elif invitation.status in (
-            AccountInvitation.Status.ACCEPTED,
-            AccountInvitation.Status.REVOKED,
-        ):
-            # Terminal: same non-disclosing failure as an unknown token.
-            outcome = ("not_found", None)
-        elif invitation.status == AccountInvitation.Status.PENDING:
-            now = timezone.now()
-            if invitation.expires_at <= now:
-                invitation.status = AccountInvitation.Status.EXPIRED
-                invitation.save(update_fields=["status"])
-                outcome = ("expired", None)
-            elif (
+        state, invitation, now = _resolve_locked_invitation(token)
+        if state == "pending":
+            if (
                 normalize_invitation_email(getattr(actor, "email", ""))
                 != invitation.invited_email
             ):
                 outcome = ("email_mismatch", None)
             else:
-                invitation.status = AccountInvitation.Status.ACCEPTED
-                invitation.accepted_at = now
-                invitation.accepted_by = actor
-                invitation.save(
-                    update_fields=["status", "accepted_at", "accepted_by"]
-                )
+                _mark_invitation_accepted(invitation, actor, now)
                 outcome = ("accepted", invitation)
-        else:  # pragma: no cover - defensive; status is a closed set
+        elif state == "expired":
+            outcome = ("expired", None)
+        else:  # missing / accepted / revoked -> same non-leaking failure
             outcome = ("not_found", None)
 
     if outcome[0] == "accepted":
@@ -327,3 +437,109 @@ def accept_account_invitation(*, actor, token):
         "email_mismatch": "This invitation is for a different e-mail address.",
     }
     raise AccountInvitationDomainError(messages[outcome[0]], code=outcome[0])
+
+
+def register_account_from_invitation(*, token, username, password):
+    """Create the account for ``token`` and atomically accept the invitation.
+
+    Invite-only self-service registration. The invited email comes
+    exclusively from the invitation; the client supplies only the user-created
+    fields required by the current User model (username and password). User
+    creation and invitation acceptance are ONE atomic database transition,
+    bounded by the invitation row lock: if any part fails, no new User
+    remains and the invitation is not consumed (an effectively-expired PENDING
+    row is persisted as EXPIRED, consistent with the invitation lifecycle).
+    No ResearchGroup or Project membership is created and no access is
+    granted.
+
+    Returns the created ``User``. Raises ``RegistrationDomainError`` with a
+    stable ``code``:
+    - ``invalid_token``  unknown token;
+    - ``already_used``   invitation already accepted;
+    - ``revoked``        invitation revoked;
+    - ``expired``        invitation effectively expired (persisted);
+    - ``account_exists`` a User with the invited normalized email already
+                         exists (the caller must sign in and use the existing
+                         acceptance flow);
+    - ``username``       username invalid or already in use;
+    - ``password``       password failed Django's validators.
+    """
+    username = "" if username is None else str(username)
+    password = "" if password is None else str(password)
+
+    with transaction.atomic():
+        state, invitation, now = _resolve_locked_invitation(token)
+        if state != "pending":
+            code = {
+                "expired": "expired",
+                "accepted": "already_used",
+                "revoked": "revoked",
+            }.get(state, "invalid_token")
+            outcome = (code, None)
+        elif _existing_user_for_normalized_email(invitation.invited_email):
+            outcome = ("account_exists", None)
+        else:
+            code, user = _try_create_registration_user(
+                username, password, invitation.invited_email
+            )
+            if code == "created":
+                _mark_invitation_accepted(invitation, user, now)
+            outcome = (code, user)
+
+    if outcome[0] == "created":
+        return outcome[1]
+    messages = {
+        "invalid_token": "This invitation token is invalid or unknown.",
+        "already_used": "This invitation has already been used.",
+        "revoked": "This invitation has been revoked.",
+        "expired": "This invitation has expired.",
+        "account_exists": (
+            "An account with this e-mail address already exists. Please sign in."
+        ),
+        "username": "The username is invalid or already in use.",
+        "password": "The password does not meet the requirements.",
+    }
+    raise RegistrationDomainError(messages[outcome[0]], code=outcome[0])
+
+
+def preview_account_invitation(token):
+    """Non-consuming preview of a registration token.
+
+    Lets a person without an account confirm a token is valid and see the
+    invited email, its expiry, and whether an account already exists, before
+    registering. It does not authenticate, does not create or accept
+    anything, and does not consume the invitation. Like every state-
+    evaluating operation it persists the EXPIRED transition when it
+    encounters an effectively-expired PENDING row.
+
+    For an unknown token it raises ``RegistrationDomainError``
+    (``invalid_token``). Otherwise it returns a dict:
+    - effective PENDING:
+      ``{status, usable: True, invitedEmail, expiresAt, accountExists}``;
+    - any other resolvable state (expired / accepted / revoked):
+      ``{status, usable: False}`` (the invited email is not disclosed for a
+      terminal token).
+    """
+    with transaction.atomic():
+        state, invitation, _ = _resolve_locked_invitation(token)
+        if state == "missing":
+            outcome = ("invalid_token", None)
+        elif state == "pending":
+            data = {
+                "status": state,
+                "usable": True,
+                "invitedEmail": invitation.invited_email,
+                "expiresAt": invitation.expires_at.isoformat(),
+                "accountExists": _existing_user_for_normalized_email(
+                    invitation.invited_email
+                ),
+            }
+            outcome = ("ok", data)
+        else:  # expired / accepted / revoked
+            outcome = ("ok", {"status": state, "usable": False})
+
+    if outcome[0] == "ok":
+        return outcome[1]
+    raise RegistrationDomainError(
+        "This invitation token is invalid or unknown.", code="invalid_token"
+    )

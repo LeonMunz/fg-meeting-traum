@@ -1,6 +1,6 @@
 # FG Workspace — Current Implementation State
 
-**Checkpoint:** Meetings + persistent Meeting Notes + Note → Work Item traceability + Meeting Templates + configurable Project Work Items + Board ordering + global account invitation foundation
+**Checkpoint:** Meetings + persistent Meeting Notes + Note → Work Item traceability + Meeting Templates + configurable Project Work Items + Board ordering + global account invitation foundation + invite-only account registration
 **Last verified:** 2026-09-13
 **Branch:** `feature/meeting-next`
 
@@ -110,6 +110,7 @@ Canonical domain reference: `docs/domain/authentication-sessions.md`.
 - **IMPLEMENTED** — revocable multi-session foundation: `accounts.UserSession` server-side registry (metadata only; non-secret `public_id` UUID; the raw Django session key is never exposed; registry rows never grant authentication) with lazy registration for sessions created outside the login endpoint.
 - **IMPLEMENTED** — session-management API (backend contract only, no UI): `GET /api/auth/sessions/` (own active sessions: `id`, `createdAt`, `isCurrent`; expired/revoked never listed), `POST /api/auth/sessions/{id}/revoke/` (non-leaking 404 for unknown or foreign ids; revoked browser is anonymous on next request), `POST /api/auth/sessions/revoke-others/` (current session kept), `POST /api/auth/sessions/revoke-all/` (includes current session).
 - **IMPLEMENTED** — CSRF enforced on all browser-authenticated mutations (login/logout via `csrf_protect`; all other API mutations via DRF `SessionAuthentication`); pinned by real-enforcement tests (`Client(enforce_csrf_checks=True)`).
+- **IMPLEMENTED** — invite-only account registration establishes a normal revocable Django session: after the atomic account + invitation transaction commits, `login()` rotates the session id and the post-rotation key is registered in `UserSession` exactly like login (no special session type or token). See `docs/domain/account-registration.md` §8.
 - **IMPLEMENTED** — inactive accounts cannot log in, and an already-authenticated session no longer authenticates once the account becomes inactive (401 on every API endpoint, including the session-management API); deactivation is not revocation (the Django session row is retained until normal expiry or explicit revocation).
 - **NOT IMPLEMENTED (deferred)** — session-management/account-security UI, password reset/change, e-mail verification, rate limiting, full ACTIVE/SUSPENDED/DEACTIVATED lifecycle, sudo/recent-auth, passkeys, SSO, API tokens, audit-log subsystem.
 
@@ -125,7 +126,9 @@ Canonical domain reference: `docs/domain/account-invitations.md`.
 - **IMPLEMENTED** — structural invariants: unique `public_id`, unique `token_digest`, and a partial unique index limiting to one `pending` row per normalized email (migration `accounts/0003`).
 - **IMPLEMENTED** — concurrency (real PostgreSQL row locks / constraints, threaded tests): concurrent acceptance of one token leaves exactly one `accepted` transition with `accepted_by` set once; concurrent creation for one normalized email leaves at most one pending invitation and at most one usable token.
 - **IMPLEMENTED (guarantee, pinned by tests)** — acceptance creates no User and no `ResearchGroupMembership` / `ProjectMembership`; the token grants no access to any ResearchGroup, Project, Work Item, or Meeting (authentication ≠ membership; deny-by-default authorization untouched).
-- **NOT IMPLEMENTED (deferred)** — e-mail delivery, registration/signup flow redeeming an invitation (must call the same acceptance service after creating/authenticating the matching account), invitation UI, membership invitations, invitation rate limiting, invitation audit history.
+- **IMPLEMENTED** — invite-only registration redeems a valid pending invitation into exactly one new account: `POST /api/auth/register/` (`{token, username, password}`; a client-supplied `email` is rejected fail-closed) atomically creates the normalized-email `User` and marks the invitation `ACCEPTED` in one transaction bounded by the invitation row lock, then authenticates a normal revocable session. No public signup, no membership, no permissions; an existing (incl. inactive) matching normalized email blocks signup and leaves the invitation pending. Real Postgres concurrency coverage proves one token yields exactly one account. Canonical reference: `docs/domain/account-registration.md`.
+- **IMPLEMENTED** — non-consuming invitation preview: `POST /api/auth/registration-invitation/` (`{token}`) reports whether a token is effectively pending (invited email, expiry, `accountExists`) without consuming it, without authenticating, and without disclosing the email for a terminal token (persists an effective `EXPIRED` transition).
+- **NOT IMPLEMENTED (deferred)** — e-mail delivery, the frontend signup UI, e-mail verification, password reset/recovery, membership invitations, invitation rate limiting, invitation audit history, global normalized User-email uniqueness, and account merging.
 
 ## Authorization / multi-user
 

@@ -142,11 +142,13 @@ second acceptance of the same token always fails, indistinguishably from
 an unknown token (terminal states answer the same non-leaking failure as
 unknown tokens).
 
-**Deferred registration integration:** a person without an account will
-later redeem the invitation in the registration flow. That future flow
-must create and authenticate the matching account and then **call the same
-acceptance service** (`accept_account_invitation`) — it must never
-duplicate token or lifecycle logic.
+**Registration integration (implemented):** a person without an account
+redeems the invitation through invite-only registration
+(`docs/domain/account-registration.md`). That flow creates and authenticates
+the matching account and then marks the invitation `ACCEPTED` through the
+**same** lifecycle internals as this acceptance service — token and
+lifecycle logic is shared, never duplicated. Registration is a separate
+endpoint under `/api/auth/`; it is not a second acceptance mechanism.
 
 ## 9. Replacement
 
@@ -206,8 +208,9 @@ These invariants are pinned by real-DB threaded tests
 ## 13. Explicitly deferred (NOT implemented)
 
 - E-mail delivery of invitations (provider, templates, transport).
-- The registration flow / signup UI that redeems an invitation for a new
-  account.
+- The frontend signup UI (the backend registration flow that redeems an
+  invitation for a new account is implemented — see
+  `docs/domain/account-registration.md`).
 - Invitation management UI.
 - Membership invitations (ResearchGroup / Project).
 - Invitation rate limiting.

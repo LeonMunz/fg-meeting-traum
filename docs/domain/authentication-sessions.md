@@ -42,7 +42,9 @@ document is an implementation defect.
    registry row without a live Django session row is dead and must never
    be presented as an active session.
 4. Registry maintenance:
-   - the login endpoint registers the **post-rotation** session key;
+   - the login endpoint (and the invite-only registration endpoint, which
+     reuses the identical login path) registers the **post-rotation**
+     session key;
    - `SessionRegistryMiddleware` lazily registers any authenticated
      session (sessions created outside the login endpoint, legacy
      sessions);
@@ -61,6 +63,12 @@ document is an implementation defect.
 4. Successful login **rotates the session identifier** (Django
    `login()`); the pre-login/anonymous session id must not remain usable
    as the authenticated session id (no session fixation).
+5. **Invite-only registration** establishes a session the same way: after
+   the atomic account + invitation transaction commits, `login(request,
+   user)` rotates the session id and the post-rotation key is registered
+   exactly as above. Registration creates no special session type or
+   token; the resulting session is an ordinary revocable Django session
+   (see `docs/domain/account-registration.md` §8).
 
 ## 4. Logout
 
