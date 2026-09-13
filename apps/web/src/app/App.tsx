@@ -6,6 +6,7 @@ import { AppShell } from '../components/layout/AppShell'
 import { AppearanceProvider } from '../features/appearance/AppearanceProvider'
 import { AppearanceSettingsPage } from '../features/appearance/AppearanceSettingsPage'
 import { LoginPage } from '../features/auth/LoginPage'
+import { RegistrationPage } from '../features/auth/RegistrationPage'
 import { DashboardPage } from '../features/dashboard/DashboardPage'
 import { MyWorkPage } from '../features/my-work/MyWorkPage'
 import { MeetingListPage } from '../features/meetings/MeetingListPage'
@@ -103,6 +104,7 @@ function AppRoutes() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/register" element={<RegistrationPage />} />
 
       <Route
         path="/*"

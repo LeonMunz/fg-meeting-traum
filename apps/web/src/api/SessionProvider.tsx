@@ -13,6 +13,12 @@ interface SessionState {
 interface SessionContextValue extends SessionState {
   login: (username: string, password: string) => Promise<void>
   logout: () => Promise<void>
+  /**
+   * Apply a user that an already-authenticated server operation
+   * (e.g. invite-only registration) returned, so the existing session
+   * state reflects the new session. Reuses the exact same state as login.
+   */
+  setAuthenticatedUser: (user: ApiUser) => void
 }
 
 const SessionContext = createContext<SessionContextValue | null>(null)
@@ -52,6 +58,10 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     setState({ user: null, loading: false, error: null })
   }, [])
 
+  const setAuthenticatedUser = useCallback((user: ApiUser) => {
+    setState({ user, loading: false, error: null })
+  }, [])
+
   // On mount, try to recover session from /api/auth/me/
   useEffect(() => {
     let cancelled = false
@@ -68,7 +78,9 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   return (
-    <SessionContext.Provider value={{ ...state, login, logout }}>
+    <SessionContext.Provider
+      value={{ ...state, login, logout, setAuthenticatedUser }}
+    >
       {children}
     </SessionContext.Provider>
   )
