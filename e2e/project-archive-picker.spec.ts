@@ -277,25 +277,37 @@ test(
       /\/meetings\/\d+$/,
     )
 
+    // The Meeting is Upcoming: the redesigned Meeting Detail
+    // prepares agenda items through the per-section quick add
+    // (the legacy standalone "Agenda item" + "Notes" form no
+    // longer exists, and Notes are a Live Meeting concept).
+    const agendaSection = page
+      .locator('section')
+      .filter({
+        hasText: 'Agenda',
+      })
+
+    await agendaSection
+      .getByRole('button', {
+        name: 'Add first item',
+        exact: true,
+      })
+      .click()
+
     await page
-      .getByLabel('Agenda item')
+      .getByLabel('Add item to Agenda')
       .fill(agendaTitle)
 
-    await page
-      .getByLabel('Notes')
-      .fill(
-        'Verify archived Projects are excluded from new work.',
-      )
-
-    await page
+    await agendaSection
       .getByRole('button', {
-        name: /Add agenda item/,
+        name: 'Add',
+        exact: true,
       })
       .click()
 
     const agendaItem =
       page
-        .locator('article')
+        .locator('li')
         .filter({
           has: page.getByText(
             agendaTitle,
@@ -309,12 +321,18 @@ test(
 
     // --------------------------------------------------------
     // Meeting Work Item picker must use the safe default list.
+    // Item actions now live in the per-item action menu.
     // --------------------------------------------------------
 
     await agendaItem
-      .getByRole('button')
-      .filter({
-        hasText: 'Create work item',
+      .getByRole('button', {
+        name: `Actions for agenda item ${agendaTitle}`,
+      })
+      .click()
+
+    await page
+      .getByRole('menuitem', {
+        name: 'Create work item',
       })
       .click()
 
