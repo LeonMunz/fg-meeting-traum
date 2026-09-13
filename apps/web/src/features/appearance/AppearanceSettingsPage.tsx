@@ -1,5 +1,6 @@
 import type { Appearance } from './appearance'
 import { useAppearance } from './useAppearance'
+import { InvitationsSettingsSection } from '../account-invitations/InvitationsSettingsSection'
 
 const appearanceOptions: Array<{
   value: Appearance
@@ -77,6 +78,8 @@ export function AppearanceSettingsPage() {
           })}
         </div>
       </section>
+
+      <InvitationsSettingsSection />
     </div>
   )
 }
