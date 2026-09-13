@@ -770,12 +770,16 @@ test(
       }),
     ).toBeVisible()
 
+    // Selected-row styling moved from the legacy `outline-primary`
+    // token to the functional `card-selected` tokens in the dark-mode
+    // migration (d5a8040); the selection behavior is unchanged, so the
+    // locator follows the current canonical token.
     await expect(
       listRowAEdited,
-    ).toHaveClass(/outline-primary/)
+    ).toHaveClass(/outline-card-selected-ring/)
     await expect(
       listRowB,
-    ).not.toHaveClass(/outline-primary/)
+    ).not.toHaveClass(/outline-card-selected-ring/)
 
     // B's in-progress description edit was committed, not lost.
     await listRowB.click()
@@ -2628,9 +2632,10 @@ test(
         name: `Open ${CLOSE_TASK_A_TITLE}`,
       },
     )
+    // Same selection-token migration as above (d5a8040).
     await expect(
       listRowAAfterSwitch,
-    ).toHaveClass(/outline-primary/)
+    ).toHaveClass(/outline-card-selected-ring/)
 
     // --------------------------------------------------------
     // Switching back to Board is the same exception in reverse:
@@ -2684,7 +2689,35 @@ test(
       'Status',
       { exact: true },
     )
-    await expect(statusSelect).toHaveValue('todo')
+
+    // The select is driven by the Project's configured status
+    // definitions (option values are definition IDs; the canonical
+    // Work Item API contract uses statusDefinitionId, not legacy
+    // semantic slug values — see docs/domain/foundation.md §15).
+    // Resolve the intended statuses by their default-definition
+    // names so no DB-generated ID is hard-coded.
+    const statusOptionIds = await statusSelect.evaluate(
+      (select) =>
+        Array.from(select.options).map((option) => ({
+          id: option.value,
+          name: option.text,
+        })),
+    )
+    const defaultTodoId = statusOptionIds.find(
+      (option) => option.name === 'Todo',
+    )?.id
+    const reviewId = statusOptionIds.find(
+      (option) => option.name === 'Review',
+    )?.id
+    if (defaultTodoId == null || reviewId == null) {
+      throw new Error(
+        'Expected Todo and Review status definitions in the ' +
+          `status select, got: ${JSON.stringify(statusOptionIds)}`,
+      )
+    }
+
+    // Initial status is the Project's default Todo status.
+    await expect(statusSelect).toHaveValue(defaultTodoId)
 
     const reviewColumn = page.locator(
       '[data-board-column="review"]',
@@ -2713,9 +2746,10 @@ test(
     await page.mouse.up()
 
     // The drag never dispatched a "click" — the inspector is still
-    // open and now reflects the new (dragged-to) status.
+    // open and now reflects the new (dragged-to) status: the
+    // Project's Review status definition.
     await expect(inspector).toBeVisible()
-    await expect(statusSelect).toHaveValue('review')
+    await expect(statusSelect).toHaveValue(reviewId)
 
     // --------------------------------------------------------
     // 9. List row -> another List row still switches without

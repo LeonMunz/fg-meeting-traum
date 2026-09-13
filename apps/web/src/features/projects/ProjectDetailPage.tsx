@@ -2484,6 +2484,9 @@ export function ProjectDetailPage() {
                 ? `fg-workspace:project-work-items:v1:${user.id}:${project.id}`
                 : null
             }
+            inspectorOpen={
+              workItemDrawerState?.mode === 'edit'
+            }
           />
         )}
 
@@ -3334,6 +3337,7 @@ function ProjectWorkItemsPanel({
   statusDropError,
   onDismissStatusDropError,
   preferencesKey,
+  inspectorOpen,
 }: {
   items: DemoWorkItem[]
   eligibleAssignees: ProjectMember[]
@@ -3350,6 +3354,12 @@ function ProjectWorkItemsPanel({
   statusDropError: string | null
   onDismissStatusDropError: () => void
   preferencesKey: string | null
+  // True while the non-modal Work Item inspector is open in edit mode.
+  // The inspector is a fixed 520px right-edge rail (see WorkItemDrawer);
+  // while it is open the panel must reserve that rail so no workspace
+  // target (Board column, List row, toolbar control) ever renders
+  // underneath the opaque drawer and loses its pointer events.
+  inspectorOpen: boolean
 }) {
   const [view, setView] = useState<WorkItemsView>('board')
   const [draggedItemId, setDraggedItemId] =
@@ -3616,8 +3626,16 @@ function ProjectWorkItemsPanel({
   }
 
   return (
-    <section className="mt-6 overflow-hidden rounded-xl border border-border-structural bg-surface-quiet shadow-sm">
-      <div className="flex items-start justify-between gap-8 border-b border-border-structural bg-work-items-header px-6 py-5">
+    <section
+      className={[
+        'mt-6 overflow-hidden rounded-xl border border-border-structural bg-surface-quiet shadow-sm',
+        // Below xl the workspace is too narrow to sit beside the
+        // 520px rail, so the drawer keeps its existing overlay
+        // behavior there; from xl up the panel reserves the rail.
+        inspectorOpen ? 'xl:mr-[520px]' : '',
+      ].join(' ')}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-8 border-b border-border-structural bg-work-items-header px-6 py-5">
         <div>
           <div className="flex items-center gap-3">
             <h2 className="text-lg font-semibold tracking-tight text-work-content-text">
