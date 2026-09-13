@@ -7,8 +7,12 @@ import {
 import { useNavigate } from 'react-router'
 
 import { ApiError } from '../../api/client'
+import {
+  getProjectWorkItemConfiguration,
+} from '../../api/projects'
 import type {
   ApiPersonalWorkItem,
+  ApiProjectWorkItemConfiguration,
   ApiWorkItemStatus,
 } from '../../api/types'
 import {
@@ -16,6 +20,10 @@ import {
   updateWorkItem,
 } from '../../api/work-items'
 import { useResearchGroup } from '../research-group/useResearchGroup'
+import {
+  resolveStatusDefinitionIdByCategory,
+  resolveWorkItemStatus,
+} from '../projects/workItemMapping'
 
 const statusLabels: Record<
   ApiWorkItemStatus,
@@ -158,6 +166,12 @@ export function MyWorkPage() {
     groupFilter,
     setGroupFilter,
   ] = useState<GroupFilter>('all')
+  const [
+    configByProject,
+    setConfigByProject,
+  ] = useState<
+    Record<number, ApiProjectWorkItemConfiguration>
+  >({})
 
   const loadMyWork =
     useCallback(async () => {
@@ -168,9 +182,37 @@ export function MyWorkPage() {
         const nextItems =
           await listMyWork()
 
+        // Resolve each Project's Work Item configuration so the
+        // status control can read and write the canonical
+        // statusDefinitionId (the API no longer carries a fixed
+        // `status` string).
+        const projectIds = Array.from(
+          new Set(
+            nextItems.map((item) => item.projectId),
+          ),
+        )
+        const configs = await Promise.all(
+          projectIds.map((projectId) =>
+            getProjectWorkItemConfiguration(
+              projectId,
+            ).catch(() => null),
+          ),
+        )
+        const nextConfigByProject: Record<
+          number, ApiProjectWorkItemConfiguration
+        > = {}
+        projectIds.forEach((projectId, index) => {
+          const config = configs[index]
+          if (config) {
+            nextConfigByProject[projectId] = config
+          }
+        })
+
+        setConfigByProject(nextConfigByProject)
         setItems(nextItems)
       } catch (loadError) {
         setItems([])
+        setConfigByProject({})
         setError(
           getErrorMessage(
             loadError,
@@ -229,16 +271,57 @@ export function MyWorkPage() {
     [groupFilter, sortedItems],
   )
 
+  function statusCategoryFor(
+    item: ApiPersonalWorkItem,
+  ): ApiWorkItemStatus {
+    return resolveWorkItemStatus(
+      item.statusDefinitionId,
+      configByProject[item.projectId] ?? null,
+    )
+  }
+
   const handleStatusChange = async (
     item: ApiPersonalWorkItem,
     status: ApiWorkItemStatus,
   ) => {
-    if (status === item.status) {
+    if (status === statusCategoryFor(item)) {
       return
     }
-    // (item.status may be undefined for definition-based items; the
-    // select below resolves the effective status separately.)
 
+    // Map the chosen status category to this Project's canonical
+    // statusDefinitionId (the API contract). The legacy fixed
+    // `status` string is no longer read or written by the backend.
+    const config =
+      configByProject[item.projectId] ?? null
+    const statusDefinitionId =
+      resolveStatusDefinitionIdByCategory(
+        status,
+        config,
+      )
+
+    if (statusDefinitionId == null) {
+      setError(
+        'No matching status is configured for this Project.',
+      )
+      return
+    }
+
+    const previousStatusDefinitionId =
+      item.statusDefinitionId
+
+    // Apply the change locally first so the controlled select
+    // immediately reflects the new status and is never left in the
+    // stale previous state, then reconcile with the server response.
+    setItems((current) =>
+      current.map((candidate) =>
+        candidate.id === item.id
+          ? {
+              ...candidate,
+              statusDefinitionId,
+            }
+          : candidate,
+      ),
+    )
     setUpdatingItemId(item.id)
     setError(null)
 
@@ -246,7 +329,7 @@ export function MyWorkPage() {
       const updated =
         await updateWorkItem(
           item.id,
-          { status },
+          { statusDefinitionId },
         )
 
       setItems((current) =>
@@ -260,6 +343,19 @@ export function MyWorkPage() {
         ),
       )
     } catch (updateError) {
+      // Roll back the optimistic change so the control reflects the
+      // persisted status.
+      setItems((current) =>
+        current.map((candidate) =>
+          candidate.id === item.id
+            ? {
+                ...candidate,
+                statusDefinitionId:
+                  previousStatusDefinitionId,
+              }
+            : candidate,
+        ),
+      )
       setError(
         getErrorMessage(
           updateError,
@@ -481,7 +577,7 @@ export function MyWorkPage() {
                 </div>
 
                 <select
-                  value={item.status ?? 'todo'}
+                  value={statusCategoryFor(item)}
                   disabled={
                     updatingItemId ===
                     item.id
