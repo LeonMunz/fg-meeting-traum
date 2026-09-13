@@ -933,6 +933,11 @@ class NoteWorkItemApiTest(NoteWorkItemBase):
             username="note-wi-cross",
             password="Pass1!",
         )
+        ResearchGroupMembership.objects.create(
+            research_group=self.project.research_group,
+            user=outsider,
+            role=ResearchGroupMembership.Role.MEMBER,
+        )
         ProjectMembership.objects.create(
             project=self.project,
             user=outsider,

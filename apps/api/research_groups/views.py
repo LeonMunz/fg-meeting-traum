@@ -5,10 +5,14 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from authorization.capabilities import Capability
+from authorization.service import resolve_group_scope
+
 from .models import ResearchGroup, ResearchGroupMembership
 from .services import (
     ResearchGroupDomainError,
     add_research_group_membership,
+    create_research_group,
     change_research_group_membership_role,
     get_research_group_member_offboarding_preview,
     offboard_research_group_member,
@@ -24,34 +28,33 @@ def _require_group_membership(
     request,
     group_id,
 ):
-    """Return (ResearchGroup, membership) for accessible groups.
+    """Return (ResearchGroup, ScopeContext) for accessible groups.
 
-    Returns None when the caller is not a member so group existence
-    is not leaked.
+    Resolved through the authorization kernel (GROUP_READ, default
+    deny). Returns None when the caller has no current group
+    membership so group existence is not leaked.
     """
-    try:
-        membership = (
-            ResearchGroupMembership.objects
-            .select_related("research_group")
-            .get(
-                research_group_id=group_id,
-                user=request.user,
-            )
-        )
-    except ResearchGroupMembership.DoesNotExist:
+    scope = resolve_group_scope(request.user, group_id)
+    if scope is None or not scope.has(Capability.GROUP_READ):
         return None
 
-    return membership.research_group, membership
+    group = ResearchGroup.objects.filter(
+        pk=scope.research_group_id
+    ).first()
+    if group is None:
+        return None
+
+    return group, scope
 
 
 def _serialize_group(
     research_group,
-    membership,
+    scope,
 ):
     return {
         "id": research_group.pk,
         "name": research_group.name,
-        "role": membership.role,
+        "role": scope.role,
     }
 
 
@@ -145,7 +148,11 @@ def _serialize_offboarding_preview(
 
 
 class ResearchGroupListView(APIView):
-    """List Research Groups the current user belongs to."""
+    """List Research Groups the current user belongs to.
+
+    POST: create a Research Group; the creator becomes its first
+    Owner (atomic).
+    """
 
     permission_classes = [IsAuthenticated]
 
@@ -165,6 +172,33 @@ class ResearchGroupListView(APIView):
         ]
 
         return Response(groups)
+
+    def post(self, request):
+        name = request.data.get("name", "")
+
+        if not isinstance(name, str) or not name.strip():
+            return Response(
+                {"error": "name is required."},
+                status=400,
+            )
+
+        try:
+            research_group = create_research_group(
+                creator=request.user,
+                name=name,
+            )
+        except ResearchGroupDomainError as exc:
+            return Response({"error": exc.message}, status=400)
+
+        membership = ResearchGroupMembership.objects.get(
+            research_group=research_group,
+            user=request.user,
+        )
+
+        return Response(
+            _serialize_group(research_group, membership),
+            status=201,
+        )
 
 
 class ResearchGroupDetailView(APIView):
@@ -193,12 +227,12 @@ class ResearchGroupDetailView(APIView):
                 status=404,
             )
 
-        group, membership = result
+        group, scope = result
 
         return Response(
             _serialize_group(
                 group,
-                membership,
+                scope,
             )
         )
 
@@ -214,12 +248,9 @@ class ResearchGroupDetailView(APIView):
                 status=404,
             )
 
-        group, membership = result
+        group, scope = result
 
-        if (
-            membership.role
-            != ResearchGroupMembership.Role.ADMIN
-        ):
+        if not scope.has(Capability.GROUP_MANAGE):
             return Response(
                 {
                     "error":
@@ -256,7 +287,7 @@ class ResearchGroupDetailView(APIView):
         return Response(
             _serialize_group(
                 group,
-                membership,
+                scope,
             )
         )
 
@@ -287,12 +318,9 @@ class ResearchGroupMemberCandidateListView(
                 status=404,
             )
 
-        group, membership = result
+        group, scope = result
 
-        if (
-            membership.role
-            != ResearchGroupMembership.Role.ADMIN
-        ):
+        if not scope.has(Capability.GROUP_MANAGE):
             return Response(
                 {
                     "error":
@@ -396,12 +424,9 @@ class ResearchGroupMembershipListView(
                 status=404,
             )
 
-        group, membership = result
+        group, scope = result
 
-        if (
-            membership.role
-            != ResearchGroupMembership.Role.ADMIN
-        ):
+        if not scope.has(Capability.GROUP_MANAGE):
             return None, Response(
                 {
                     "error":
@@ -531,12 +556,9 @@ class ResearchGroupMembershipDetailView(
                 status=404,
             )
 
-        group, actor_membership = result
+        group, scope = result
 
-        if (
-            actor_membership.role
-            != ResearchGroupMembership.Role.ADMIN
-        ):
+        if not scope.has(Capability.GROUP_MANAGE):
             return None, None, Response(
                 {
                     "error":
@@ -677,12 +699,9 @@ class ResearchGroupMembershipOffboardingView(
                 status=404,
             )
 
-        group, actor_membership = result
+        group, scope = result
 
-        if (
-            actor_membership.role
-            != ResearchGroupMembership.Role.ADMIN
-        ):
+        if not scope.has(Capability.GROUP_MANAGE):
             return None, Response(
                 {
                     "error":

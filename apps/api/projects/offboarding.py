@@ -13,6 +13,11 @@ from django.db import transaction
 from django.utils import timezone
 
 from audit_history.services import record_audit_event
+from authorization.capabilities import Capability
+from authorization.service import (
+    AuthorizationDenied,
+    require_group_capability,
+)
 from research_groups.models import ResearchGroupMembership
 from work_items.models import WorkItemAssignee
 
@@ -84,15 +89,17 @@ def resolve_project_membership_for_research_group_offboarding(
             )
         )
 
-        if not ResearchGroupMembership.objects.filter(
-            research_group=project.research_group,
-            user=actor,
-            role=ResearchGroupMembership.Role.ADMIN,
-        ).exists():
+        try:
+            require_group_capability(
+                actor,
+                project.research_group_id,
+                Capability.GROUP_MANAGE,
+            )
+        except AuthorizationDenied as exc:
             raise ProjectDomainError(
                 "Only a Research Group admin can perform "
                 "Research Group offboarding."
-            )
+            ) from exc
 
         target_user = membership.user
 

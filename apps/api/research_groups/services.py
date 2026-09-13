@@ -14,6 +14,11 @@ from django.db import transaction
 
 from audit_history.services import record_audit_event
 
+from authorization.capabilities import Capability
+from authorization.service import (
+    AuthorizationDenied,
+    require_group_capability,
+)
 from projects.models import ProjectMembership
 
 from .models import ResearchGroup, ResearchGroupMembership
@@ -31,23 +36,55 @@ def _require_group_admin(
     *,
     research_group: ResearchGroup,
     actor,
-) -> ResearchGroupMembership:
-    """Require an active Research Group admin membership."""
-    membership = ResearchGroupMembership.objects.filter(
-        research_group=research_group,
-        user=actor,
-    ).first()
-
-    if (
-        membership is None
-        or membership.role
-        != ResearchGroupMembership.Role.ADMIN
-    ):
+) -> None:
+    """Require the GROUP_MANAGE capability via the authorization kernel."""
+    try:
+        require_group_capability(
+            actor,
+            research_group.pk,
+            Capability.GROUP_MANAGE,
+        )
+    except AuthorizationDenied as exc:
         raise ResearchGroupDomainError(
             "Only a Research Group admin can manage this Research Group."
+        ) from exc
+
+
+def create_research_group(
+    *,
+    creator,
+    name: str,
+) -> ResearchGroup:
+    """Create a ResearchGroup; the creator becomes its first Owner.
+
+    Creation is atomic: the group and the creator's ``admin`` (group
+    Owner) membership are created in one transaction. Only active
+    accounts may create a ResearchGroup.
+    """
+    normalized_name = (name or "").strip()
+
+    if not normalized_name:
+        raise ResearchGroupDomainError(
+            "Research Group name is required."
         )
 
-    return membership
+    if not getattr(creator, "is_active", False):
+        raise ResearchGroupDomainError(
+            "Only active accounts can create a Research Group."
+        )
+
+    with transaction.atomic():
+        research_group = ResearchGroup.objects.create(
+            name=normalized_name,
+            created_by=creator,
+        )
+        ResearchGroupMembership.objects.create(
+            research_group=research_group,
+            user=creator,
+            role=ResearchGroupMembership.Role.ADMIN,
+        )
+
+    return research_group
 
 
 def update_research_group(

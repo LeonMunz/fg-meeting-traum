@@ -11,6 +11,8 @@ from django.db import transaction
 from django.db.models import QuerySet
 
 from audit_history.services import record_audit_event
+from authorization.capabilities import Capability
+from authorization.service import has_project_capability
 from projects.models import (
     Project,
     ProjectMembership,
@@ -52,35 +54,18 @@ _UNSET = object()
 def _validate_assignee_eligibility(project: Project, user) -> None:
     """Validate that a user is eligible to be assigned to a WorkItem in the project.
 
-    The user must have BOTH:
-    - ResearchGroupMembership in the Project's Research Group
-    - ProjectMembership in the Project with role 'owner' or 'member'
-
-    A viewer or non-member cannot be assigned.
-    Stale ProjectMembership (whose ResearchGroupMembership no longer exists)
-    is rejected.
+    Eligibility is the PROJECT_WORK capability: a current
+    ProjectMembership (owner/member) together with a current
+    ResearchGroupMembership in the Project's Research Group, resolved
+    through the authorization kernel (default deny).
     """
-    # Check current ResearchGroupMembership
-    if not ResearchGroupMembership.objects.filter(
-        research_group=project.research_group,
-        user=user,
-    ).exists():
-        raise WorkItemDomainError(
-            f"User '{user.username}' does not have a current "
-            "ResearchGroupMembership and cannot be assigned."
-        )
-
-    membership = ProjectMembership.objects.filter(
-        project=project,
-        user=user,
-    ).first()
-    if membership is None:
+    if not has_project_capability(
+        user,
+        project.pk,
+        Capability.PROJECT_WORK,
+    ):
         raise WorkItemDomainError(
             f"User '{user.username}' does not have ProjectMembership and cannot be assigned."
-        )
-    if membership.role == ProjectMembership.Role.VIEWER:
-        raise WorkItemDomainError(
-            f"User '{user.username}' is a viewer and cannot be assigned to a WorkItem."
         )
 
 
@@ -846,36 +831,24 @@ def _apply_work_item_fields(
 
 
 def _require_project_write_access(project: Project, actor) -> None:
-    """Require that the actor has effective write access to the project.
+    """Require that the actor can write WorkItems in the project.
 
-    Effective write access requires BOTH:
-    - ResearchGroupMembership in the Project's Research Group
-    - ProjectMembership with role 'owner' or 'member'
-
-    A viewer cannot write.
-    Stale ProjectMembership (whose ResearchGroupMembership no longer exists)
-    is rejected.
+    Write access is the PROJECT_WORK capability resolved through the
+    authorization kernel: current ProjectMembership (owner/member)
+    plus current ResearchGroupMembership in the Project's Research
+    Group (default deny). Archived Projects remain read-only.
     """
     if project.archived_at is not None:
         raise WorkItemDomainError(
             "Archived Projects are read-only. Restore the Project first."
         )
 
-    # Check current ResearchGroupMembership
-    if not ResearchGroupMembership.objects.filter(
-        research_group=project.research_group,
-        user=actor,
-    ).exists():
+    if not has_project_capability(
+        actor,
+        project.pk,
+        Capability.PROJECT_WORK,
+    ):
         raise WorkItemDomainError("You do not have access to this Project.")
-
-    membership = ProjectMembership.objects.filter(
-        project=project,
-        user=actor,
-    ).first()
-    if membership is None:
-        raise WorkItemDomainError("You do not have access to this Project.")
-    if membership.role == ProjectMembership.Role.VIEWER:
-        raise WorkItemDomainError("A viewer cannot modify WorkItems.")
 
 
 def resolve_work_item_meeting_origin(work_item: WorkItem, user):

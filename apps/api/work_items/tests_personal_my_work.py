@@ -242,6 +242,12 @@ class PersonalMyWorkApiTest(APITestCase):
         )
 
     def test_stale_research_group_membership_excludes_work(self):
+        # Revoke group B access: the ProjectMembership first (required by
+        # the composite FK), then the group membership.
+        ProjectMembership.objects.filter(
+            project=self.project_b,
+            user=self.chris,
+        ).delete()
         self.membership_b.delete()
 
         self.login()

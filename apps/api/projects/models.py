@@ -40,6 +40,14 @@ class Project(models.Model):
         db_table = "projects_project"
         verbose_name = "project"
         verbose_name_plural = "projects"
+        constraints = [
+            # FK target for the composite constraint that pins a
+            # ProjectMembership to its Project's Research Group.
+            models.UniqueConstraint(
+                fields=["id", "research_group"],
+                name="projects_project_id_research_group_uniq",
+            )
+        ]
 
     def __str__(self):
         return f"{self.name} ({self.research_group.name})"
@@ -49,8 +57,16 @@ class ProjectMembership(models.Model):
     """Links a User to a Project with a specific role.
 
     Domain rule: the user must have a ResearchGroupMembership in the
-    Project's Research Group. This is enforced in application logic,
-    not at the database level (cross-table constraint not supported by PostgreSQL).
+    Project's Research Group. This is enforced at the database level by
+    composite foreign keys (see migrations):
+
+    - (project_id, research_group_id) -> projects_project
+      (id, research_group_id): the membership's group always matches the
+      Project's current group;
+    - (research_group_id, user_id) -> research_groups_membership
+      (research_group_id, user_id) ON DELETE RESTRICT: the user must
+      currently be a member of that group, and removing a group
+      membership requires explicit ProjectMembership cleanup first.
     """
 
     class Role(models.TextChoices):
@@ -62,6 +78,15 @@ class ProjectMembership(models.Model):
         Project,
         on_delete=models.CASCADE,
         related_name="memberships",
+    )
+    # Denormalized scope link: always equal to project.research_group
+    # (derived in save()). It exists so PostgreSQL can enforce the
+    # "membership user belongs to the Project's Research Group"
+    # invariant with composite foreign keys.
+    research_group = models.ForeignKey(
+        "research_groups.ResearchGroup",
+        on_delete=models.RESTRICT,
+        related_name="+",
     )
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -75,6 +100,22 @@ class ProjectMembership(models.Model):
         on_delete=models.RESTRICT,
         related_name="project_memberships_added",
     )
+
+    def save(self, *args, **kwargs):
+        # The Project is the single source of truth for scope; derive
+        # the denormalized link so no ORM write path can diverge.
+        if self.project_id is not None and self.research_group_id is None:
+            if (
+                self._state.db is not None
+                and "project" not in self.__dict__
+            ):
+                project = Project.objects.using(
+                    self._state.db
+                ).get(pk=self.project_id)
+            else:
+                project = self.project
+            self.research_group = project.research_group
+        super().save(*args, **kwargs)
 
     class Meta:
         db_table = "projects_membership"

@@ -7,6 +7,12 @@ and preserve domain invariants.
 from django.db import transaction
 from django.db.models import Max
 
+from authorization.capabilities import Capability
+from authorization.service import (
+    AuthorizationDenied,
+    require_project_capability,
+)
+
 from .models import (
     Project,
     ProjectMembership,
@@ -28,12 +34,15 @@ class ConfigurationError(Exception):
 
 
 def _require_owner(project, actor):
-    """Require actor is a Project owner. Raise ConfigurationError otherwise."""
-    membership = ProjectMembership.objects.filter(
-        project=project, user=actor
-    ).first()
-    if membership is None or membership.role != ProjectMembership.Role.OWNER:
-        raise ConfigurationError("Only a Project owner can modify configuration.")
+    """Require PROJECT_MANAGE (Project owner) via the kernel."""
+    try:
+        require_project_capability(
+            actor, project.pk, Capability.PROJECT_MANAGE
+        )
+    except AuthorizationDenied as exc:
+        raise ConfigurationError(
+            "Only a Project owner can modify configuration."
+        ) from exc
 
 
 def _validate_name(name):

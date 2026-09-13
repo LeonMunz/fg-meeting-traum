@@ -556,12 +556,20 @@ class MyWorkAPITest(_MyWorkAuthMixin, APITestCase):
         self.assertEqual(response.json(), [])
 
     def test_stale_group_membership_removed(self):
-        """WorkItemAssignee exists but ResearchGroupMembership removed:
+        """WorkItemAssignee exists but access revoked:
         My Work must not expose the item."""
         # Login as Chris first
         self._login("chris")
 
-        # Directly remove Chris's ResearchGroupMembership
+        # Revoke Chris's access: ProjectMembership, then group membership.
+        # (The database forbids removing the group membership while the
+        # ProjectMembership still exists.)
+        from projects.models import ProjectMembership
+
+        ProjectMembership.objects.filter(
+            project=self.data["paper_xyz"],
+            user=self.data["chris"],
+        ).delete()
         ResearchGroupMembership.objects.filter(
             research_group=self.data["group"],
             user=self.data["chris"],

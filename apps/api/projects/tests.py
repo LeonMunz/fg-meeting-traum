@@ -93,6 +93,16 @@ class ProjectMembershipModelTest(TestCase):
         self.group = ResearchGroup.objects.create(
             name="FG Test", created_by=self.user
         )
+        ResearchGroupMembership.objects.create(
+            research_group=self.group,
+            user=self.user,
+            role=ResearchGroupMembership.Role.ADMIN,
+        )
+        ResearchGroupMembership.objects.create(
+            research_group=self.group,
+            user=self.user2,
+            role=ResearchGroupMembership.Role.MEMBER,
+        )
         self.project = Project.objects.create(
             name="Test Project",
             research_group=self.group,
@@ -633,6 +643,11 @@ class ProjectMembershipAdminTest(TestCase):
         )
         self.group = ResearchGroup.objects.create(
             name="FG Test", created_by=self.superuser
+        )
+        ResearchGroupMembership.objects.create(
+            research_group=self.group,
+            user=self.superuser,
+            role=ResearchGroupMembership.Role.ADMIN,
         )
         self.project = Project.objects.create(
             name="Admin Test",

@@ -15,6 +15,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from audit_history.models import AuditEvent
+from authorization.capabilities import Capability
+from authorization.service import resolve_project_scope
 from projects.models import Project, ProjectMembership
 from research_groups.models import ResearchGroupMembership
 
@@ -39,30 +41,19 @@ from .services import (
 
 
 def _require_project_access(request, project_id):
-    """Return (Project, membership) if user has effective access, else None.
+    """Return (Project, ScopeContext) if the user has effective access.
 
-    Effective access requires BOTH:
-    - ResearchGroupMembership in the Project's Research Group
-    - ProjectMembership in the Project
+    Effective access requires BOTH a current ProjectMembership and a
+    current ResearchGroupMembership in the Project's Research Group
+    (authorization kernel; default deny).
     """
-    try:
-        membership = ProjectMembership.objects.select_related(
-            "project",
-        ).get(
-            project_id=project_id,
-            user=request.user,
-        )
-    except (ProjectMembership.DoesNotExist, Project.DoesNotExist):
+    scope = resolve_project_scope(request.user, project_id)
+    if scope is None or not scope.has(Capability.PROJECT_READ):
         return None
-
-    # Verify current ResearchGroupMembership — membership may be stale
-    if not ResearchGroupMembership.objects.filter(
-        research_group=membership.project.research_group,
-        user=request.user,
-    ).exists():
+    project = Project.objects.filter(pk=scope.project_id).first()
+    if project is None:
         return None
-
-    return membership.project, membership
+    return project, scope
 
 
 def serialize_work_item(work_item, user=None):
@@ -126,7 +117,7 @@ class ProjectWorkItemListCreateView(APIView):
                 {"error": "Project not found"},
                 status=404,
             )
-        project, membership = result
+        project, scope = result
 
         # Query scoped to this project. Board columns are rendered in
         # this order: persisted manual position (WorkItem.board_position)
@@ -153,10 +144,10 @@ class ProjectWorkItemListCreateView(APIView):
                 {"error": "Project not found"},
                 status=404,
             )
-        project, membership = result
+        project, scope = result
 
         # Viewer cannot create
-        if membership.role == ProjectMembership.Role.VIEWER:
+        if not scope.has(Capability.PROJECT_WORK):
             return Response(
                 {"error": "A viewer cannot create WorkItems."},
                 status=403,
@@ -259,10 +250,10 @@ class WorkItemDetailView(APIView):
                 {"error": "WorkItem not found"},
                 status=404,
             )
-        project, membership = result
+        project, scope = result
 
         # Viewer cannot update
-        if membership.role == ProjectMembership.Role.VIEWER:
+        if not scope.has(Capability.PROJECT_WORK):
             return Response(
                 {"error": "A viewer cannot modify WorkItems."},
                 status=403,
@@ -332,10 +323,10 @@ class WorkItemDetailView(APIView):
                 {"error": "WorkItem not found"},
                 status=404,
             )
-        project, membership = result
+        project, scope = result
 
         # Viewer cannot delete
-        if membership.role == ProjectMembership.Role.VIEWER:
+        if not scope.has(Capability.PROJECT_WORK):
             return Response(
                 {"error": "A viewer cannot delete WorkItems."},
                 status=403,
@@ -388,9 +379,9 @@ class WorkItemReorderView(APIView):
                 {"error": "WorkItem not found"},
                 status=404,
             )
-        project, membership = result
+        project, scope = result
 
-        if membership.role == ProjectMembership.Role.VIEWER:
+        if not scope.has(Capability.PROJECT_WORK):
             return Response(
                 {"error": "A viewer cannot modify WorkItems."},
                 status=403,
@@ -573,10 +564,10 @@ class WorkItemCommentListCreateView(APIView):
                 {"error": "WorkItem not found"},
                 status=404,
             )
-        project, membership = result
+        project, scope = result
 
         # Viewer cannot comment — same boundary as WorkItem writes.
-        if membership.role == ProjectMembership.Role.VIEWER:
+        if not scope.has(Capability.PROJECT_WORK):
             return Response(
                 {"error": "A viewer cannot comment on WorkItems."},
                 status=403,

@@ -4,6 +4,11 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from authorization.capabilities import Capability
+from authorization.service import (
+    resolve_group_scope,
+    resolve_project_scope,
+)
 from research_groups.models import ResearchGroup, ResearchGroupMembership
 
 from .models import (
@@ -41,34 +46,41 @@ from .configuration_services import (
 
 
 def _require_research_group_membership(request, group_id):
-    """Return the ResearchGroup if the user is a member, else None."""
-    try:
-        ResearchGroupMembership.objects.get(
-            research_group_id=group_id,
-            user=request.user,
-        )
-    except (ResearchGroupMembership.DoesNotExist, ResearchGroup.DoesNotExist):
+    """Return the ResearchGroup if the user can read it, else None.
+
+    Resolved through the authorization kernel (GROUP_READ).
+    """
+    scope = resolve_group_scope(request.user, group_id)
+    if scope is None or not scope.has(Capability.GROUP_READ):
         return None
     return ResearchGroup.objects.filter(pk=group_id).first()
 
 
 def _require_project_access(request, project_id):
-    """Return (Project, membership) if user has access, else None."""
-    try:
-        membership = ProjectMembership.objects.get(
-            project_id=project_id,
-            user=request.user,
-        )
-    except (ProjectMembership.DoesNotExist, Project.DoesNotExist):
+    """Return (Project, ScopeContext) if the user has effective access.
+
+    Effective access requires BOTH a current ProjectMembership and a
+    current ResearchGroupMembership in the Project's Research Group
+    (authorization kernel; default deny).
+    """
+    scope = resolve_project_scope(request.user, project_id)
+    if scope is None or not scope.has(Capability.PROJECT_READ):
         return None
-    return membership.project, membership
+    project = Project.objects.filter(pk=scope.project_id).first()
+    if project is None:
+        return None
+    return project, scope
 
 
 def _project_response_data(
     project: Project,
-    membership: ProjectMembership,
+    scope,
 ) -> dict:
-    """Return the canonical Project API representation."""
+    """Return the canonical Project API representation.
+
+    ``scope`` is the caller's ScopeContext (or a ProjectMembership for
+    list views); only its ``role`` is used.
+    """
 
     return {
         "id": project.pk,
@@ -81,7 +93,7 @@ def _project_response_data(
             if project.archived_at is not None
             else None
         ),
-        "currentUserRole": membership.role,
+        "currentUserRole": scope.role,
         "createdAt": project.created_at.isoformat(),
         "updatedAt": project.updated_at.isoformat(),
     }
@@ -208,12 +220,12 @@ class ProjectDetailView(APIView):
                 {"error": "Project not found"},
                 status=404,
             )
-        project, membership = result
+        project, scope = result
 
         return Response(
             _project_response_data(
                 project,
-                membership,
+                scope,
             )
         )
 
@@ -228,9 +240,9 @@ class ProjectDetailView(APIView):
                 {"error": "Project not found"},
                 status=404,
             )
-        project, membership = result
+        project, scope = result
 
-        if membership.role != ProjectMembership.Role.OWNER:
+        if not scope.has(Capability.PROJECT_MANAGE):
             return Response(
                 {"error": "Only a Project owner can update a Project."},
                 status=403,
@@ -261,7 +273,7 @@ class ProjectDetailView(APIView):
         return Response(
             _project_response_data(
                 project,
-                membership,
+                scope,
             )
         )
 
@@ -284,12 +296,9 @@ class ProjectDetailView(APIView):
                 status=404,
             )
 
-        project, membership = result
+        project, scope = result
 
-        if (
-            membership.role
-            != ProjectMembership.Role.OWNER
-        ):
+        if not scope.has(Capability.PROJECT_MANAGE):
             return Response(
                 {
                     "error":
@@ -332,12 +341,9 @@ class ProjectArchiveView(APIView):
                 status=404,
             )
 
-        project, membership = result
+        project, scope = result
 
-        if (
-            membership.role
-            != ProjectMembership.Role.OWNER
-        ):
+        if not scope.has(Capability.PROJECT_MANAGE):
             return Response(
                 {
                     "error":
@@ -360,7 +366,7 @@ class ProjectArchiveView(APIView):
         return Response(
             _project_response_data(
                 project,
-                membership,
+                scope,
             )
         )
 
@@ -382,12 +388,9 @@ class ProjectRestoreView(APIView):
                 status=404,
             )
 
-        project, membership = result
+        project, scope = result
 
-        if (
-            membership.role
-            != ProjectMembership.Role.OWNER
-        ):
+        if not scope.has(Capability.PROJECT_MANAGE):
             return Response(
                 {
                     "error":
@@ -410,7 +413,7 @@ class ProjectRestoreView(APIView):
         return Response(
             _project_response_data(
                 project,
-                membership,
+                scope,
             )
         )
 
@@ -468,9 +471,9 @@ class ProjectMembershipListView(APIView):
                 {"error": "Project not found"},
                 status=404,
             )
-        project, membership = result
+        project, scope = result
 
-        if membership.role != ProjectMembership.Role.OWNER:
+        if not scope.has(Capability.PROJECT_MANAGE):
             return Response(
                 {"error": "Only a Project owner can manage memberships."},
                 status=403,
@@ -537,9 +540,9 @@ class ProjectMembershipDetailView(APIView):
                 {"error": "Project not found"},
                 status=404,
             )
-        project, membership = result
+        project, scope = result
 
-        if membership.role != ProjectMembership.Role.OWNER:
+        if not scope.has(Capability.PROJECT_MANAGE):
             return Response(
                 {"error": "Only a Project owner can manage memberships."},
                 status=403,
@@ -636,9 +639,9 @@ class ProjectMembershipDetailView(APIView):
                 {"error": "Project not found"},
                 status=404,
             )
-        project, membership = result
+        project, scope = result
 
-        if membership.role != ProjectMembership.Role.OWNER:
+        if not scope.has(Capability.PROJECT_MANAGE):
             return Response(
                 {"error": "Only a Project owner can manage memberships."},
                 status=403,
@@ -838,9 +841,9 @@ class ProjectWorkItemTypesView(APIView):
                 {"error": "Project not found"},
                 status=404,
             )
-        project, membership = result
+        project, scope = result
 
-        if membership.role != ProjectMembership.Role.OWNER:
+        if not scope.has(Capability.PROJECT_MANAGE):
             return Response(
                 {"error": "Only a Project owner can modify configuration."},
                 status=403,
@@ -874,9 +877,9 @@ class ProjectWorkItemTypeDetailView(APIView):
                 {"error": "Project not found"},
                 status=404,
             )
-        project, membership = result
+        project, scope = result
 
-        if membership.role != ProjectMembership.Role.OWNER:
+        if not scope.has(Capability.PROJECT_MANAGE):
             return Response(
                 {"error": "Only a Project owner can modify configuration."},
                 status=403,
@@ -922,9 +925,9 @@ class ProjectWorkItemStatusesView(APIView):
                 {"error": "Project not found"},
                 status=404,
             )
-        project, membership = result
+        project, scope = result
 
-        if membership.role != ProjectMembership.Role.OWNER:
+        if not scope.has(Capability.PROJECT_MANAGE):
             return Response(
                 {"error": "Only a Project owner can modify configuration."},
                 status=403,
@@ -971,9 +974,9 @@ class ProjectWorkItemStatusDetailView(APIView):
                 {"error": "Project not found"},
                 status=404,
             )
-        project, membership = result
+        project, scope = result
 
-        if membership.role != ProjectMembership.Role.OWNER:
+        if not scope.has(Capability.PROJECT_MANAGE):
             return Response(
                 {"error": "Only a Project owner can modify configuration."},
                 status=403,
@@ -1027,9 +1030,9 @@ class ProjectWorkItemLabelsView(APIView):
                 {"error": "Project not found"},
                 status=404,
             )
-        project, membership = result
+        project, scope = result
 
-        if membership.role != ProjectMembership.Role.OWNER:
+        if not scope.has(Capability.PROJECT_MANAGE):
             return Response(
                 {"error": "Only a Project owner can modify configuration."},
                 status=403,
@@ -1063,9 +1066,9 @@ class ProjectWorkItemLabelDetailView(APIView):
                 {"error": "Project not found"},
                 status=404,
             )
-        project, membership = result
+        project, scope = result
 
-        if membership.role != ProjectMembership.Role.OWNER:
+        if not scope.has(Capability.PROJECT_MANAGE):
             return Response(
                 {"error": "Only a Project owner can modify configuration."},
                 status=403,

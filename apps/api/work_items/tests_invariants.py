@@ -104,10 +104,13 @@ def _create_test_scenario():
 
 
 class StaleProjectMembershipTest(TransactionTestCase):
-    """Test that stale ProjectMembership (ResearchGroupMembership removed) blocks access.
+    """Test that revoked access blocks Work Item operations.
 
-    Simulates a scenario where a user's ResearchGroupMembership is deleted
-    but their ProjectMembership still exists.
+    Canonical revocation: the ProjectMembership is removed first, then the
+    ResearchGroupMembership. The database forbids the historical "stale"
+    state where a ProjectMembership outlived the group membership
+    (composite FK, invariant: ProjectMembership requires a valid
+    ResearchGroupMembership).
     """
 
     def setUp(self):
@@ -120,7 +123,13 @@ class StaleProjectMembershipTest(TransactionTestCase):
         )
 
     def _make_membership_stale(self, user):
-        """Remove the user's ResearchGroupMembership while keeping ProjectMembership."""
+        """Revoke the user's access: ProjectMembership, then group membership."""
+        from projects.models import ProjectMembership
+
+        ProjectMembership.objects.filter(
+            project=self.data["paper_xyz"],
+            user=user,
+        ).delete()
         ResearchGroupMembership.objects.filter(
             research_group=self.data["group"],
             user=user,
@@ -173,7 +182,13 @@ class StaleAssigneeMembershipTest(TransactionTestCase):
         self.data = _create_test_scenario()
 
     def test_stale_assignee_rejected(self):
-        """Chris has ProjectMembership but no ResearchGroupMembership → cannot be assigned."""
+        """Chris without any current membership → cannot be assigned."""
+        from projects.models import ProjectMembership
+
+        ProjectMembership.objects.filter(
+            project=self.data["paper_xyz"],
+            user=self.data["chris"],
+        ).delete()
         ResearchGroupMembership.objects.filter(
             research_group=self.data["group"],
             user=self.data["chris"],
@@ -187,7 +202,7 @@ class StaleAssigneeMembershipTest(TransactionTestCase):
                 title="Assign Stale",
                 assignee_ids=[self.data["chris"].pk],
             )
-        self.assertIn("ResearchGroupMembership", ctx.exception.message)
+        self.assertIn("cannot be assigned", ctx.exception.message)
 
     def test_stale_assignee_rejected_in_update(self):
         """Replacing assignee with a stale member is rejected."""
@@ -198,7 +213,13 @@ class StaleAssigneeMembershipTest(TransactionTestCase):
             title="Test",
         )
 
-        # Make Chris stale
+        # Revoke Chris's access (ProjectMembership, then group membership)
+        from projects.models import ProjectMembership
+
+        ProjectMembership.objects.filter(
+            project=self.data["paper_xyz"],
+            user=self.data["chris"],
+        ).delete()
         ResearchGroupMembership.objects.filter(
             research_group=self.data["group"],
             user=self.data["chris"],
@@ -231,6 +252,12 @@ class StaleMembershipAPITest(_AuthMixin, APITestCase):
 
     def test_stale_member_cannot_list_via_api(self):
         """Chris with stale membership cannot list via API."""
+        from projects.models import ProjectMembership
+
+        ProjectMembership.objects.filter(
+            project=self.data["paper_xyz"],
+            user=self.data["chris"],
+        ).delete()
         ResearchGroupMembership.objects.filter(
             research_group=self.data["group"],
             user=self.data["chris"],
@@ -244,6 +271,12 @@ class StaleMembershipAPITest(_AuthMixin, APITestCase):
 
     def test_stale_member_cannot_read_work_item_via_api(self):
         """Chris with stale membership cannot read WorkItem via API."""
+        from projects.models import ProjectMembership
+
+        ProjectMembership.objects.filter(
+            project=self.data["paper_xyz"],
+            user=self.data["chris"],
+        ).delete()
         ResearchGroupMembership.objects.filter(
             research_group=self.data["group"],
             user=self.data["chris"],
@@ -255,6 +288,12 @@ class StaleMembershipAPITest(_AuthMixin, APITestCase):
 
     def test_stale_member_cannot_create_via_api(self):
         """Chris with stale membership cannot create via API → 404 (non-leaking)."""
+        from projects.models import ProjectMembership
+
+        ProjectMembership.objects.filter(
+            project=self.data["paper_xyz"],
+            user=self.data["chris"],
+        ).delete()
         ResearchGroupMembership.objects.filter(
             research_group=self.data["group"],
             user=self.data["chris"],
@@ -272,6 +311,12 @@ class StaleMembershipAPITest(_AuthMixin, APITestCase):
 
     def test_stale_member_cannot_update_via_api(self):
         """Chris with stale membership cannot update via API → 404 (non-leaking)."""
+        from projects.models import ProjectMembership
+
+        ProjectMembership.objects.filter(
+            project=self.data["paper_xyz"],
+            user=self.data["chris"],
+        ).delete()
         ResearchGroupMembership.objects.filter(
             research_group=self.data["group"],
             user=self.data["chris"],

@@ -45,6 +45,7 @@ INSTALLED_APPS = [
     'work_items',
     'meetings',
     'audit_history',
+    'authorization',
 ]
 
 MIDDLEWARE = [

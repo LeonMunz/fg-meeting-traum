@@ -102,9 +102,18 @@ Markers:
 
 ## Authorization / multi-user
 
+Canonical domain reference: `docs/domain/authorization.md` (ResearchGroup /
+Project membership, scope, ownership, and authorization invariants).
+
 - **IMPLEMENTED** — session authentication (login/logout/me, CSRF) with server-side, deny-by-default authorization.
-- **IMPLEMENTED** — list endpoints are permission-filtered; forbidden objects do not leak through collections.
-- **IMPLEMENTED** — Project scope enforcement for Project Meetings (read and write), including archived read-only behavior.
+- **IMPLEMENTED** — single server-side authorization foundation (backend app `authorization`, no models): typed `Capability` inventory, the central role → capability table, `AuthContext` (trusted session identity, inactive accounts get no capabilities), `ScopeContext`, and one canonical service (`resolve_group_scope` / `resolve_project_scope` / `resolve_meeting_scope` / `resolve_meeting_series_scope`, `require_*`). All protected ResearchGroup-, Project-, Work Item-, and Meeting-related server operations resolve scope + capability through it; no endpoint-specific role systems and no raw role authorization checks in view code remain.
+- **IMPLEMENTED** — persisted membership integrity: `ProjectMembership` carries its `research_group` (derived from the Project) and two composite foreign keys enforce, at the database level, that every `ProjectMembership` references a valid Project-of-that-group and a current `ResearchGroupMembership` of the user in that group (migration `projects/0005`, non-destructive backfill). Rejoining a Research Group never restores removed `ProjectMembership`s.
+- **IMPLEMENTED** — ResearchGroup creation: `POST /api/research-groups/` + `create_research_group` (creator becomes first group Owner atomically); Project creation by any group member with creator becoming first Project Owner.
+- **IMPLEMENTED** — ownership invariants: 1..n Owners per ResearchGroup and per active Project; final Owner cannot be removed, leave, or be downgraded (group + Project, API and service level); all owner-set mutations are concurrency-safe (parent row lock + revalidation under lock, with explicit two-thread concurrency tests).
+- **IMPLEMENTED** — ResearchGroup offboarding: explicit workflow that atomically resolves Project ownership/assignments and revokes all child `ProjectMembership`s in the group; plain membership removal refuses while Project memberships remain.
+- **IMPLEMENTED** — list endpoints are permission-filtered; forbidden objects do not leak through collections; inaccessible single-resource reads return non-leaking 404.
+- **IMPLEMENTED** — Meeting access on the same foundation: `MEETING_READ` = creator-or-participant only (membership alone never grants Meeting visibility); `MEETING_WRITE` = the scoped write rule (group: `GROUP_READ`; project: `PROJECT_WORK`, archived read-only). `MEETING_SERIES_*` analogous.
+- **IMPLEMENTED** — security regression matrix: `apps/api/authorization/tests_security_matrix.py` (25 behavioral ALLOW/DENY API tests) plus kernel capability-matrix tests (`authorization/tests.py`) pin removal + known-ID denial, cross-group rejection, final-Owner denial, rejoin non-restoration, and inactive-account denial.
 - **IMPLEMENTED** — audit history foundation for Work Item change tracking.
 
 ## Meeting concepts that are documented direction, NOT implemented

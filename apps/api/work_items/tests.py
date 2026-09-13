@@ -277,7 +277,7 @@ class AssigneeEligibilityTest(TestCase):
     def test_viewer_rejected(self):
         with self.assertRaises(WorkItemDomainError) as ctx:
             _validate_assignee_eligibility(self.data["paper_xyz"], self.data["laura"])
-        self.assertIn("viewer", str(ctx.exception.message).lower())
+        self.assertIn("cannot be assigned", str(ctx.exception.message).lower())
 
     def test_no_membership_rejected(self):
         with self.assertRaises(WorkItemDomainError) as ctx:

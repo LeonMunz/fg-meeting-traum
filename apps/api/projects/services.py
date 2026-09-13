@@ -12,6 +12,12 @@ from django.db.models import Q
 from django.utils import timezone
 
 from audit_history.services import record_audit_event
+from authorization.capabilities import Capability
+from authorization.service import (
+    AuthorizationDenied,
+    has_group_capability,
+    require_project_capability,
+)
 from research_groups.models import ResearchGroup, ResearchGroupMembership
 
 from .models import (
@@ -62,11 +68,12 @@ def create_project(
 
     The creator must have a ResearchGroupMembership in the target group.
     """
-    # Validate: creator is a Research Group member
-    if not ResearchGroupMembership.objects.filter(
-        research_group=research_group,
-        user=creator,
-    ).exists():
+    # Validate: creator holds GROUP_CREATE_PROJECT (any active member)
+    if not has_group_capability(
+        creator,
+        research_group.pk,
+        Capability.GROUP_CREATE_PROJECT,
+    ):
         raise ProjectDomainError(
             "User must be a member of this Research Group to create a Project."
         )
@@ -153,28 +160,22 @@ def add_project_membership(
             locked_project,
         )
 
-        actor_membership = (
-            ProjectMembership.objects
-            .filter(
-                project=locked_project,
-                user=actor,
+        try:
+            require_project_capability(
+                actor,
+                locked_project.pk,
+                Capability.PROJECT_MANAGE,
             )
-            .first()
-        )
-
-        if (
-            actor_membership is None
-            or actor_membership.role
-            != ProjectMembership.Role.OWNER
-        ):
+        except AuthorizationDenied as exc:
             raise ProjectDomainError(
                 "Only a Project owner can manage memberships."
-            )
+            ) from exc
 
-        if not ResearchGroupMembership.objects.filter(
-            research_group=locked_project.research_group,
-            user=target_user,
-        ).exists():
+        if not has_group_capability(
+            target_user,
+            locked_project.research_group_id,
+            Capability.GROUP_READ,
+        ):
             raise ProjectDomainError(
                 "Target user must be a member of the "
                 "Project's Research Group."
@@ -232,13 +233,15 @@ def change_membership_role(
 
         _ensure_project_not_archived(project)
 
-        # Validate: actor is Project owner
-        actor_membership = ProjectMembership.objects.select_for_update().filter(
-            project=project,
-            user=actor,
-        ).first()
-        if actor_membership is None or actor_membership.role != ProjectMembership.Role.OWNER:
-            raise ProjectDomainError("Only a Project owner can manage memberships.")
+        # Validate: actor holds PROJECT_MANAGE (Project owner)
+        try:
+            require_project_capability(
+                actor, project.pk, Capability.PROJECT_MANAGE
+            )
+        except AuthorizationDenied as exc:
+            raise ProjectDomainError(
+                "Only a Project owner can manage memberships."
+            ) from exc
 
         # Validate: final-owner invariant for active projects
         if project.status == Project.Status.ACTIVE:
@@ -331,13 +334,15 @@ def remove_membership(
 
         _ensure_project_not_archived(project)
 
-        # Validate: actor is Project owner
-        actor_membership = ProjectMembership.objects.select_for_update().filter(
-            project=project,
-            user=actor,
-        ).first()
-        if actor_membership is None or actor_membership.role != ProjectMembership.Role.OWNER:
-            raise ProjectDomainError("Only a Project owner can manage memberships.")
+        # Validate: actor holds PROJECT_MANAGE (Project owner)
+        try:
+            require_project_capability(
+                actor, project.pk, Capability.PROJECT_MANAGE
+            )
+        except AuthorizationDenied as exc:
+            raise ProjectDomainError(
+                "Only a Project owner can manage memberships."
+            ) from exc
 
         # Validate: final-owner invariant for active projects
         if project.status == Project.Status.ACTIVE:
@@ -427,23 +432,16 @@ def update_project(
             locked_project,
         )
 
-        actor_membership = (
-            ProjectMembership.objects
-            .filter(
-                project=locked_project,
-                user=actor,
+        try:
+            require_project_capability(
+                actor,
+                locked_project.pk,
+                Capability.PROJECT_MANAGE,
             )
-            .first()
-        )
-
-        if (
-            actor_membership is None
-            or actor_membership.role
-            != ProjectMembership.Role.OWNER
-        ):
+        except AuthorizationDenied as exc:
             raise ProjectDomainError(
                 "Only a Project owner can update a Project."
-            )
+            ) from exc
 
         update_fields = []
 
@@ -485,24 +483,16 @@ def archive_project(
             .get(pk=project.pk)
         )
 
-        actor_membership = (
-            ProjectMembership.objects
-            .select_for_update()
-            .filter(
-                project=project,
-                user=actor,
+        try:
+            require_project_capability(
+                actor,
+                project.pk,
+                Capability.PROJECT_MANAGE,
             )
-            .first()
-        )
-
-        if (
-            actor_membership is None
-            or actor_membership.role
-            != ProjectMembership.Role.OWNER
-        ):
+        except AuthorizationDenied as exc:
             raise ProjectDomainError(
                 "Only a Project owner can archive a Project."
-            )
+            ) from exc
 
         if project.archived_at is not None:
             raise ProjectDomainError(
@@ -544,24 +534,16 @@ def restore_project(
             .get(pk=project.pk)
         )
 
-        actor_membership = (
-            ProjectMembership.objects
-            .select_for_update()
-            .filter(
-                project=project,
-                user=actor,
+        try:
+            require_project_capability(
+                actor,
+                project.pk,
+                Capability.PROJECT_MANAGE,
             )
-            .first()
-        )
-
-        if (
-            actor_membership is None
-            or actor_membership.role
-            != ProjectMembership.Role.OWNER
-        ):
+        except AuthorizationDenied as exc:
             raise ProjectDomainError(
                 "Only a Project owner can restore a Project."
-            )
+            ) from exc
 
         if project.archived_at is None:
             raise ProjectDomainError(
@@ -607,24 +589,16 @@ def delete_empty_project(
             .get(pk=project.pk)
         )
 
-        actor_membership = (
-            ProjectMembership.objects
-            .select_for_update()
-            .filter(
-                project=project,
-                user=actor,
+        try:
+            require_project_capability(
+                actor,
+                project.pk,
+                Capability.PROJECT_MANAGE,
             )
-            .first()
-        )
-
-        if (
-            actor_membership is None
-            or actor_membership.role
-            != ProjectMembership.Role.OWNER
-        ):
+        except AuthorizationDenied as exc:
             raise ProjectDomainError(
                 "Only a Project owner can delete a Project."
-            )
+            ) from exc
 
         if project.work_items.exists():
             raise ProjectDomainError(
@@ -663,6 +637,12 @@ def get_accessible_project_qs(user):
     Effective access requires BOTH:
     - ResearchGroupMembership in the Project's Research Group
     - ProjectMembership in the Project
+
+    The query filters only on ProjectMembership: the group-membership
+    condition is enforced structurally by the composite FK added in
+    migration 0005 (a ProjectMembership row cannot exist without a
+    current ResearchGroupMembership in the Project's Research Group).
+    Do not weaken this dependency without replacing the DB constraint.
     """
     return Project.objects.filter(
         memberships__user=user,

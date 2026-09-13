@@ -2,6 +2,12 @@ from django.db import IntegrityError, models, transaction
 from django.utils import timezone
 from django.db.models import Max
 
+from authorization.capabilities import Capability
+from authorization.service import (
+    has_group_capability,
+    has_project_capability,
+    resolve_meeting_scope,
+)
 from projects.models import ProjectMembership
 from research_groups.models import ResearchGroupMembership
 
@@ -33,22 +39,12 @@ class MeetingFollowUpConflictError(MeetingDomainError):
     """An active schedule exists and requires explicit rescheduling."""
 
 
-PROJECT_READ_ROLES = {
-    ProjectMembership.Role.OWNER,
-    ProjectMembership.Role.MEMBER,
-    ProjectMembership.Role.VIEWER,
-}
-PROJECT_WRITE_ROLES = {
-    ProjectMembership.Role.OWNER,
-    ProjectMembership.Role.MEMBER,
-}
-
-
 def _require_research_group_membership(*, research_group, user):
-    if not ResearchGroupMembership.objects.filter(
-        research_group=research_group,
-        user=user,
-    ).exists():
+    if not has_group_capability(
+        user,
+        research_group.pk,
+        Capability.GROUP_READ,
+    ):
         raise MeetingDomainError(
             "User is not a member of this Research Group."
         )
@@ -69,12 +65,8 @@ def _has_canonical_meeting_read_access(*, meeting, user):
     Project permissions, or access to otherwise protected Work
     Items.
     """
-    if meeting.created_by_id == user.pk:
-        return True
-    return MeetingParticipant.objects.filter(
-        meeting_id=meeting.pk,
-        user=user,
-    ).exists()
+    scope = resolve_meeting_scope(user, meeting)
+    return scope is not None and scope.has(Capability.MEETING_READ)
 
 
 def _require_scoped_read_access(
@@ -109,11 +101,9 @@ def _require_scoped_read_access(
             "Project must belong to the Meeting's Research Group."
         )
 
-    membership = ProjectMembership.objects.filter(
-        project=project,
-        user=user,
-    ).first()
-    if membership is None or membership.role not in PROJECT_READ_ROLES:
+    if not has_project_capability(
+        user, project.pk, Capability.PROJECT_READ
+    ):
         raise MeetingDomainError(
             "User does not have access to this Project."
         )
@@ -141,11 +131,9 @@ def _require_scoped_write_access(
             "Archived Projects are read-only. Restore the Project first."
         )
 
-    membership = ProjectMembership.objects.get(
-        project=project,
-        user=user,
-    )
-    if membership.role not in PROJECT_WRITE_ROLES:
+    if not has_project_capability(
+        user, project.pk, Capability.PROJECT_WORK
+    ):
         raise MeetingDomainError(
             "A viewer cannot modify Project Meeting content."
         )

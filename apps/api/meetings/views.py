@@ -8,6 +8,13 @@ from rest_framework.views import APIView
 from projects.models import ProjectMembership
 from work_items.views import serialize_work_item
 
+from authorization.capabilities import Capability
+from authorization.service import (
+    has_project_capability,
+    resolve_group_scope,
+    resolve_meeting_scope,
+    resolve_meeting_series_scope,
+)
 from research_groups.models import (
     ResearchGroupMembership,
 )
@@ -54,8 +61,6 @@ from .serializers import (
 from .services import (
     MeetingDomainError,
     MeetingFollowUpConflictError,
-    PROJECT_READ_ROLES,
-    PROJECT_WRITE_ROLES,
     _has_canonical_meeting_read_access,
     _has_can_meet_participant_add_access,
     add_meeting_participant,
@@ -113,17 +118,12 @@ def _active_follow_up_prefetch():
 
 
 def _require_research_group_access(request, group_id):
-    try:
-        membership = ResearchGroupMembership.objects.select_related(
-            "research_group",
-        ).get(
-            research_group_id=group_id,
-            user=request.user,
-        )
-    except ResearchGroupMembership.DoesNotExist:
+    scope = resolve_group_scope(request.user, group_id)
+    if scope is None or not scope.has(Capability.GROUP_READ):
         return None
+    from research_groups.models import ResearchGroup
 
-    return membership.research_group
+    return ResearchGroup.objects.filter(pk=group_id).first()
 
 
 def _require_meeting_access(request, meeting_id):
@@ -242,45 +242,33 @@ def _require_meeting_section_access(request, section_id):
 
 
 def _has_scoped_read_access(user, resource):
-    if not ResearchGroupMembership.objects.filter(
-        research_group_id=resource.research_group_id,
-        user=user,
-    ).exists():
-        return False
-
-    if resource.scope == Meeting.Scope.GROUP:
-        return resource.project_id is None
-
-    return (
-        resource.scope == Meeting.Scope.PROJECT
-        and resource.project_id is not None
-        and ProjectMembership.objects.filter(
-            project_id=resource.project_id,
-            user=user,
-            role__in=PROJECT_READ_ROLES,
-        ).exists()
-    )
+    """MeetingSeries read: the kernel's MEETING_SERIES_READ capability."""
+    scope = resolve_meeting_series_scope(user, resource)
+    return scope is not None and scope.has(Capability.MEETING_SERIES_READ)
 
 
 def _has_project_write_access(user, project):
+    """PROJECT_WORK via the kernel; archived Projects are read-only."""
     if project.archived_at is not None:
         return False
-
-    return ProjectMembership.objects.filter(
-        project=project,
-        user=user,
-        role__in=PROJECT_WRITE_ROLES,
-    ).exists()
+    return has_project_capability(
+        user, project.pk, Capability.PROJECT_WORK
+    )
 
 
 def _has_scoped_write_access(user, resource):
-    if not _has_scoped_read_access(user, resource):
-        return False
+    """Meeting/Series write via the kernel capabilities.
 
-    if resource.scope == Meeting.Scope.GROUP:
-        return True
-
-    return _has_project_write_access(user, resource.project)
+    - Meeting occurrence → MEETING_WRITE (scoped write rule).
+    - MeetingSeries template → MEETING_SERIES_WRITE.
+    """
+    if isinstance(resource, MeetingSeries):
+        scope = resolve_meeting_series_scope(user, resource)
+        return scope is not None and scope.has(
+            Capability.MEETING_SERIES_WRITE
+        )
+    scope = resolve_meeting_scope(user, resource)
+    return scope is not None and scope.has(Capability.MEETING_WRITE)
 
 
 def _mutation_forbidden_response():
@@ -366,10 +354,7 @@ def _series_scope_filter(user):
         | (
             Q(scope=Meeting.Scope.PROJECT, project__isnull=False)
             & Q(research_group__memberships__user=user)
-            & Q(
-                project__memberships__user=user,
-                project__memberships__role__in=PROJECT_READ_ROLES,
-            )
+            & Q(project__memberships__user=user)
         )
     )
 
@@ -394,7 +379,6 @@ def _resolve_project_for_scope_read(*, group, user, scope, project_id):
             project_id=project_id,
             project__research_group=group,
             user=user,
-            role__in=PROJECT_READ_ROLES,
         )
         .first()
     )
@@ -1730,7 +1714,11 @@ class MeetingItemWorkItemCreateView(APIView):
                 status=404,
             )
 
-        if membership.role == ProjectMembership.Role.VIEWER:
+        if not has_project_capability(
+            request.user,
+            data["projectId"],
+            Capability.PROJECT_WORK,
+        ):
             return Response(
                 {
                     "error": (
