@@ -29,6 +29,8 @@ import {
   getProjectWorkItemConfiguration,
   listProjectMemberships,
   listResearchGroupMembers,
+  removeProjectMembership,
+  updateProjectMembership,
 } from '../../api/projects'
 import { listProjectWorkItems } from '../../api/work-items'
 import type {
@@ -145,6 +147,10 @@ const ALEX_MEMBER = membership(1, 1, 'alex', 'Alex', 'member')
 
 const CHRIS_MEMBER = membership(2, 2, 'chris', 'Chris', 'member')
 
+const CHRIS_OWNER = membership(2, 2, 'chris', 'Chris', 'owner')
+
+const CHRIS_VIEWER = membership(2, 2, 'chris', 'Chris', 'viewer')
+
 const GROUP_MEMBERS: ApiResearchGroupMember[] = [
   {
     id: 1,
@@ -199,7 +205,9 @@ function LocationProbe({
   return null
 }
 
-function renderPage() {
+function renderPage(
+  initialPath = '/projects/7/work-items',
+) {
   const paths: string[] = []
   const onPath = (path: string) => {
     paths.push(path)
@@ -207,7 +215,7 @@ function renderPage() {
 
   render(
     <MemoryRouter
-      initialEntries={['/projects/7/work-items']}
+      initialEntries={[initialPath]}
     >
       <Routes>
         <Route
@@ -299,7 +307,7 @@ describe('Project Header add-member shortcut', () => {
     ).toBe(true)
   })
 
-  it('uses the same Add-member dialog as Settings -> Access', async () => {
+  it('uses the same Add-member dialog as Members -> Add member', async () => {
     mockProjectData([ALEX_OWNER])
 
     renderPage()
@@ -311,7 +319,8 @@ describe('Project Header add-member shortcut', () => {
       within(fromHeader).getByLabelText('Select person'),
     ).toBeInTheDocument()
 
-    // ... and Settings -> Access opens the same shared dialog.
+    // ... and Members -> Add member opens the same shared
+    // dialog.
     fireEvent.click(
       within(fromHeader).getByRole('button', {
         name: 'Cancel',
@@ -320,23 +329,23 @@ describe('Project Header add-member shortcut', () => {
 
     fireEvent.click(
       screen.getByRole('link', {
-        name: 'Settings',
+        name: 'Members',
       }),
     )
 
     fireEvent.click(
       await screen.findByRole('button', {
-        name: /Add member/,
+        name: 'Add member',
       }),
     )
 
-    const fromSettings = screen.getByRole('dialog', {
+    const fromMembers = screen.getByRole('dialog', {
       name: 'Add project member',
     })
 
-    expect(fromSettings).toBeVisible()
+    expect(fromMembers).toBeVisible()
     expect(
-      within(fromSettings).getByLabelText('Select person'),
+      within(fromMembers).getByLabelText('Select person'),
     ).toBeInTheDocument()
   })
 
@@ -486,5 +495,315 @@ describe('Project Header add-member shortcut', () => {
         name: /@laura/,
       }),
     ).toBeInTheDocument()
+  })
+})
+
+describe('Project Members tab', () => {
+  it('renders the Project tabs in order: Work Items, Overview, Members, Settings', async () => {
+    mockProjectData([ALEX_OWNER])
+
+    renderPage()
+
+    await screen.findByRole('button', {
+      name: 'Add project member',
+    })
+
+    const nav = screen.getByRole('navigation')
+
+    expect(
+      within(nav)
+        .getAllByRole('link')
+        .map((link) => link.textContent),
+    ).toEqual([
+      'Work Items',
+      'Overview',
+      'Members',
+      'Settings',
+    ])
+  })
+
+  it('opens the Members tab and shows the heading, count and current members', async () => {
+    mockProjectData([ALEX_OWNER, CHRIS_MEMBER])
+
+    renderPage('/projects/7/members')
+
+    expect(
+      await screen.findByRole('heading', {
+        name: 'Members',
+        level: 2,
+      }),
+    ).toBeInTheDocument()
+
+    // Count badge reflects the current membership count.
+    expect(screen.getByText('2', { exact: true })).toBeInTheDocument()
+
+    // Both members render with name and username.
+    expect(screen.getByText('Alex')).toBeInTheDocument()
+    expect(screen.getByText('@alex', { exact: true })).toBeInTheDocument()
+    expect(screen.getByText('Chris')).toBeInTheDocument()
+    expect(screen.getByText('@chris', { exact: true })).toBeInTheDocument()
+  })
+
+  it('renders the current role of each member', async () => {
+    mockProjectData([ALEX_OWNER, CHRIS_MEMBER])
+
+    renderPage('/projects/7/members')
+
+    expect(
+      await screen.findByRole('combobox', {
+        name: 'Role for Alex',
+      }),
+    ).toHaveValue('owner')
+
+    expect(
+      screen.getByRole('combobox', {
+        name: 'Role for Chris',
+      }),
+    ).toHaveValue('member')
+  })
+
+  it('no longer contains Access or member management in Settings', async () => {
+    mockProjectData([ALEX_OWNER, CHRIS_MEMBER])
+
+    renderPage()
+
+    await screen.findByRole('button', {
+      name: 'Add project member',
+    })
+
+    fireEvent.click(
+      screen.getByRole('link', { name: 'Settings' }),
+    )
+
+    // The Settings form still renders ...
+    expect(screen.getByLabelText('Project name')).toBeInTheDocument()
+
+    // ... but the extracted membership UI is gone.
+    expect(
+      screen.queryByText('Access', { exact: true }),
+    ).not.toBeInTheDocument()
+
+    expect(
+      screen.queryByRole('button', {
+        name: /Add member/,
+      }),
+    ).not.toBeInTheDocument()
+
+    expect(
+      screen.queryByRole('combobox'),
+    ).not.toBeInTheDocument()
+
+    expect(
+      screen.queryByRole('button', {
+        name: 'Remove',
+      }),
+    ).not.toBeInTheDocument()
+
+    expect(
+      screen.queryByText('@chris', { exact: true }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('adds a member from the Members tab through the shared dialog and updates the list immediately', async () => {
+    mockProjectData([ALEX_OWNER])
+    vi.mocked(addProjectMembership).mockResolvedValue(
+      CHRIS_MEMBER,
+    )
+
+    renderPage('/projects/7/members')
+
+    await screen.findByText('@alex', { exact: true })
+
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Add member',
+      }),
+    )
+
+    const dialog = screen.getByRole('dialog', {
+      name: 'Add project member',
+    })
+
+    expect(dialog).toBeVisible()
+
+    fireEvent.change(
+      within(dialog).getByLabelText('Select person'),
+      { target: { value: 'chris' } },
+    )
+
+    fireEvent.click(
+      within(dialog).getByRole('button', {
+        name: /@chris/,
+      }),
+    )
+
+    fireEvent.click(
+      within(dialog).getByRole('button', {
+        name: /Add member/,
+      }),
+    )
+
+    expect(addProjectMembership).toHaveBeenCalledWith(
+      7,
+      { userId: 2, role: 'member' },
+    )
+
+    // Success closes the dialog and the new member appears
+    // in the Members list and header cluster without a
+    // reload.
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('dialog', {
+          name: 'Add project member',
+        }),
+      ).not.toBeInTheDocument(),
+    )
+
+    expect(
+      screen.getByText('@chris', { exact: true }),
+    ).toBeInTheDocument()
+    expect(screen.getByText('Chris')).toBeInTheDocument()
+    expect(screen.getByTitle('Chris')).toBeInTheDocument()
+
+    // The count badge reflects the new member.
+    expect(screen.getByText('2', { exact: true })).toBeInTheDocument()
+  })
+
+  it('changes a member role from the Members tab as before', async () => {
+    mockProjectData([ALEX_OWNER, CHRIS_MEMBER])
+    vi.mocked(updateProjectMembership).mockResolvedValue(
+      CHRIS_VIEWER,
+    )
+
+    renderPage('/projects/7/members')
+
+    const select = await screen.findByRole('combobox', {
+      name: 'Role for Chris',
+    })
+
+    expect(select).toHaveValue('member')
+
+    fireEvent.change(select, {
+      target: { value: 'viewer' },
+    })
+
+    expect(updateProjectMembership).toHaveBeenCalledWith(
+      7,
+      2,
+      { role: 'viewer' },
+    )
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole('combobox', {
+          name: 'Role for Chris',
+        }),
+      ).toHaveValue('viewer'),
+    )
+  })
+
+  it('removes a member from the Members tab as before', async () => {
+    mockProjectData([ALEX_OWNER, CHRIS_MEMBER])
+    vi.mocked(removeProjectMembership).mockResolvedValue({
+      detail: 'Project membership removed.',
+    })
+
+    renderPage('/projects/7/members')
+
+    await screen.findByText('@chris', { exact: true })
+
+    // Two rows render: the last owner's action stays disabled,
+    // Chris' action is the enabled one.
+    const removeButtons = screen.getAllByRole('button', {
+      name: 'Remove',
+    })
+
+    expect(removeButtons).toHaveLength(2)
+    expect(removeButtons[0]).toBeDisabled()
+
+    fireEvent.click(removeButtons[1])
+
+    const confirmDialog = screen.getByRole('alertdialog')
+
+    fireEvent.click(
+      within(confirmDialog).getByRole('button', {
+        name: 'Remove member',
+      }),
+    )
+
+    expect(removeProjectMembership).toHaveBeenCalledWith(
+      7,
+      2,
+    )
+
+    await waitFor(() =>
+      expect(
+        screen.queryByText('@chris', { exact: true }),
+      ).not.toBeInTheDocument(),
+    )
+  })
+
+  it('keeps the last-owner protection in the Members tab', async () => {
+    mockProjectData([ALEX_OWNER])
+
+    renderPage('/projects/7/members')
+
+    const select = await screen.findByRole('combobox', {
+      name: 'Role for Alex',
+    })
+
+    expect(
+      screen.getByText('Last owner', { exact: true }),
+    ).toBeInTheDocument()
+
+    expect(
+      within(select).getByRole('option', {
+        name: 'Member',
+      }),
+    ).toBeDisabled()
+
+    expect(
+      within(select).getByRole('option', {
+        name: 'Viewer',
+      }),
+    ).toBeDisabled()
+
+    expect(
+      screen.getByRole('button', {
+        name: 'Remove',
+      }),
+    ).toBeDisabled()
+  })
+
+  it('gives a non-owner Project member no membership controls', async () => {
+    mockProjectData([ALEX_MEMBER, CHRIS_OWNER])
+
+    renderPage('/projects/7/members')
+
+    // Wait until the member list has actually loaded so the
+    // absence below is meaningful, not a pre-load snapshot.
+    await screen.findByText('Owner', { exact: true })
+
+    expect(
+      screen.queryByRole('button', {
+        name: /Add member/,
+      }),
+    ).not.toBeInTheDocument()
+
+    expect(
+      screen.queryByRole('combobox'),
+    ).not.toBeInTheDocument()
+
+    expect(
+      screen.queryByRole('button', {
+        name: 'Remove',
+      }),
+    ).not.toBeInTheDocument()
+
+    // Roles remain visible as plain labels: the header pill,
+    // the Member column header and Alex' row label.
+    expect(
+      screen.getAllByText('Member', { exact: true }),
+    ).toHaveLength(3)
   })
 })

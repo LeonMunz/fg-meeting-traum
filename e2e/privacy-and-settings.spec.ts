@@ -58,7 +58,7 @@ async function addChris(
 ) {
   await page
     .getByRole('link', {
-        name: 'Settings',
+        name: 'Members',
         exact: true,
       })
     .click()
@@ -475,13 +475,19 @@ test(
         .getByTitle('Chris'),
     ).toBeVisible()
 
-    // The same member is present in Settings -> Access.
+    // The same member is present in the dedicated Members tab.
     await page
       .getByRole('link', {
-        name: 'Settings',
+        name: 'Members',
         exact: true,
       })
       .click()
+
+    await expect(
+      page.getByRole('heading', {
+        name: 'Members',
+      }),
+    ).toBeVisible()
 
     await expect(
       page.getByText(

@@ -155,12 +155,7 @@ function AppRoutes() {
 
                   <Route
                     path="members"
-                    element={
-                      <Navigate
-                        to="../settings"
-                        replace
-                      />
-                    }
+                    element={<ProjectDetailPage />}
                   />
 
                   <Route

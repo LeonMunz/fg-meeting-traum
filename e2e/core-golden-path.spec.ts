@@ -82,7 +82,7 @@ test(
 
     await page
       .getByRole('link', {
-        name: 'Settings',
+        name: 'Members',
         exact: true,
       })
       .click()
