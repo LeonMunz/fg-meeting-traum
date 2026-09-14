@@ -222,21 +222,21 @@ test(
         name: 'Project status',
       })
 
-    await projectStatusGroup
-      .getByText(
-        'Paused',
-        { exact: true },
-      )
-      .click()
+    // The status control is a semantic radio group. The radio
+    // input sits visually hidden inside its segmented label, so a
+    // pointer click on the input itself is intercepted by the icon
+    // span; select it through the native radio keyboard contract
+    // (focus + Space) instead.
+    const pausedStatus =
+      projectStatusGroup.getByRole('radio', {
+        name: 'Paused',
+      })
 
-    await expect(
-      projectStatusGroup.getByRole(
-        'radio',
-        {
-          name: /Paused/,
-        },
-      ),
-    ).toBeChecked()
+    await pausedStatus.focus()
+
+    await pausedStatus.press('Space')
+
+    await expect(pausedStatus).toBeChecked()
 
     await page
       .getByRole('button', {

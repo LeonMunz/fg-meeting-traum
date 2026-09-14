@@ -2689,29 +2689,27 @@ export function ProjectDetailPage() {
 
 
       {activeTab === 'settings' && (
-        <section className="mt-6 overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest shadow-sm">
-          <div className="border-b border-outline-variant px-6 py-5">
-            <h2 className="font-semibold text-on-surface">
-              Project settings
-            </h2>
+        <div className="mt-7 w-full max-w-[640px]">
+          <h2 className="text-[18px] font-semibold leading-6 text-text">
+            Project settings
+          </h2>
 
-            <p className="mt-0.5 text-xs text-on-surface-variant">
-              Manage the project identity and lifecycle.
-            </p>
-          </div>
+          <p className="mt-1 text-[13px] leading-5 text-text-muted">
+            Manage the project identity and lifecycle.
+          </p>
 
           {!canEditProjectSettings && (
-            <div className="flex items-start gap-3 border-b border-outline-variant bg-surface-container-low px-6 py-4">
-              <span className="material-symbols-outlined mt-0.5 text-[18px] text-on-surface-variant">
+            <div className="mt-6 flex items-start gap-2.5 rounded-md border border-border-subtle bg-surface-quiet px-3.5 py-3">
+              <span className="material-symbols-outlined mt-0.5 text-[15px] text-text-muted">
                 lock
               </span>
 
               <div>
-                <div className="text-sm font-medium text-on-surface">
+                <div className="text-[13px] font-medium leading-5 text-text">
                   Read-only settings
                 </div>
 
-                <p className="mt-0.5 text-xs leading-5 text-on-surface-variant">
+                <p className="mt-0.5 text-[11px] leading-4 text-text-tertiary">
                   {isArchived
                     ? 'Restore this project before changing its settings.'
                     : 'Only project owners can change project settings.'}
@@ -2720,355 +2718,277 @@ export function ProjectDetailPage() {
             </div>
           )}
 
-          <div className="space-y-7 px-6 py-6">
-            <div className="max-w-2xl">
-              <label
-                htmlFor="settings-project-name"
-                className="mb-1.5 block text-sm font-medium text-on-surface"
-              >
-                Project name
-              </label>
+          <div className="mt-6">
+            <label
+              htmlFor="settings-project-name"
+              className="block text-xs font-medium leading-[18px] text-text-muted"
+            >
+              Project name
+            </label>
 
-              <input
-                id="settings-project-name"
-                type="text"
-                value={settingsName}
-                disabled={!canEditProjectSettings}
-                onChange={(event) =>
-                  setSettingsName(event.target.value)
-                }
-                className="h-10 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15 disabled:cursor-not-allowed disabled:bg-surface-container-low disabled:text-on-surface-variant"
-              />
+            <input
+              id="settings-project-name"
+              type="text"
+              value={settingsName}
+              disabled={!canEditProjectSettings}
+              onChange={(event) =>
+                setSettingsName(event.target.value)
+              }
+              className="mt-1.5 h-10 w-full rounded border border-border-standalone bg-surface-quiet px-3 text-sm text-text outline-none transition placeholder:text-text-tertiary focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-not-allowed disabled:text-control-disabled-foreground"
+            />
 
-              <p className="mt-1.5 text-xs text-on-surface-variant">
-                Used throughout the workspace to identify this project.
-              </p>
-            </div>
-
-            <div className="max-w-2xl">
-              <div className="mb-1.5 flex items-center justify-between">
-                <label
-                  htmlFor="settings-project-description"
-                  className="block text-sm font-medium text-on-surface"
-                >
-                  Description
-                </label>
-
-                <span className="text-xs text-on-surface-variant">
-                  Optional
-                </span>
-              </div>
-
-              <textarea
-                id="settings-project-description"
-                value={settingsDescription}
-                disabled={!canEditProjectSettings}
-                onChange={(event) =>
-                  setSettingsDescription(event.target.value)
-                }
-                rows={4}
-                placeholder="Describe the purpose and context of this project..."
-                className="w-full resize-none rounded-lg border border-outline-variant bg-surface-container-lowest px-3 py-2.5 text-sm leading-6 text-on-surface outline-none transition placeholder:text-on-surface-variant/60 focus:border-primary focus:ring-2 focus:ring-primary/15 disabled:cursor-not-allowed disabled:bg-surface-container-low disabled:text-on-surface-variant"
-              />
-            </div>
-
-            <fieldset>
-              <legend className="text-sm font-medium text-on-surface">
-                Project status
-              </legend>
-
-              <p className="mt-1 text-xs text-on-surface-variant">
-                Control whether the project is actively worked on, temporarily
-                paused or finished.
-              </p>
-
-              <div className="mt-3 grid max-w-4xl gap-3 md:grid-cols-3">
-                <label
-                  className={[
-                    'flex items-start gap-3 rounded-xl border p-4 transition',
-                    canEditProjectSettings
-                      ? 'cursor-pointer'
-                      : 'cursor-not-allowed',
-                    settingsStatus === 'active'
-                      ? 'border-emerald-600 bg-emerald-50 ring-1 ring-emerald-600/20'
-                      : 'border-outline-variant bg-surface-container-lowest',
-                  ].join(' ')}
-                >
-                  <input
-                    type="radio"
-                    name="settings-project-status"
-                    value="active"
-                    checked={settingsStatus === 'active'}
-                    disabled={!canEditProjectSettings}
-                    onChange={() => setSettingsStatus('active')}
-                    className="sr-only"
-                  />
-
-                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-700">
-                    <span className="material-symbols-outlined text-[19px]">
-                      play_arrow
-                    </span>
-                  </div>
-
-                  <div>
-                    <div className="text-sm font-semibold text-on-surface">
-                      Active
-                    </div>
-
-                    <p className="mt-1 text-xs leading-5 text-on-surface-variant">
-                      Project work is currently active.
-                    </p>
-                  </div>
-                </label>
-
-                <label
-                  className={[
-                    'flex items-start gap-3 rounded-xl border p-4 transition',
-                    canEditProjectSettings
-                      ? 'cursor-pointer'
-                      : 'cursor-not-allowed',
-                    settingsStatus === 'paused'
-                      ? 'border-amber-500 bg-amber-50 ring-1 ring-amber-500/20'
-                      : 'border-outline-variant bg-surface-container-lowest',
-                  ].join(' ')}
-                >
-                  <input
-                    type="radio"
-                    name="settings-project-status"
-                    value="paused"
-                    checked={settingsStatus === 'paused'}
-                    disabled={!canEditProjectSettings}
-                    onChange={() => setSettingsStatus('paused')}
-                    className="sr-only"
-                  />
-
-                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-700">
-                    <span className="material-symbols-outlined text-[19px]">
-                      pause
-                    </span>
-                  </div>
-
-                  <div>
-                    <div className="text-sm font-semibold text-on-surface">
-                      Paused
-                    </div>
-
-                    <p className="mt-1 text-xs leading-5 text-on-surface-variant">
-                      Keep the project, but pause active work.
-                    </p>
-                  </div>
-                </label>
-
-                <label
-                  className={[
-                    'flex items-start gap-3 rounded-xl border p-4 transition',
-                    canEditProjectSettings
-                      ? 'cursor-pointer'
-                      : 'cursor-not-allowed',
-                    settingsStatus === 'completed'
-                      ? 'border-primary bg-primary-fixed/35 ring-1 ring-primary/15'
-                      : 'border-outline-variant bg-surface-container-lowest',
-                  ].join(' ')}
-                >
-                  <input
-                    type="radio"
-                    name="settings-project-status"
-                    value="completed"
-                    checked={settingsStatus === 'completed'}
-                    disabled={!canEditProjectSettings}
-                    onChange={() => setSettingsStatus('completed')}
-                    className="sr-only"
-                  />
-
-                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary-fixed text-primary">
-                    <span className="material-symbols-outlined text-[19px]">
-                      task_alt
-                    </span>
-                  </div>
-
-                  <div>
-                    <div className="text-sm font-semibold text-on-surface">
-                      Completed
-                    </div>
-
-                    <p className="mt-1 text-xs leading-5 text-on-surface-variant">
-                      Mark the project as finished.
-                    </p>
-                  </div>
-                </label>
-              </div>
-            </fieldset>
-
-            {canManageProjectLifecycle && (
-              <div className="border-t border-outline-variant pt-6">
-                <div className="flex max-w-3xl items-start justify-between gap-6">
-                  <div>
-                    <h3 className="text-sm font-medium text-on-surface">
-                      {isArchived
-                        ? 'Restore project'
-                        : 'Archive project'}
-                    </h3>
-
-                    <p className="mt-1 max-w-xl text-xs leading-5 text-on-surface-variant">
-                      {isArchived
-                        ? 'Return this project to the current workspace and enable editing again.'
-                        : 'Remove this project from the current workspace without losing its work, members or history.'}
-                    </p>
-                  </div>
-
-                  {isArchived ? (
-                    <button
-                      type="button"
-                      disabled={lifecycleSaving}
-                      onClick={() =>
-                        void handleRestoreProject()
-                      }
-                      className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-lg border border-outline-variant bg-surface-container-lowest px-3.5 text-sm font-semibold text-on-surface transition hover:border-primary/40 hover:bg-surface-container-low disabled:cursor-not-allowed disabled:opacity-45"
-                    >
-                      <span
-                        aria-hidden="true"
-                        className="material-symbols-outlined text-[18px]"
-                      >
-                        unarchive
-                      </span>
-                      Restore
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      disabled={lifecycleSaving}
-                      onClick={() => {
-                        setLifecycleError(null)
-                        setLifecycleAction('archive')
-                      }}
-                      className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-lg border border-outline-variant bg-surface-container-lowest px-3.5 text-sm font-semibold text-on-surface transition hover:border-primary/40 hover:bg-surface-container-low disabled:cursor-not-allowed disabled:opacity-45"
-                    >
-                      <span
-                        aria-hidden="true"
-                        className="material-symbols-outlined text-[18px]"
-                      >
-                        archive
-                      </span>
-                      Archive
-                    </button>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {canManageProjectLifecycle && (
-              <div className="border-t border-error/20 pt-6">
-                <div className="flex max-w-3xl items-start justify-between gap-6">
-                  <div>
-                    <h3 className="text-sm font-medium text-error">
-                      Delete project
-                    </h3>
-
-                    <p className="mt-1 max-w-xl text-xs leading-5 text-on-surface-variant">
-                      Only an empty project can be permanently deleted.
-                      Projects containing work must be archived instead.
-                    </p>
-
-                    {!workItemsLoading &&
-                      projectHasWork && (
-                        <p className="mt-1.5 text-xs font-medium text-on-surface-variant">
-                          This project contains{' '}
-                          {apiWorkItems.length}{' '}
-                          {apiWorkItems.length === 1
-                            ? 'work item'
-                            : 'work items'}
-                          , so permanent deletion is unavailable.
-                        </p>
-                      )}
-                  </div>
-
-                  <button
-                    type="button"
-                    disabled={
-                      !canDeleteProject ||
-                      lifecycleSaving
-                    }
-                    onClick={() => {
-                      setLifecycleError(null)
-                      setLifecycleAction('delete')
-                    }}
-                    className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-lg border border-error/35 px-3.5 text-sm font-semibold text-error transition hover:bg-error-container/35 disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    <span
-                      aria-hidden="true"
-                      className="material-symbols-outlined text-[18px]"
-                    >
-                      delete
-                    </span>
-                    Delete
-                  </button>
-                </div>
-              </div>
-            )}
-
+            <p className="mt-[5px] text-[11px] leading-4 text-text-tertiary">
+              Used throughout the workspace to identify this project.
+            </p>
           </div>
 
-          {lifecycleError && (
-            <div
-              role="alert"
-              className="border-t border-error/20 bg-error-container/35 px-6 py-3 text-sm text-error"
-            >
-              {lifecycleError}
+          <div className="mt-5">
+            <div className="flex items-baseline justify-between">
+              <label
+                htmlFor="settings-project-description"
+                className="text-xs font-medium leading-[18px] text-text-muted"
+              >
+                Description
+              </label>
+
+              <span className="text-[11px] leading-4 text-text-tertiary">
+                Optional
+              </span>
+            </div>
+
+            <textarea
+              id="settings-project-description"
+              value={settingsDescription}
+              disabled={!canEditProjectSettings}
+              onChange={(event) =>
+                setSettingsDescription(event.target.value)
+              }
+              rows={5}
+              placeholder="Describe the purpose and context of this project..."
+              className="mt-1.5 h-28 w-full resize-y rounded border border-border-standalone bg-surface-quiet px-3 py-2.5 text-sm leading-[22px] text-text outline-none transition placeholder:text-text-tertiary focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-not-allowed disabled:text-control-disabled-foreground"
+            />
+          </div>
+
+          <fieldset className="mt-7">
+            <legend className="text-xs font-medium leading-[18px] text-text-muted">
+              Project status
+            </legend>
+
+            <p className="mt-[3px] text-[11px] leading-4 text-text-tertiary">
+              Control whether the project is actively worked on, temporarily
+              paused or finished.
+            </p>
+
+            <div className="mt-3 inline-flex items-center rounded-[5px] border border-border-standalone bg-surface-quiet p-0.5">
+              {(
+                [
+                  {
+                    value: 'active',
+                    label: 'Active',
+                    icon: 'play_arrow',
+                  },
+                  {
+                    value: 'paused',
+                    label: 'Paused',
+                    icon: 'pause',
+                  },
+                  {
+                    value: 'completed',
+                    label: 'Completed',
+                    icon: 'task_alt',
+                  },
+                ] as const
+              ).map((option) => (
+                <label
+                  key={option.value}
+                  className={[
+                    'flex h-8 items-center gap-1.5 rounded-[3px] px-3 text-[13px] font-medium leading-5 outline-none transition has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-focus',
+                    settingsStatus === option.value
+                      ? 'bg-selected-neutral-bg text-text'
+                      : canEditProjectSettings
+                        ? 'text-text-muted hover:bg-surface-hover hover:text-text'
+                        : 'cursor-not-allowed text-text-muted',
+                  ].join(' ')}
+                >
+                  <input
+                    type="radio"
+                    name="settings-project-status"
+                    value={option.value}
+                    checked={settingsStatus === option.value}
+                    disabled={!canEditProjectSettings}
+                    onChange={() =>
+                      setSettingsStatus(option.value)
+                    }
+                    className="sr-only"
+                  />
+
+                  <span
+                    aria-hidden="true"
+                    className="material-symbols-outlined text-[15px]"
+                  >
+                    {option.icon}
+                  </span>
+
+                  {option.label}
+                </label>
+              ))}
+            </div>
+          </fieldset>
+
+          {canEditProjectSettings && (
+            <div className="mt-8 flex items-center justify-end gap-4">
+              <span className="text-[11px] leading-4 text-text-tertiary">
+                {settingsSaving
+                  ? 'Saving changes…'
+                  : settingsDirty
+                    ? 'You have unsaved changes.'
+                    : 'All changes are saved.'}
+              </span>
+
+              <button
+                type="button"
+                disabled={!settingsDirty || settingsSaving}
+                onClick={handleResetProjectSettings}
+                className="h-8 rounded px-3 text-[13px] font-medium leading-5 text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-not-allowed disabled:text-control-disabled-foreground disabled:hover:bg-transparent"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                disabled={
+                  !settingsDirty ||
+                  !settingsValid ||
+                  settingsSaving
+                }
+                onClick={() =>
+                  void handleSaveProjectSettings()
+                }
+                className={[
+                  'h-8 rounded px-3 text-[13px] font-medium leading-5 outline-none transition focus-visible:ring-2 focus-visible:ring-focus',
+                  settingsDirty &&
+                  settingsValid &&
+                  !settingsSaving
+                    ? 'bg-accent text-text-inverse hover:bg-accent-hover'
+                    : 'cursor-not-allowed bg-action-disabled-bg text-action-disabled-text',
+                ].join(' ')}
+              >
+                Save changes
+              </button>
             </div>
           )}
 
           {settingsError && (
             <div
               role="alert"
-              className="border-t border-error/20 bg-error-container/35 px-6 py-3 text-sm text-error"
+              className="mt-3 text-xs font-medium text-danger"
             >
               {settingsError}
             </div>
           )}
 
-          {canEditProjectSettings && (
-            <div className="flex flex-col gap-3 border-t border-outline-variant bg-surface-container-low/45 px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
-              <div className="text-xs text-on-surface-variant">
-                {settingsSaving
-                  ? 'Saving changes…'
-                  : settingsDirty
-                    ? 'You have unsaved changes.'
-                    : 'All changes are saved.'}
-              </div>
+          {canManageProjectLifecycle && (
+            <>
+              <div className="mt-9 border-t border-border-subtle" />
 
-              <div className="flex items-center justify-end gap-3">
+              <div className="mt-7 flex items-start justify-between gap-6">
+                <div>
+                  <h3 className="text-[13px] font-semibold leading-5 text-text">
+                    {isArchived
+                      ? 'Restore project'
+                      : 'Archive project'}
+                  </h3>
+
+                  <p className="mt-[3px] text-[11px] leading-4 text-text-tertiary">
+                    {isArchived
+                      ? 'Return this project to the current workspace and enable editing again.'
+                      : 'Remove this project from the current workspace without losing its work, members or history.'}
+                  </p>
+                </div>
+
                 <button
                   type="button"
-                  disabled={!settingsDirty || settingsSaving}
-                  onClick={handleResetProjectSettings}
-                  className="h-9 rounded-lg px-4 text-sm font-medium text-on-surface-variant transition hover:bg-surface-container-high hover:text-on-surface disabled:cursor-not-allowed disabled:opacity-40"
+                  disabled={lifecycleSaving}
+                  onClick={
+                    isArchived
+                      ? () =>
+                          void handleRestoreProject()
+                      : () => {
+                          setLifecycleError(null)
+                          setLifecycleAction(
+                            'archive',
+                          )
+                        }
+                  }
+                  className="h-8 shrink-0 rounded border border-border-standalone px-2.5 text-[13px] leading-5 text-text outline-none transition hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-not-allowed disabled:text-control-disabled-foreground disabled:hover:bg-transparent"
                 >
-                  Cancel
+                  {isArchived
+                    ? 'Restore'
+                    : 'Archive'}
                 </button>
+              </div>
+
+              <div className="mt-7 border-t border-border-subtle" />
+
+              <div className="mt-6 flex items-start justify-between gap-6">
+                <div>
+                  <h3 className="text-[13px] font-semibold leading-5 text-danger">
+                    Delete project
+                  </h3>
+
+                  <p className="mt-[3px] text-[11px] leading-4 text-text-muted">
+                    Only an empty project can be permanently deleted.
+                    Projects containing work must be archived instead.
+                  </p>
+
+                  {!workItemsLoading &&
+                    projectHasWork && (
+                      <p className="mt-1.5 text-[11px] leading-4 text-text-tertiary">
+                        This project contains{' '}
+                        {apiWorkItems.length}{' '}
+                        {apiWorkItems.length === 1
+                          ? 'work item'
+                          : 'work items'}
+                        , so permanent deletion is unavailable.
+                      </p>
+                    )}
+                </div>
 
                 <button
                   type="button"
                   disabled={
-                    !settingsDirty ||
-                    !settingsValid ||
-                    settingsSaving
+                    !canDeleteProject ||
+                    lifecycleSaving
                   }
-                  onClick={() =>
-                    void handleSaveProjectSettings()
-                  }
-                  className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-45"
+                  onClick={() => {
+                    setLifecycleError(null)
+                    setLifecycleAction(
+                      'delete',
+                    )
+                  }}
+                  className={[
+                    'h-8 shrink-0 rounded border px-2.5 text-[13px] leading-5 outline-none transition focus-visible:ring-2 focus-visible:ring-focus',
+                    canDeleteProject &&
+                    !lifecycleSaving
+                      ? 'border-danger/35 text-danger hover:bg-danger-subtle'
+                      : 'cursor-not-allowed border-border-subtle text-control-disabled-foreground',
+                  ].join(' ')}
                 >
-                  <span className="material-symbols-outlined text-[18px]">
-                    save
-                  </span>
-                  {settingsSaving
-                    ? 'Saving…'
-                    : 'Save changes'}
+                  Delete
                 </button>
               </div>
-            </div>
+
+              {lifecycleError && (
+                <div
+                  role="alert"
+                  className="mt-4 rounded-md bg-danger-bg px-3 py-2 text-xs font-medium text-danger"
+                >
+                  {lifecycleError}
+                </div>
+              )}
+            </>
           )}
-        </section>
+        </div>
       )}
 
 
