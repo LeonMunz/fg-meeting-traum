@@ -3,6 +3,8 @@ import { Navigate, Route, Routes } from 'react-router'
 import { SessionProvider } from '../api/SessionProvider'
 import { useSession } from '../api/useSession'
 import { AppShell } from '../components/layout/AppShell'
+import { SettingsLayout } from '../components/layout/SettingsLayout'
+import { InvitationsSettingsPage } from '../features/account-invitations/InvitationsSettingsPage'
 import { AppearanceProvider } from '../features/appearance/AppearanceProvider'
 import { AppearanceSettingsPage } from '../features/appearance/AppearanceSettingsPage'
 import { LoginPage } from '../features/auth/LoginPage'
@@ -230,8 +232,25 @@ function AppRoutes() {
 
                 <Route
                   path="/settings"
-                  element={<AppearanceSettingsPage />}
-                />
+                  element={<SettingsLayout />}
+                >
+                  <Route
+                    index
+                    element={
+                      <Navigate to="appearance" replace />
+                    }
+                  />
+
+                  <Route
+                    path="appearance"
+                    element={<AppearanceSettingsPage />}
+                  />
+
+                  <Route
+                    path="invitations"
+                    element={<InvitationsSettingsPage />}
+                  />
+                </Route>
 
                 <Route
                   path="/profile"

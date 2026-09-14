@@ -1,6 +1,7 @@
 """
 URL configuration for config project.
 """
+from django.conf import settings
 from django.contrib import admin
 
 from django.urls import path
@@ -22,6 +23,7 @@ from accounts.views import (
     SessionRevokeOthersView,
     SessionRevokeView,
 )
+from accounts.views_e2e import E2EAccountInvitationFixtureView
 from config.health import HealthCheckView
 from projects.views import (
     ProjectArchiveView,
@@ -191,3 +193,12 @@ urlpatterns = [
     path('api/meeting-series/<int:series_id>/participant-candidates/', MeetingSeriesParticipantCandidateListView.as_view(), name='meeting-series-participant-candidates'),
     path('api/meeting-series-sections/<int:section_id>/', MeetingSeriesSectionDetailView.as_view(), name='meeting-series-section-detail'),
 ]
+
+# Browser-E2E-only fixture endpoints. Registered exclusively under the
+# isolated E2E settings module (dedicated fg_e2e schema; the webServer in
+# playwright.config.ts boots the API with it). Never reachable in any
+# other environment.
+if settings.SETTINGS_MODULE == "config.settings_e2e":
+    urlpatterns += [
+        path('api/e2e/fixture/account-invitation/', E2EAccountInvitationFixtureView.as_view(), name='e2e-account-invitation-fixture'),
+    ]

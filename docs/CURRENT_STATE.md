@@ -100,6 +100,14 @@ Markers:
 - **IMPLEMENTED** — App Shell, Sidebar, TopBar, and the shell-level Research Group selector migrated to the functional tokens: neutral structural surfaces, neutral active/hover navigation (no large Accent nav fill), canonical 2px `focus-visible` keyboard ring.
 - **COMPATIBILITY** — legacy Material-style tokens (`primary`, `surface`, `on-surface`, `outline`, `error`, `surface-container-*`) are retained in `@theme` with their **original pre-migration values**, so unmigrated feature screens (Meetings, Projects, Work Items, Dashboard, Research Group settings, `.fg-prose` editor) keep their previous appearance. Legacy tokens are a temporary compatibility layer; migration is feature-by-feature (functional tokens for migrated code, legacy tokens for the rest). A temporary `--color-legacy-surface: #F8F9FF` token preserves the exact historical surface of the one unmigrated Dashboard card (the old Material `surface` name is now owned by the functional `surface` = `#FFFFFF`); it is used only there and removed when Dashboard is migrated. Full policy: `docs/design/tokens.md`.
 
+## Settings (user) routing
+
+- **IMPLEMENTED** — `/settings` redirects to `/settings/appearance`.
+- **IMPLEMENTED** — `/settings/appearance` and `/settings/invitations` exist as separate routes under a shared horizontal Settings navigation (`SettingsLayout`); the active section is derived from the route and exposed via `aria-current="page"`.
+- **IMPLEMENTED** — the sidebar Settings entry remains active on all `/settings/*` routes and lands on `/settings/appearance`.
+- **PARTIAL** — invitation creation is still temporarily inline on the Invitations settings page (creation form on the page, not a shared dialog).
+- **NOT IMPLEMENTED** — global Invite dialog and User menu.
+
 ## Authentication & Sessions
 
 Canonical domain reference: `docs/domain/authentication-sessions.md`.

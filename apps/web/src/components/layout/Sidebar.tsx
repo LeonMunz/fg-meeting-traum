@@ -1,4 +1,4 @@
-import { NavLink } from 'react-router'
+import { NavLink, useLocation } from 'react-router'
 
 import { ResearchGroupSelector } from '../../features/research-group/ResearchGroupSelector'
 import { useResearchGroup } from '../../features/research-group/useResearchGroup'
@@ -63,7 +63,7 @@ const secondaryNavigation = [
   },
   {
     label: 'Settings',
-    path: '/settings',
+    path: '/settings/appearance',
     icon: 'settings',
   },
   {
@@ -84,6 +84,8 @@ function navClasses(isActive: boolean) {
 }
 
 export function Sidebar() {
+  const location = useLocation()
+
   const {
     groups,
     activeResearchGroupId,
@@ -191,7 +193,11 @@ export function Sidebar() {
             key={item.path}
             to={item.path}
             className={({ isActive }) =>
-              navClasses(isActive)
+              navClasses(
+                item.path === '/settings/appearance'
+                  ? location.pathname.startsWith('/settings')
+                  : isActive,
+              )
             }
           >
             <span className="material-symbols-outlined text-[20px]">

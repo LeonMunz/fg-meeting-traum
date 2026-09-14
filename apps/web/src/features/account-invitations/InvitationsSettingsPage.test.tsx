@@ -23,7 +23,7 @@ import {
 } from '../../api/account-invitations'
 import type { ApiAccountInvitation } from '../../api/account-invitations'
 
-import { InvitationsSettingsSection } from './InvitationsSettingsSection'
+import { InvitationsSettingsPage } from './InvitationsSettingsPage'
 
 vi.mock('../../api/account-invitations', () => ({
   listAccountInvitations: vi.fn(),
@@ -115,13 +115,13 @@ function storedTokens(): string[] {
   return values
 }
 
-describe('InvitationsSettingsSection', () => {
+describe('InvitationsSettingsPage', () => {
   it('loads the current user\'s invitation list with state and dates', async () => {
     ;(listAccountInvitations as ReturnType<typeof vi.fn>).mockResolvedValue({
       invitations: [makeInvitation()],
     })
 
-    render(<InvitationsSettingsSection />)
+    render(<InvitationsSettingsPage />)
 
     expect(listAccountInvitations).toHaveBeenCalledTimes(1)
     expect(
@@ -137,7 +137,7 @@ describe('InvitationsSettingsSection', () => {
   })
 
   it('shows a clear empty state when there are no invitations', async () => {
-    render(<InvitationsSettingsSection />)
+    render(<InvitationsSettingsPage />)
 
     expect(
       await screen.findByText(
@@ -151,7 +151,7 @@ describe('InvitationsSettingsSection', () => {
       makeCreated(),
     )
 
-    render(<InvitationsSettingsSection />)
+    render(<InvitationsSettingsPage />)
 
     await screen.findByRole('button', {
       name: 'Create invitation',
@@ -176,7 +176,7 @@ describe('InvitationsSettingsSection', () => {
       .mockResolvedValueOnce({ invitations: [] })
       .mockResolvedValueOnce({ invitations: [makeInvitation(created)] })
 
-    render(<InvitationsSettingsSection />)
+    render(<InvitationsSettingsPage />)
 
     submitCreate('newcol@example.com')
 
@@ -201,7 +201,7 @@ describe('InvitationsSettingsSection', () => {
       makeCreated(),
     )
 
-    render(<InvitationsSettingsSection />)
+    render(<InvitationsSettingsPage />)
 
     submitCreate('colleague@example.com')
     await screen.findByText('Invitation created for colleague@example.com.')
@@ -226,7 +226,7 @@ describe('InvitationsSettingsSection', () => {
       makeCreated(),
     )
 
-    render(<InvitationsSettingsSection />)
+    render(<InvitationsSettingsPage />)
 
     submitCreate('colleague@example.com')
     await screen.findByText('Invitation created for colleague@example.com.')
@@ -253,7 +253,7 @@ describe('InvitationsSettingsSection', () => {
       .mockResolvedValueOnce({ invitations: [] })
       .mockResolvedValueOnce({ invitations: [makeInvitation(created)] })
 
-    render(<InvitationsSettingsSection />)
+    render(<InvitationsSettingsPage />)
 
     submitCreate('newcol@example.com')
     await screen.findByText(
@@ -272,7 +272,7 @@ describe('InvitationsSettingsSection', () => {
       invitations: [makeInvitation()],
     })
 
-    render(<InvitationsSettingsSection />)
+    render(<InvitationsSettingsPage />)
 
     await screen.findByText('colleague@example.com')
     expect(
@@ -303,7 +303,7 @@ describe('InvitationsSettingsSection', () => {
       ],
     })
 
-    render(<InvitationsSettingsSection />)
+    render(<InvitationsSettingsPage />)
 
     await screen.findByText('accepted@example.com')
     expect(screen.getByText('Accepted', { exact: true })).toBeVisible()
@@ -333,7 +333,7 @@ describe('InvitationsSettingsSection', () => {
     ;(revokeAccountInvitation as ReturnType<typeof vi.fn>)
       .mockResolvedValue({ detail: 'Invitation revoked' })
 
-    render(<InvitationsSettingsSection />)
+    render(<InvitationsSettingsPage />)
 
     await screen.findByText('colleague@example.com')
     fireEvent.click(
@@ -374,7 +374,7 @@ describe('InvitationsSettingsSection', () => {
       }),
     )
 
-    render(<InvitationsSettingsSection />)
+    render(<InvitationsSettingsPage />)
 
     await screen.findByText('colleague@example.com')
 
@@ -395,7 +395,7 @@ describe('InvitationsSettingsSection', () => {
       new Promise(() => {}),
     )
 
-    render(<InvitationsSettingsSection />)
+    render(<InvitationsSettingsPage />)
 
     await screen.findByRole('button', {
       name: 'Create invitation',
@@ -421,7 +421,7 @@ describe('InvitationsSettingsSection', () => {
       new Promise(() => {}),
     )
 
-    render(<InvitationsSettingsSection />)
+    render(<InvitationsSettingsPage />)
 
     await screen.findByText('colleague@example.com')
     fireEvent.click(

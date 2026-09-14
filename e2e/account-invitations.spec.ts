@@ -14,10 +14,18 @@ test('an authenticated user manages account invitations through the settings UI'
   )
 
   // 2. Navigate through the normal UI to invitation management
-  //    (the Invitations section of Settings).
+  //    (Settings opens on Appearance; Invitations is a Settings tab).
   await page
     .getByRole('link', { name: 'Settings' })
     .click()
+
+  await expect(page).toHaveURL(/\/settings\/appearance$/)
+
+  await page
+    .getByRole('link', { name: 'Invitations' })
+    .click()
+
+  await expect(page).toHaveURL(/\/settings\/invitations$/)
 
   await expect(
     page.getByRole('heading', {

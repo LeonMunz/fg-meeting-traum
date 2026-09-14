@@ -42,6 +42,9 @@ test('Appearance defaults to Dark and persists both explicit choices', async ({
     })
     .click()
 
+  // Settings opens on the Appearance section.
+  await expect(page).toHaveURL(/\/settings\/appearance$/)
+
   const appearance = page.getByRole('radiogroup', {
     name: 'Appearance',
   })

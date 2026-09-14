@@ -53,7 +53,7 @@ interface OneTimeResult {
   registrationUrl: string
 }
 
-export function InvitationsSettingsSection() {
+export function InvitationsSettingsPage() {
   const [invitations, setInvitations] = useState<
     ApiAccountInvitation[]
   >([])
@@ -191,7 +191,6 @@ export function InvitationsSettingsSection() {
   return (
     <section
       aria-labelledby="invitations-heading"
-      className="mt-8 rounded-xl border border-border-subtle bg-surface p-6 shadow-sm"
     >
       <div>
         <h2
@@ -202,9 +201,9 @@ export function InvitationsSettingsSection() {
         </h2>
 
         <p className="mt-1 text-sm text-text-muted">
-          Invite people to create an FG Workspace account.
-          Invitations grant an account only — no research group or
-          project access.
+          Manage invitations you have created for FG Workspace.
+          Invitations create accounts only and do not grant
+          research group or project access.
         </p>
       </div>
 
