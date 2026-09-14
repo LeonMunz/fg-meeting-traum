@@ -25,6 +25,7 @@ Markers:
 - **IMPLEMENTED** — group management: member list, member candidates, add/update roles, offboarding.
 - **IMPLEMENTED** — personal cross-group scope and Research Group scope UI.
 - **IMPLEMENTED** — Research Group Meetings are listed/created under a group.
+- **IMPLEMENTED** — authenticated users can create Research Groups through the UI: the existing Research Group selector exposes a `Create research group` action to every authenticated user; a user with no Research Groups sees a `New research group` entry in the same Sidebar slot (rendered only after group loading resolved successfully, never on a failed load), which opens the same dialog. The compact creation dialog (name only) calls the canonical `POST /api/research-groups/`, shows the authoritative backend error while keeping the entered name on failure, and on success hands the exact server-serialized group to the canonical Research Group state, which makes it immediately the active group (no page reload); group-scoped routes follow the new group in the URL.
 
 ## Projects
 

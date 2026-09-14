@@ -118,6 +118,7 @@ beforeEach(() => {
     error: null,
     setActiveResearchGroupId: vi.fn(),
     reloadResearchGroups: vi.fn(),
+    addResearchGroup: vi.fn(),
   })
   vi.mocked(projectsApi.listProjects).mockResolvedValue([])
   vi.mocked(meetingsApi.listMeetingSeries).mockResolvedValue([template])

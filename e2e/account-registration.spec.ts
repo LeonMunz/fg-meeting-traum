@@ -1,53 +1,11 @@
 import { expect, test } from '@playwright/test'
 
-import { logout, userMenuTrigger } from './helpers'
-
-const PASSWORD = 'DevPass1!'
-
-async function createAccountInvitation(
-  page: import('@playwright/test').Page,
-  targetEmail: string,
-): Promise<string> {
-  // Create the invitation through the existing backend API using the
-  // browser's own session (invitations have no UI yet). Returns the
-  // one-time raw token from the creation response.
-  const created = await page.evaluate(
-    async (email) => {
-      let csrf = document.cookie
-        .split(';')
-        .map((c) => c.trim())
-        .find((c) => c.startsWith('csrftoken='))
-        ?.split('=')[1]
-
-      if (!csrf) {
-        await fetch('/api/auth/csrf/', { credentials: 'same-origin' })
-        csrf = document.cookie
-          .split(';')
-          .map((c) => c.trim())
-          .find((c) => c.startsWith('csrftoken='))
-          ?.split('=')[1]
-      }
-
-      const res = await fetch('/api/account-invitations/', {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: {
-          Accept: 'application/json',
-          'Content-Type': 'application/json',
-          'X-CSRFToken': csrf ?? '',
-        },
-        body: JSON.stringify({ targetEmail: email }),
-      })
-
-      return { status: res.status, data: await res.json() }
-    },
-    targetEmail,
-  )
-
-  expect(created.status).toBe(201)
-  expect(typeof created.data.token).toBe('string')
-  return created.data.token
-}
+import {
+  createAccountInvitation,
+  logout,
+  PASSWORD,
+  userMenuTrigger,
+} from './helpers'
 
 test('an invited person registers a new account through the registration page', async ({ page }) => {
   // 1. Authenticate as an existing active user.

@@ -82,10 +82,20 @@ export function Sidebar() {
     groups,
     activeResearchGroupId,
     loading,
+    error,
   } = useResearchGroup()
 
+  /*
+   * Keep the Research Group area mounted while groups load (the
+   * selector renders its own spinner), for users with at least one
+   * group, and once loading resolved successfully with zero groups
+   * (the selector then renders the first-group creation entry).
+   * A failed group load must not present a false zero-group state.
+   */
   const showResearchGroupSection =
-    loading || groups.length > 0
+    loading ||
+    groups.length > 0 ||
+    (!loading && !error)
 
   return (
     <aside className="fixed inset-y-0 left-0 z-30 flex w-[240px] flex-col border-r border-border-subtle bg-surface-subtle px-4 pb-4 pt-8">

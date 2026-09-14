@@ -610,6 +610,10 @@ export interface ApiUpdateResearchGroupInput {
   name: string
 }
 
+export interface ApiCreateResearchGroupInput {
+  name: string
+}
+
 export interface ApiUpdateResearchGroupMembershipInput {
   role: 'admin' | 'member'
 }

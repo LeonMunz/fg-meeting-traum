@@ -9,6 +9,7 @@ import {
 } from 'react-router'
 
 import type { ApiResearchGroup } from '../../api/types'
+import { CreateResearchGroupDialog } from './CreateResearchGroupDialog'
 import { useResearchGroup } from './useResearchGroup'
 
 function getInitials(name: string) {
@@ -32,9 +33,11 @@ export function ResearchGroupSelector() {
     loading,
     error,
     setActiveResearchGroupId,
+    addResearchGroup,
   } = useResearchGroup()
 
   const [open, setOpen] = useState(false)
+  const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const containerRef =
     useRef<HTMLDivElement | null>(null)
 
@@ -85,12 +88,9 @@ export function ResearchGroupSelector() {
     }
   }, [open])
 
-  const switchResearchGroup = (
+  const navigateToGroup = (
     group: ApiResearchGroup,
   ) => {
-    setActiveResearchGroupId(group.id)
-    setOpen(false)
-
     if (
       /^\/groups\/\d+\/settings$/.test(
         location.pathname,
@@ -153,6 +153,28 @@ export function ResearchGroupSelector() {
     }
   }
 
+  const switchResearchGroup = (
+    group: ApiResearchGroup,
+  ) => {
+    setActiveResearchGroupId(group.id)
+    setOpen(false)
+    navigateToGroup(group)
+  }
+
+  const handleCreatedResearchGroup = (
+    group: ApiResearchGroup,
+  ) => {
+    /*
+     * The exact server-serialized group enters the canonical state
+     * and becomes the active Research Group. No membership is
+     * synthesized client-side.
+     */
+    addResearchGroup(group)
+    setOpen(false)
+    setCreateDialogOpen(false)
+    navigateToGroup(group)
+  }
+
   if (loading) {
     return (
       <div className="flex h-11 items-center gap-2 px-2 text-sm text-text-muted">
@@ -172,10 +194,36 @@ export function ResearchGroupSelector() {
     )
   }
 
-  if (
-    groups.length === 0 ||
-    !activeResearchGroup
-  ) {
+  if (groups.length === 0) {
+    return (
+      <>
+        <button
+          type="button"
+          onClick={() => setCreateDialogOpen(true)}
+          className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left transition hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface-subtle"
+        >
+          <span
+            aria-hidden="true"
+            className="material-symbols-outlined text-[18px] text-text-muted"
+          >
+            add
+          </span>
+
+          <span className="min-w-0 flex-1 truncate text-sm text-text">
+            New research group
+          </span>
+        </button>
+
+        <CreateResearchGroupDialog
+          open={createDialogOpen}
+          onClose={() => setCreateDialogOpen(false)}
+          onCreated={handleCreatedResearchGroup}
+        />
+      </>
+    )
+  }
+
+  if (!activeResearchGroup) {
     return null
   }
 
@@ -254,6 +302,29 @@ export function ResearchGroupSelector() {
             )
           })}
 
+          <div className="my-1.5 border-t border-border-subtle" />
+
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false)
+              setCreateDialogOpen(true)
+            }}
+            className="flex w-full items-center gap-3 rounded-lg px-2.5 py-2.5 text-left text-sm font-medium text-text transition hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+          >
+            <span
+              aria-hidden="true"
+              className="material-symbols-outlined text-[18px] text-text-muted"
+            >
+              add
+            </span>
+
+            <span>
+              Create research group
+            </span>
+          </button>
+
           {activeResearchGroup.role === 'admin' && (
             <>
               <div className="my-1.5 border-t border-border-subtle" />
@@ -281,6 +352,12 @@ export function ResearchGroupSelector() {
           )}
         </div>
       )}
+
+      <CreateResearchGroupDialog
+        open={createDialogOpen}
+        onClose={() => setCreateDialogOpen(false)}
+        onCreated={handleCreatedResearchGroup}
+      />
     </div>
   )
 }

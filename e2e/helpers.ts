@@ -6,6 +6,55 @@ import {
 export const PASSWORD = 'DevPass1!'
 
 /**
+ * Create a global account invitation through the existing backend
+ * API using the browser's own authenticated session (the invitation
+ * surface is the user menu / settings, not a dedicated page flow in
+ * these scenarios). Returns the one-time raw token from the
+ * creation response.
+ */
+export async function createAccountInvitation(
+  page: Page,
+  targetEmail: string,
+): Promise<string> {
+  const created = await page.evaluate(
+    async (email) => {
+      let csrf = document.cookie
+        .split(';')
+        .map((c) => c.trim())
+        .find((c) => c.startsWith('csrftoken='))
+        ?.split('=')[1]
+
+      if (!csrf) {
+        await fetch('/api/auth/csrf/', { credentials: 'same-origin' })
+        csrf = document.cookie
+          .split(';')
+          .map((c) => c.trim())
+          .find((c) => c.startsWith('csrftoken='))
+          ?.split('=')[1]
+      }
+
+      const res = await fetch('/api/account-invitations/', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          'X-CSRFToken': csrf ?? '',
+        },
+        body: JSON.stringify({ targetEmail: email }),
+      })
+
+      return { status: res.status, data: await res.json() }
+    },
+    targetEmail,
+  )
+
+  expect(created.status).toBe(201)
+  expect(typeof created.data.token).toBe('string')
+  return created.data.token as string
+}
+
+/**
  * Seeded E2E accounts carry a first_name that capitalizes the username
  * (alex -> Alex, ...). Newly registered accounts have no first_name and
  * are displayed by their username.

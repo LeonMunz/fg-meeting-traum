@@ -6,6 +6,7 @@ import {
 
 import type {
   ApiAddResearchGroupMembershipInput,
+  ApiCreateResearchGroupInput,
   ApiResearchGroup,
   ApiResearchGroupMemberCandidate,
   ApiResearchGroupMembership,
@@ -29,6 +30,22 @@ export async function getResearchGroup(
 ): Promise<ApiResearchGroup> {
   return apiGet<ApiResearchGroup>(
     `/api/research-groups/${id}/`,
+  )
+}
+
+/**
+ * Create a Research Group.
+ *
+ * The server makes the authenticated creator the first group
+ * Owner (admin) atomically; the returned object is the
+ * canonical server-serialized Research Group.
+ */
+export async function createResearchGroup(
+  input: ApiCreateResearchGroupInput,
+): Promise<ApiResearchGroup> {
+  return apiPost<ApiResearchGroup>(
+    '/api/research-groups/',
+    input,
   )
 }
 

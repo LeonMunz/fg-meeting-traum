@@ -125,6 +125,21 @@ export function ResearchGroupProvider({
     [groups],
   )
 
+  const addResearchGroup = useCallback(
+    (group: ApiResearchGroup) => {
+      setGroups((current) =>
+        current.some(
+          (existing) => existing.id === group.id,
+        )
+          ? current
+          : [...current, group],
+      )
+      setActiveResearchGroupIdState(group.id)
+      storeGroupId(group.id)
+    },
+    [],
+  )
+
   const activeResearchGroup = useMemo(
     () =>
       groups.find(
@@ -142,10 +157,12 @@ export function ResearchGroupProvider({
       error,
       setActiveResearchGroupId,
       reloadResearchGroups,
+      addResearchGroup,
     }),
     [
       activeResearchGroup,
       activeResearchGroupId,
+      addResearchGroup,
       error,
       groups,
       loading,
