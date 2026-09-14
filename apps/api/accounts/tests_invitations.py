@@ -3,12 +3,15 @@
 Covers:
 - creation (normalization, 7-day expiry, one-time raw token, no raw
   token persisted)
-- replacement of an existing pending invitation
+- duplicate-pending rejection (exact / case / whitespace variants; the
+  original invitation and its token stay fully usable; no membership is
+  created) and the revoked / expired / effectively-expired paths that
+  allow a new invitation
 - listing (own only, no secrets, effective state)
 - revocation (own only, non-leaking 404)
 - acceptance (existing-account flow, no account or membership creation)
 - security: unauthenticated / inactive denial, mismatched email,
-  expired / revoked / already-accepted / replaced tokens
+  expired / revoked / already-accepted tokens
 - real CSRF enforcement on all mutation endpoints
 """
 
@@ -24,7 +27,11 @@ from rest_framework.test import APIClient, APITestCase
 from projects.models import ProjectMembership
 from research_groups.models import ResearchGroupMembership
 
-from .invitation_services import digest_invitation_token
+from .invitation_services import (
+    digest_invitation_token,
+    generate_invitation_token,
+    normalize_invitation_email,
+)
 from .models import AccountInvitation
 
 User = get_user_model()
@@ -48,6 +55,32 @@ def _login(client, username, password=PASSWORD):
 
 def _revoke_url(public_id):
     return f"/api/account-invitations/{public_id}/revoke/"
+
+
+# Non-account target used by creation tests: nobody with this email has a
+# User account, so the existing-account guard does not apply.
+TARGET = "dup_target@example.com"
+
+
+def _historical_token_for(inviter, email):
+    """Create a pre-existing PENDING AccountInvitation record directly.
+
+    The production creation endpoint rejects emails that already belong
+    to an account, so the existing-account redemption tests (preview /
+    acceptance / wrong-account guard) need an invitation record that
+    predates that rule. This fixture helper writes that historical record
+    at the domain level with the canonical token/normalization helpers —
+    it is not a bypass of the production creation endpoint.
+    """
+    token = generate_invitation_token()
+    invitation = AccountInvitation.objects.create(
+        invited_by=inviter,
+        invited_email=normalize_invitation_email(email),
+        token_digest=digest_invitation_token(token),
+        status=AccountInvitation.Status.PENDING,
+        expires_at=timezone.now() + timedelta(days=7),
+    )
+    return invitation, token
 
 
 class CreateInvitationTest(APITestCase):
@@ -150,9 +183,10 @@ class CreateInvitationTest(APITestCase):
         self.assertFalse(AccountInvitation.objects.exists())
 
     def test_inactive_session_cannot_accept_invitation(self):
-        response = self._create("inviter@example.com")
-        self.assertEqual(response.status_code, 201)
-        token = response.json()["token"]
+        # Historical invitation record for the inviter's own account
+        # email (the production create endpoint now rejects account
+        # emails with account_exists).
+        _invitation, token = _historical_token_for(self.inviter, "inviter@example.com")
 
         self.inviter.is_active = False
         self.inviter.save(update_fields=["is_active"])
@@ -166,85 +200,300 @@ class CreateInvitationTest(APITestCase):
         self.assertEqual(row.status, AccountInvitation.Status.PENDING)
 
 
-class ReplacementInvitationTest(APITestCase):
-    """A new invitation for the same normalized email replaces the old one."""
+class DuplicatePendingInvitationTest(APITestCase):
+    """An effective pending invitation blocks duplicate creation.
+
+    All creation tests here target a non-account email (TARGET): the
+    existing-account guard (which answers account emails with
+    account_exists before the pending check) is covered separately in
+    ``ExistingAccountInvitationTest``.
+    """
 
     def setUp(self):
         self.inviter = User.objects.create_user(
-            "inviter2", email="inviter2@example.com", password=PASSWORD
+            "dup_inviter", email="dup_inviter@example.com", password=PASSWORD
         )
         self.invitee = User.objects.create_user(
-            "invitee", email="invitee@example.com", password=PASSWORD
+            "dup_invitee", email="dup_invitee@example.com", password=PASSWORD
         )
-        self.assertEqual(_login(self.client, "inviter2").status_code, 200)
+        self.assertEqual(_login(self.client, "dup_inviter").status_code, 200)
 
-    def _create(self, target_email="invitee@example.com"):
+    def _create(self, target_email=TARGET):
         return self.client.post(
             LIST_URL,
             data={"targetEmail": target_email},
             content_type="application/json",
         )
 
-    def test_second_invitation_invalidates_the_first(self):
+    def _snapshot(self, public_id):
+        row = AccountInvitation.objects.get(public_id=public_id)
+        return (
+            row.status,
+            row.token_digest,
+            row.expires_at,
+            row.created_at,
+            row.revoked_at,
+            row.accepted_at,
+            row.accepted_by_id,
+        )
+
+    def test_first_invitation_succeeds_and_duplicate_is_rejected(self):
         first = self._create()
         self.assertEqual(first.status_code, 201)
-        first_token = first.json()["token"]
+        public_id = first.json()["id"]
+
+        second = self._create()
+        self.assertEqual(second.status_code, 409)
+        data = second.json()
+        self.assertEqual(data["code"], "pending_invitation_exists")
+        self.assertTrue(data["error"])
+
+        # No second invitation was created.
+        self.assertEqual(
+            AccountInvitation.objects.filter(invited_email=TARGET).count(),
+            1,
+        )
+        row = AccountInvitation.objects.get(public_id=public_id)
+        self.assertEqual(row.status, AccountInvitation.Status.PENDING)
+
+    def test_case_variant_is_rejected(self):
+        self.assertEqual(self._create().status_code, 201)
+        response = self._create("DUP_TARGET@Example.COM")
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["code"], "pending_invitation_exists")
+        self.assertEqual(
+            AccountInvitation.objects.filter(invited_email=TARGET).count(),
+            1,
+        )
+
+    def test_whitespace_variant_is_rejected(self):
+        self.assertEqual(self._create("  dup_target@example.com  ").status_code, 201)
+        response = self._create("dup_target@example.com\t")
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["code"], "pending_invitation_exists")
+        self.assertEqual(
+            AccountInvitation.objects.filter(invited_email=TARGET).count(),
+            1,
+        )
+
+    def test_duplicate_rejection_leaves_original_invitation_unchanged(self):
+        first = self._create()
+        self.assertEqual(first.status_code, 201)
+        before = self._snapshot(first.json()["id"])
+
+        self.assertEqual(self._create().status_code, 409)
+
+        # Status, token digest, expiry, creation timestamp, and the
+        # revocation/acceptance fields are all untouched.
+        self.assertEqual(self._snapshot(first.json()["id"]), before)
+
+    def test_duplicate_rejection_keeps_original_token_usable(self):
+        _invitation, first_token = _historical_token_for(self.inviter, TARGET)
+        self.assertEqual(self._create().status_code, 409)
+
+        # The original token still previews successfully.
+        preview = self.client.post(
+            "/api/auth/registration-invitation/",
+            data={"token": first_token},
+            content_type="application/json",
+        )
+        self.assertEqual(preview.status_code, 200)
+        self.assertEqual(preview.json()["status"], "pending")
+        self.assertTrue(preview.json()["usable"])
+
+        # ...and can still be used through the normal registration flow.
+        register = self.client.post(
+            "/api/auth/register/",
+            data={
+                "token": first_token,
+                "username": "dup_target_user",
+                "password": "Zebra!Correct99x",
+            },
+            content_type="application/json",
+        )
+        self.assertEqual(register.status_code, 201)
+        row = AccountInvitation.objects.get(invited_by=self.inviter)
+        self.assertEqual(
+            row.status, AccountInvitation.Status.ACCEPTED
+        )
+        self.assertEqual(
+            row.accepted_by_id, User.objects.get(username="dup_target_user").pk
+        )
+
+    def test_duplicate_rejection_creates_no_membership(self):
+        self.assertEqual(self._create().status_code, 201)
+        self.assertEqual(self._create().status_code, 409)
+        self.assertEqual(ResearchGroupMembership.objects.count(), 0)
+        self.assertEqual(ProjectMembership.objects.count(), 0)
+
+    def test_revoked_invitation_allows_new_invitation(self):
+        first = self._create()
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(
+            self.client.post(_revoke_url(first.json()["id"])).status_code, 200
+        )
 
         second = self._create()
         self.assertEqual(second.status_code, 201)
-        second_token = second.json()["token"]
-        self.assertNotEqual(first_token, second_token)
-
         rows = sorted(
             AccountInvitation.objects.filter(invited_by=self.inviter),
             key=lambda row: row.created_at,
         )
         self.assertEqual(len(rows), 2)
         self.assertEqual(rows[0].status, AccountInvitation.Status.REVOKED)
-        self.assertIsNotNone(rows[0].revoked_at)
         self.assertEqual(rows[1].status, AccountInvitation.Status.PENDING)
 
-    def test_replaced_token_stops_working_and_new_token_works(self):
-        first_token = self._create().json()["token"]
-        second_token = self._create().json()["token"]
-
-        # The old token is unusable immediately.
-        other_client = APIClient()
-        _login(other_client, "invitee")
-        response = other_client.post(
-            ACCEPT_URL,
-            data={"token": first_token},
-            content_type="application/json",
-        )
-        self.assertEqual(response.status_code, 404)
-
-        # The new token remains usable by the matching account.
-        response = other_client.post(
-            ACCEPT_URL,
-            data={"token": second_token},
-            content_type="application/json",
-        )
-        self.assertEqual(response.status_code, 200)
-
-    def test_replacement_can_come_from_a_different_inviter(self):
+    def test_expired_invitation_allows_new_invitation(self):
         first = self._create()
         self.assertEqual(first.status_code, 201)
-
-        other_inviter = User.objects.create_user(
-            "inviter3", email="inviter3@example.com", password=PASSWORD
+        row = AccountInvitation.objects.get(public_id=first.json()["id"])
+        row.expires_at = timezone.now() - timedelta(seconds=1)
+        row.save(update_fields=["expires_at"])
+        # The revoke attempt persists the terminal EXPIRED transition.
+        self.assertEqual(
+            self.client.post(_revoke_url(row.public_id)).status_code, 404
         )
-        other_client = APIClient()
-        _login(other_client, "inviter3")
-        response = other_client.post(
+        row.refresh_from_db()
+        self.assertEqual(row.status, AccountInvitation.Status.EXPIRED)
+
+        second = self._create()
+        self.assertEqual(second.status_code, 201)
+        self.assertEqual(
+            AccountInvitation.objects.filter(
+                invited_by=self.inviter,
+                status=AccountInvitation.Status.PENDING,
+            ).count(),
+            1,
+        )
+
+    def test_effectively_expired_pending_does_not_block_creation(self):
+        self.assertEqual(self._create().status_code, 201)
+        row = AccountInvitation.objects.get(invited_by=self.inviter)
+        row.expires_at = timezone.now() - timedelta(seconds=1)
+        row.save(update_fields=["expires_at"])
+
+        second = self._create()
+        self.assertEqual(second.status_code, 201)
+        # The effectively expired PENDING row is persisted as EXPIRED by
+        # the creation operation; exactly one PENDING row remains.
+        row.refresh_from_db()
+        self.assertEqual(row.status, AccountInvitation.Status.EXPIRED)
+        self.assertEqual(
+            AccountInvitation.objects.filter(
+                invited_by=self.inviter,
+                status=AccountInvitation.Status.PENDING,
+            ).count(),
+            1,
+        )
+
+
+class ExistingAccountInvitationTest(APITestCase):
+    """The create endpoint rejects emails that already belong to an account.
+
+    The guard reuses the canonical normalized lookup (trim + lowercase),
+    answers ``account_exists`` with the canonical 409 discriminator (the
+    same status registration already uses for this code), and takes
+    precedence over ``pending_invitation_exists``. Already-existing
+    invitation records for account emails are still redeemed through the
+    existing preview/acceptance flow.
+    """
+
+    def setUp(self):
+        self.inviter = User.objects.create_user(
+            "acct_inviter", email="acct_inviter@example.com", password=PASSWORD
+        )
+        self.existing = User.objects.create_user(
+            "acct_existing",
+            email="acct_existing@example.com",
+            password=PASSWORD,
+        )
+        self.assertEqual(_login(self.client, "acct_inviter").status_code, 200)
+
+    def _create(self, target_email="acct_existing@example.com"):
+        return self.client.post(
             LIST_URL,
-            data={"targetEmail": "invitee@example.com"},
+            data={"targetEmail": target_email},
             content_type="application/json",
         )
-        self.assertEqual(response.status_code, 201)
 
-        rows = AccountInvitation.objects.filter(invited_by=self.inviter)
-        self.assertEqual(rows.count(), 1)
-        self.assertEqual(rows.first().status, AccountInvitation.Status.REVOKED)
+    def test_existing_account_email_is_rejected_with_account_exists(self):
+        response = self._create()
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["code"], "account_exists")
+        self.assertTrue(response.json()["error"])
+        # No invitation row and no raw token in the response.
+        self.assertFalse(AccountInvitation.objects.exists())
+        self.assertNotIn("token", response.json())
+
+    def test_case_variant_existing_account_is_rejected(self):
+        response = self._create("ACCT_EXISTING@Example.COM")
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["code"], "account_exists")
+        self.assertFalse(AccountInvitation.objects.exists())
+
+    def test_whitespace_variant_existing_account_is_rejected(self):
+        response = self._create("  acct_existing@example.com  ")
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["code"], "account_exists")
+        self.assertFalse(AccountInvitation.objects.exists())
+
+    def test_inactive_existing_account_is_rejected(self):
+        self.existing.is_active = False
+        self.existing.save(update_fields=["is_active"])
+        response = self._create()
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["code"], "account_exists")
+        self.assertFalse(AccountInvitation.objects.exists())
+
+    def test_account_exists_takes_precedence_over_pending(self):
+        # A historical pending invitation for the same (account) email
+        # exists; creation must answer account_exists, not
+        # pending_invitation_exists, and leave the old record untouched.
+        _invitation, _token = _historical_token_for(
+            self.inviter, "acct_existing@example.com"
+        )
+        snapshot = (
+            AccountInvitation.objects.get(invited_by=self.inviter).status,
+            AccountInvitation.objects.get(invited_by=self.inviter).token_digest,
+        )
+        response = self._create()
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["code"], "account_exists")
+        self.assertEqual(AccountInvitation.objects.count(), 1)
+        row = AccountInvitation.objects.get(invited_by=self.inviter)
+        self.assertEqual((row.status, row.token_digest), snapshot)
+
+    def test_historical_invitation_for_account_still_redeemed(self):
+        # Pre-existing invitation record for an account email: preview
+        # and the existing-account acceptance flow keep working.
+        _invitation, token = _historical_token_for(
+            self.inviter, "acct_existing@example.com"
+        )
+        preview = self.client.post(
+            "/api/auth/registration-invitation/",
+            data={"token": token},
+            content_type="application/json",
+        )
+        self.assertEqual(preview.status_code, 200)
+        data = preview.json()
+        self.assertEqual(data["status"], "pending")
+        self.assertTrue(data["usable"])
+        self.assertTrue(data["accountExists"])
+
+        existing_client = APIClient()
+        _login(existing_client, "acct_existing")
+        response = existing_client.post(
+            ACCEPT_URL, data={"token": token}, content_type="application/json"
+        )
+        self.assertEqual(response.status_code, 200)
+        row = AccountInvitation.objects.get(invited_by=self.inviter)
+        self.assertEqual(row.status, AccountInvitation.Status.ACCEPTED)
+        self.assertEqual(row.accepted_by_id, self.existing.pk)
+
+    def test_rejection_creates_no_membership(self):
+        self.assertEqual(self._create().status_code, 409)
+        self.assertEqual(ResearchGroupMembership.objects.count(), 0)
+        self.assertEqual(ProjectMembership.objects.count(), 0)
 
 
 class ListInvitationsTest(APITestCase):
@@ -319,13 +568,13 @@ class RevokeInvitationTest(APITestCase):
             "revoke_b", email="revoke_b@example.com", password=PASSWORD
         )
         self.assertEqual(_login(self.client, "revoke_a").status_code, 200)
-        created = self.client.post(
-            LIST_URL,
-            data={"targetEmail": "revoke-target@example.com"},
-            content_type="application/json",
+        # Historical invitation record for an existing account: the
+        # production create endpoint now rejects account emails with
+        # account_exists, so the record is written directly.
+        created, self.token = _historical_token_for(
+            self.inviter, "revoke-target@example.com"
         )
-        self.public_id = created.json()["id"]
-        self.token = created.json()["token"]
+        self.public_id = created.public_id
 
     def test_inviter_can_revoke_own_pending_invitation(self):
         response = self.client.post(_revoke_url(self.public_id))
@@ -385,11 +634,12 @@ class AcceptInvitationTest(APITestCase):
         _login(self.client, "accept_a")
 
     def _create_for(self, email="accept_b@example.com"):
-        response = self.client.post(
-            LIST_URL, data={"targetEmail": email}, content_type="application/json"
-        )
-        self.assertEqual(response.status_code, 201)
-        return response.json()["token"]
+        # Pre-existing invitation record for the existing account (the
+        # production create endpoint no longer creates invitations for
+        # account emails); the behavior under test is the redemption
+        # flow itself.
+        _invitation, token = _historical_token_for(self.inviter, email)
+        return token
 
     def _accept(self, token, username="accept_b"):
         client = APIClient()
@@ -454,24 +704,6 @@ class AcceptInvitationTest(APITestCase):
         self.assertEqual(row.status, AccountInvitation.Status.EXPIRED)
         self.assertIsNone(row.accepted_by_id)
 
-    def test_expired_invitation_does_not_block_replacement(self):
-        self._create_for()
-        row = AccountInvitation.objects.get(invited_by=self.inviter)
-        row.expires_at = timezone.now() - timedelta(seconds=1)
-        row.save(update_fields=["expires_at"])
-
-        response = self.client.post(
-            LIST_URL,
-            data={"targetEmail": "accept_b@example.com"},
-            content_type="application/json",
-        )
-        self.assertEqual(response.status_code, 201)
-        rows = list(
-            AccountInvitation.objects.filter(invited_by=self.inviter).order_by("pk")
-        )
-        self.assertEqual(rows[0].status, AccountInvitation.Status.EXPIRED)
-        self.assertEqual(rows[1].status, AccountInvitation.Status.PENDING)
-
     def test_revoked_invitation_cannot_be_accepted(self):
         token = self._create_for()
         row = AccountInvitation.objects.get(invited_by=self.inviter)
@@ -529,13 +761,11 @@ class InvitationCSRFTest(TestCase):
         self.assertEqual(row.status, AccountInvitation.Status.PENDING)
 
     def test_accept_without_csrf_is_rejected(self):
-        created = self.client.post(
-            LIST_URL,
-            data={"targetEmail": "invitecsrf@example.com"},
-            content_type="application/json",
-            **self._csrf_headers(),
+        # Historical invitation record for an existing account (the
+        # production create endpoint now rejects account emails).
+        _invitation, token = _historical_token_for(
+            self.user, "invitecsrf@example.com"
         )
-        token = created.json()["token"]
 
         response = self.client.post(
             ACCEPT_URL, data={"token": token}, content_type="application/json"

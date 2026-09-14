@@ -4,7 +4,7 @@ Covers the registration / session / security matrix:
 - a valid pending token creates exactly one normalized-email account and
   atomically accepts the invitation;
 - the client cannot choose the email (a client-supplied email is rejected);
-- no valid token (missing / invalid / expired / revoked / used / replaced)
+- no valid token (missing / invalid / expired / revoked / used)
   creates no User and does not consume a valid invitation;
 - an existing (incl. inactive) matching normalized email blocks signup and
   leaves the invitation pending;
@@ -29,7 +29,11 @@ from rest_framework.test import APITestCase
 from projects.models import ProjectMembership
 from research_groups.models import ResearchGroupMembership
 
-from .invitation_services import create_account_invitation
+from .invitation_services import (
+    create_account_invitation,
+    revoke_account_invitation,
+)
+from .tests_invitations import _historical_token_for
 from .models import AccountInvitation, UserSession
 
 User = get_user_model()
@@ -184,12 +188,11 @@ class RegistrationFailureTest(APITestCase):
 
     def test_revoked_token_fails_and_creates_no_user(self):
         invitation, token = _token_for()
-        # A second invitation for the same email revokes the first (system
-        # replacement) — the original token is now terminal-revoked.
-        replacement = create_account_invitation(
-            actor=invitation.invited_by, invited_email=INVITED
-        )[0]
-        self.assertEqual(replacement.status, AccountInvitation.Status.PENDING)
+        # Manual revocation — the original token is now terminal-revoked.
+        revoked = revoke_account_invitation(
+            actor=invitation.invited_by, public_id=invitation.public_id
+        )
+        self.assertEqual(revoked.status, AccountInvitation.Status.REVOKED)
         before = User.objects.count()
 
         response = _register(self.client, token)
@@ -206,18 +209,6 @@ class RegistrationFailureTest(APITestCase):
         second = _register(self.client, token)
         self.assertEqual(second.status_code, 410)
         self.assertEqual(second.json()["code"], "already_used")
-        self.assertEqual(User.objects.count(), before)
-
-    def test_replaced_old_token_fails_and_creates_no_user(self):
-        inviter = _inviter()
-        _invitation1, old_token = _token_for(actor=inviter)
-        # A second invitation for the same email replaces (revokes) the first.
-        _invitation2, _new_token = _token_for(actor=inviter)
-        before = User.objects.count()
-
-        response = _register(self.client, old_token)
-        self.assertEqual(response.status_code, 410)
-        self.assertEqual(response.json()["code"], "revoked")
         self.assertEqual(User.objects.count(), before)
 
     def test_client_cannot_choose_email(self):
@@ -242,7 +233,10 @@ class RegistrationCollisionTest(APITestCase):
             email="PERSON@EXAMPLE.COM",
             password=PASSWORD,
         )
-        invitation, token = _token_for(INVITED_RAW)
+        # Historical invitation record for an existing account (the
+        # production create endpoint no longer creates invitations for
+        # account emails); redemption is what this test exercises.
+        invitation, token = _historical_token_for(_inviter(), INVITED_RAW)
         before = User.objects.count()
 
         response = _register(self.client, token)
@@ -260,7 +254,7 @@ class RegistrationCollisionTest(APITestCase):
             email="  person@example.com  ",
             password=PASSWORD,
         )
-        _invitation, token = _token_for(INVITED_RAW)
+        _invitation, token = _historical_token_for(_inviter(), INVITED_RAW)
         before = User.objects.count()
 
         response = _register(self.client, token)
@@ -274,7 +268,7 @@ class RegistrationCollisionTest(APITestCase):
             password=PASSWORD,
             is_active=False,
         )
-        _invitation, token = _token_for(INVITED_RAW)
+        _invitation, token = _historical_token_for(_inviter(), INVITED_RAW)
         before = User.objects.count()
 
         response = _register(self.client, token)
@@ -289,7 +283,8 @@ class RegistrationCollisionTest(APITestCase):
         existing = User.objects.create_user(
             username="existingperson", email=INVITED, password=PASSWORD
         )
-        invitation, token = _token_for(INVITED_RAW)
+        # Historical invitation record for the existing account.
+        invitation, token = _historical_token_for(_inviter(), INVITED_RAW)
 
         self.assertEqual(_register(self.client, token).status_code, 409)
         # The existing account can redeem via the existing acceptance flow.

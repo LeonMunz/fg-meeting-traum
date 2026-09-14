@@ -40,6 +40,7 @@ from projects.models import ProjectMembership
 from research_groups.models import ResearchGroupMembership
 
 from .invitation_services import create_account_invitation
+from .tests_invitations import _historical_token_for
 from .models import AccountInvitation
 
 User = get_user_model()
@@ -469,7 +470,10 @@ class PasswordPolicyInvitationStatesTest(APITestCase):
             email=INVITED.upper(),  # storage format intentionally loose
             password=VALID_PASSWORD,
         )
-        invitation, token = _token_for()
+        # Historical invitation record for an existing account (the
+        # production create endpoint no longer creates invitations for
+        # account emails); the policy/preview contract is what is tested.
+        invitation, token = _historical_token_for(_inviter(), INVITED_RAW)
 
         response = _policy(self.client, token)
         self.assertEqual(response.status_code, 200)

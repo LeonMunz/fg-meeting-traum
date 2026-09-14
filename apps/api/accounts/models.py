@@ -70,9 +70,11 @@ class AccountInvitation(models.Model):
     persist the EXPIRED transition.
 
     At most one PENDING row may exist per normalized invited email
-    (partial unique index); creating a new invitation atomically
-    transitions the effective pending row to REVOKED (system replacement)
-    or an already-expired row to EXPIRED before inserting the new row.
+    (partial unique index). While an effective PENDING invitation exists
+    for the email, creation is rejected deterministically
+    (``pending_invitation_exists``) and the row is left untouched; an
+    effectively expired PENDING row is persisted as EXPIRED by the
+    creation operation and does not block a new invitation.
     """
 
     class Status(models.TextChoices):

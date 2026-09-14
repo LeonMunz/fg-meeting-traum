@@ -26,6 +26,10 @@ global account**. Nothing else happens.
 An account invitation targets a **global account** (identified by the
 invited email address), never a ResearchGroup and never a Project.
 
+Only people who do **not** yet have an FG Workspace account may be
+invited: creating an invitation for a normalized email that already
+belongs to an account is rejected with `account_exists` (§9).
+
 ## 2. Separation from Membership
 
 1. Authentication (who), membership (where), and authorization (what)
@@ -101,9 +105,9 @@ acceptance compares `normalize_invitation_email(actor.email)` against
    creation timestamp).
 2. A `pending` row with `expires_at <= now` is *effectively expired*: it is
    not usable, all API/service behavior treats it as `expired`, and it
-   does not block creation of a replacement invitation.
+   does not block creation of a new invitation.
 3. Operations that evaluate an invitation's state (accept, revoke, list,
-   replacement) persist the `expired` transition when they encounter an
+   creation) persist the `expired` transition when they encounter an
    effectively expired `pending` row. No scheduler is required;
    observable behavior is authoritative.
 
@@ -115,7 +119,7 @@ lifecycle state directly):
 
 ```text
 pending -> accepted    (acceptance, §8)
-pending -> revoked     (manual revocation or system replacement)
+pending -> revoked     (manual revocation)
 pending -> expired     (effective expiry persisted by a state-evaluating op)
 ```
 
@@ -142,6 +146,11 @@ second acceptance of the same token always fails, indistinguishably from
 an unknown token (terminal states answer the same non-leaking failure as
 unknown tokens).
 
+Already-existing invitation records for emails that belong to an account
+— for example records created before the existing-account guard on
+creation (§9) — are still accepted through this flow; the guard only
+restricts **new** creation.
+
 **Registration integration (implemented):** a person without an account
 redeems the invitation through invite-only registration
 (`docs/domain/account-registration.md`). That flow creates and authenticates
@@ -150,21 +159,39 @@ the matching account and then marks the invitation `ACCEPTED` through the
 lifecycle logic is shared, never duplicated. Registration is a separate
 endpoint under `/api/auth/`; it is not a second acceptance mechanism.
 
-## 9. Replacement
+## 9. Duplicate pending invitations
 
-Creating an invitation for a normalized email that already has an
-effective `pending` invitation:
+**Existing-account guard first.** Account invitations are only for
+people who do not yet have an FG Workspace account. If the normalized
+email already belongs to an existing User — the same canonical
+normalized lookup registration uses (trim + lowercase, active or
+inactive) — creation is rejected with the stable `account_exists`
+discriminator (API: `409`, the same status registration uses for that
+code) before any token is generated and no invitation is written. This
+guard takes precedence over the duplicate-pending rule: an email that
+belongs to an account and also has a pending invitation record is
+answered `account_exists`, never `pending_invitation_exists`. The
+rejection creates no memberships.
 
-1. invalidates the previous invitation **atomically** (same
-   transaction as the new insert);
-2. the old token becomes unusable immediately;
-3. a new `pending` invitation with a completely new token is persisted.
+For a non-account email, creating an invitation while an effective
+`pending` invitation exists is **rejected**:
 
-System replacement transitions the previous effective pending invitation
-to `revoked` (with `revoked_at`); an already-effectively-expired pending
-row is transitioned to `expired`. Replacement may be triggered by a
-different active inviter — this is acceptable because account
-invitations grant no ResearchGroup/Project access.
+1. no new invitation is created;
+2. the existing invitation is left completely unchanged (status, token,
+   expiry, and timestamps); the old token remains usable;
+3. the operation returns the stable domain discriminator
+   `pending_invitation_exists` (API: `409` with a neutral message).
+
+The rejection is deterministic and holds under concurrency: the partial
+unique index (§3) guarantees at most one `pending` row per normalized
+email, so exactly one concurrent creation can win; the losing attempt(s)
+receive the same `pending_invitation_exists` failure.
+
+An effectively **expired** pending invitation does **not** block
+creation: the state-evaluating creation operation persists the `expired`
+transition for that row (§6) and issues a new invitation with a fresh
+cryptographically random token and the normal 7-day expiry. `revoked`,
+`expired`, and `accepted` rows never block creation.
 
 ## 10. Revocation
 
@@ -183,7 +210,7 @@ enforcement; no `csrf_exempt` shortcuts):
 | Endpoint | Behavior |
 |---|---|
 | `GET /api/account-invitations/` | Own invitations, newest first, with **effective** status (`id`, `invitedEmail`, `invitedBy`, `status`, `createdAt`, `expiresAt`, `acceptedAt`, `revokedAt`). Never the raw token or its digest. Never other inviters' invitations. |
-| `POST /api/account-invitations/` | Body `{targetEmail}`. Creates (or replaces) the pending invitation; `201` with the invitation metadata **plus the raw token exactly once**. `400` for an invalid email. |
+| `POST /api/account-invitations/` | Body `{targetEmail}`. Creates the pending invitation; `201` with the invitation metadata **plus the raw token exactly once**. `400` for an invalid email. `409` with the stable code `account_exists` when the normalized email already belongs to an FG Workspace account (checked first; no invitation and no token are created). `409` with the stable code `pending_invitation_exists` for a non-account email when an effective pending invitation already exists (the existing invitation and its token are left untouched). |
 | `POST /api/account-invitations/{publicId}/revoke/` | Own, effectively pending invitations only; non-leaking `404` otherwise. |
 | `POST /api/account-invitations/accept/` | Body `{token}`. Existing-account acceptance (§8). `404` unknown/terminal token, `410` expired, `400` email mismatch. |
 
@@ -196,11 +223,13 @@ authentication rejects inactive accounts with `401`).
    succeeds; the invitation ends `accepted` exactly once, with
    `accepted_by` set exactly once; no inconsistent intermediate state is
    observable (row lock + single transaction; real PostgreSQL).
-2. **Concurrent creation/replacement for one normalized email:** the final
-   state contains at most one `pending` invitation and at most one usable
-   token; no duplicate active invitations survive. The partial unique
-   index serializes the inserts; the service retries narrowly and
-   deterministically around the empty-row race.
+2. **Concurrent creation for one normalized email:** exactly one creation
+   succeeds; every other concurrent attempt fails with
+   `pending_invitation_exists`. The final state contains at most one
+   `pending` invitation and at most one usable token; no duplicate active
+   invitations survive. The partial unique index serializes the inserts;
+   the service retries narrowly and deterministically around the
+   empty-row race, which resolves into the duplicate rejection.
 
 These invariants are pinned by real-DB threaded tests
 (`apps/api/accounts/tests_invitations_concurrency.py`), not mocks.

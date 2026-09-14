@@ -171,14 +171,25 @@ class SessionRevokeAllView(APIView):
 class AccountInvitationListCreateView(APIView):
     """List (GET) or create (POST) the current user's account invitations.
 
-    Creation requires an authenticated active account, returns the raw
-    token exactly once (201), and atomically replaces any existing
-    effective pending invitation for the same normalized email. Listing
-    returns only the current user's invitations with their effective
-    lifecycle state — never the raw token or its digest.
+    Creation requires an authenticated active account and returns the raw
+    token exactly once (201). Creating for a normalized email that
+    already belongs to an account is rejected with the stable
+    ``account_exists`` code (409, same status as registration) before any
+    token is generated; for a non-account email, an effective pending
+    invitation rejects creation with the stable
+    ``pending_invitation_exists`` code (409) and the existing invitation
+    is left untouched. Listing returns only the current user's
+    invitations with their effective lifecycle state — never the raw
+    token or its digest.
     """
 
     permission_classes = [IsAuthenticated]
+
+    _STATUS_BY_CODE = {
+        "pending_invitation_exists": 409,
+        "account_exists": 409,
+        "conflict": 409,
+    }
 
     def get(self, request):
         rows = list_account_invitations(request.user)
@@ -195,7 +206,10 @@ class AccountInvitationListCreateView(APIView):
                 actor=request.user, invited_email=invited_email
             )
         except AccountInvitationDomainError as exc:
-            return Response({"error": exc.message}, status=400)
+            return Response(
+                {"error": exc.message, "code": exc.code},
+                status=self._STATUS_BY_CODE.get(exc.code, 400),
+            )
         data = serialize_account_invitation(invitation)
         data["token"] = raw_token
         return Response(data, status=201)

@@ -16,12 +16,21 @@ Canonical email normalization (shared by invitation storage, acceptance
 matching, and registration collision detection): trim surrounding
 whitespace, then lowercase (case-insensitive comparison).
 
-Concurrency: at most one PENDING row per normalized email is enforced by a
-partial unique index (``uniq_account_invitation_pending_email``). Creation
-replaces the existing effective pending row atomically and retries
-narrowly around the empty-row insert race; acceptance and registration lock
-the invitation row so at most one concurrent transition of a token
-succeeds.
+Account invitations are only for people who do not yet have an FG
+Workspace account: creation first checks the canonical normalized-email
+account lookup (the same ``LOWER(BTRIM(email))`` match registration uses)
+and answers an existing account with the canonical ``account_exists``
+discriminator before any token is generated or invitation is written.
+That guard takes precedence over the duplicate-pending rule; only for a
+non-account email does an effective PENDING row block creation (stable
+``pending_invitation_exists`` error; the existing row is left untouched)
+while an effectively expired PENDING row is persisted as EXPIRED and does
+not block. At most one PENDING row per normalized email is enforced by a
+partial unique index (``uniq_account_invitation_pending_email``); the
+service retries narrowly around the empty-row insert race, which resolves
+deterministically into the duplicate rejection. Acceptance and
+registration lock the invitation row so at most one concurrent transition
+of a token succeeds.
 """
 
 import hashlib
@@ -181,12 +190,19 @@ def _require_active_account(actor):
         )
 
 
-def _replace_pending_invitation(invited_email, now):
-    """Transition this email's PENDING rows out of PENDING (under lock).
+def _enforce_no_effective_pending_invitation(invited_email, now):
+    """Enforce the duplicate-pending invariant (under lock).
 
-    Effective pending rows become REVOKED (system replacement — the old
-    token is unusable immediately); rows already past expiry are persisted
-    as EXPIRED. Called inside the caller's transaction.
+    While an effective PENDING row exists for ``invited_email`` (its
+    ``expires_at`` is in the future), raise the stable
+    ``pending_invitation_exists`` domain error without touching the row:
+    no replacement, no revocation, no token or expiry change. A PENDING
+    row already past its expiry is effectively expired: this
+    state-evaluating operation persists the EXPIRED transition and the row
+    does not block the new invitation.
+
+    At most one PENDING row per email can exist (partial unique index), so
+    the loop is defensive. Called inside the caller's transaction.
     """
     rows = (
         AccountInvitation.objects.select_for_update()
@@ -198,19 +214,39 @@ def _replace_pending_invitation(invited_email, now):
     for row in rows:
         if row.expires_at <= now:
             row.status = AccountInvitation.Status.EXPIRED
+            row.save(update_fields=["status"])
         else:
-            row.status = AccountInvitation.Status.REVOKED
-            row.revoked_at = now
-        row.save(update_fields=["status", "revoked_at"])
+            raise AccountInvitationDomainError(
+                "An invitation for this e-mail address is already pending.",
+                code="pending_invitation_exists",
+            )
 
 
 def create_account_invitation(*, actor, invited_email):
-    """Create (or replace) the pending account invitation for an email.
+    """Create the pending account invitation for an email.
 
     Validates and normalizes the target email, generates a fresh
-    cryptographic token, atomically invalidates any existing effective
-    pending invitation for the same normalized email, and persists exactly
-    one new PENDING row expiring 7 days after creation.
+    cryptographic token, and persists exactly one new PENDING row expiring
+    7 days after creation.
+
+    Existing-account guard (checked first, before any token is generated
+    or invitation is written): if the normalized email already belongs to
+    an existing User — the canonical normalized lookup shared with
+    registration — no invitation is created and the canonical
+    ``account_exists`` discriminator is raised. This takes precedence over
+    the duplicate-pending rule. Account invitations are only for people
+    who do not yet have an FG Workspace account; an already-existing
+    invitation record for an account email is still redeemed through the
+    existing preview/acceptance/registration flows.
+
+    An effective PENDING invitation for the same non-account normalized
+    email blocks creation deterministically: nothing is created or
+    modified and a ``pending_invitation_exists`` domain error is raised
+    (the existing invitation and its token remain fully usable). An
+    effectively expired PENDING row is persisted as EXPIRED and does not
+    block; REVOKED, EXPIRED, and ACCEPTED rows never block. A created
+    invitation always gets a fresh cryptographic token and the normal
+    7-day expiry.
 
     Returns ``(invitation, raw_token)``. The raw token is returned once,
     only here; it is never persisted.
@@ -225,11 +261,22 @@ def create_account_invitation(*, actor, invited_email):
             "A valid e-mail address is required.", code="invalid_email"
         ) from None
 
+    # Existing-account guard, with precedence over the duplicate-pending
+    # check. Reuses the same canonical normalized-email account lookup as
+    # registration (trim + lowercase equivalence; active or inactive).
+    # It is a pre-check before any token generation or invitation write,
+    # so no usable token is ever produced for an account email.
+    if _existing_user_for_normalized_email(normalized):
+        raise AccountInvitationDomainError(
+            "An account with this e-mail address already exists. Please sign in.",
+            code="account_exists",
+        )
+
     for _attempt in range(_MAX_CREATE_ATTEMPTS):
         try:
             with transaction.atomic():
                 now = timezone.now()
-                _replace_pending_invitation(normalized, now)
+                _enforce_no_effective_pending_invitation(normalized, now)
                 token = generate_invitation_token()
                 invitation = AccountInvitation.objects.create(
                     invited_by=actor,
@@ -251,7 +298,9 @@ def create_account_invitation(*, actor, invited_email):
             # Empty-row race: a concurrent transaction inserted the single
             # PENDING row for this email after we read none. The partial
             # unique index serialized the inserts and rolled this attempt
-            # back; retry the replacement against committed state.
+            # back; the retry re-evaluates committed state and
+            # deterministically rejects the duplicate (or proceeds when the
+            # winning row is no longer effective).
             continue
 
     raise AccountInvitationDomainError(

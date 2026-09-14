@@ -5,8 +5,10 @@ Real PostgreSQL row locks and the partial unique index
 threaded service calls (repository concurrency harness):
 
 - concurrent acceptance of one token: exactly one ACCEPTED transition;
-- concurrent creation/replacement for one normalized email: at most one
-  PENDING invitation and at most one usable token survive.
+- concurrent creation for one normalized email: exactly one creation
+  succeeds, the losing attempt fails with ``pending_invitation_exists``,
+  and at most one PENDING invitation / usable token survives (both with
+  and without a pre-existing effective pending invitation).
 """
 
 import threading
@@ -91,7 +93,7 @@ class AccountInvitationConcurrencyTest(TransactionTestCase):
         self.assertEqual(invitation.status, AccountInvitation.Status.ACCEPTED)
         self.assertEqual(invitation.accepted_by_id, successes[0].accepted_by_id)
 
-    def test_concurrent_replacement_leaves_at_most_one_pending(self):
+    def test_concurrent_creation_leaves_exactly_one_pending(self):
         inviter_a = self.inviter
         inviter_b = User.objects.create_user(
             username="cinviter_b",
@@ -125,25 +127,110 @@ class AccountInvitationConcurrencyTest(TransactionTestCase):
 
         rows = AccountInvitation.objects.filter(invited_email=email)
         pending = rows.filter(status=AccountInvitation.Status.PENDING)
-        # At most one PENDING invitation survives — in practice exactly one:
-        # the last replacement always inserts a fresh pending row.
+        # Exactly one creation wins and inserts the single PENDING row;
+        # the other attempt is rejected deterministically.
         self.assertEqual(pending.count(), 1)
-        self.assertTrue(
-            set(rows.values_list("status", flat=True))
-            <= {
-                AccountInvitation.Status.PENDING,
-                AccountInvitation.Status.REVOKED,
-                AccountInvitation.Status.EXPIRED,
-            }
-        )
+        self.assertEqual(rows.count(), 1)
+
+        successes = [
+            value for value in results.values() if isinstance(value, tuple)
+        ]
+        rejections = [
+            value for value in results.values()
+            if isinstance(value, AccountInvitationDomainError)
+        ]
+        self.assertEqual(len(results), 2)
+        self.assertEqual(len(successes), 1)
+        self.assertEqual(len(rejections), 1)
+        self.assertEqual(rejections[0].code, "pending_invitation_exists")
 
         # At most one of the returned tokens is usable: only the token
-        # whose digest belongs to the surviving PENDING row can be accepted.
+        # whose digest belongs to the surviving PENDING row can be
+        # accepted.
         pending_digest = list(pending.values_list("token_digest", flat=True))[0]
-        usable_tokens = 0
-        for value in results.values():
-            if isinstance(value, tuple):
-                _invitation, raw_token = value
-                if digest_invitation_token(raw_token) == pending_digest:
-                    usable_tokens += 1
+        usable_tokens = sum(
+            1
+            for _invitation, raw_token in successes
+            if digest_invitation_token(raw_token) == pending_digest
+        )
         self.assertEqual(usable_tokens, 1)
+
+    def test_concurrent_creation_against_effective_pending_is_rejected(self):
+        create_account_invitation(
+            actor=self.inviter, invited_email="guarded@example.com"
+        )
+        original = AccountInvitation.objects.get(invited_email="guarded@example.com")
+        original.refresh_from_db()
+        original_snapshot = (
+            original.status,
+            original.token_digest,
+            original.expires_at,
+            original.created_at,
+            original.revoked_at,
+        )
+
+        inviter_a = User.objects.create_user(
+            username="cguard_a",
+            email="cguard_a@example.com",
+            password="CInvPass1!",
+        )
+        inviter_b = User.objects.create_user(
+            username="cguard_b",
+            email="cguard_b@example.com",
+            password="CInvPass1!",
+        )
+
+        results = {}
+        barrier = threading.Barrier(2)
+
+        def worker(name, actor):
+            barrier.wait()
+            try:
+                results[name] = create_account_invitation(
+                    actor=actor, invited_email="guarded@example.com"
+                )
+            except AccountInvitationDomainError as exc:
+                results[name] = exc
+            finally:
+                _db.close()
+
+        threads = [
+            threading.Thread(target=worker, args=("a", inviter_a)),
+            threading.Thread(target=worker, args=("b", inviter_b)),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        # Both attempts are rejected; the original invitation and its
+        # token are completely unchanged and no second PENDING row exists.
+        self.assertEqual(len(results), 2)
+        for value in results.values():
+            self.assertIsInstance(value, AccountInvitationDomainError)
+            self.assertEqual(value.code, "pending_invitation_exists")
+
+        original.refresh_from_db()
+        self.assertEqual(
+            (
+                original.status,
+                original.token_digest,
+                original.expires_at,
+                original.created_at,
+                original.revoked_at,
+            ),
+            original_snapshot,
+        )
+        self.assertEqual(
+            AccountInvitation.objects.filter(
+                invited_email="guarded@example.com"
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            AccountInvitation.objects.filter(
+                invited_email="guarded@example.com",
+                status=AccountInvitation.Status.PENDING,
+            ).count(),
+            1,
+        )

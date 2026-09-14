@@ -35,7 +35,7 @@ token and binds it to the newly created account.
 1. There is no endpoint or service that creates a `User` without a valid
    pending invitation token.
 2. Registration is impossible with a missing, unknown, expired, revoked,
-   already-accepted, or replaced token.
+   already-accepted token.
 3. The only other `User`-creation paths in the repository are developer /
    E2E seed management commands, not application endpoints.
 
