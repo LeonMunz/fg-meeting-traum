@@ -5,6 +5,33 @@ import {
 
 export const PASSWORD = 'DevPass1!'
 
+/**
+ * Seeded E2E accounts carry a first_name that capitalizes the username
+ * (alex -> Alex, ...). Newly registered accounts have no first_name and
+ * are displayed by their username.
+ */
+export function displayNameFor(username: string): string {
+  return username.charAt(0).toUpperCase() + username.slice(1)
+}
+
+/**
+ * The authenticated topbar's user menu trigger, addressed by its
+ * accessibility contract: the account menu button's accessible name is
+ * the current user's display name (first name, falling back to
+ * username). This is unique on every page — feature headers (Meeting
+ * actions, New project, ...) never carry the account name — so it stays
+ * unambiguous regardless of which page the test runs on.
+ */
+export function userMenuTrigger(
+  page: Page,
+  displayName: string,
+) {
+  return page.getByRole('button', {
+    name: displayName,
+    exact: true,
+  })
+}
+
 export async function login(
   page: Page,
   username: string,
@@ -26,18 +53,22 @@ export async function login(
     .click()
 
   await expect(
-    page.getByRole('button', {
-      name: /Sign out/,
-    }),
+    userMenuTrigger(
+      page,
+      displayNameFor(username),
+    ),
   ).toBeVisible()
 }
 
 export async function logout(
   page: Page,
+  displayName: string,
 ) {
+  await userMenuTrigger(page, displayName).click()
+
   await page
-    .getByRole('button', {
-      name: /Sign out/,
+    .getByRole('menuitem', {
+      name: 'Sign out',
     })
     .click()
 

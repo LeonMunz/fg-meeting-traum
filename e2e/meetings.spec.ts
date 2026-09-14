@@ -402,7 +402,7 @@ test(
     ).toContainText('No current item')
 
     // The create-time invitation grants Chris access to this Meeting.
-    await logout(page)
+    await logout(page, 'Alex')
     await login(page, 'chris')
 
     await page
@@ -708,7 +708,7 @@ test(
     // Chris sees exactly that canonical WorkItem in My Work.
     // --------------------------------------------------------
 
-    await logout(page)
+    await logout(page, 'Alex')
     await login(page, 'chris')
 
     await page

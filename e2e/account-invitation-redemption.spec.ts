@@ -1,6 +1,10 @@
 import { expect, test } from '@playwright/test'
 
-import { PASSWORD, login } from './helpers'
+import {
+  PASSWORD,
+  login,
+  userMenuTrigger,
+} from './helpers'
 
 const INVITED_EMAIL = 'chris@example.com'
 
@@ -170,7 +174,7 @@ test('an existing account redeems its invitation through the registration flow',
     .getByRole('button', { name: 'Continue to workspace' })
     .click()
   await expect(invitePage).toHaveURL('http://127.0.0.1:4173/')
-  await expect(invitePage.getByRole('button', { name: 'Sign out' })).toBeVisible()
+  await expect(userMenuTrigger(invitePage, 'Chris')).toBeVisible()
   const meResp = await invitePage.evaluate(async () => {
     const res = await fetch('/api/auth/me/', { credentials: 'same-origin' })
     return { status: res.status, data: await res.json() }

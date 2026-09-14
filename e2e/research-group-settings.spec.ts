@@ -197,7 +197,7 @@ test(
     // Non-admin may open the URL but cannot manage settings.
     // --------------------------------------------------------
 
-    await logout(page)
+    await logout(page, 'Alex')
     await login(page, 'chris')
 
     await page.goto(

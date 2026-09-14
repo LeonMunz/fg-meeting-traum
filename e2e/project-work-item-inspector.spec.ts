@@ -2456,7 +2456,7 @@ test(
     //    renders an enabled comment composer.
     // --------------------------------------------------------
 
-    await logout(page)
+    await logout(page, 'Alex')
     await login(page, 'laura')
     await openProjects(page)
     await openProject(page, VIEWER_PROJECT_NAME)

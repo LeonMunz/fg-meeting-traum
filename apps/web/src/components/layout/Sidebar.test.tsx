@@ -63,6 +63,24 @@ describe('Sidebar research group navigation', () => {
     )
   })
 
+  it('keeps Notifications as the only bottom entry, without Settings or Profile', () => {
+    renderSidebar()
+
+    const notifications = screen.getByRole('link', {
+      name: /Notifications/,
+    })
+    expect(notifications).toHaveAttribute('href', '/notifications')
+
+    // Personal account destinations moved exclusively to the topbar
+    // user menu.
+    expect(
+      screen.queryByRole('link', { name: /Settings/ }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('link', { name: /Profile/ }),
+    ).not.toBeInTheDocument()
+  })
+
   it('renders future sections as disabled, struck-through non-links', () => {
     renderSidebar()
 

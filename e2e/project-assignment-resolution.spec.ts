@@ -621,7 +621,7 @@ test(
     // Removed user also loses direct Project access.
     // --------------------------------------------------------
 
-    await logout(page)
+    await logout(page, 'Alex')
     await login(page, 'chris')
 
     const projectResponse =

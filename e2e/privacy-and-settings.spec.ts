@@ -135,7 +135,7 @@ test(
 
     const projectId = match![1]
 
-    await logout(page)
+    await logout(page, 'Alex')
     await login(page, 'maria')
     await openProjects(page)
 
@@ -281,7 +281,7 @@ test(
     // Chris sees the same Project, but cannot edit settings.
     // --------------------------------------------------------
 
-    await logout(page)
+    await logout(page, 'Alex')
     await login(page, 'chris')
     await openProjects(page)
 

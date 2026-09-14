@@ -1,4 +1,4 @@
-import { NavLink, useLocation } from 'react-router'
+import { NavLink } from 'react-router'
 
 import { ResearchGroupSelector } from '../../features/research-group/ResearchGroupSelector'
 import { useResearchGroup } from '../../features/research-group/useResearchGroup'
@@ -55,21 +55,15 @@ const groupNavigation = [
   },
 ]
 
+/*
+ * Bottom workspace zone. Personal account destinations (Settings,
+ * Profile) live exclusively in the topbar user menu, not here.
+ */
 const secondaryNavigation = [
   {
     label: 'Notifications',
     path: '/notifications',
     icon: 'notifications',
-  },
-  {
-    label: 'Settings',
-    path: '/settings/appearance',
-    icon: 'settings',
-  },
-  {
-    label: 'Profile',
-    path: '/profile',
-    icon: 'account_circle',
   },
 ]
 
@@ -84,8 +78,6 @@ function navClasses(isActive: boolean) {
 }
 
 export function Sidebar() {
-  const location = useLocation()
-
   const {
     groups,
     activeResearchGroupId,
@@ -96,7 +88,7 @@ export function Sidebar() {
     loading || groups.length > 0
 
   return (
-    <aside className="fixed inset-y-0 left-0 z-30 flex w-[240px] flex-col border-r border-border-subtle bg-surface-subtle px-4 py-8">
+    <aside className="fixed inset-y-0 left-0 z-30 flex w-[240px] flex-col border-r border-border-subtle bg-surface-subtle px-4 pb-4 pt-8">
       <div className="mb-8 flex items-center gap-3 px-2">
         <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-accent font-bold text-text-inverse">
           FG
@@ -193,11 +185,7 @@ export function Sidebar() {
             key={item.path}
             to={item.path}
             className={({ isActive }) =>
-              navClasses(
-                item.path === '/settings/appearance'
-                  ? location.pathname.startsWith('/settings')
-                  : isActive,
-              )
+              navClasses(isActive)
             }
           >
             <span className="material-symbols-outlined text-[20px]">

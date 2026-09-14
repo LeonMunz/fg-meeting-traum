@@ -231,7 +231,7 @@ test(
     // Chris sees the canonical item in My Work.
     // --------------------------------------------------------
 
-    await logout(page)
+    await logout(page, 'Alex')
     await login(page, 'chris')
 
     await page
@@ -288,7 +288,7 @@ test(
     // Alex sees the same canonical status.
     // --------------------------------------------------------
 
-    await logout(page)
+    await logout(page, 'Chris')
     await login(page, 'alex')
     await openProjects(page)
 

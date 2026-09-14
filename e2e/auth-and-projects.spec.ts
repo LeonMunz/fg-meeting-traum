@@ -4,6 +4,8 @@ import {
   type Page,
 } from '@playwright/test'
 
+import { displayNameFor, userMenuTrigger } from './helpers'
+
 const PASSWORD = 'DevPass1!'
 
 async function login(
@@ -27,9 +29,7 @@ async function login(
     .click()
 
   await expect(
-    page.getByRole('button', {
-      name: 'Sign out',
-    }),
+    userMenuTrigger(page, displayNameFor(username)),
   ).toBeVisible()
 }
 

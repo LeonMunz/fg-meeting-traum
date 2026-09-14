@@ -121,7 +121,7 @@ describe('InvitationsSettingsPage', () => {
     expect(screen.queryByRole('form')).toBeNull()
     expect(screen.queryByRole('dialog')).toBeNull()
     expect(
-      screen.queryByRole('button', { name: 'Create invitation' }),
+      screen.queryByRole('button', { name: 'Send invitation' }),
     ).toBeNull()
     expect(screen.queryByLabelText('Email', { exact: true })).toBeNull()
   })
@@ -138,7 +138,7 @@ describe('InvitationsSettingsPage', () => {
     expect(dialog).toBeVisible()
     expect(screen.getByLabelText('Email', { exact: true })).toBeVisible()
     expect(
-      within(dialog).getByRole('button', { name: 'Create invitation' }),
+      within(dialog).getByRole('button', { name: 'Send invitation' }),
     ).toBeVisible()
   })
 
@@ -163,7 +163,7 @@ describe('InvitationsSettingsPage', () => {
       { target: { value: 'newcol@example.com' } },
     )
     fireEvent.click(
-      screen.getByRole('button', { name: 'Create invitation' }),
+      screen.getByRole('button', { name: 'Send invitation' }),
     )
 
     const dialog = screen.getByRole('dialog', {
@@ -215,7 +215,7 @@ describe('InvitationsSettingsPage', () => {
       { target: { value: 'newcol@example.com' } },
     )
     fireEvent.click(
-      screen.getByRole('button', { name: 'Create invitation' }),
+      screen.getByRole('button', { name: 'Send invitation' }),
     )
     await screen.findByText('Invitation created')
 
@@ -353,7 +353,7 @@ describe('InvitationsSettingsPage', () => {
       { target: { value: 'newcol@example.com' } },
     )
     fireEvent.click(
-      screen.getByRole('button', { name: 'Create invitation' }),
+      screen.getByRole('button', { name: 'Send invitation' }),
     )
     await screen.findByText('Invitation created')
 

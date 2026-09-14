@@ -711,7 +711,7 @@ test(
     // Laura has lost RG and Project access.
     // --------------------------------------------------------
 
-    await logout(page)
+    await logout(page, 'Alex')
     await login(page, 'laura')
 
     const groups =
@@ -788,7 +788,7 @@ test(
     // She is its only owner.
     // --------------------------------------------------------
 
-    await logout(page)
+    await logout(page, 'Alex')
     await login(page, 'laura')
 
     await selectResearchGroup(
@@ -807,7 +807,7 @@ test(
     // No Work Items are created deliberately:
     // this case should expose only the
     // ownership decision.
-    await logout(page)
+    await logout(page, 'Laura')
 
     // --------------------------------------------------------
     // Alex offboards Laura as Research Group admin.

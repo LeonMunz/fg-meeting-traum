@@ -4,6 +4,7 @@ import {
   useState,
 } from 'react'
 import type { FormEvent } from 'react'
+import { createPortal } from 'react-dom'
 
 import { ApiError } from '../../api/client'
 import { createAccountInvitation } from '../../api/account-invitations'
@@ -52,14 +53,15 @@ function mapCreateError(error: unknown): string {
 }
 
 const PRIMARY_BUTTON_CLASSES = [
-  'inline-flex h-[38px] items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-text-inverse shadow-sm transition',
-  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface',
-  'disabled:cursor-not-allowed disabled:opacity-50',
+  'inline-flex h-8 items-center justify-center gap-2 rounded bg-accent px-3 text-[13px] font-medium leading-[18px] text-text-inverse transition',
+  'hover:bg-accent-hover',
+  'focus-visible:outline-2 focus-visible:outline focus-visible:outline-focus focus-visible:outline-offset-1',
+  'disabled:cursor-not-allowed disabled:bg-action-disabled-bg disabled:text-text-tertiary',
 ].join(' ')
 
 const SECONDARY_BUTTON_CLASSES = [
-  'inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-border-default bg-surface px-3.5 text-sm font-medium text-text transition hover:bg-surface-hover',
-  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface',
+  'inline-flex h-8 items-center justify-center gap-1.5 rounded bg-transparent px-2.5 text-[13px] font-medium leading-[18px] text-text-muted transition hover:bg-surface-hover hover:text-text',
+  'focus-visible:outline-2 focus-visible:outline focus-visible:outline-focus focus-visible:outline-offset-1',
   'disabled:cursor-not-allowed disabled:opacity-50',
 ].join(' ')
 
@@ -69,7 +71,9 @@ const SECONDARY_BUTTON_CLASSES = [
  * result with copy, and close/reset behavior. Callers only control
  * `open`, close the dialog, and get notified after a successful
  * creation; the dialog is deliberately independent of any route,
- * Settings layout, or user menu.
+ * Settings layout, or user menu. The overlay is rendered into
+ * document.body so the modal always fills and is centered in the
+ * viewport regardless of the caller's mount location.
  */
 export function InviteToWorkspaceDialog({
   open,
@@ -173,7 +177,13 @@ export function InviteToWorkspaceDialog({
     return null
   }
 
-  return (
+  // The modal boundary is location-independent: the overlay is portaled
+  // to document.body so it is always positioned against the viewport,
+  // no matter where the caller mounts this dialog. (An ancestor with a
+  // non-none `filter`/`backdrop-filter`/`transform` would otherwise
+  // become the containing block for the `fixed` overlay and clip the
+  // dialog to that ancestor's box.)
+  return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-overlay-scrim px-4 py-8 backdrop-blur-[2px]"
       onMouseDown={(event) => {
@@ -186,7 +196,7 @@ export function InviteToWorkspaceDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="invite-to-workspace-title"
-        className="relative w-[440px] max-w-full rounded-lg border border-border-subtle bg-surface p-6 shadow-xl"
+        className="relative w-[440px] max-w-[calc(100vw-48px)] rounded-lg border border-border-subtle bg-surface p-6 shadow-[0_20px_56px_rgba(0,0,0,0.42)]"
       >
         <h2
           id="invite-to-workspace-title"
@@ -195,7 +205,7 @@ export function InviteToWorkspaceDialog({
           Invite to FG Workspace
         </h2>
 
-        <p className="mt-2 text-sm text-text-muted">
+        <p className="mt-1 text-[13px] leading-5 text-text-muted">
           Invite someone to create an FG Workspace account.
           <span className="block">
             This does not grant access to research groups or projects.
@@ -225,7 +235,7 @@ export function InviteToWorkspaceDialog({
 
             <label
               htmlFor="invite-to-workspace-email"
-              className="mb-1 block text-sm font-medium text-text"
+              className="mb-1 block text-xs font-medium leading-[18px] text-text-muted"
             >
               Email
             </label>
@@ -242,8 +252,7 @@ export function InviteToWorkspaceDialog({
               aria-describedby={
                 createError ? 'invite-to-workspace-email-error' : undefined
               }
-              placeholder="name@example.com"
-              className="h-10 w-full rounded border border-border-default bg-surface-subtle px-3 text-sm text-text outline-none transition placeholder:text-text-muted focus:border-accent focus:ring-2 focus:ring-focus/25"
+              className="h-10 w-full rounded border border-border-default bg-surface-quiet px-3 text-sm text-text outline-none transition focus:border-accent focus:ring-2 focus:ring-focus/25"
             />
 
             {createError && (
@@ -256,7 +265,16 @@ export function InviteToWorkspaceDialog({
               </p>
             )}
 
-            <div className="mt-5 flex justify-end">
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                disabled={submitting}
+                onClick={requestClose}
+                className={SECONDARY_BUTTON_CLASSES}
+              >
+                Cancel
+              </button>
+
               <button
                 type="submit"
                 disabled={submitting}
@@ -265,12 +283,12 @@ export function InviteToWorkspaceDialog({
                 {submitting && (
                   <span
                     aria-hidden="true"
-                    className="material-symbols-outlined animate-spin text-[18px]"
+                    className="material-symbols-outlined animate-spin text-[16px]"
                   >
                     refresh
                   </span>
                 )}
-                {submitting ? 'Creating…' : 'Create invitation'}
+                {submitting ? 'Sending…' : 'Send invitation'}
               </button>
             </div>
           </form>
@@ -343,6 +361,7 @@ export function InviteToWorkspaceDialog({
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }

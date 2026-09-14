@@ -86,7 +86,7 @@ function submitCreate(email: string) {
     target: { value: email },
   })
   fireEvent.click(
-    screen.getByRole('button', { name: 'Create invitation' }),
+    screen.getByRole('button', { name: 'Send invitation' }),
   )
 }
 
@@ -140,7 +140,13 @@ describe('InviteToWorkspaceDialog', () => {
     expect(emailInput).toHaveAttribute('type', 'email')
     expect(emailInput).toHaveAttribute('autocomplete', 'email')
     expect(emailInput).toHaveValue('')
-    expect(screen.getByRole('button', { name: 'Create invitation' })).toBeEnabled()
+    // The primary form action is the final "Send invitation" label.
+    expect(
+      screen.getByRole('button', { name: 'Send invitation' }),
+    ).toBeEnabled()
+    expect(
+      screen.queryByRole('button', { name: 'Create invitation' }),
+    ).toBeNull()
     expect(screen.queryByRole('alert')).toBeNull()
     expect(screen.queryByText('Invitation created')).toBeNull()
   })
@@ -254,7 +260,7 @@ describe('InviteToWorkspaceDialog', () => {
     expect(screen.queryByRole('alert')).toBeNull()
     expect(document.querySelector('code')?.textContent ?? '').not.toContain(TOKEN)
     expect(
-      screen.getByRole('button', { name: 'Create invitation' }),
+      screen.getByRole('button', { name: 'Send invitation' }),
     ).toBeVisible()
   })
 
@@ -353,7 +359,7 @@ describe('InviteToWorkspaceDialog', () => {
     })
 
     const form = screen
-      .getByRole('button', { name: /Create invitation/ })
+      .getByRole('button', { name: /Send invitation/ })
       .closest('form')!
     fireEvent.submit(form)
     fireEvent.submit(form)
@@ -361,7 +367,7 @@ describe('InviteToWorkspaceDialog', () => {
 
     expect(createAccountInvitation).toHaveBeenCalledTimes(1)
     expect(
-      screen.getByRole('button', { name: 'Creating…' }),
+      screen.getByRole('button', { name: 'Sending…' }),
     ).toBeDisabled()
   })
 
@@ -372,6 +378,21 @@ describe('InviteToWorkspaceDialog', () => {
     fireEvent.keyDown(window, { key: 'Escape' })
 
     expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('renders the modal into document.body so the boundary is location-independent', () => {
+    const { container } = renderOpen()
+
+    const dialog = screen.getByRole('dialog', {
+      name: 'Invite to FG Workspace',
+    })
+
+    // The overlay is portaled to document.body: it is not a descendant
+    // of the caller's mount node, so an ancestor with a
+    // filter/backdrop-filter/transform (e.g. the topbar's backdrop-blur)
+    // can never become the modal's containing block or clip it.
+    expect(container.contains(dialog)).toBe(false)
+    expect(document.body.contains(dialog)).toBe(true)
   })
 
   it('never persists the raw token in browser storage', async () => {

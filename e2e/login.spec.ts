@@ -3,6 +3,8 @@ import {
   test,
 } from '@playwright/test'
 
+import { displayNameFor, userMenuTrigger } from './helpers'
+
 // Seeded E2E credentials (see settings_e2e reset seed); they must never
 // appear in the product UI itself.
 const SEED_USER = 'alex'
@@ -43,15 +45,11 @@ test('logs in and keeps the session across a reload', async ({
     .getByRole('button', { name: 'Sign in' })
     .click()
 
-  await expect(
-    page.getByRole('button', { name: 'Sign out' }),
-  ).toBeVisible()
+  await expect(userMenuTrigger(page, displayNameFor(SEED_USER))).toBeVisible()
 
   // Session persistence: a reload still resolves the server session.
   await page.reload()
-  await expect(
-    page.getByRole('button', { name: 'Sign out' }),
-  ).toBeVisible()
+  await expect(userMenuTrigger(page, displayNameFor(SEED_USER))).toBeVisible()
 })
 
 test('renders the canonical inline error for incorrect credentials', async ({
@@ -71,7 +69,5 @@ test('renders the canonical inline error for incorrect credentials', async ({
 
   // Still unauthenticated on the login page.
   await expect(page.getByLabel('Username')).toBeVisible()
-  await expect(
-    page.getByRole('button', { name: 'Sign out' }),
-  ).toHaveCount(0)
+  await expect(userMenuTrigger(page, displayNameFor(SEED_USER))).toHaveCount(0)
 })

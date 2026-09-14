@@ -1,5 +1,7 @@
 import { expect, test } from '@playwright/test'
 
+import { logout, userMenuTrigger } from './helpers'
+
 const PASSWORD = 'DevPass1!'
 
 async function createAccountInvitation(
@@ -53,7 +55,7 @@ test('an invited person registers a new account through the registration page', 
   await page.getByLabel('Username').fill('alex')
   await page.getByLabel('Password', { exact: true }).fill(PASSWORD)
   await page.getByRole('button', { name: 'Sign in' }).click()
-  await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible()
+  await expect(userMenuTrigger(page, 'Alex')).toBeVisible()
 
   // 2. Create a global account invitation for a unique email and capture
   //    the one-time raw token.
@@ -63,8 +65,7 @@ test('an invited person registers a new account through the registration page', 
   expect(token.length).toBeGreaterThan(0)
 
   // 3. Log out.
-  await page.getByRole('button', { name: 'Sign out' }).click()
-  await expect(page.getByLabel('Username')).toBeVisible()
+  await logout(page, 'Alex')
 
   // 4. Open the registration URL carrying the token.
   const newUsername = `invitee${suffix}`
@@ -112,7 +113,7 @@ test('an invited person registers a new account through the registration page', 
 
   // 8. The browser enters the authenticated application.
   await expect(page).toHaveURL('http://127.0.0.1:4173/')
-  await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible()
+  await expect(userMenuTrigger(page, newUsername)).toBeVisible()
 
   // 9. /api/auth/me/ reflects the new account.
   const meResp = await page.evaluate(async () => {
@@ -125,7 +126,7 @@ test('an invited person registers a new account through the registration page', 
 
   // 10. Reload — the session survives.
   await page.reload()
-  await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible()
+  await expect(userMenuTrigger(page, newUsername)).toBeVisible()
 
   // 11. No ResearchGroup (and thus no Project) membership was implicitly
   //     created for the new account.

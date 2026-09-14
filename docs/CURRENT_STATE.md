@@ -1,7 +1,7 @@
 # FG Workspace — Current Implementation State
 
-**Checkpoint:** Meetings + persistent Meeting Notes + Note → Work Item traceability + Meeting Templates + configurable Project Work Items + Board ordering + global account invitation foundation + invite-only account registration
-**Last verified:** 2026-09-13
+**Checkpoint:** Meetings + persistent Meeting Notes + Note → Work Item traceability + Meeting Templates + configurable Project Work Items + Board ordering + global account invitation foundation + invite-only account registration + global topbar user menu (Invitations V1 global foundation complete)
+**Last verified:** 2026-09-14
 **Branch:** `feature/meeting-next`
 
 This document answers one question: *what is actually implemented in the
@@ -104,9 +104,10 @@ Markers:
 
 - **IMPLEMENTED** — `/settings` redirects to `/settings/appearance`.
 - **IMPLEMENTED** — `/settings/appearance` and `/settings/invitations` exist as separate routes under a shared horizontal Settings navigation (`SettingsLayout`); the active section is derived from the route and exposed via `aria-current="page"`.
-- **IMPLEMENTED** — the sidebar Settings entry remains active on all `/settings/*` routes and lands on `/settings/appearance`.
-- **IMPLEMENTED** — reusable “Invite to FG Workspace” dialog: owns the email form, the create request, backend error mapping (`invalid_email` / `account_exists` / `pending_invitation_exists` / generic), the in-dialog one-time registration link with copy, and close/reset (fresh state on every open; the dialog stays open after creation and notifies the caller to refresh its list). `/settings/invitations` launches it from the “Invite person” action; the inline invitation form is no longer present.
-- **NOT IMPLEMENTED** — global user-menu entry for invitations (User menu).
+- **IMPLEMENTED** — the Sidebar no longer contains Settings or Profile; its bottom zone holds only the Notifications entry (personal account destinations live exclusively in the topbar user menu). Settings is reached via the user menu and lands on `/settings/appearance`.
+- **IMPLEMENTED** — reusable “Invite to FG Workspace” dialog: owns the email form, the create request, backend error mapping (`invalid_email` / `account_exists` / `pending_invitation_exists` / generic), the in-dialog one-time registration link with copy, and close/reset (fresh state on every open; the dialog stays open after creation and notifies the caller to refresh its list). `/settings/invitations` launches it from the “Invite person” action; the inline invitation form is no longer present. The dialog overlay is portaled to `document.body`, so the modal is always viewport-bound and centered regardless of the caller's mount location (required for the global topbar user menu, whose header uses a backdrop-filter that would otherwise become the fixed overlay's containing block). Final reduced visual scale: 440 px panel (`max-width: calc(100vw - 48px)`), 40 px input, 32 px Cancel / primary actions; the primary form action is labeled `Send invitation` (copy only — the click still invokes the existing account-invitation creation API and the one-time registration-link behavior is unchanged; no e-mail delivery).
+- **IMPLEMENTED** — authenticated topbar user menu (`UserMenu`): the permanent topbar Sign out control is removed and replaced by one compact trigger (24 px avatar + current name + 12 px disclosure chevron; `aria-haspopup="menu"` / `aria-expanded`; Escape and outside click close it; focus ring only in keyboard `focus-visible` state). Menu order: Profile, Invite to FG Workspace, Settings, divider, Sign out. “Profile” closes the menu and navigates to the existing `/profile` route (placeholder page; a full Profile feature is still follow-up work). “Invite to FG Workspace” closes the menu and opens the existing reusable `InviteToWorkspaceDialog` in place (no navigation, no duplicated invitation API/state; dropdown and dialog never remain open simultaneously); “Settings” closes the menu and navigates to `/settings/appearance`; “Sign out” closes the menu and uses the existing canonical session logout (logout request + authenticated state cleared → normal unauthenticated/login state).
+- **NOT IMPLEMENTED** — the Profile *feature/page* itself: the user-menu Profile entry navigates to the existing placeholder `/profile` route; a real Profile implementation is unrelated follow-up work.
 
 ## Authentication & Sessions
 

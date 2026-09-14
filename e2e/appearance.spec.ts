@@ -3,7 +3,7 @@ import {
   test,
 } from '@playwright/test'
 
-import { login } from './helpers'
+import { login, userMenuTrigger } from './helpers'
 
 const storageKey = 'fg-workspace.appearance'
 
@@ -36,9 +36,11 @@ test('Appearance defaults to Dark and persists both explicit choices', async ({
 
   await login(page, 'alex')
 
+  // Settings lives in the user menu, not the sidebar.
+  await userMenuTrigger(page, 'Alex').click()
   await page
-    .getByRole('link', {
-      name: /Settings/,
+    .getByRole('menuitem', {
+      name: 'Settings',
     })
     .click()
 

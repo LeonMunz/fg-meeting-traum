@@ -3,7 +3,7 @@ import {
   test,
 } from '@playwright/test'
 
-import { login } from './helpers'
+import { login, userMenuTrigger } from './helpers'
 
 test('settings shell: /settings redirect, section tabs, and back/forward', async ({ page }) => {
   await login(page, 'alex')
@@ -12,10 +12,17 @@ test('settings shell: /settings redirect, section tabs, and back/forward', async
   await page.goto('/settings')
   await expect(page).toHaveURL(/\/settings\/appearance$/)
 
-  // The sidebar Settings entry lands on /settings/appearance.
-  const sidebarSettings = page.getByRole('link', { name: 'Settings' })
+  // Settings is reachable from the user menu (no longer in the
+  // sidebar), and it lands on /settings/appearance.
+  await expect(
+    page.getByRole('link', { name: 'Settings' }),
+  ).toHaveCount(0)
+  await expect(
+    page.getByRole('link', { name: 'Profile' }),
+  ).toHaveCount(0)
 
-  await sidebarSettings.click()
+  await userMenuTrigger(page, 'Alex').click()
+  await page.getByRole('menuitem', { name: 'Settings' }).click()
 
   await expect(page).toHaveURL(/\/settings\/appearance$/)
 
@@ -36,8 +43,6 @@ test('settings shell: /settings redirect, section tabs, and back/forward', async
     page.getByRole('button', { name: 'Invite person' }),
   ).not.toBeVisible()
 
-  // The sidebar Settings entry is active on this route.
-  await expect(sidebarSettings).toHaveClass(/font-semibold/)
 
   // Switch to Invitations: URL, active section, and content update.
   await invitationsTab.click()
@@ -53,8 +58,6 @@ test('settings shell: /settings redirect, section tabs, and back/forward', async
   ).toBeVisible()
   await expect(appearance).not.toBeVisible()
 
-  // The sidebar Settings entry stays active on this route too.
-  await expect(sidebarSettings).toHaveClass(/font-semibold/)
 
   // Switch back to Appearance: route, active section, and content revert.
   await appearanceTab.click()
@@ -64,7 +67,6 @@ test('settings shell: /settings redirect, section tabs, and back/forward', async
   await expect(invitationsTab).not.toHaveAttribute('aria-current')
   await expect(appearance).toBeVisible()
   await expect(inviteButton).not.toBeVisible()
-  await expect(sidebarSettings).toHaveClass(/font-semibold/)
 
   // Browser Back/Forward restore route, content, and active state.
   await page.goBack()
@@ -72,12 +74,10 @@ test('settings shell: /settings redirect, section tabs, and back/forward', async
   await expect(page).toHaveURL(/\/settings\/invitations$/)
   await expect(invitationsTab).toHaveAttribute('aria-current', 'page')
   await expect(inviteButton).toBeVisible()
-  await expect(sidebarSettings).toHaveClass(/font-semibold/)
 
   await page.goForward()
 
   await expect(page).toHaveURL(/\/settings\/appearance$/)
   await expect(appearanceTab).toHaveAttribute('aria-current', 'page')
   await expect(appearance).toBeVisible()
-  await expect(sidebarSettings).toHaveClass(/font-semibold/)
 })

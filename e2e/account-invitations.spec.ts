@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 
-import { login } from './helpers'
+import { login, userMenuTrigger } from './helpers'
 
 /**
  * Read the exact invitation records for one normalized email through
@@ -55,8 +55,10 @@ test('an authenticated user manages account invitations through the settings UI'
 
   // 2. Navigate through the normal UI to invitation management
   //    (Settings opens on Appearance; Invitations is a Settings tab).
+  //    Settings lives in the user menu, not the sidebar.
+  await userMenuTrigger(page, 'Alex').click()
   await page
-    .getByRole('link', { name: 'Settings' })
+    .getByRole('menuitem', { name: 'Settings' })
     .click()
 
   await expect(page).toHaveURL(/\/settings\/appearance$/)
@@ -98,7 +100,7 @@ test('an authenticated user manages account invitations through the settings UI'
     .fill(firstEmail)
 
   await dialog
-    .getByRole('button', { name: 'Create invitation' })
+    .getByRole('button', { name: 'Send invitation' })
     .click()
 
   // 4. Success state: the invited email and the one-time registration
@@ -174,7 +176,7 @@ test('an authenticated user manages account invitations through the settings UI'
     .fill(secondEmail)
 
   await dialog
-    .getByRole('button', { name: 'Create invitation' })
+    .getByRole('button', { name: 'Send invitation' })
     .click()
 
   await expect(
@@ -256,7 +258,7 @@ test('an authenticated user manages account invitations through the settings UI'
     .fill(chrisEmail)
 
   await dialog
-    .getByRole('button', { name: 'Create invitation' })
+    .getByRole('button', { name: 'Send invitation' })
     .click()
 
   await expect(
@@ -287,7 +289,7 @@ test('an authenticated user manages account invitations through the settings UI'
     .fill(firstEmail)
 
   await dialog
-    .getByRole('button', { name: 'Create invitation' })
+    .getByRole('button', { name: 'Send invitation' })
     .click()
 
   await expect(
