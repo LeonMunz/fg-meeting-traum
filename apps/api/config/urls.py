@@ -7,6 +7,7 @@ from django.contrib import admin
 from django.urls import path
 from django.views.decorators.csrf import csrf_protect
 
+from audit_history.views import ActivityFeedView
 from accounts.views import (
     AccountInvitationAcceptView,
     AccountInvitationListCreateView,
@@ -146,6 +147,8 @@ urlpatterns = [
     path('api/work-items/<int:work_item_id>/history/', WorkItemHistoryView.as_view(), name='work-item-history'),
     path('api/work-items/<int:work_item_id>/comments/', WorkItemCommentListCreateView.as_view(), name='work-item-comments-list'),
     path('api/work-item-comments/<int:comment_id>/', WorkItemCommentDetailView.as_view(), name='work-item-comment-detail'),
+    # Activity — permission-filtered aggregate feed over Work Item events
+    path('api/activity/', ActivityFeedView.as_view(), name='activity-feed'),
     # My Work — authorized projection over assigned WorkItems
     path('api/me/work-items/', PersonalMyWorkView.as_view(), name='personal-my-work'),
     path('api/research-groups/<int:group_id>/my-work/', MyWorkView.as_view(), name='research-group-my-work'),

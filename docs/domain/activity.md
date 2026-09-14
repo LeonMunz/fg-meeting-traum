@@ -132,6 +132,31 @@ underlying object. It must never become a privacy bypass.**
   owner/member/viewer + current ResearchGroupMembership); a group admin
   without Project membership gets a non-leaking 404.
 
+The aggregate feed **`GET /api/activity/`** (Work Item slice events
+only) applies the **same** rule per event, evaluated at read time on
+every request:
+
+- an event is returned only if the requester can read the affected
+  Work Item **today** — losing Project/Research Group membership
+  immediately removes its historical events (read-time, not
+  creation-time, authorization);
+- events whose Work Item was hard-deleted (FK nulled) are not
+  readable and never appear;
+- the filter runs in the database **before** bounded pagination
+  (`?limit=` 1..100, default 50; `?offset=` non-negative with a hard
+  bound; invalid values → 400), so inaccessible events leak nothing:
+  no title, actor, context, event data, existence, count, or
+  ordering/page behavior. The response is a bare page — no total
+  count is exposed;
+- deterministic reverse-chronological order: newest `created_at`
+  first, event `id` as the stable tie-breaker;
+- structured projection only: event id / machine `eventType` /
+  `createdAt`, the existing audit/history actor representation,
+  affected Work Item id + current title, Project and Research Group
+  context, and the structured `changes` diff (`category` makes a
+  completion distinguishable from an ordinary status change). No
+  rendered sentences, no arbitrary `AuditEvent` internals.
+
 ## 6. Transactional guarantee
 
 An Activity event **participates in the same logical transaction** as the
@@ -154,15 +179,17 @@ Implemented and proven in this slice:
 - Work Item events: created, status changed, completed (distinct),
   assignee changed, due date changed;
 - the authorization rule above for Work Item history;
+- the permission-safe aggregate read API `GET /api/activity/`
+  (Work Item slice events only; see §5 for the binding read-time
+  rule);
 - the transactional guarantee;
 - `docs` + tests (`apps/api/work_items/tests_activity_foundation.py`,
   `apps/api/work_items/tests_history.py`, `apps/api/audit_history/tests.py`).
 
 Explicitly **not** in this slice:
 
-- no Activity API and no Home Activity rail / feed rendering yet — the
-  persistence and domain foundation exists so a later projection can
-  summarize the events;
+- no Home Activity rail / feed rendering yet — the read API exists so
+  a later UI projection can summarize the events;
 - Activity is not a notification system (no push, no unread state, no
   inbox semantics);
 - no events for other object kinds yet (Meeting, Project, etc. will reuse
