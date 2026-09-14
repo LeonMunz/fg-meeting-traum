@@ -325,3 +325,207 @@ test(
     ).toHaveCount(0)
   },
 )
+
+test(
+  'Project Header add-member shortcut adds an existing user without leaving Work Items',
+  async ({ page }) => {
+    const projectName =
+      'E2E Header Member Project'
+
+    await login(page, 'alex')
+
+    await createProject(
+      page,
+      projectName,
+      'Header add-member shortcut acceptance project.',
+    )
+
+    await openProject(
+      page,
+      projectName,
+    )
+
+    const workItemsPath =
+      new URL(page.url()).pathname
+
+    expect(workItemsPath).toMatch(
+      /^\/projects\/\d+\/work-items$/,
+    )
+
+    // The shortcut is visible to the Project owner on the
+    // Work Items page.
+    const addButton =
+      page.getByRole('button', {
+        name: 'Add project member',
+        exact: true,
+      })
+
+    await expect(addButton).toBeVisible()
+    await expect(addButton).toHaveAttribute(
+      'title',
+      'Add project member',
+    )
+
+    // Clicking opens the shared Add-member dialog in place,
+    // without navigating to Settings.
+    await addButton.click()
+
+    const dialog =
+      page.getByRole('dialog', {
+        name: 'Add project member',
+      })
+
+    await expect(dialog).toBeVisible()
+    expect(
+      new URL(page.url()).pathname,
+    ).toBe(workItemsPath)
+
+    // The dialog lists the eligible candidates (Research
+    // Group members who are not yet Project members) for an
+    // empty query.
+    const row = (username: string) =>
+      dialog
+        .getByRole('button')
+        .filter({
+          hasText: username,
+        })
+
+    await expect(row('@chris')).toBeVisible()
+    await expect(row('@maria')).toBeVisible()
+    await expect(row('@laura')).toBeVisible()
+
+    // Typing filters the visible result set: 'mar' matches
+    // Maria only.
+    await dialog
+      .getByLabel('Select person')
+      .fill('mar')
+
+    await expect(row('@maria')).toBeVisible()
+    await expect(row('@chris')).toHaveCount(0)
+    await expect(row('@laura')).toHaveCount(0)
+
+    // Clearing the query restores the full eligible pool.
+    await dialog
+      .getByLabel('Select person')
+      .fill('')
+
+    await expect(row('@chris')).toBeVisible()
+    await expect(row('@maria')).toBeVisible()
+    await expect(row('@laura')).toBeVisible()
+
+    // A query without matches shows the distinct no-match
+    // state (not the everyone-has-access message).
+    await dialog
+      .getByLabel('Select person')
+      .fill('zzz-nobody')
+
+    await expect(
+      dialog.getByText('No matching people'),
+    ).toBeVisible()
+    await expect(
+      dialog.getByText(
+        'Everyone already has project access',
+      ),
+    ).toHaveCount(0)
+
+    // Search again for the intended candidate and select it.
+    // The canonical default role (Member) is used — no
+    // explicit role change.
+    await dialog
+      .getByLabel('Select person')
+      .fill('chris')
+
+    await expect(row('@chris')).toBeVisible()
+    await expect(row('@maria')).toHaveCount(0)
+
+    await row('@chris').click()
+
+    // The selected person renders exactly once: the search
+    // and the candidate list are replaced by the selected row.
+    await expect(
+      dialog.getByLabel('Select person'),
+    ).toHaveCount(0)
+    await expect(row('@chris')).toHaveCount(0)
+    await expect(dialog.getByText('@chris')).toBeVisible()
+
+    await expect(
+      dialog
+        .getByRole('radio', {
+          name: /^Member/,
+        }),
+    ).toBeChecked()
+
+    await dialog
+      .getByRole('button', {
+        name: /Add member/,
+      })
+      .click()
+
+    // The backend mutation succeeded: dialog closed, still on
+    // the same Work Items route, and the new member is visible
+    // in the header cluster without a reload.
+    await expect(dialog).not.toBeVisible()
+    expect(
+      new URL(page.url()).pathname,
+    ).toBe(workItemsPath)
+
+    await expect(
+      page
+        .locator('header')
+        .getByTitle('Chris'),
+    ).toBeVisible()
+
+    // The same member is present in Settings -> Access.
+    await page
+      .getByRole('link', {
+        name: 'Settings',
+        exact: true,
+      })
+      .click()
+
+    await expect(
+      page.getByText(
+        '@chris',
+        { exact: true },
+      ),
+    ).toBeVisible()
+
+    // Reload: membership persists and the header still shows
+    // the member.
+    await page.reload()
+
+    await expect(
+      page
+        .locator('header')
+        .getByTitle('Chris'),
+    ).toBeVisible()
+
+    await expect(
+      page.getByRole('button', {
+        name: 'Add project member',
+        exact: true,
+      }),
+    ).toBeVisible()
+
+    // An unauthorized (non-owner) Project member does not see
+    // the header shortcut ...
+    await logout(page, 'Alex')
+    await login(page, 'chris')
+    await openProjects(page)
+    await openProject(page, projectName)
+
+    await expect(
+      page.getByRole('button', {
+        name: 'Add project member',
+        exact: true,
+      }),
+    ).toHaveCount(0)
+
+    // ... while the member cluster itself remains rendered.
+    await expect(
+      page
+        .locator('header')
+        .getByTitle('Chris'),
+    ).toBeVisible()
+  },
+)

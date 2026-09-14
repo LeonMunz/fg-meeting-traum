@@ -37,6 +37,10 @@
   --color-accent-text: #3a5bc7;
   --color-accent-subtle: #edf2fe;
   --color-accent-selected: #e1e9ff;
+  /* Add-project-member role picker: selected radio indicator. Light
+   * uses the canonical interaction accent; Dark uses the approved
+   * lighter indicator accent. */
+  --color-role-radio-accent: #3e63dd;
 
   /* Focus */
   --color-focus: #3e63dd;
@@ -330,6 +334,7 @@ html[data-theme='dark'] {
   --color-accent-text: #9eb1ff;
   --color-accent-subtle: #15224c;
   --color-accent-selected: #15224c;
+  --color-role-radio-accent: #5b7cfa;
 
   --color-focus: #3e63dd;
 

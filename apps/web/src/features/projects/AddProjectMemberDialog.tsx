@@ -1,4 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent,
+} from 'react'
 
 export type AddableProjectRole = 'owner' | 'member' | 'viewer'
 
@@ -20,6 +26,34 @@ type AddProjectMemberDialogProps = {
   ) => Promise<void>
 }
 
+// The canonical Project membership roles supported by the backend
+// (ProjectMembership.Role: owner / member / viewer). Only these are
+// rendered; the default is Member — never Owner.
+const PROJECT_ROLES: Array<{
+  value: AddableProjectRole
+  label: string
+  description: string
+}> = [
+  {
+    value: 'owner',
+    label: 'Owner',
+    description:
+      'Can manage the project, members and their roles.',
+  },
+  {
+    value: 'member',
+    label: 'Member',
+    description:
+      'Can participate in and modify project work.',
+  },
+  {
+    value: 'viewer',
+    label: 'Viewer',
+    description:
+      'Can inspect the project but cannot make changes.',
+  },
+]
+
 export function AddProjectMemberDialog({
   open,
   users,
@@ -28,12 +62,26 @@ export function AddProjectMemberDialog({
   onAdd,
 }: AddProjectMemberDialogProps) {
   const [query, setQuery] = useState('')
-  const [selectedUserId, setSelectedUserId] = useState<string | null>(null)
-  const [role, setRole] = useState<AddableProjectRole>('member')
+  const [selectedUserId, setSelectedUserId] = useState<
+    string | null
+  >(null)
+  const [role, setRole] = useState<AddableProjectRole>(
+    'member',
+  )
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] =
     useState<string | null>(null)
 
+  // The parent recreates `onClose` on every render. Keep the latest
+  // handler in a ref so the effects below can depend on `open` alone;
+  // otherwise any parent re-render while the dialog is open would
+  // re-run the reset and wipe an in-flight query or selection.
+  const onCloseRef = useRef(onClose)
+  useEffect(() => {
+    onCloseRef.current = onClose
+  }, [onClose])
+
+  // Fresh state on every open.
   useEffect(() => {
     if (!open) return
 
@@ -42,10 +90,14 @@ export function AddProjectMemberDialog({
     setRole('member')
     setSubmitting(false)
     setSubmitError(null)
+  }, [open])
+
+  useEffect(() => {
+    if (!open) return
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        onClose()
+        onCloseRef.current()
       }
     }
 
@@ -54,40 +106,54 @@ export function AddProjectMemberDialog({
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
     }
-  }, [open, onClose])
+  }, [open])
 
+  // Eligible pool: Research Group members minus current
+  // Project members. This — not the filtered result — decides
+  // the "nobody left to add" state.
+  const eligibleUsers = useMemo(
+    () =>
+      users.filter(
+        (user) => !excludedUserIds.includes(user.id),
+      ),
+    [excludedUserIds, users],
+  )
+
+  // Case-insensitive, trimmed name/username filter over the
+  // eligible pool. Empty query shows the whole pool.
   const availableUsers = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase()
 
-    return users.filter((user) => {
-      if (excludedUserIds.includes(user.id)) {
-        return false
-      }
+    if (!normalizedQuery) {
+      return eligibleUsers
+    }
 
-      if (!normalizedQuery) {
-        return true
-      }
-
-      return (
-        user.name.toLowerCase().includes(normalizedQuery) ||
-        user.username.toLowerCase().includes(normalizedQuery)
-      )
-    })
-  }, [excludedUserIds, query, users])
+    return eligibleUsers.filter(
+      (user) =>
+        user.name
+          .toLowerCase()
+          .includes(normalizedQuery) ||
+        user.username
+          .toLowerCase()
+          .includes(normalizedQuery),
+    )
+  }, [eligibleUsers, query])
 
   const selectedUser =
-    users.find((user) => user.id === selectedUserId) ?? null
-
-  const hasEligibleUsers = users.some(
-    (user) => !excludedUserIds.includes(user.id),
-  )
+    users.find((user) => user.id === selectedUserId) ??
+    null
 
   if (!open) {
     return null
   }
 
+  const hasEligibleUsers = eligibleUsers.length > 0
+  const hasQuery = query.trim().length > 0
+  const noMatchingPeople =
+    hasEligibleUsers && hasQuery && availableUsers.length === 0
+
   const handleSubmit = async () => {
-    if (!selectedUser || submitting) return
+    if (!selectedUser || !role || submitting) return
 
     setSubmitting(true)
     setSubmitError(null)
@@ -106,332 +172,301 @@ export function AddProjectMemberDialog({
     }
   }
 
+  const handleOverlayMouseDown = (
+    event: MouseEvent<HTMLDivElement>,
+  ) => {
+    if (event.target === event.currentTarget) {
+      onClose()
+    }
+  }
+
+  // Shared header for both dialog variants: 18px/24px/600 title,
+  // 12px/18px description, 28x28 close control with a 16px icon.
+  const dialogHeader = (
+    <div className="flex items-start justify-between gap-4 px-4 pb-3.5 pt-[18px]">
+      <div>
+        <h2
+          id="add-project-member-title"
+          className="text-lg font-semibold leading-6 tracking-tight text-text"
+        >
+          Add project member
+        </h2>
+
+        <p className="mt-[3px] text-xs leading-[18px] text-text-muted">
+          Give a research-group member access to this
+          project.
+        </p>
+      </div>
+
+      <button
+        type="button"
+        onClick={onClose}
+        aria-label="Close dialog"
+        className="-mr-1.5 -mt-1.5 flex h-7 w-7 shrink-0 items-center justify-center rounded text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus"
+      >
+        <span
+          aria-hidden="true"
+          className="material-symbols-outlined text-[16px]"
+        >
+          close
+        </span>
+      </button>
+    </div>
+  )
+
+  // Zero eligible candidates: compact, search-free state.
+  // Nothing can be added, so no Select person, Search,
+  // role, or Add member control is rendered at all.
+  if (!hasEligibleUsers) {
+    return (
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center bg-overlay-scrim px-4 py-6 backdrop-blur-[2px]"
+        onMouseDown={handleOverlayMouseDown}
+      >
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="add-project-member-title"
+          className="w-[440px] max-w-[calc(100vw-48px)] overflow-hidden rounded-lg border border-border-subtle bg-surface shadow-xl"
+        >
+          {dialogHeader}
+
+          <div className="px-4 py-4">
+            <div className="rounded border border-border-subtle bg-surface-quiet px-4 py-5 text-center">
+              <p className="text-[13px] font-semibold leading-[18px] text-text">
+                Everyone already has project access
+              </p>
+
+              <p className="mt-1 text-xs leading-[18px] text-text-muted">
+                All research-group members are already
+                members of this project.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-end border-t border-border-subtle px-4 pb-4 pt-3">
+            <button
+              type="button"
+              onClick={onClose}
+              className="h-8 rounded bg-transparent px-2.5 text-[13px] font-medium leading-[18px] text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-on-surface/25 px-4 py-8 backdrop-blur-[2px]"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) {
-          onClose()
-        }
-      }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-overlay-scrim px-4 py-6 backdrop-blur-[2px]"
+      onMouseDown={handleOverlayMouseDown}
     >
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="add-project-member-title"
-        className="w-full max-w-lg overflow-hidden rounded-2xl border border-outline-variant bg-surface-container-lowest shadow-xl"
+        className="w-[460px] max-h-[calc(100dvh-48px)] max-w-[calc(100vw-48px)] overflow-hidden rounded-lg border border-border-subtle bg-surface shadow-xl"
       >
-        <div className="flex items-start justify-between border-b border-outline-variant px-6 py-5">
-          <div>
-            <h2
-              id="add-project-member-title"
-              className="text-lg font-semibold tracking-tight text-on-surface"
-            >
-              Add project member
-            </h2>
+        {dialogHeader}
 
-            <p className="mt-1 text-sm text-on-surface-variant">
-              Give another research-group member access to this project.
-            </p>
-          </div>
-
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close dialog"
-            className="flex h-8 w-8 items-center justify-center rounded-lg text-on-surface-variant transition hover:bg-surface-container-high hover:text-on-surface"
-          >
-            <span className="material-symbols-outlined text-[20px]">
-              close
-            </span>
-          </button>
-        </div>
-
-        <div className="space-y-6 px-6 py-6">
+        <div className="p-4">
           <div>
             <label
               htmlFor="member-search"
-              className="mb-1.5 block text-sm font-medium text-on-surface"
+              className="mb-1.5 block text-sm font-medium text-text"
             >
               Select person
             </label>
 
-            <div className="relative">
-              <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[18px] text-on-surface-variant">
-                search
-              </span>
-
-              <input
-                id="member-search"
-                type="search"
-                autoFocus
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Search by name or username..."
-                className="h-10 w-full rounded-lg border border-outline-variant bg-surface-container-lowest pl-10 pr-3 text-sm text-on-surface outline-none transition placeholder:text-on-surface-variant/60 focus:border-primary focus:ring-2 focus:ring-primary/15"
-              />
-            </div>
-
-            <div className="mt-2 max-h-52 overflow-y-auto rounded-xl border border-outline-variant">
-              {availableUsers.length > 0 ? (
-                <div className="divide-y divide-outline-variant">
-                  {availableUsers.map((user) => {
-                    const selected = user.id === selectedUserId
-
-                    return (
-                      <button
-                        key={user.id}
-                        type="button"
-                        onClick={() => setSelectedUserId(user.id)}
-                        className={[
-                          'flex w-full items-center gap-3 px-4 py-3 text-left transition',
-                          selected
-                            ? 'bg-primary-fixed/55'
-                            : 'hover:bg-surface-container-low',
-                        ].join(' ')}
-                      >
-                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-surface-container-high text-[11px] font-semibold text-on-surface">
-                          {user.initials}
-                        </div>
-
-                        <div className="min-w-0 flex-1">
-                          <div className="truncate text-sm font-medium text-on-surface">
-                            {user.name}
-                          </div>
-
-                          <div className="truncate text-xs text-on-surface-variant">
-                            @{user.username}
-                          </div>
-                        </div>
-
-                        {selected && (
-                          <span className="material-symbols-outlined text-[20px] text-primary">
-                            check_circle
-                          </span>
-                        )}
-                      </button>
-                    )
-                  })}
+            {selectedUser ? (
+              <div className="mt-2 flex h-12 items-center gap-2.5 rounded border border-border-control bg-surface-quiet px-2.5 py-1.5">
+                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-surface-muted text-[10px] font-semibold text-text">
+                  {selectedUser.initials}
                 </div>
-              ) : (
-                <div className="px-4 py-8 text-center">
-                  <span className="material-symbols-outlined text-[22px] text-on-surface-variant">
-                    person_search
+
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[13px] font-medium leading-[18px] text-text">
+                    {selectedUser.name}
+                  </div>
+
+                  <div className="truncate text-[11px] leading-4 text-text-muted">
+                    @{selectedUser.username}
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setSelectedUserId(null)}
+                  aria-label="Remove selected person"
+                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus"
+                >
+                  <span
+                    aria-hidden="true"
+                    className="material-symbols-outlined text-[14px]"
+                  >
+                    close
+                  </span>
+                </button>
+              </div>
+            ) : (
+              <>
+                <div className="relative">
+                  <span
+                    aria-hidden="true"
+                    className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[16px] text-text-muted"
+                  >
+                    search
                   </span>
 
-                  <p className="mt-2 text-sm font-medium text-on-surface">
-                    {hasEligibleUsers
-                      ? 'No users found'
-                      : 'Everyone is already a member'}
-                  </p>
-
-                  <p className="mt-1 text-xs leading-5 text-on-surface-variant">
-                    {hasEligibleUsers
-                      ? 'Try another name or username.'
-                      : 'There are no additional research-group members available to add.'}
-                  </p>
+                  <input
+                    id="member-search"
+                    type="search"
+                    autoFocus
+                    value={query}
+                    onChange={(event) =>
+                      setQuery(event.target.value)
+                    }
+                    placeholder="Search by name or username"
+                    className="h-10 w-full rounded border border-border-control bg-surface-quiet pl-9 pr-3 text-sm leading-5 text-text outline-none transition placeholder:text-text-muted/60 focus:border-accent focus:ring-2 focus:ring-accent/20"
+                  />
                 </div>
-              )}
-            </div>
+
+                <div className="mt-2 max-h-48 overflow-y-auto rounded border border-border-subtle bg-surface-quiet">
+                  {noMatchingPeople ? (
+                    <div className="px-4 py-8 text-center">
+                      <p className="text-sm font-medium text-text">
+                        No matching people
+                      </p>
+
+                      <p className="mt-1 text-xs leading-5 text-text-muted">
+                        Try a different name or username.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="divide-y divide-border-subtle">
+                      {availableUsers.map((user) => (
+                        <button
+                          key={user.id}
+                          type="button"
+                          onClick={() =>
+                            setSelectedUserId(user.id)
+                          }
+                          className="flex h-11 w-full items-center gap-2.5 px-2.5 py-1.5 text-left outline-none transition hover:bg-surface-hover focus-visible:bg-surface-hover"
+                        >
+                          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-surface-muted text-[10px] font-semibold text-text">
+                            {user.initials}
+                          </div>
+
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate text-[13px] font-medium leading-[18px] text-text">
+                              {user.name}
+                            </div>
+
+                            <div className="truncate text-[11px] leading-4 text-text-muted">
+                              @{user.username}
+                            </div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
           </div>
+
+          {selectedUser && (
+            <fieldset className="mt-5">
+              <legend className="mb-2 text-xs font-medium leading-[18px] text-text">
+                Project role
+              </legend>
+
+              <div className="space-y-1.5">
+                {PROJECT_ROLES.map((option) => {
+                  const selected =
+                    role === option.value
+
+                  return (
+                    <label
+                      key={option.value}
+                      className={[
+                        'grid h-12 cursor-pointer grid-cols-[16px_minmax(0,1fr)] items-center gap-x-2.5 rounded border px-2.5 py-[7px] transition',
+                        selected
+                          ? 'border-accent bg-accent-subtle'
+                          : 'border-border-subtle hover:bg-surface-hover',
+                        'has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-focus has-[:focus-visible]:ring-inset',
+                      ].join(' ')}
+                    >
+                      <input
+                        type="radio"
+                        name="new-member-role"
+                        value={option.value}
+                        checked={selected}
+                        onChange={() =>
+                          setRole(option.value)
+                        }
+                        className="sr-only"
+                      />
+
+                      <span
+                        aria-hidden="true"
+                        className={[
+                          'flex h-4 w-4 shrink-0 items-center justify-center rounded-full border',
+                          selected
+                            ? 'border-accent'
+                            : 'border-border-control',
+                        ].join(' ')}
+                      >
+                        {selected && (
+                          <span className="h-2 w-2 rounded-full bg-role-radio-accent" />
+                        )}
+                      </span>
+
+                      <span className="min-w-0">
+                        <span className="block text-[13px] font-semibold leading-[18px] text-text">
+                          {option.label}
+                        </span>
+
+                        <span className="mt-px block text-[11px] leading-4 text-text-muted">
+                          {option.description}
+                        </span>
+                      </span>
+                    </label>
+                  )
+                })}
+              </div>
+            </fieldset>
+          )}
 
           {submitError && (
             <div
               role="alert"
-              className="rounded-lg bg-error-container px-4 py-3 text-sm text-error"
+              className="mt-4 rounded bg-danger-bg px-4 py-3 text-sm text-danger"
             >
               {submitError}
             </div>
           )}
-
-          <fieldset>
-            <legend className="mb-2 text-sm font-medium text-on-surface">
-              Project role
-            </legend>
-
-            <div className="space-y-2.5">
-              <label
-                className={[
-                  'flex cursor-pointer items-center gap-4 rounded-xl border px-4 py-3.5 transition',
-                  role === 'owner'
-                    ? 'border-primary bg-primary-fixed/45 ring-1 ring-primary/20'
-                    : 'border-outline-variant hover:bg-surface-container-low',
-                ].join(' ')}
-              >
-                <input
-                  type="radio"
-                  name="new-member-role"
-                  value="owner"
-                  checked={role === 'owner'}
-                  onChange={() => setRole('owner')}
-                  className="sr-only"
-                />
-
-                <div
-                  className={[
-                    'flex h-10 w-10 shrink-0 items-center justify-center rounded-full',
-                    role === 'owner'
-                      ? 'bg-primary-fixed text-primary'
-                      : 'bg-surface-container-high text-primary',
-                  ].join(' ')}
-                >
-                  <span className="material-symbols-outlined text-[21px]">
-                    shield_person
-                  </span>
-                </div>
-
-                <div className="min-w-0 flex-1">
-                  <div className="text-sm font-semibold text-on-surface">
-                    Owner
-                  </div>
-
-                  <p className="mt-0.5 text-xs leading-5 text-on-surface-variant">
-                    Can manage the project, members and their roles.
-                  </p>
-                </div>
-
-                <span
-                  className={[
-                    'flex h-5 w-5 shrink-0 items-center justify-center rounded-full border',
-                    role === 'owner'
-                      ? 'border-primary bg-primary text-white'
-                      : 'border-outline',
-                  ].join(' ')}
-                >
-                  {role === 'owner' && (
-                    <span className="material-symbols-outlined text-[14px]">
-                      check
-                    </span>
-                  )}
-                </span>
-              </label>
-
-              <label
-                className={[
-                  'flex cursor-pointer items-center gap-4 rounded-xl border px-4 py-3.5 transition',
-                  role === 'member'
-                    ? 'border-emerald-600 bg-emerald-50 ring-1 ring-emerald-600/20'
-                    : 'border-outline-variant hover:bg-surface-container-low',
-                ].join(' ')}
-              >
-                <input
-                  type="radio"
-                  name="new-member-role"
-                  value="member"
-                  checked={role === 'member'}
-                  onChange={() => setRole('member')}
-                  className="sr-only"
-                />
-
-                <div
-                  className={[
-                    'flex h-10 w-10 shrink-0 items-center justify-center rounded-full',
-                    role === 'member'
-                      ? 'bg-emerald-100 text-emerald-700'
-                      : 'bg-surface-container-high text-emerald-600',
-                  ].join(' ')}
-                >
-                  <span className="material-symbols-outlined text-[21px]">
-                    person
-                  </span>
-                </div>
-
-                <div className="min-w-0 flex-1">
-                  <div className="text-sm font-semibold text-on-surface">
-                    Member
-                  </div>
-
-                  <p className="mt-0.5 text-xs leading-5 text-on-surface-variant">
-                    Can participate in and modify project work.
-                  </p>
-                </div>
-
-                <span
-                  className={[
-                    'flex h-5 w-5 shrink-0 items-center justify-center rounded-full border',
-                    role === 'member'
-                      ? 'border-emerald-600 bg-emerald-600 text-white'
-                      : 'border-outline',
-                  ].join(' ')}
-                >
-                  {role === 'member' && (
-                    <span className="material-symbols-outlined text-[14px]">
-                      check
-                    </span>
-                  )}
-                </span>
-              </label>
-
-              <label
-                className={[
-                  'flex cursor-pointer items-center gap-4 rounded-xl border px-4 py-3.5 transition',
-                  role === 'viewer'
-                    ? 'border-primary bg-primary-fixed/30 ring-1 ring-primary/15'
-                    : 'border-outline-variant hover:bg-surface-container-low',
-                ].join(' ')}
-              >
-                <input
-                  type="radio"
-                  name="new-member-role"
-                  value="viewer"
-                  checked={role === 'viewer'}
-                  onChange={() => setRole('viewer')}
-                  className="sr-only"
-                />
-
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-surface-container-high text-on-surface-variant">
-                  <span className="material-symbols-outlined text-[21px]">
-                    visibility
-                  </span>
-                </div>
-
-                <div className="min-w-0 flex-1">
-                  <div className="text-sm font-semibold text-on-surface">
-                    Viewer
-                  </div>
-
-                  <p className="mt-0.5 text-xs leading-5 text-on-surface-variant">
-                    Can inspect the project but cannot make changes.
-                  </p>
-                </div>
-
-                <span
-                  className={[
-                    'flex h-5 w-5 shrink-0 items-center justify-center rounded-full border',
-                    role === 'viewer'
-                      ? 'border-primary bg-primary text-white'
-                      : 'border-outline',
-                  ].join(' ')}
-                >
-                  {role === 'viewer' && (
-                    <span className="material-symbols-outlined text-[14px]">
-                      check
-                    </span>
-                  )}
-                </span>
-              </label>
-            </div>
-          </fieldset>
         </div>
 
-        <div className="flex items-center justify-end gap-3 border-t border-outline-variant bg-surface-container-low/45 px-6 py-4">
+        <div className="flex items-center justify-end gap-2 border-t border-border-subtle px-4 pb-3.5 pt-3">
           <button
             type="button"
             onClick={onClose}
-            className="h-9 rounded-lg px-4 text-sm font-medium text-on-surface-variant transition hover:bg-surface-container-high hover:text-on-surface"
+            className="h-8 rounded bg-transparent px-2.5 text-[13px] font-medium leading-[18px] text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus"
           >
             Cancel
           </button>
 
           <button
             type="button"
-            disabled={!selectedUser || submitting}
+            disabled={
+              !selectedUser || !role || submitting
+            }
             onClick={() => void handleSubmit()}
-            className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-45"
+            className="h-8 rounded bg-accent px-3 text-[13px] font-medium leading-[18px] text-white transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-45"
           >
-            <span className="material-symbols-outlined text-[18px]">
-              person_add
-            </span>
             {submitting ? 'Adding…' : 'Add member'}
           </button>
         </div>

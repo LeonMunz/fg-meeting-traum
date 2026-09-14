@@ -2196,7 +2196,7 @@ export function ProjectDetailPage() {
 
           </div>
 
-          <div className="flex shrink-0 flex-wrap items-center gap-4">
+          <div className="flex shrink-0 flex-wrap items-center">
             <div className="flex -space-x-2">
               {sortedMembers.slice(0, 4).map((member) => (
                 <div
@@ -2215,11 +2215,30 @@ export function ProjectDetailPage() {
               )}
             </div>
 
-            <div className="h-6 w-px bg-border-structural" />
+            {canManageMembers && (
+              <button
+                type="button"
+                onClick={() =>
+                  setAddMemberDialogOpen(true)
+                }
+                aria-label="Add project member"
+                title="Add project member"
+                className="ml-2 flex h-7 w-7 shrink-0 items-center justify-center rounded border border-border-default bg-transparent text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus"
+              >
+                <span
+                  aria-hidden="true"
+                  className="material-symbols-outlined text-[14px]"
+                >
+                  person_add
+                </span>
+              </button>
+            )}
+
+            <div className="ml-3 h-6 w-px bg-border-structural" />
 
             <span
               className={[
-                'inline-flex rounded-full px-3 py-1.5 text-xs font-semibold',
+                'ml-3 inline-flex rounded-full px-3 py-1.5 text-xs font-semibold',
                 roleClass[currentMemberRole],
               ].join(' ')}
             >
