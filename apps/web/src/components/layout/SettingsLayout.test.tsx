@@ -122,9 +122,9 @@ describe('Settings routes and shared navigation', () => {
       screen.queryByRole('heading', { name: 'Invitations' }),
     ).toBeNull()
     expect(
-      screen.queryByRole('button', { name: 'Create invitation' }),
+      screen.queryByRole('button', { name: 'Invite person' }),
     ).toBeNull()
-    expect(screen.queryByLabelText('Email address')).toBeNull()
+    expect(screen.queryByLabelText('Email', { exact: true })).toBeNull()
     expect(
       screen.queryByText(/Manage invitations you have created/),
     ).toBeNull()
@@ -141,14 +141,14 @@ describe('Settings routes and shared navigation', () => {
       screen.getByText(/Manage invitations you have created for FG Workspace\./),
     ).toBeVisible()
     expect(
-      await screen.findByRole('button', { name: 'Create invitation' }),
+      await screen.findByRole('button', { name: 'Invite person' }),
     ).toBeVisible()
   })
 
   it('keeps the Invitations page free of Appearance controls', async () => {
     renderSettings('/settings/invitations')
 
-    await screen.findByRole('button', { name: 'Create invitation' })
+    await screen.findByRole('button', { name: 'Invite person' })
 
     expect(screen.queryByRole('radiogroup')).toBeNull()
     expect(
@@ -172,7 +172,7 @@ describe('Settings routes and shared navigation', () => {
   it('marks the Invitations section active on /settings/invitations', async () => {
     renderSettings('/settings/invitations')
 
-    await screen.findByRole('button', { name: 'Create invitation' })
+    await screen.findByRole('button', { name: 'Invite person' })
 
     expect(invitationsNav()).toHaveAttribute(
       'aria-current',
@@ -193,7 +193,7 @@ describe('Settings routes and shared navigation', () => {
     expect(currentPath()).toBe('/settings/invitations')
     expect(screen.queryByRole('radiogroup')).toBeNull()
     expect(
-      await screen.findByRole('button', { name: 'Create invitation' }),
+      await screen.findByRole('button', { name: 'Invite person' }),
     ).toBeVisible()
     expect(invitationsNav()).toHaveAttribute(
       'aria-current',
@@ -207,7 +207,7 @@ describe('Settings routes and shared navigation', () => {
       screen.getByRole('radiogroup', { name: 'Appearance' }),
     ).toBeVisible()
     expect(
-      screen.queryByRole('button', { name: 'Create invitation' }),
+      screen.queryByRole('button', { name: 'Invite person' }),
     ).toBeNull()
   })
 

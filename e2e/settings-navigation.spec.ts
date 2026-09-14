@@ -33,7 +33,7 @@ test('settings shell: /settings redirect, section tabs, and back/forward', async
     page.getByRole('heading', { name: 'Invitations', exact: true }),
   ).not.toBeVisible()
   await expect(
-    page.getByRole('button', { name: 'Create invitation' }),
+    page.getByRole('button', { name: 'Invite person' }),
   ).not.toBeVisible()
 
   // The sidebar Settings entry is active on this route.
@@ -46,8 +46,8 @@ test('settings shell: /settings redirect, section tabs, and back/forward', async
   await expect(invitationsTab).toHaveAttribute('aria-current', 'page')
   await expect(appearanceTab).not.toHaveAttribute('aria-current')
 
-  const createButton = page.getByRole('button', { name: 'Create invitation' })
-  await expect(createButton).toBeVisible()
+  const inviteButton = page.getByRole('button', { name: 'Invite person' })
+  await expect(inviteButton).toBeVisible()
   await expect(
     page.getByRole('heading', { name: 'Invitations', exact: true }),
   ).toBeVisible()
@@ -63,7 +63,7 @@ test('settings shell: /settings redirect, section tabs, and back/forward', async
   await expect(appearanceTab).toHaveAttribute('aria-current', 'page')
   await expect(invitationsTab).not.toHaveAttribute('aria-current')
   await expect(appearance).toBeVisible()
-  await expect(createButton).not.toBeVisible()
+  await expect(inviteButton).not.toBeVisible()
   await expect(sidebarSettings).toHaveClass(/font-semibold/)
 
   // Browser Back/Forward restore route, content, and active state.
@@ -71,7 +71,7 @@ test('settings shell: /settings redirect, section tabs, and back/forward', async
 
   await expect(page).toHaveURL(/\/settings\/invitations$/)
   await expect(invitationsTab).toHaveAttribute('aria-current', 'page')
-  await expect(createButton).toBeVisible()
+  await expect(inviteButton).toBeVisible()
   await expect(sidebarSettings).toHaveClass(/font-semibold/)
 
   await page.goForward()

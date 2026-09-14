@@ -3,11 +3,9 @@ import {
   useEffect,
   useState,
 } from 'react'
-import type { FormEvent } from 'react'
 
 import { ApiError } from '../../api/client'
 import {
-  createAccountInvitation,
   listAccountInvitations,
   revokeAccountInvitation,
 } from '../../api/account-invitations'
@@ -15,6 +13,8 @@ import type {
   AccountInvitationStatus,
   ApiAccountInvitation,
 } from '../../api/account-invitations'
+
+import { InviteToWorkspaceDialog } from './InviteToWorkspaceDialog'
 
 const STATUS_LABELS: Record<AccountInvitationStatus, string> = {
   pending: 'Pending',
@@ -44,15 +44,6 @@ function apiErrorMessage(error: ApiError): string {
   return detail ?? `Request failed (${error.status}).`
 }
 
-/** The one-time creation result. Holds only the constructed URL; the
- *  raw token is never stored outside component memory. */
-interface OneTimeResult {
-  invitationId: string
-  invitedEmail: string
-  expiresAt: string
-  registrationUrl: string
-}
-
 export function InvitationsSettingsPage() {
   const [invitations, setInvitations] = useState<
     ApiAccountInvitation[]
@@ -60,12 +51,7 @@ export function InvitationsSettingsPage() {
   const [loading, setLoading] = useState(true)
   const [listError, setListError] = useState<string | null>(null)
 
-  const [email, setEmail] = useState('')
-  const [creating, setCreating] = useState(false)
-  const [createError, setCreateError] = useState<string | null>(null)
-  const [oneTime, setOneTime] = useState<OneTimeResult | null>(null)
-  const [copied, setCopied] = useState(false)
-  const [copyError, setCopyError] = useState<string | null>(null)
+  const [inviteOpen, setInviteOpen] = useState(false)
 
   const [revokeTarget, setRevokeTarget] = useState<
     ApiAccountInvitation | null
@@ -89,63 +75,6 @@ export function InvitationsSettingsPage() {
     void refresh()
   }, [refresh])
 
-  const handleCreate = async (event: FormEvent) => {
-    event.preventDefault()
-    if (creating) return
-
-    const targetEmail = email.trim()
-    if (!targetEmail) {
-      setCreateError('Enter an email address.')
-      return
-    }
-
-    setCreating(true)
-    setCreateError(null)
-    setCopied(false)
-    setCopyError(null)
-
-    try {
-      const created = await createAccountInvitation(targetEmail)
-
-      // The raw token arrives exactly once, only in this response.
-      // It stays in component memory for the one-time result only and
-      // is never written to browser storage or global state.
-      setOneTime({
-        invitationId: created.id,
-        invitedEmail: created.invitedEmail,
-        expiresAt: created.expiresAt,
-        registrationUrl: `${window.location.origin}/register?token=${encodeURIComponent(created.token)}`,
-      })
-      setEmail('')
-      await refresh()
-    } catch (error) {
-      setCreateError(
-        error instanceof ApiError
-          ? apiErrorMessage(error)
-          : 'Could not create the invitation. Please try again.',
-      )
-    } finally {
-      setCreating(false)
-    }
-  }
-
-  const handleCopy = async () => {
-    if (!oneTime) return
-
-    setCopyError(null)
-
-    try {
-      await navigator.clipboard.writeText(
-        oneTime.registrationUrl,
-      )
-      setCopied(true)
-    } catch {
-      setCopyError(
-        'Could not copy the link automatically. Select and copy it manually.',
-      )
-    }
-  }
-
   const openRevoke = (invitation: ApiAccountInvitation) => {
     setRevokeTarget(invitation)
     setRevokeError(null)
@@ -167,15 +96,6 @@ export function InvitationsSettingsPage() {
     try {
       await revokeAccountInvitation(revokeTarget.id)
       setRevokeTarget(null)
-      // The revoked invitation's link is unusable; do not leave a
-      // stale "copy link" action for it.
-      setOneTime((current) =>
-        current && current.invitationId === revokeTarget.id
-          ? null
-          : current,
-      )
-      setCopied(false)
-      setCopyError(null)
       await refresh()
     } catch (error) {
       setRevokeError(
@@ -207,127 +127,22 @@ export function InvitationsSettingsPage() {
         </p>
       </div>
 
-      <form
-        onSubmit={handleCreate}
-        noValidate
-        className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-end"
+      <button
+        type="button"
+        onClick={() => setInviteOpen(true)}
+        className={[
+          'mt-5 inline-flex h-[38px] items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-text-inverse shadow-sm transition',
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface',
+        ].join(' ')}
       >
-        <div className="grow">
-          <label
-            htmlFor="invite-email"
-            className="mb-1 block text-sm font-medium text-text"
-          >
-            Email address
-          </label>
-
-          <input
-            id="invite-email"
-            type="email"
-            autoComplete="off"
-            required
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-            aria-invalid={createError ? true : undefined}
-            aria-describedby={
-              createError ? 'invite-email-error' : undefined
-            }
-            placeholder="name@example.com"
-            className="w-full rounded-lg border border-border-default bg-surface-subtle px-3 py-2 text-sm text-text outline-none transition focus:border-accent focus:ring-2 focus:ring-focus/25"
-          />
-        </div>
-
-        <button
-          type="submit"
-          disabled={creating || !email.trim()}
-          className={[
-            'inline-flex h-[38px] items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-text-inverse shadow-sm transition',
-            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface',
-            'disabled:cursor-not-allowed disabled:opacity-50',
-            'sm:shrink-0',
-          ].join(' ')}
+        <span
+          aria-hidden="true"
+          className="material-symbols-outlined text-[18px]"
         >
-          {creating && (
-            <span
-              aria-hidden="true"
-              className="material-symbols-outlined animate-spin text-[18px]"
-            >
-              refresh
-            </span>
-          )}
-          {creating ? 'Creating…' : 'Create invitation'}
-        </button>
-      </form>
-
-      {createError && (
-        <p
-          id="invite-email-error"
-          role="alert"
-          className="mt-2 text-sm text-danger"
-        >
-          {createError}
-        </p>
-      )}
-
-      {oneTime && (
-        <div
-          role="status"
-          className="mt-4 rounded-lg border border-border-subtle bg-surface-subtle p-4"
-        >
-          <p className="text-sm font-medium text-text">
-            Invitation created for {oneTime.invitedEmail}.
-          </p>
-
-          <p className="mt-1 text-sm text-text-muted">
-            Expires {formatDate(oneTime.expiresAt)}.
-          </p>
-
-          <p className="mt-3 text-xs text-text-muted">
-            Copy this link now — it is shown only once and cannot be
-            recovered after this page is closed or reloaded.
-          </p>
-
-          <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center">
-            <code className="min-w-0 flex-1 truncate rounded border border-border-subtle bg-surface px-2 py-1.5 text-xs text-text">
-              {oneTime.registrationUrl}
-            </code>
-
-            <button
-              type="button"
-              onClick={() => void handleCopy()}
-              className={[
-                'inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-lg border border-border-default bg-surface px-3.5 text-sm font-medium text-text transition hover:bg-surface-hover',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface-subtle',
-              ].join(' ')}
-            >
-              <span
-                aria-hidden="true"
-                className="material-symbols-outlined text-[18px]"
-              >
-                content_copy
-              </span>
-              Copy invitation link
-            </button>
-          </div>
-
-          {copied && (
-            <p
-              role="status"
-              className="mt-2 text-sm text-success-text"
-            >
-              Link copied to clipboard.
-            </p>
-          )}
-
-          {copyError && (
-            <p
-              role="alert"
-              className="mt-2 text-sm text-danger"
-            >
-              {copyError}
-            </p>
-          )}
-        </div>
-      )}
+          person_add
+        </span>
+        Invite person
+      </button>
 
       <div className="mt-6">
         <h3 className="text-sm font-medium text-text-muted">
@@ -485,6 +300,14 @@ export function InvitationsSettingsPage() {
           </div>
         </div>
       )}
+
+      <InviteToWorkspaceDialog
+        open={inviteOpen}
+        onClose={() => setInviteOpen(false)}
+        onCreated={() => {
+          void refresh()
+        }}
+      />
     </section>
   )
 }

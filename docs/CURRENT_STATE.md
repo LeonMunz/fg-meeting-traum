@@ -105,8 +105,8 @@ Markers:
 - **IMPLEMENTED** — `/settings` redirects to `/settings/appearance`.
 - **IMPLEMENTED** — `/settings/appearance` and `/settings/invitations` exist as separate routes under a shared horizontal Settings navigation (`SettingsLayout`); the active section is derived from the route and exposed via `aria-current="page"`.
 - **IMPLEMENTED** — the sidebar Settings entry remains active on all `/settings/*` routes and lands on `/settings/appearance`.
-- **PARTIAL** — invitation creation is still temporarily inline on the Invitations settings page (creation form on the page, not a shared dialog).
-- **NOT IMPLEMENTED** — global Invite dialog and User menu.
+- **IMPLEMENTED** — reusable “Invite to FG Workspace” dialog: owns the email form, the create request, backend error mapping (`invalid_email` / `account_exists` / `pending_invitation_exists` / generic), the in-dialog one-time registration link with copy, and close/reset (fresh state on every open; the dialog stays open after creation and notifies the caller to refresh its list). `/settings/invitations` launches it from the “Invite person” action; the inline invitation form is no longer present.
+- **NOT IMPLEMENTED** — global user-menu entry for invitations (User menu).
 
 ## Authentication & Sessions
 
