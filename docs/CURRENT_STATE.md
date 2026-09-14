@@ -1,6 +1,6 @@
 # FG Workspace — Current Implementation State
 
-**Checkpoint:** Meetings + persistent Meeting Notes + Note → Work Item traceability + Meeting Templates + configurable Project Work Items + Board ordering + global account invitation foundation + invite-only account registration + global topbar user menu (Invitations V1 global foundation complete)
+**Checkpoint:** Meetings + persistent Meeting Notes + Note → Work Item traceability + Meeting Templates + configurable Project Work Items + Board ordering + global account invitation foundation + invite-only account registration + global topbar user menu (Invitations V1 global foundation complete) + Activity event foundation (Work Item slice)
 **Last verified:** 2026-09-14
 **Branch:** `feature/meeting-next`
 
@@ -51,6 +51,17 @@ Markers:
 - **IMPLEMENTED** — Work Item deletion: `DELETE /api/work-items/{id}/` (server-side owner/member write authorization) permanently removes one Work Item and its Work-Item-owned dependents; children survive parent deletion as unparented (`parent` is `SET_NULL`); Meeting origin links are removed without touching the Meeting. The delete action is reachable from the Work Item drawer, Board card, and List row via a shared three-dot actions menu + confirmation dialog.
 - **IMPLEMENTED** — Board drag and drop: cross-column drag atomically updates status and position (`reposition_work_item`), with an explicit insertion anchor (`beforeWorkItemId`).
 - **IMPLEMENTED** — Board ↔ Editor status synchronization (Board column, Editor status, `statusDefinitionId`, and persisted state agree).
+
+## Activity
+
+Canonical domain reference: `docs/domain/activity.md`.
+
+- **IMPLEMENTED** — Activity event foundation (persistence/domain only — no Activity API, no Home Activity rail, no feed rendering; Activity is an awareness/history stream, not a notification inbox). Activity events are the canonical persisted concept `audit_history.AuditEvent` (append-only, no update/delete path), recorded through `record_audit_event` **inside the same logical transaction** as the domain mutation: a rollback never leaves an orphaned event and a committed mutation always has its event (pinned by simulated post-mutation failure tests for create and update).
+- **IMPLEMENTED** — Work Item event slice: one event per logical operation (domain-level action boundary, deliberately NOT one event per changed column) — `work_item.created` and `work_item.updated` with a structured, ID-based `data["changes"]` diff. The required action boundaries are reconstructable from the persisted event: **status changed** (`statusDefinition` from/to refs), **completed** — semantically distinct from an ordinary status change because the stored status summary now carries the fixed semantic `category` (`todo`/`in_progress`/`review`/`done`), so a transition into `done` (which drives the server-managed `completed_at`) is marked `to.category == "done"` with no join back to the StatusDefinition; a transition out of `done` is an ordinary status change, **assignee changed** (`assignees.added`/`assignees.removed` user refs), **due date changed** (`dueDate` from/to, including clearing to null). A no-op update records no event. Board drag/drop reuses the same contract (cross-column move = one `work_item.updated` with the status transition; pure within-column reorder = no event).
+- **IMPLEMENTED** — structured-semantics rule: `event_type` is a stable machine code and `data` stores IDs + fixed enums (rendered names are display convenience, never the source of truth) — a later projection can answer WHO (actor FK) / WHAT (event type + structured changes) / WHICH (WorkItem FK) / WHERE (Project + Research Group scope FKs) / WHEN (`created_at`).
+- **IMPLEMENTED** — Activity authorization rule: an Activity entry about an object is visible iff the user can read that object today (never a privacy bypass). Proven by the existing `GET /api/work-items/{id}/history/` enforcing the identical read rule as the Work Item itself (ProjectMembership owner/member/viewer + current ResearchGroupMembership; group admin without Project membership gets a non-leaking 404).
+- **NOT IMPLEMENTED (deferred)** — Activity API, Home Activity rail/feed, events for other object kinds (Meeting, Project, …), Work Item deletion event, and any notification semantics.
+
 
 ## Meetings
 
@@ -157,8 +168,6 @@ Project membership, scope, ownership, and authorization invariants).
 - **IMPLEMENTED** — list endpoints are permission-filtered; forbidden objects do not leak through collections; inaccessible single-resource reads return non-leaking 404.
 - **IMPLEMENTED** — Meeting access on the same foundation: `MEETING_READ` = creator-or-participant only (membership alone never grants Meeting visibility); `MEETING_WRITE` = the scoped write rule (group: `GROUP_READ`; project: `PROJECT_WORK`, archived read-only). `MEETING_SERIES_*` analogous.
 - **IMPLEMENTED** — security regression matrix: `apps/api/authorization/tests_security_matrix.py` (25 behavioral ALLOW/DENY API tests) plus kernel capability-matrix tests (`authorization/tests.py`) pin removal + known-ID denial, cross-group rejection, final-Owner denial, rejoin non-restoration, and inactive-account denial.
-- **IMPLEMENTED** — audit history foundation for Work Item change tracking.
-
 ## Meeting concepts that are documented direction, NOT implemented
 
 These appear in `docs/domain/meetings.md` as intended product direction but are **NOT IMPLEMENTED** in the current code:

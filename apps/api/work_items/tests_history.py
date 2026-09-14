@@ -8,7 +8,12 @@ the implementation):
 - title:         {"from": <str>, "to": <str>}
 - description:   {"changed": True}                 (never stores bodies)
 - typeDefinition:   {"from": {"id": int, "name": str} | None, "to": {...} | None}
-- statusDefinition: {"from": {"id": int, "name": str} | None, "to": {...} | None}
+- statusDefinition: {"from": {"id": int, "name": str, "category": str} | None,
+                      "to": {...} | None}
+                   (category: the fixed semantic category
+                    todo/in_progress/review/done — makes a
+                    completion directly distinguishable in the
+                    persisted event without a definition join)
 - dueDate:       {"from": <"YYYY-MM-DD" or None>, "to": <...>}
 - blockedReason: {"from": <str or None>, "to": <str or None>}
                  (None == unblocked, matching canonical semantics)
@@ -131,10 +136,12 @@ class WorkItemUpdateHistoryDiffTest(TestCase):
                         "from": {
                             "id": self.todo_status.pk,
                             "name": "Todo",
+                            "category": "todo",
                         },
                         "to": {
                             "id": self.in_progress_status.pk,
                             "name": "In Progress",
+                            "category": "in_progress",
                         },
                     },
                 },
@@ -165,8 +172,10 @@ class WorkItemUpdateHistoryDiffTest(TestCase):
         self.assertEqual(
             changes["statusDefinition"],
             {
-                "from": {"id": self.todo_status.pk, "name": "Todo"},
-                "to": {"id": self.review_status.pk, "name": "Review"},
+                "from": {"id": self.todo_status.pk, "name": "Todo",
+                         "category": "todo"},
+                "to": {"id": self.review_status.pk, "name": "Review",
+                       "category": "review"},
             },
         )
         self.assertEqual(

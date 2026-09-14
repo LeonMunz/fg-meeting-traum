@@ -358,21 +358,38 @@ def _summarize_type_definition(
 def _summarize_status_definition(
     project_id: int, status_definition_id: Optional[int],
 ) -> Optional[dict]:
-    """Display-safe summary of a StatusDefinition for history."""
+    """Display-safe summary of a StatusDefinition for history.
+
+    Includes the fixed semantic ``category`` (todo/in_progress/review/
+    done) so an Activity projection can distinguish a completion
+    (transition into the ``done`` category, which drives the
+    server-managed ``completed_at``) from an ordinary status change
+    using the persisted event alone — no join back to the definition.
+    The category is structured semantics, not presentation; ``name``
+    remains a display convenience and is never the source of truth.
+    """
     if status_definition_id is None:
         return None
 
     defn = (
         WorkItemStatusDefinition.objects
         .filter(pk=status_definition_id, project_id=project_id)
-        .only("id", "name")
+        .only("id", "name", "category")
         .first()
     )
 
     if defn is None:
-        return {"id": status_definition_id, "name": None}
+        return {
+            "id": status_definition_id,
+            "name": None,
+            "category": None,
+        }
 
-    return {"id": defn.pk, "name": defn.name}
+    return {
+        "id": defn.pk,
+        "name": defn.name,
+        "category": defn.category,
+    }
 
 
 def _diff_work_item_changes(
