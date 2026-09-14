@@ -2316,10 +2316,10 @@ export function ProjectDetailPage() {
 
 
       {activeTab === 'overview' && (
-        <div className="mt-7 max-w-4xl space-y-10">
+        <div className="mt-7 w-full max-w-[960px]">
           <section>
-            <div className="flex min-h-8 items-center justify-between border-b border-outline-variant/50 pb-3">
-              <h2 className="text-sm font-semibold text-on-surface">
+            <div className="flex items-center justify-between">
+              <h2 className="text-[13px] font-semibold leading-[18px] text-text">
                 About
               </h2>
 
@@ -2329,66 +2329,73 @@ export function ProjectDetailPage() {
                   <button
                     type="button"
                     onClick={() => navigateToTab('settings')}
-                    className="text-xs font-medium text-on-surface-variant transition hover:text-primary"
+                    className="rounded px-1 text-xs font-medium leading-[18px] text-text-muted transition outline-none hover:text-text focus-visible:ring-2 focus-visible:ring-focus"
                   >
                     Edit
                   </button>
                 )}
             </div>
 
-            {projectDescription.trim().length > 0 &&
-            !forceEmptyDescription ? (
-              <p className="max-w-3xl pt-4 text-sm leading-6 text-on-surface">
-                {projectDescription}
-              </p>
-            ) : (
-              <div className="flex min-h-28 items-center justify-between gap-6 py-5">
-                <div>
-                  <p className="text-sm font-medium text-on-surface">
+            <div className="mt-3">
+              <div className="text-[11px] font-medium leading-4 text-text-tertiary">
+                Description
+              </div>
+
+              {projectDescription.trim().length > 0 &&
+              !forceEmptyDescription ? (
+                <p className="mt-1.5 text-[13px] leading-5 text-text">
+                  {projectDescription}
+                </p>
+              ) : (
+                <div className="mt-1.5">
+                  <p className="text-[13px] font-medium leading-[18px] text-text-tertiary">
                     No description yet.
                   </p>
 
-                  <p className="mt-1 max-w-lg text-xs leading-5 text-on-surface-variant">
+                  <p className="mt-1 max-w-lg text-xs leading-4 text-text-tertiary">
                     Add context so project members can quickly understand
                     the purpose of this project.
                   </p>
-                </div>
 
-                {canEditProjectSettings && (
-                  <button
-                    type="button"
-                    onClick={() => navigateToTab('settings')}
-                    className="shrink-0 text-xs font-medium text-primary transition hover:opacity-75"
-                  >
-                    Add description
-                  </button>
-                )}
-              </div>
-            )}
+                  {canEditProjectSettings && (
+                    <button
+                      type="button"
+                      onClick={() => navigateToTab('settings')}
+                      className="mt-2 rounded px-1 text-xs font-medium leading-[18px] text-accent-text transition outline-none hover:opacity-75 focus-visible:ring-2 focus-visible:ring-focus"
+                    >
+                      Add description
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
           </section>
+
+          <div
+            aria-hidden="true"
+            className="mt-7 mb-6 border-t border-border-subtle"
+          />
 
           <section
             aria-labelledby="overview-milestones-heading"
           >
-            <div className="border-b border-outline-variant/50 pb-3">
-              <h2
-                id="overview-milestones-heading"
-                className="text-sm font-semibold text-on-surface"
-              >
-                Milestones
-              </h2>
-            </div>
+            <h2
+              id="overview-milestones-heading"
+              className="text-[13px] font-semibold leading-[18px] text-text"
+            >
+              Milestones
+            </h2>
 
             {workItemsLoading ? (
-              <p className="py-5 text-sm text-on-surface-variant">
+              <p className="mt-3 text-[13px] leading-5 text-text-muted">
                 Loading milestones…
               </p>
             ) : workItemsError ? (
-              <p className="py-5 text-sm text-on-surface-variant">
+              <p className="mt-3 text-[13px] leading-5 text-text-muted">
                 Project work could not be loaded.
               </p>
             ) : milestoneWorkItems.length > 0 ? (
-              <div className="divide-y divide-outline-variant/30">
+              <div className="mt-3 divide-y divide-border-subtle">
                 {milestoneWorkItems.map((item) => (
                   <OverviewWorkItemRow
                     key={item.id}
@@ -2402,34 +2409,37 @@ export function ProjectDetailPage() {
                 ))}
               </div>
             ) : (
-              <p className="py-5 text-sm text-on-surface-variant">
+              <p className="mt-2.5 text-xs leading-[18px] text-text-tertiary">
                 No milestones yet.
               </p>
             )}
           </section>
 
+          <div
+            aria-hidden="true"
+            className="mt-7 mb-6 border-t border-border-subtle"
+          />
+
           <section
             aria-labelledby="overview-attention-heading"
           >
-            <div className="border-b border-outline-variant/50 pb-3">
-              <h2
-                id="overview-attention-heading"
-                className="text-sm font-semibold text-on-surface"
-              >
-                Needs Attention
-              </h2>
-            </div>
+            <h2
+              id="overview-attention-heading"
+              className="text-[13px] font-semibold leading-[18px] text-text"
+            >
+              Needs Attention
+            </h2>
 
             {workItemsLoading ? (
-              <p className="py-5 text-sm text-on-surface-variant">
+              <p className="mt-3 text-[13px] leading-5 text-text-muted">
                 Checking project work…
               </p>
             ) : workItemsError ? (
-              <p className="py-5 text-sm text-on-surface-variant">
+              <p className="mt-3 text-[13px] leading-5 text-text-muted">
                 Project work could not be loaded.
               </p>
             ) : attentionWorkItems.length > 0 ? (
-              <div className="divide-y divide-outline-variant/30">
+              <div className="mt-3 divide-y divide-border-subtle">
                 {attentionWorkItems.map(
                   ({ item, kind }) => (
                     <OverviewWorkItemRow
@@ -2446,7 +2456,7 @@ export function ProjectDetailPage() {
                 )}
               </div>
             ) : (
-              <p className="py-5 text-sm text-on-surface-variant">
+              <p className="mt-2.5 text-xs leading-[18px] text-text-tertiary">
                 Nothing needs attention right now.
               </p>
             )}
@@ -3154,10 +3164,10 @@ function OverviewWorkItemRow({
           : undefined
       }
       className={[
-        'grid gap-3 py-3.5 sm:grid-cols-[minmax(0,1fr)_130px_180px_110px] sm:items-center',
+        'grid min-h-10 gap-3 py-2 transition-colors focus-visible:ring-2 focus-visible:ring-focus sm:grid-cols-[minmax(0,1fr)_130px_180px_110px] sm:items-center',
         selected
-          ? 'outline outline-1 -outline-offset-1 outline-primary/55 bg-primary/5'
-          : '',
+          ? 'outline outline-1 -outline-offset-1 outline-card-selected-ring bg-card-selected-bg'
+          : 'hover:bg-surface-hover',
       ].join(' ')}
     >
       <div className="min-w-0">
@@ -3166,7 +3176,7 @@ function OverviewWorkItemRow({
             className={[
               'mb-1 text-[10px] font-semibold uppercase tracking-[0.1em]',
               attentionKind === 'unassigned'
-                ? 'text-on-surface-variant'
+                ? 'text-text-tertiary'
                 : 'text-error',
             ].join(' ')}
           >
@@ -3178,12 +3188,12 @@ function OverviewWorkItemRow({
           <span
             title={item.typeLabel}
             aria-label={item.typeLabel}
-            className="material-symbols-outlined shrink-0 text-[15px] text-on-surface-variant/80"
+            className="material-symbols-outlined shrink-0 text-[16px] text-text-tertiary"
           >
             {workItemTypeIcon(item.type)}
           </span>
 
-          <span className="truncate text-sm font-semibold text-on-surface">
+          <span className="truncate text-[13px] font-medium leading-[18px] text-text">
             {item.title}
           </span>
         </div>
@@ -3202,7 +3212,7 @@ function OverviewWorkItemRow({
           {status.glyph}
         </span>
 
-        <span className="text-on-surface-variant">
+        <span className="text-text-muted">
           {workItemStatusLabels[item.status]}
         </span>
       </div>
@@ -3216,7 +3226,7 @@ function OverviewWorkItemRow({
           'text-xs',
           due.attention
             ? 'font-medium text-error'
-            : 'text-on-surface-variant',
+            : 'text-text-tertiary',
         ].join(' ')}
       >
         {due.label}
