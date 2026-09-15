@@ -96,7 +96,85 @@ Implementation: `apps/api/work_items/home_attention.py`
 (`get_work_item_attention_candidates`), tested by
 `apps/api/work_items/tests_home_attention.py`.
 
-## 3. Deferred (documented direction, NOT implemented)
+## 3. Today & next — implemented V1 timeline read model
+
+`Today & next` answers "what is scheduled for me in the coming days?"
+The V1 backend read model is implemented (read service only: no Home
+API endpoint, no UI yet):
+
+- **Seven-day window including Today** (half-open, one clock
+  observation per read, application timezone — currently UTC; no
+  per-user timezone model):
+
+  - Meetings: `start_of_today <= scheduled_at < start_of_today + 7 days`
+  - Work Items: `today <= due_date < today + 7 days`
+
+  The end boundary is exclusive (Today + 6 is the last eligible
+  day).
+- **Upcoming readable Meetings**: a Meeting is a candidate iff it is
+  `upcoming` (live, completed, and stale past "upcoming" Meetings are
+  excluded) and the requester currently has canonical `MEETING_READ`
+  — creator or explicit current Meeting participant. Research Group
+  membership/admin, Project membership, ownership, and Meeting write
+  permission never grant timeline eligibility. Participant removal
+  revokes the candidate immediately at read time; historical
+  participant rows grant nothing.
+- **Assigned readable open due Work Items**: a Work Item is a
+  candidate iff the user is currently assigned to it, the identical
+  current-membership read boundary of personal My Work still holds
+  (current `ProjectMembership` `owner`/`member` + current
+  `ResearchGroupMembership`), its status category is not `done`, and
+  its non-null `due_date` lies inside the window. Removing the
+  assignment or any membership removes the candidate immediately.
+- **Overdue Work Items are excluded**: `due_date < today` falls
+  outside the forward window by construction; overdue items remain
+  the responsibility of `Needs attention`. No cross-module
+  suppression is implemented or needed.
+- **Blocked Work Items stay eligible**: a blocked Work Item whose
+  due date is inside the window remains a `Today & next` candidate —
+  the overlap with `Needs attention` is intentional (problem vs.
+  time obligation).
+- **Meeting follow-ups are not a candidate type.** A follow-up whose
+  target is an upcoming readable Meeting inside the window is
+  represented exactly once — by that target Meeting; a follow-up
+  whose target the user cannot read produces no entry. Activity
+  events are never timeline state.
+- **Flat chronological candidate list**: one flat list, no backend
+  buckets (Today / Tomorrow / Later are derived later by the
+  composition layer from the candidate's calendar date), and **no
+  backend row limit** — the read model returns the complete eligible
+  7-day candidate set. The settled V1 Home presentation rule (at
+  most **7 visible `Today & next` rows**) belongs to the later Home
+  composition/UI layer.
+- **Date-only Work Items are all-day entries**: their chronological
+  sort point is the start of their due date in the application
+  timezone, so they sort before timed Meetings later on the same
+  date and win an exact-midnight tie against a Meeting scheduled at
+  00:00.
+- **Deterministic cross-domain ordering**: `(sort_at, domain_rank,
+  object_id)` — `sort_at` is the Meeting's exact `scheduled_at` or
+  the start of the Work Item's due date; `domain_rank` is Work Item
+  (0) < Meeting (1) for exact-instant ties only; `object_id`
+  ascending breaks same-domain ties. No relevance scoring.
+- **Calendar is NOT implemented** and stays excluded; the candidate
+  representation is structured so a future Calendar candidate
+  provider can be added without redefining Meeting or Work Item
+  semantics.
+
+Candidate contract: each candidate exposes domain, object identity,
+title, calendar date, chronological sort point, and a small
+domain-specific detail block (Meeting: id, `scheduled_at`, status,
+scope, Research Group / Project IDs exactly as the canonical Meeting
+read exposes them; Work Item: id, title, Project id/name, due date,
+semantic status category, blocked reason). No rendered sentences;
+the canonical object remains reachable by ID.
+
+Implementation: `apps/api/home_timeline/timeline.py`
+(`get_home_timeline_candidates`) — a neutral cross-domain read-model
+package (plain Python package, NOT a Django app), tested by
+`apps/api/home_timeline/tests.py`.
+
+## 4. Deferred (documented direction, NOT implemented)
 
 - **Due-soon candidates**: no canonical due-soon threshold exists in
   this repository; none is invented.
@@ -104,5 +182,4 @@ Implementation: `apps/api/work_items/home_attention.py`
 - **Follow-up attention** candidates.
 - Domain-specific Project-owner / decision problems.
 - The Home aggregate API endpoint and any Home UI.
-- The **Today & next** module, general **My work** module wiring,
-  and **Continue working**.
+- General **My work** module wiring and **Continue working**.
