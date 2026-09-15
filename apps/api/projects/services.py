@@ -37,6 +37,22 @@ ASSIGNMENT_RESOLUTION_VALUES = {
 }
 
 
+class ProjectAuditEventType:
+    """Event types recorded for Project audit history.
+
+    These events predate the aggregate Activity feed; the constants
+    name the exact persisted event set (docs/domain/activity.md §4b).
+    """
+
+    MEMBER_ASSIGNMENTS_RESOLVED = "project.member_assignments_resolved"
+    OWNERSHIP_RESOLVED_FOR_OFFBOARDING = (
+        "project.ownership_resolved_for_offboarding"
+    )
+    ARCHIVED = "project.archived"
+    RESTORED = "project.restored"
+    DELETED = "project.deleted"
+
+
 class ProjectDomainError(Exception):
     """Raised when a domain invariant is violated."""
 
@@ -286,7 +302,7 @@ def change_membership_role(
             record_audit_event(
                 research_group=project.research_group,
                 actor=actor,
-                event_type="project.member_assignments_resolved",
+                event_type=ProjectAuditEventType.MEMBER_ASSIGNMENTS_RESOLVED,
                 subject_user=membership.user,
                 project=project,
                 data={
@@ -378,7 +394,7 @@ def remove_membership(
             record_audit_event(
                 research_group=project.research_group,
                 actor=actor,
-                event_type="project.member_assignments_resolved",
+                event_type=ProjectAuditEventType.MEMBER_ASSIGNMENTS_RESOLVED,
                 subject_user=target_user,
                 project=project,
                 data={
@@ -510,7 +526,7 @@ def archive_project(
         record_audit_event(
             research_group=project.research_group,
             actor=actor,
-            event_type="project.archived",
+            event_type=ProjectAuditEventType.ARCHIVED,
             project=project,
             data={
                 "status": project.status,
@@ -561,7 +577,7 @@ def restore_project(
         record_audit_event(
             research_group=project.research_group,
             actor=actor,
-            event_type="project.restored",
+            event_type=ProjectAuditEventType.RESTORED,
             project=project,
             data={
                 "status": project.status,
@@ -618,7 +634,7 @@ def delete_empty_project(
         record_audit_event(
             research_group=project.research_group,
             actor=actor,
-            event_type="project.deleted",
+            event_type=ProjectAuditEventType.DELETED,
             project=project,
             data={
                 "projectId": project_id,

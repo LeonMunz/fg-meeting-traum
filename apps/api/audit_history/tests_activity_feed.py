@@ -210,6 +210,7 @@ class ActivityFeedVisibilityTest(_FeedClientMixin, APITestCase):
                 "id",
                 "eventType",
                 "actor",
+                "subjectUser",
                 "workItemId",
                 "workItemTitle",
                 "meetingId",

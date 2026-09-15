@@ -23,6 +23,7 @@ from work_items.models import WorkItemAssignee
 
 from .models import Project, ProjectMembership
 from .services import (
+    ProjectAuditEventType,
     ProjectDomainError,
     _resolve_assignments_for_membership_mutation,
 )
@@ -197,7 +198,7 @@ def resolve_project_membership_for_research_group_offboarding(
                     research_group=project.research_group,
                     actor=actor,
                     event_type=(
-                        "project.ownership_resolved_for_offboarding"
+                        ProjectAuditEventType.OWNERSHIP_RESOLVED_FOR_OFFBOARDING
                     ),
                     subject_user=target_user,
                     project=project,
@@ -230,7 +231,7 @@ def resolve_project_membership_for_research_group_offboarding(
                 record_audit_event(
                     research_group=project.research_group,
                     actor=actor,
-                    event_type="project.archived",
+                    event_type=ProjectAuditEventType.ARCHIVED,
                     project=project,
                     data={
                         "status": project.status,
@@ -294,7 +295,7 @@ def resolve_project_membership_for_research_group_offboarding(
                 research_group=project.research_group,
                 actor=actor,
                 event_type=(
-                    "project.member_assignments_resolved"
+                    ProjectAuditEventType.MEMBER_ASSIGNMENTS_RESOLVED
                 ),
                 subject_user=target_user,
                 project=project,

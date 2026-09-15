@@ -34,7 +34,11 @@ from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rest_framework.test import APIClient, APITestCase
 
-from projects.services import create_project
+from projects.services import (
+    archive_project,
+    create_project,
+    restore_project,
+)
 from research_groups.models import (
     ResearchGroup,
     ResearchGroupMembership,
@@ -135,4 +139,78 @@ class ActivityFeedQueryCountTest(APITestCase):
             "Activity page query count must not scale with Meeting row "
             "count; every serialized relation must be eager-loaded on "
             "the page queryset.",
+        )
+
+
+class ActivityFeedProjectQueryCountTest(APITestCase):
+    """A Project-heavy page must not add one Project / Research Group
+    / subject-user query per Activity row (same bounded-query
+    invariant as the Meeting regression test above)."""
+
+    client = APIClient()
+
+    def setUp(self):
+        self.alice = User.objects.create_user(
+            username="feed-pqc-alice", password="Pass1!",
+        )
+        self.group = ResearchGroup.objects.create(
+            name="Feed PQC Group", created_by=self.alice,
+        )
+        ResearchGroupMembership.objects.create(
+            research_group=self.group,
+            user=self.alice,
+            role=ResearchGroupMembership.Role.MEMBER,
+        )
+        self.project = create_project(
+            research_group=self.group,
+            creator=self.alice,
+            name="Feed PQC Project",
+            description="",
+        )
+        self.client.force_login(self.alice)
+
+    def _add_project_events(self, count):
+        # Archive and restore each record exactly one Project event;
+        # alternate so the project stays in a valid lifecycle state.
+        for i in range(count):
+            if i % 2 == 0:
+                archive_project(project=self.project, actor=self.alice)
+            else:
+                restore_project(project=self.project, actor=self.alice)
+
+    def _get_feed(self, params=None):
+        response = self.client.get(FEED_URL, params or None)
+        self.assertEqual(response.status_code, 200)
+        return response.json()
+
+    def test_project_rows_do_not_add_per_row_queries(self):
+        # Warm-up: establish the session steady state.
+        self._get_feed()
+
+        # Page 1: 2 Project rows.
+        self._add_project_events(2)
+        with CaptureQueriesContext(connection) as small_ctx:
+            small = self._get_feed()
+        self.assertEqual(
+            len([e for e in small if e["projectId"] == self.project.pk]),
+            2,
+        )
+
+        # Page 2: 14 Project rows (same page shape, 7x the rows).
+        self._add_project_events(12)
+        with CaptureQueriesContext(connection) as large_ctx:
+            large = self._get_feed()
+        self.assertEqual(
+            len([e for e in large if e["projectId"] == self.project.pk]),
+            14,
+        )
+
+        # Invariant: 7x the Project rows on the page add ZERO queries.
+        self.assertEqual(
+            len(small_ctx.captured_queries),
+            len(large_ctx.captured_queries),
+            "Activity page query count must not scale with Project row "
+            "count; every serialized relation (project, research "
+            "group, subject user) must be eager-loaded on the page "
+            "queryset.",
         )

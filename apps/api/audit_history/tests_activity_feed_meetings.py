@@ -379,13 +379,15 @@ class MeetingFeedPayloadContractTest(_MeetingFeedBase):
         )
 
         # Exact contract: the Work Item slice keys plus the Meeting
-        # identity pair (null on the non-matching side).
+        # identity pair (null on the non-matching side) plus the
+        # additive subjectUser field (null on Meeting events).
         self.assertEqual(
             set(entry.keys()),
             {
                 "id",
                 "eventType",
                 "actor",
+                "subjectUser",
                 "workItemId",
                 "workItemTitle",
                 "meetingId",

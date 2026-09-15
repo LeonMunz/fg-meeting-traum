@@ -3,9 +3,13 @@
 The aggregate Activity feed is a read-only projection over the
 canonical ``audit_history.AuditEvent`` persistence. It exposes the
 currently supported Activity events: Work Item events
-(``work_item.created`` / ``work_item.updated``) and Meeting events
+(``work_item.created`` / ``work_item.updated``), Meeting events
 (``meeting.created`` / ``meeting.rescheduled`` / ``meeting.completed``
-/ ``meeting.agenda_item_added`` / ``meeting.follow_up_scheduled``).
+/ ``meeting.agenda_item_added`` / ``meeting.follow_up_scheduled``),
+and Project events
+(``project.member_assignments_resolved`` /
+``project.ownership_resolved_for_offboarding`` /
+``project.archived`` / ``project.restored`` / ``project.deleted``).
 
 Authorization is evaluated at READ time and is identical to the
 underlying object's read rule: an Activity event is returned only if
@@ -15,6 +19,15 @@ the requester can read the affected object TODAY.
   ``ProjectMembership`` (owner/member/viewer) in the Work Item's
   Project AND a current ``ResearchGroupMembership`` in the Project's
   Research Group.
+- Project events: the identical canonical Project read rule, applied
+  to the event's own Project (the affected object itself). Archiving
+  is not deletion: an archived Project keeps normal read
+  authorization. ``project.deleted`` fails closed: the event is
+  recorded before the Project row is deleted, its ``project`` FK is
+  nulled by the deletion, and a Project that no longer exists can
+  never be read again — so deleted-Project events stay durably
+  persisted but are never returned (never authorized from the
+  retained ``research_group`` scope, actor, subject user, or payload).
 - Meeting events: the requester created the Meeting or is an explicit
   ``MeetingParticipant`` — the canonical ``MEETING_READ`` rule; group
   or Project membership alone never grants Meeting visibility.
@@ -44,6 +57,7 @@ from rest_framework.views import APIView
 from meetings.models import Meeting
 from meetings.services import MeetingAuditEventType
 from projects.models import ProjectMembership
+from projects.services import ProjectAuditEventType
 from work_items.services import WorkItemAuditEventType
 
 from .models import AuditEvent
@@ -81,10 +95,14 @@ class ActivityFeedView(APIView):
 
     Reverse-chronological, permission-filtered Activity feed over the
     currently supported Activity events: Work Item events
-    (``work_item.created`` / ``work_item.updated``) and Meeting
-    events (``meeting.created`` / ``meeting.rescheduled`` /
+    (``work_item.created`` / ``work_item.updated``), Meeting events
+    (``meeting.created`` / ``meeting.rescheduled`` /
     ``meeting.completed`` / ``meeting.agenda_item_added`` /
-    ``meeting.follow_up_scheduled``).
+    ``meeting.follow_up_scheduled``), and Project events
+    (``project.member_assignments_resolved`` /
+    ``project.ownership_resolved_for_offboarding`` /
+    ``project.archived`` / ``project.restored`` /
+    ``project.deleted``).
 
     Ordering is deterministic: newest ``created_at`` first, with the
     stable event ``id`` as the secondary key when timestamps are equal
@@ -98,9 +116,10 @@ class ActivityFeedView(APIView):
 
     Authorization: authenticated (IsAuthenticated) + per-row read
     authorization through the canonical read boundary of the
-    affected object (Project read rule for Work Items;
-    creator-or-participant rule for Meetings; both Meetings for a
-    follow-up schedule).
+    affected object (Project read rule for Work Items and for
+    Project events — the affected Project itself, which fails closed
+    once deleted; creator-or-participant rule for Meetings; both
+    Meetings for a follow-up schedule).
     """
 
     permission_classes = [IsAuthenticated]
@@ -165,12 +184,15 @@ class ActivityFeedView(APIView):
 
         # Permission-filter FIRST, on the LIVE object's current access
         # scope. Each branch requires the affected object to still
-        # exist: a hard-deleted WorkItem or Meeting (FK nulled via
-        # SET_NULL) is no longer readable, so its events are excluded.
-        # A follow-up schedule references BOTH Meetings, so it also
-        # requires the stored source Meeting reference to be readable
-        # today (stable flat data key; a missing/unknown reference
-        # fails closed).
+        # exist: a hard-deleted WorkItem, Meeting, or Project (FK
+        # nulled via SET_NULL) is no longer readable, so its events
+        # are excluded — deleted-Project events in particular fail
+        # closed (their project FK is always nulled after the
+        # deletion, and no ProjectMembership can survive the
+        # Project's CASCADE delete). A follow-up schedule references
+        # BOTH Meetings, so it also requires the stored source
+        # Meeting reference to be readable today (stable flat data
+        # key; a missing/unknown reference fails closed).
         work_item_events = Q(
             work_item__isnull=False,
             event_type__in=[
@@ -178,6 +200,22 @@ class ActivityFeedView(APIView):
                 WorkItemAuditEventType.UPDATED,
             ],
             work_item__project_id__in=readable_project_ids,
+        )
+        # Project events: the affected object IS the event's own
+        # Project, so the canonical Project read rule applies to it
+        # directly. ``project__isnull=False`` is the deleted-Project
+        # fail-closed: a ``project.deleted`` event's FK is nulled by
+        # the deletion and can therefore never match.
+        project_events = Q(
+            project__isnull=False,
+            event_type__in=[
+                ProjectAuditEventType.MEMBER_ASSIGNMENTS_RESOLVED,
+                ProjectAuditEventType.OWNERSHIP_RESOLVED_FOR_OFFBOARDING,
+                ProjectAuditEventType.ARCHIVED,
+                ProjectAuditEventType.RESTORED,
+                ProjectAuditEventType.DELETED,
+            ],
+            project_id__in=readable_project_ids,
         )
         meeting_events = Q(
             meeting__isnull=False,
@@ -209,11 +247,13 @@ class ActivityFeedView(APIView):
             AuditEvent.objects
             .filter(
                 work_item_events
+                | project_events
                 | meeting_events
                 | (follow_up_events & follow_up_source_readable)
             )
             .select_related(
                 "actor",
+                "subject_user",
                 "work_item",
                 "work_item__project",
                 "work_item__project__research_group",
@@ -221,6 +261,8 @@ class ActivityFeedView(APIView):
                 "meeting__project",
                 "meeting__project__research_group",
                 "meeting__research_group",
+                "project",
+                "project__research_group",
             )
             .order_by("-created_at", "-id")
         )

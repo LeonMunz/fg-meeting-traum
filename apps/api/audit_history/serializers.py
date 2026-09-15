@@ -7,6 +7,34 @@ internals.
 
 from rest_framework import serializers
 
+from projects.services import ProjectAuditEventType
+
+# Project audit events (docs/domain/activity.md §4b) store their
+# structured semantics at the TOP LEVEL of ``data`` (not under a
+# ``changes`` key). The feed exposes exactly the persisted payload
+# keys, per event type — never the raw audit payload.
+# ``project.deleted`` is never returned by the feed (its Project no
+# longer exists; read-time authorization fails closed), and the empty
+# allowlist keeps it fail-closed at the serializer as well.
+_PROJECT_EVENT_PAYLOAD_KEYS = {
+    ProjectAuditEventType.MEMBER_ASSIGNMENTS_RESOLVED: (
+        "resolution",
+        "affectedWorkItemCount",
+        "replacementUserId",
+        "membershipAction",
+        "previousRole",
+        "newRole",
+    ),
+    ProjectAuditEventType.OWNERSHIP_RESOLVED_FOR_OFFBOARDING: (
+        "resolution",
+        "replacementUserId",
+        "replacementPreviousRole",
+    ),
+    ProjectAuditEventType.ARCHIVED: ("status", "reason"),
+    ProjectAuditEventType.RESTORED: ("status",),
+    ProjectAuditEventType.DELETED: (),
+}
+
 
 class ActivityEventSerializer(serializers.Serializer):
     """Structured Activity feed entry.
@@ -33,10 +61,20 @@ class ActivityEventSerializer(serializers.Serializer):
     - owning Project / Research Group context: Work Item events take it
       from the Work Item's Project; Meeting events from the Meeting's
       own scope (``projectId`` is null for group-scoped Meetings);
-    - ``changes``: exactly ``AuditEvent.data["changes"]`` (the
-      structured semantics contract; see work_items.services /
-      meetings.services), or ``{}`` for events that carry none (e.g.
-      work_item.created, meeting.created). The Work Item
+      Project events from the affected Project itself;
+    - ``subjectUser``: the user a Project operation acted upon
+      (``project.member_assignments_resolved`` /
+      ``project.ownership_resolved_for_offboarding``), reusing the
+      actor user-ref representation; null for every other event kind
+      (Work Item and Meeting events never set it, and no subject is
+      ever fabricated). It is event context, never an authorization
+      input;
+    - ``changes``: for Work Item and Meeting events, exactly
+      ``AuditEvent.data["changes"]`` (the structured semantics
+      contract; see work_items.services / meetings.services), or
+      ``{}`` for events that carry none (e.g. work_item.created,
+      meeting.created); for Project events, the allowlisted persisted
+      payload keys (see ``_PROJECT_EVENT_PAYLOAD_KEYS``). The Work Item
       ``statusDefinition`` refs carry the fixed semantic ``category``,
       so a completion (transition into ``done``) is distinguishable
       from an ordinary status change from the persisted event alone.
@@ -45,6 +83,7 @@ class ActivityEventSerializer(serializers.Serializer):
     id = serializers.IntegerField()
     eventType = serializers.CharField(source="event_type")
     actor = serializers.SerializerMethodField()
+    subjectUser = serializers.SerializerMethodField()
     workItemId = serializers.PrimaryKeyRelatedField(
         source="work_item", read_only=True,
     )
@@ -68,15 +107,20 @@ class ActivityEventSerializer(serializers.Serializer):
 
     def _project(self, obj):
         target = self._object(obj)
-        if target is None:
-            return None
-        return target.project
+        if target is not None:
+            return target.project
+        # Project event: the affected object is the event's own
+        # Project (null once the Project was hard-deleted — in which
+        # case the feed has already excluded the event).
+        return obj.project
 
     def _research_group(self, obj):
         if obj.work_item is not None:
             return obj.work_item.project.research_group
         if obj.meeting is not None:
             return obj.meeting.research_group
+        if obj.project is not None:
+            return obj.project.research_group
         return None
 
     def get_actor(self, obj):
@@ -90,6 +134,19 @@ class ActivityEventSerializer(serializers.Serializer):
             "username": actor.username,
             "firstName": actor.first_name,
             "lastName": actor.last_name,
+        }
+
+    def get_subjectUser(self, obj):
+        subject = obj.subject_user
+
+        if subject is None:
+            return None
+
+        return {
+            "id": subject.pk,
+            "username": subject.username,
+            "firstName": subject.first_name,
+            "lastName": subject.last_name,
         }
 
     def get_workItemTitle(self, obj):
@@ -126,6 +183,24 @@ class ActivityEventSerializer(serializers.Serializer):
             return None
         return group.name
 
+    def _project_event(self, obj):
+        return (
+            obj.work_item is None
+            and obj.meeting is None
+            and obj.event_type in _PROJECT_EVENT_PAYLOAD_KEYS
+        )
+
     def get_changes(self, obj):
         data = obj.data or {}
+
+        if self._project_event(obj):
+            # Project events carry their structured semantics at the
+            # top level of ``data``; project the allowlisted payload
+            # keys only.
+            return {
+                key: data[key]
+                for key in _PROJECT_EVENT_PAYLOAD_KEYS[obj.event_type]
+                if key in data
+            }
+
         return data.get("changes", {})
