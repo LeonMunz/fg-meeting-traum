@@ -24,6 +24,16 @@ from projects.models import ProjectMembership
 from .models import ResearchGroup, ResearchGroupMembership
 
 
+class ResearchGroupAuditEventType:
+    """Event types recorded for Research Group audit history.
+
+    These events predate the aggregate Activity feed; the constants
+    name the exact persisted event set (docs/domain/activity.md §4b).
+    """
+
+    MEMBER_OFFBOARDED = "research_group.member_offboarded"
+
+
 class ResearchGroupDomainError(Exception):
     """Raised when a Research Group domain invariant is violated."""
 
@@ -716,7 +726,7 @@ def offboard_research_group_member(
             research_group=research_group,
             actor=actor,
             event_type=(
-                "research_group.member_offboarded"
+                ResearchGroupAuditEventType.MEMBER_OFFBOARDED
             ),
             subject_user=target_user,
             data={

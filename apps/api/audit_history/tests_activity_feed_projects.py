@@ -54,6 +54,7 @@ from research_groups.models import (
     ResearchGroupMembership,
 )
 from research_groups.services import (
+    ResearchGroupAuditEventType,
     ResearchGroupProjectOffboardingResolution,
     offboard_research_group_member,
 )
@@ -512,10 +513,33 @@ class ProjectFeedOffboardingTest(_FeedClientMixin, APITestCase):
         self.assertEqual(entry["subjectUser"]["username"], "feed-p-ob-bob")
 
         # The offboarded owner loses access at read time: his feed
-        # no longer contains the event about his former Project.
+        # no longer contains the event about his former Project or
+        # Group.
         self.assertEqual(self._feed_entries(self.bob), [])
-        # Group admin without Project membership: still nothing.
-        self.assertEqual(self._feed_entries(self.admin), [])
+        # Group admin without Project membership: still nothing of
+        # the PRIVATE PROJECT — the Project events stay hidden from
+        # him. The group-scoped offboarding event IS visible to him
+        # while he retains current GROUP_READ (Research Group
+        # Activity follows the group read rule, not Project
+        # membership).
+        admin_entries = self._feed_entries(self.admin)
+        self.assertFalse(
+            set(e["eventType"] for e in admin_entries)
+            & PROJECT_EVENT_TYPES,
+        )
+        self.assertEqual(len(admin_entries), 1)
+        admin_entry = admin_entries[0]
+        self.assertEqual(
+            admin_entry["eventType"],
+            ResearchGroupAuditEventType.MEMBER_OFFBOARDED,
+        )
+        self.assertEqual(
+            admin_entry["researchGroupId"], self.group.pk,
+        )
+        self.assertEqual(
+            admin_entry["subjectUser"]["id"], self.bob.pk,
+        )
+        self.assertIsNone(admin_entry["projectId"])
 
 
 # ── subject_user semantics ──

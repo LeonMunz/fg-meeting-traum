@@ -167,14 +167,13 @@ add/remove, MeetingItem outcome transitions (done / follow-up /
 reopen), Meeting deletion, MeetingSeries (template) mutations,
 MeetingNotes.
 
-## 4b. Project and Research Group audit events (pre-existing persistence; Project events feed-projected)
+## 4b. Project and Research Group audit events (pre-existing persistence; feed-projected)
 
 The events below **predate** the aggregate Activity feed work. They are
 already persisted as durable `AuditEvent`s through `record_audit_event`
 inside the same transaction as the domain mutation, on the same canonical
-concept. The **Project** events are currently returned by
-`GET /api/activity/` (binding read-time rule in §5); the Research Group
-event is persisted but **not** currently projected.
+concept. The **Project** and **Research Group** events are
+currently returned by `GET /api/activity/` (binding read-time rule in §5).
 
 Project audit events (event `project` FK = the affected Project; `research_group` FK = the Project's group):
 
@@ -227,9 +226,18 @@ closed**: it remains durably persisted but is never returned — never
 authorized from the retained `research_group` scope, actor, subject
 user, or payload. A group admin without Project membership never sees a
 private Project's audit events; authorization is read-time, never
-creation-time. Research Group feed projection is not implemented yet and
-must obey the same rule (an entry about a Research Group only while
-readable in the current group scope).
+creation-time. A Research Group entry (currently
+`research_group.member_offboarded`) is visible only while the requester
+can read that Research Group **today** through the canonical group read
+rule (`GROUP_READ`: current ResearchGroupMembership — both the `member`
+and the `admin` role grant read); losing group membership immediately
+removes the historical Research Group entry — including for the
+`subject_user` (the offboarded member), which is event context, never an
+authorization input. Research Group deletion is not supported: the
+event's `research_group` FK is NOT NULL / RESTRICT, so a retained
+Research Group event always references an existing group whose current
+read authorization is evaluable (no retained-event state exists that
+could fail open).
 
 ## 5. Authorization (binding for every future Activity read)
 
@@ -275,6 +283,13 @@ evaluated at read time on every request:
   ResearchGroupMembership — the identical rule of Project reads);
   losing Project or Research Group membership immediately removes the
   historical Project events;
+- a Research Group event is returned only if the requester can read the
+  affected Research Group **today** through the canonical group read
+  rule (`GROUP_READ`: current ResearchGroupMembership — both the
+  `member` and the `admin` role grant read; the identical rule of
+  Research Group reads); losing group membership immediately removes
+  the historical Research Group events, and the event's `subject_user`
+  (the offboarded member) never grants access;
 - archiving is not deletion: the `project.archived` /
   `project.restored` events remain visible to a user who retains
   canonical read access to the archived Project; the archive state
@@ -295,24 +310,27 @@ evaluated at read time on every request:
   first, event `id` as the stable tie-breaker;
 - structured projection only: event id / machine `eventType` /
   `createdAt`, the existing audit/history actor representation,
-  `subjectUser` (the user a Project operation acted upon, in the same
-  user-ref representation; null for Work Item and Meeting events and
-  for Project events without one — never fabricated; event context,
+  `subjectUser` (the user an operation acted upon — for Project
+  events the resolved member / final owner, and for
+  `research_group.member_offboarded` the offboarded member — in the
+  same user-ref representation; null for Work Item and Meeting events
+  and for Project events without one — never fabricated; event context,
   never an authorization input), affected Work Item id + current
   title **or** affected Meeting id + current title (the non-matching
   identity pair is null), Project and Research Group context (null
   Project for group-scoped Meetings; for Project events, the affected
-  Project itself), and the structured `changes` payload (for Work
-  Items, `category` makes a completion distinguishable from an
-  ordinary status change; for Project events, exactly the allowlisted
-  persisted payload keys of that event type — never the raw
-  `AuditEvent.data`). No rendered sentences, no arbitrary
+  Project itself; for Research Group events, null Project + the
+  event's own Research Group), and the structured `changes` payload
+  (for Work Items, `category` makes a completion distinguishable from
+  an ordinary status change; for Project events, exactly the
+  allowlisted persisted payload keys of that event type; for Research
+  Group events, the allowlisted offboarding summary keys — never the
+  raw `AuditEvent.data`). No rendered sentences, no arbitrary
   `AuditEvent` internals.
 
-Research Group audit events (§4b) are persisted but **not
-currently part of `GET /api/activity/`**; a future feed projection that
-adds them must obey this same rule at read time — per-event, evaluated
-on every request, never creation-time authorization.
+Research Group audit events (§4b) are part of `GET /api/activity/`
+under this same rule at read time — per-event, evaluated on every
+request, never creation-time authorization.
 
 ## 6. Transactional guarantee
 
@@ -341,18 +359,24 @@ Implemented and proven in this slice:
   Activity (including the dual-readability rule for follow-up
   schedules);
 - the permission-safe aggregate read API `GET /api/activity/`
-  (Work Item + Meeting + Project slice events; see §5 for the binding
-  read-time rule), including the Project feed projection: the
-  pre-existing Project audit events (§4b) returned under the same
-  read-time rule, with `subjectUser` as event context only and
-  `project.deleted` failing closed;
+  (Work Item + Meeting + Project + Research Group slice events; see
+  §5 for the binding read-time rule), including the Project feed
+  projection: the pre-existing Project audit events (§4b) returned
+  under the same read-time rule, with `subjectUser` as event
+  context only and `project.deleted` failing closed, and the
+  Research Group feed projection: the pre-existing
+  `research_group.member_offboarded` event (§4b) returned under the
+  same read-time rule (current `GROUP_READ` group membership; the
+  event's `subject_user` — the offboarded member — never grants
+  access);
 - the transactional guarantee;
 - `docs` + tests (`apps/api/work_items/tests_activity_foundation.py`,
   `apps/api/work_items/tests_history.py`, `apps/api/meetings/tests_activity.py`,
   `apps/api/audit_history/tests.py`,
   `apps/api/audit_history/tests_activity_feed.py`,
   `apps/api/audit_history/tests_activity_feed_meetings.py`,
-  `apps/api/audit_history/tests_activity_feed_projects.py`).
+  `apps/api/audit_history/tests_activity_feed_projects.py`,
+  `apps/api/audit_history/tests_activity_feed_research_groups.py`).
 
 Explicitly **not** in this slice:
 
@@ -360,11 +384,8 @@ Explicitly **not** in this slice:
   a later UI projection can summarize the events;
 - Activity is not a notification system (no push, no unread state, no
   inbox semantics);
-- no Activity feed projection for the pre-existing Research Group
-  audit event yet (§4b): `research_group.member_offboarded` is persisted
-  but not currently returned by `GET /api/activity/`, and no read-time
-  authorization rule exists for that feed branch; later object kinds
-  reuse the same concept, and any model/contract extension is follow-up
-  work;
+- no further Research Group event families beyond the pre-existing
+  `research_group.member_offboarded` (any additional Research Group
+  event is follow-up work);
 - no Work Item **deletion** event (existing behavior: an allowed hard
   delete keeps earlier events with `work_item` nulled).

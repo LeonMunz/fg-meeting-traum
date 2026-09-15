@@ -43,6 +43,10 @@ from research_groups.models import (
     ResearchGroup,
     ResearchGroupMembership,
 )
+from research_groups.services import (
+    ResearchGroupAuditEventType,
+    offboard_research_group_member,
+)
 from work_items.services import create_work_item, update_work_item
 from meetings.services import create_meeting
 
@@ -213,4 +217,92 @@ class ActivityFeedProjectQueryCountTest(APITestCase):
             "count; every serialized relation (project, research "
             "group, subject user) must be eager-loaded on the page "
             "queryset.",
+        )
+
+class ActivityFeedResearchGroupQueryCountTest(APITestCase):
+    """A Research Group-heavy page must not add one Research Group /
+    actor / subject-user query per Activity row (same bounded-query
+    invariant as the Meeting and Project regression tests)."""
+
+    client = APIClient()
+
+    def setUp(self):
+        self.alice = User.objects.create_user(
+            username="rg-feed-qc-alice", password="Pass1!",
+        )
+        self.group = ResearchGroup.objects.create(
+            name="RG Feed Query Group", created_by=self.alice,
+        )
+        ResearchGroupMembership.objects.create(
+            research_group=self.group,
+            user=self.alice,
+            role=ResearchGroupMembership.Role.ADMIN,
+        )
+        # 14 offboardable members (no Project memberships, so each
+        # offboarding records exactly one Research Group event).
+        self.members = [
+            User.objects.create_user(
+                username=f"rg-feed-qc-m{i}", password="Pass1!",
+            )
+            for i in range(14)
+        ]
+        for member in self.members:
+            ResearchGroupMembership.objects.create(
+                research_group=self.group, user=member,
+                role=ResearchGroupMembership.Role.MEMBER,
+            )
+        self.offboarded = 0
+        self.client.force_login(self.alice)
+
+    def _add_rg_events(self, count):
+        for member in self.members[
+            self.offboarded: self.offboarded + count
+        ]:
+            offboard_research_group_member(
+                membership=ResearchGroupMembership.objects.get(
+                    research_group=self.group, user=member,
+                ),
+                actor=self.alice,
+            )
+        self.offboarded += count
+
+    def _rg_rows(self, entries):
+        return [
+            e for e in entries
+            if e["eventType"]
+            == ResearchGroupAuditEventType.MEMBER_OFFBOARDED
+        ]
+
+    def _get_feed(self, params=None):
+        response = self.client.get(FEED_URL, params or None)
+        self.assertEqual(response.status_code, 200)
+        return response.json()
+
+    def test_research_group_rows_do_not_add_per_row_queries(self):
+        # Warm-up: establish the session steady state.
+        self._get_feed()
+
+        # Page 1: 2 Research Group rows.
+        self._add_rg_events(2)
+        with CaptureQueriesContext(connection) as small_ctx:
+            small = self._get_feed()
+        self.assertEqual(len(self._rg_rows(small)), 2)
+
+        # Page 2: 14 Research Group rows (7x the rows).
+        self._add_rg_events(12)
+        with CaptureQueriesContext(connection) as large_ctx:
+            large = self._get_feed()
+        self.assertEqual(len(self._rg_rows(large)), 14)
+
+        # Invariant: 7x the Research Group rows on the page add
+        # ZERO queries — the Research Group, actor, and
+        # subject_user relations are eager-loaded on the page
+        # queryset.
+        self.assertEqual(
+            len(small_ctx.captured_queries),
+            len(large_ctx.captured_queries),
+            "Activity page query count must not scale with Research "
+            "Group row count; every serialized relation (research "
+            "group, actor, subject user) must be eager-loaded on "
+            "the page queryset.",
         )

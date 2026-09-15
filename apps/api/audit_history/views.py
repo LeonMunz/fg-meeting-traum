@@ -9,7 +9,9 @@ currently supported Activity events: Work Item events
 and Project events
 (``project.member_assignments_resolved`` /
 ``project.ownership_resolved_for_offboarding`` /
-``project.archived`` / ``project.restored`` / ``project.deleted``).
+``project.archived`` / ``project.restored`` / ``project.deleted``),
+and Research Group events
+(``research_group.member_offboarded``).
 
 Authorization is evaluated at READ time and is identical to the
 underlying object's read rule: an Activity event is returned only if
@@ -28,6 +30,16 @@ the requester can read the affected object TODAY.
   never be read again — so deleted-Project events stay durably
   persisted but are never returned (never authorized from the
   retained ``research_group`` scope, actor, subject user, or payload).
+- Research Group events: the requester has a current
+  ``ResearchGroupMembership`` in the event's Research Group — the
+  canonical ``GROUP_READ`` rule (both the ``member`` and the
+  ``admin`` role grant read). Losing group membership immediately
+  removes the historical Research Group events. The event's
+  ``subject_user`` (the offboarded member) is event context and
+  never an authorization input. Research Group deletion is not
+  supported: the event's ``research_group`` FK is NOT NULL and
+  RESTRICT, so a retained Research Group event always references an
+  existing group whose current read authorization is evaluable.
 - Meeting events: the requester created the Meeting or is an explicit
   ``MeetingParticipant`` — the canonical ``MEETING_READ`` rule; group
   or Project membership alone never grants Meeting visibility.
@@ -58,6 +70,8 @@ from meetings.models import Meeting
 from meetings.services import MeetingAuditEventType
 from projects.models import ProjectMembership
 from projects.services import ProjectAuditEventType
+from research_groups.models import ResearchGroupMembership
+from research_groups.services import ResearchGroupAuditEventType
 from work_items.services import WorkItemAuditEventType
 
 from .models import AuditEvent
@@ -98,11 +112,13 @@ class ActivityFeedView(APIView):
     (``work_item.created`` / ``work_item.updated``), Meeting events
     (``meeting.created`` / ``meeting.rescheduled`` /
     ``meeting.completed`` / ``meeting.agenda_item_added`` /
-    ``meeting.follow_up_scheduled``), and Project events
+    ``meeting.follow_up_scheduled``), Project events
     (``project.member_assignments_resolved`` /
     ``project.ownership_resolved_for_offboarding`` /
     ``project.archived`` / ``project.restored`` /
-    ``project.deleted``).
+    ``project.deleted``),
+    and Research Group events
+    (``research_group.member_offboarded``).
 
     Ordering is deterministic: newest ``created_at`` first, with the
     stable event ``id`` as the secondary key when timestamps are equal
@@ -119,7 +135,9 @@ class ActivityFeedView(APIView):
     affected object (Project read rule for Work Items and for
     Project events — the affected Project itself, which fails closed
     once deleted; creator-or-participant rule for Meetings; both
-    Meetings for a follow-up schedule).
+    Meetings for a follow-up schedule; current GROUP_READ group
+    membership for Research Group events — the subject_user of an
+    offboarding event never grants access).
     """
 
     permission_classes = [IsAuthenticated]
@@ -167,6 +185,24 @@ class ActivityFeedView(APIView):
                 project__research_group__memberships__user=user,
             )
             .values_list("project_id", flat=True)
+        )
+
+        # Research Groups the user can read RIGHT NOW — the
+        # canonical GROUP_READ rule expressed as one DB-level
+        # subquery: a current ResearchGroupMembership in that group
+        # (both the member and the admin role grant GROUP_READ,
+        # mirroring resolve_group_scope and the central role to
+        # capability table; default deny for any other role).
+        readable_group_ids = (
+            ResearchGroupMembership.objects
+            .filter(
+                user=user,
+                role__in=[
+                    ResearchGroupMembership.Role.ADMIN,
+                    ResearchGroupMembership.Role.MEMBER,
+                ],
+            )
+            .values_list("research_group_id", flat=True)
         )
 
         # Meetings the user can read RIGHT NOW — the canonical
@@ -217,6 +253,23 @@ class ActivityFeedView(APIView):
             ],
             project_id__in=readable_project_ids,
         )
+        # Research Group events: the affected object is the event's
+        # own Research Group (its scope). Canonical GROUP_READ rule:
+        # a current ResearchGroupMembership in that group (member
+        # and admin both grant read). Research Group deletion is
+        # not supported, and the NOT NULL / RESTRICT
+        # research_group FK guarantees a retained Research Group
+        # event always references an existing group, so current
+        # read authorization is always evaluable; a requester
+        # without current membership matches nothing (fail closed).
+        # The event's subject_user (the offboarded member) plays no
+        # part in this filter.
+        research_group_events = Q(
+            event_type=(
+                ResearchGroupAuditEventType.MEMBER_OFFBOARDED
+            ),
+            research_group_id__in=readable_group_ids,
+        )
         meeting_events = Q(
             meeting__isnull=False,
             event_type__in=[
@@ -249,11 +302,13 @@ class ActivityFeedView(APIView):
                 work_item_events
                 | project_events
                 | meeting_events
+                | research_group_events
                 | (follow_up_events & follow_up_source_readable)
             )
             .select_related(
                 "actor",
                 "subject_user",
+                "research_group",
                 "work_item",
                 "work_item__project",
                 "work_item__project__research_group",
