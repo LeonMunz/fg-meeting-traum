@@ -241,6 +241,109 @@ personal My Work projection query is the shared source
 (`personal_my_work_queryset`), consumed by the personal and
 per-Research-Group My Work endpoints and by this read model.
 
+## 4a. Continue working — implemented LIMITED V1 read model
+
+`Continue working` answers "where was I working recently?" The
+LIMITED V1 backend read model is implemented (read service only: no
+Home API endpoint, no UI yet).
+
+- **Continue working means recent personal persisted mutation —
+  NOT "last opened".** Existing persistence reliably identifies
+  only the current user's own attributable persisted actions. It
+  cannot identify last opened / last viewed, passive Meeting
+  attendance, navigation history, or edit sessions without
+  attributable persistence. None of those is a V1 signal, and
+  **last-opened tracking remains unimplemented**.
+- **Supported V1 domains**: Work Items and Meetings. Projects,
+  Research Groups, and Meeting Notes as standalone rows are
+  excluded. A Meeting Note **authored** by the user contributes
+  recency to its parent Meeting only (`MeetingNote.author == user`,
+  `MeetingNote.created_at`; Note edits are not editor-attributed, so
+  `updated_at` is never used).
+- **Supported V1 Work Item signals** — the user is the `actor` of
+  one of the existing actor-attributed Work Item Activity events:
+  `work_item.created`, `work_item.updated` (the event's
+  `created_at` is the personal-action timestamp).
+- **Supported V1 Meeting signals** — the user is the `actor` of one
+  of the existing attributable Meeting events: `meeting.created`,
+  `meeting.rescheduled`, `meeting.completed`,
+  `meeting.agenda_item_added`, `meeting.follow_up_scheduled` (the
+  event's `created_at` is the personal-action timestamp).
+- **`meeting.follow_up_scheduled` anchors the target Meeting**: it
+  may contribute personal recency to the target Meeting only; the
+  candidate exposes only the target Meeting and current read access
+  to the target is mandatory. Source Meeting metadata is never
+  exposed (unlike the Activity feed, which projects source-related
+  event semantics and therefore requires source readability).
+- **Explicitly NOT V1 signals** (documented unsupported
+  interactions; never inferred from generic timestamps): Work Item
+  comments, label-only Work Item changes, being assigned by another
+  user, pure within-column Board reorder, object reads/opens,
+  passive Meeting participation/invitation, Meeting start/reopen,
+  participant add/remove, MeetingItem outcome transitions, section
+  changes, Meeting Note edits, actual attendance/presence. The
+  event system is not broadened to capture them.
+- **Current read authorization is mandatory**: a historical action
+  never grants current visibility. A Work Item candidate is visible
+  only while the user can read the Work Item **today** through the
+  canonical Work Item read boundary (current
+  `ProjectMembership` — any role, including `viewer` — in the Work
+  Item's Project AND current `ResearchGroupMembership` in the
+  Project's Research Group). A Meeting candidate is visible only
+  while the user has canonical `MEETING_READ` (creator or explicit
+  current participant); Project/Research Group membership,
+  ownership, admin status, or Meeting write access alone never
+  grant a candidate. Losing current read access removes the
+  candidate immediately; deleted objects fail closed (no candidate
+  row at all — no title, timestamp, or metadata leak).
+- **Recency-oriented, not responsibility-oriented**: a currently
+  readable Work Item remains a candidate when the user is no longer
+  assigned, is assigned to someone else, or its status category is
+  `done`. Home "My work"'s active/assignment filters are NOT
+  applied here; only current read authorization is required.
+  Completed Meetings remain candidates while readable and
+  personally touched.
+- **Deduplication**: multiple personal actions on one object
+  collapse to exactly one candidate per `(domain, object_id)`
+  carrying the LATEST qualifying personal timestamp (max over the
+  user's qualifying Meeting event `created_at`s and authored Note
+  `created_at`s for Meetings; max over qualifying Work Item event
+  `created_at`s for Work Items).
+- **No recency horizon**: no 7-/14-/30-/90-day window exists for
+  Continue working and none is invented; the read model returns the
+  complete currently readable mutation-based candidate set.
+- **No read-model display limit**: the service applies no row
+  truncation; candidate eligibility and Home presentation limit
+  stay separate (the later Home composition layer decides how many
+  recent rows to show).
+- **Generic `updated_at` is never personal recency**; another
+  user's actions never create, move, or retimestamp the user's
+  candidate.
+- **Candidate contract**: domain, object ID, title,
+  `latest_personal_activity_at`, and a small domain-specific detail
+  block (Work Item: Project ID/name — current Work Item read
+  implies Project read — semantic status category, due date;
+  Meeting: status, `scheduled_at` — only data safe under
+  `MEETING_READ`, no Project/Research Group names). No raw
+  `AuditEvent` payload, no source Meeting details, no rendered
+  sentences; the canonical object remains reachable by ID.
+- **Deterministic ordering** (one flat list, no relevance
+  scoring): `latest_personal_activity_at` DESC, then
+  `domain_rank` (Work Item 0 < Meeting 1, exact-timestamp
+  tie-break only), then object ID ASC.
+- **Bounded query work**: the read model issues a fixed, small
+  number of bounded queries (aggregate latest qualifying Work Item
+  event per Work Item, aggregate latest qualifying Meeting event
+  per Meeting, aggregate latest authored Note per parent Meeting,
+  merge, bulk-fetch currently authorized live objects,
+  deterministic in-memory merge); the query count is independent
+  of the candidate count (no N+1, no one-query-per-candidate, no
+  loading of every AuditEvent row).
+
+Implementation: `apps/api/home_continue/continue_working.py`
+(`get_continue_working_candidates`), tested by
+`apps/api/home_continue/tests.py`.
+
 ## 5. Deferred (documented direction, NOT implemented)
 
 - **Due-soon candidates**: no canonical due-soon threshold exists in
@@ -249,4 +352,8 @@ per-Research-Group My Work endpoints and by this read model.
 - **Follow-up attention** candidates.
 - Domain-specific Project-owner / decision problems.
 - The Home aggregate API endpoint and any Home UI.
-- **Continue working** module wiring.
+- **Continue working** wiring into the Home aggregate API endpoint
+  and UI (the LIMITED V1 backend read model exists; no HTTP
+  exposure or presentation yet).
+- **Last-opened / last-viewed tracking** (no persistence exists;
+  Continue working V1 is explicitly mutation-based).
