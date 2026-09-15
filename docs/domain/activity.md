@@ -51,9 +51,14 @@ enough information to reconstruct the five questions above:
 |---|---|
 | WHO | `actor` FK → User (`RESTRICT`; historical identities stay addressable) |
 | WHAT | `event_type` (stable machine code, ≤ 80 chars) + `data` (structured, ID-based) |
-| WHICH | affected-object FK: `work_item` FK (Work Item events) or `meeting` FK (Meeting events), both `SET_NULL` so history survives an allowed hard delete |
+| WHICH | affected-object FK: `work_item` FK (Work Item events), `meeting` FK (Meeting events), or `project` FK (Project audit events, §4b) — all `SET_NULL` so history survives an allowed hard delete |
 | WHERE | `research_group` FK (always) + `project` FK (Project-scoped objects) — the access-control scope |
 | WHEN | `created_at` (occurrence timestamp, set on insert) |
+
+The nullable `subject_user` FK is set only by the pre-existing
+Project/Research Group audit events (§4b): it names the user the
+operation acted upon. Work Item and Meeting events never set it, and it is
+a historical record field, never an authorization input.
 
 `record_audit_event` validates scope consistency: the referenced Project,
 Work Item, and Meeting must belong to the event's Research Group, and a
@@ -162,6 +167,62 @@ add/remove, MeetingItem outcome transitions (done / follow-up /
 reopen), Meeting deletion, MeetingSeries (template) mutations,
 MeetingNotes.
 
+## 4b. Project and Research Group audit events (pre-existing persistence, no feed projection yet)
+
+The events below **predate** the aggregate Activity feed work. They are
+already persisted as durable `AuditEvent`s through `record_audit_event`
+inside the same transaction as the domain mutation, on the same canonical
+concept. **None of them is currently returned by `GET /api/activity/`**:
+persistence exists; Activity feed projection does not.
+
+Project audit events (event `project` FK = the affected Project; `research_group` FK = the Project's group):
+
+| Domain action | Persisted as | `subject_user` |
+|---|---|---|
+| Membership role change with assignment resolution | `project.member_assignments_resolved` | the affected member |
+| Membership removal with assignment resolution | `project.member_assignments_resolved` | the removed member |
+| Research Group offboarding, per-Project assignment resolution | `project.member_assignments_resolved` | the offboarded member |
+| Research Group offboarding, final-owner ownership transfer | `project.ownership_resolved_for_offboarding` | the offboarded final owner |
+| Project archived (manual archive; offboarding archive) | `project.archived` | not set |
+| Project restored | `project.restored` | not set |
+| Empty archived Project deleted | `project.deleted` | not set |
+
+Notes: `project.member_assignments_resolved` stores the structured
+resolution (`resolution`, `affectedWorkItemCount`, `replacementUserId`,
+plus a `membershipAction` of `role_changed` / `removed` /
+`offboarded`); `project.ownership_resolved_for_offboarding` stores the
+transfer details (`replacementUserId`, `replacementPreviousRole`);
+`project.archived` / `project.restored` store the resulting `status`;
+`project.deleted` is recorded **before** the Project row is deleted (it
+keeps a flat `projectId` / `projectName` snapshot, and its `project` FK is
+nulled once the deletion commits), so it remains durable after the
+Project no longer exists.
+
+Research Group audit events (no `project` FK):
+
+| Domain action | Persisted as | `subject_user` |
+|---|---|---|
+| Research Group member offboarded | `research_group.member_offboarded` | the offboarded member |
+
+(`research_group.member_offboarded` stores the structured offboarding
+summary: removed Project memberships, affected/transferred/unassigned
+assignments, ownership transfers, archived Projects.)
+
+`subject_user` semantics (narrow, as the code stands — not a general
+event framework): the nullable `AuditEvent.subject_user` FK is set on
+exactly these pre-existing Project/Research Group events, naming the user
+the operation acted upon. Work Item and Meeting events never set it.
+It is a historical record field; it is never an authorization input.
+
+Future feed boundary: when a feed projection adds these events, the §5
+rule applies at read time: an entry about a Project is visible only while
+the requester can read that Project today through the canonical
+authorization path (`docs/domain/authorization.md`), an entry about a
+Research Group only while readable in the current group scope, and an
+entry whose Project was hard-deleted (FK nulled) is not readable — never
+a privacy bypass (a group admin without Project membership never sees a
+private Project's audit events), never creation-time authorization.
+
 ## 5. Authorization (binding for every future Activity read)
 
 **Activity obeys exactly the same authorization boundaries as the
@@ -219,6 +280,11 @@ evaluated at read time on every request:
   completion distinguishable from an ordinary status change). No
   rendered sentences, no arbitrary `AuditEvent` internals.
 
+Project and Research Group audit events (§4b) are persisted but
+**not currently part of `GET /api/activity/`**; a future feed projection
+that adds them must obey this same rule at read time — per-event,
+evaluated on every request, never creation-time authorization.
+
 ## 6. Transactional guarantee
 
 An Activity event **participates in the same logical transaction** as the
@@ -261,7 +327,10 @@ Explicitly **not** in this slice:
   a later UI projection can summarize the events;
 - Activity is not a notification system (no push, no unread state, no
   inbox semantics);
-- no events for other object kinds yet (Project, etc. will reuse the same
-  concept; any model/contract extension is follow-up work);
+- no Activity feed projection for the pre-existing Project / Research
+  Group audit events yet (§4b): they are persisted but not currently
+  returned by `GET /api/activity/`, and no read-time authorization rules
+  exist for those feed branches; later object kinds reuse the same
+  concept, and any model/contract extension is follow-up work;
 - no Work Item **deletion** event (existing behavior: an allowed hard
   delete keeps earlier events with `work_item` nulled).
