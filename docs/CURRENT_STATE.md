@@ -1,6 +1,6 @@
 # FG Workspace — Current Implementation State
 
-**Checkpoint:** Meetings + persistent Meeting Notes + Note → Work Item traceability + Meeting Templates + configurable Project Work Items + Board ordering + global account invitation foundation + invite-only account registration + global topbar user menu (Invitations V1 global foundation complete) + Activity event foundation (Work Item + Meeting + Project + Research Group slice)
+**Checkpoint:** Meetings + persistent Meeting Notes + Note → Work Item traceability + Meeting Templates + configurable Project Work Items + Board ordering + global account invitation foundation + invite-only account registration + global topbar user menu (Invitations V1 global foundation complete) + Activity event foundation (Work Item + Meeting + Project + Research Group slice) + Home Needs attention Work Item read model (backend read service; no Home API, no UI)
 **Last verified:** 2026-09-15
 **Branch:** `main`
 
@@ -102,6 +102,13 @@ Canonical domain reference: `docs/domain/activity.md`.
 ## My Work
 
 - **IMPLEMENTED** — My Work is an authorized projection over assigned Work Items (personal cross-group and per-Research Group endpoints), wired to the frontend.
+
+## Home
+
+Canonical domain reference: `docs/domain/home.md`.
+
+- **IMPLEMENTED** — Home **Needs attention** Work Item candidate read model (backend read service `work_items.home_attention.get_work_item_attention_candidates`; no Home API endpoint, no Home UI, Activity untouched): for the current user, returns the user's own currently assigned Work Items that are open (status category not `done`) and overdue and/or blocked — overdue = canonical date-only `due_date` strictly before the current Django application-timezone date (due-today is NOT overdue), blocked = canonical non-empty `blockedReason` (foundation.md §11). Current read authorization is mandatory and identical to the personal My Work boundary (current ProjectMembership `owner`/`member` + current ResearchGroupMembership; stale assignment rows alone grant nothing — membership removal removes the item immediately). One candidate per Work Item with stable machine-readable reason codes `overdue` / `blocked` (an item that is both appears exactly once with both codes, overdue first). Deterministic ordering: overdue items before blocked-only items, earliest `due_date` first (NULLS LAST), Work Item ID tie-break. Candidate rows carry Work Item identity, title, Project identity/name, due value, semantic status category, blocked reason, and reason codes; no Home row limits, cross-domain prioritization, or summary counts are decided here.
+- **NOT IMPLEMENTED (deferred)** — due-soon candidates (no canonical due-soon threshold exists in the repository and none is invented), Meeting preparation, Follow-up attention, Project-owner/decision candidate families, the Home aggregate API endpoint, the Home UI, and `Today & next` / `My work` / `Continue working` module wiring.
 
 ## Design / color tokens
 

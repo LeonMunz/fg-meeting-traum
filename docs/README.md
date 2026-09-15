@@ -17,6 +17,7 @@ The documentation is intentionally split by concern so humans and coding agents 
 | Invite-only account registration (redeem an invitation into one account) | `domain/account-registration.md` |
 | Meetings, Meeting Templates, Sections, Items, lifecycle, meeting→work | `domain/meetings.md` |
 | Activity (awareness/history stream, persisted event contract, Work Item event slice) | `domain/activity.md` |
+| Home (personal workspace surface, Needs attention read model) | `domain/home.md` |
 | Current implemented vs. not-yet-implemented checkpoint | `CURRENT_STATE.md` |
 | Testing, seed/reset, Living Lab, deployment, privacy | `living-lab.md` |
 | Canonical agent execution flow, debugging budget, verification boundary | `agent/WORKFLOW.md` |
@@ -34,6 +35,7 @@ Each kind of truth has one canonical owner:
 - **Foundation domain semantics and invariants** → `domain/foundation.md`
 - **Meeting domain semantics and invariants** → `domain/meetings.md`
 - **Activity (awareness/history stream) event contract** → `domain/activity.md`
+- **Home personal workspace surface and Needs attention read model** → `domain/home.md`
 - **Invite-only account registration (atomic account + invitation transition)** → `domain/account-registration.md`
 - **Current implementation checkpoint** → `CURRENT_STATE.md`
 - **Living-Lab and validation process** → `living-lab.md`
