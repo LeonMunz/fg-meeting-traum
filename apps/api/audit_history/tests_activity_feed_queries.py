@@ -306,3 +306,96 @@ class ActivityFeedResearchGroupQueryCountTest(APITestCase):
             "group, actor, subject user) must be eager-loaded on "
             "the page queryset.",
         )
+
+
+class ActivityFeedWorkItemQueryCountTest(APITestCase):
+    """A Work Item-heavy page must not add one Work Item / Project /
+    Research Group / actor query per Activity row (same bounded-query
+    invariant as the Meeting, Project, and Research Group regression
+    tests)."""
+
+    client = APIClient()
+
+    def setUp(self):
+        self.alice = User.objects.create_user(
+            username="feed-wqc-alice", password="Pass1!",
+        )
+        self.group = ResearchGroup.objects.create(
+            name="Feed WQC Group", created_by=self.alice,
+        )
+        ResearchGroupMembership.objects.create(
+            research_group=self.group,
+            user=self.alice,
+            role=ResearchGroupMembership.Role.MEMBER,
+        )
+        self.project = create_project(
+            research_group=self.group,
+            creator=self.alice,
+            name="Feed WQC Project",
+            description="",
+        )
+        # One Work Item: create_work_item records its ``created``
+        # event (row 1); every title change records exactly one
+        # ``updated`` event on the same Work Item.
+        task_type = self.project.type_definitions.get(name="Task")
+        self.work_item = create_work_item(
+            project=self.project,
+            actor=self.alice,
+            type_definition_id=task_type.pk,
+            title="Work item query probe",
+        )
+        # Monotonic update counter so every update in the test
+        # changes the title and records exactly one event.
+        self._update_seq = 0
+        self.client.force_login(self.alice)
+
+    def _add_work_item_events(self, count):
+        # Each title change records exactly one Work Item event.
+        for _ in range(count):
+            self._update_seq += 1
+            update_work_item(
+                work_item=self.work_item,
+                actor=self.alice,
+                title=f"Work item query probe {self._update_seq}",
+            )
+
+    def _work_item_rows(self, entries):
+        return [
+            e for e in entries
+            if e["workItemId"] == self.work_item.pk
+        ]
+
+    def _get_feed(self, params=None):
+        response = self.client.get(FEED_URL, params or None)
+        self.assertEqual(response.status_code, 200)
+        return response.json()
+
+    def test_work_item_rows_do_not_add_per_row_queries(self):
+        # Warm-up: establish the session steady state.
+        self._get_feed()
+
+        # Page 1: 2 Work Item rows (created + one update).
+        self._add_work_item_events(1)
+        with CaptureQueriesContext(connection) as small_ctx:
+            small = self._get_feed()
+        self.assertEqual(len(self._work_item_rows(small)), 2)
+
+        # Page 2: 14 Work Item rows (same feed composition, 7x the
+        # Work Item rows).
+        self._add_work_item_events(12)
+        with CaptureQueriesContext(connection) as large_ctx:
+            large = self._get_feed()
+        self.assertEqual(len(self._work_item_rows(large)), 14)
+
+        # Invariant: 7x the Work Item rows on the page add
+        # ZERO queries — the Work Item, Project, Research Group,
+        # and actor relations are eager-loaded on the page
+        # queryset.
+        self.assertEqual(
+            len(small_ctx.captured_queries),
+            len(large_ctx.captured_queries),
+            "Activity page query count must not scale with Work Item "
+            "row count; every serialized relation (work item, "
+            "project, research group, actor) must be eager-loaded on "
+            "the page queryset.",
+        )
