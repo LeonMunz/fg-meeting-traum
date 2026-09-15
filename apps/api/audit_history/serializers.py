@@ -24,17 +24,22 @@ class ActivityEventSerializer(serializers.Serializer):
       actor whose account changed or was removed still serializes
       (the actor FK is RESTRICT precisely so historical identities
       stay addressable) and never breaks the feed;
-    - affected Work Item identity (``workItemId``) plus its CURRENT
-      display title (``workItemTitle``) and owning Project /
-      Research Group context (the requester can read the Work Item,
-      so its current label and context are in scope);
+    - affected object identity: Work Item events carry ``workItemId``
+      plus the CURRENT display title (``workItemTitle``); Meeting
+      events carry ``meetingId`` plus the CURRENT display title
+      (``meetingTitle``); the non-matching pair is null. The requester
+      can read the affected object (enforced before pagination), so its
+      current label and context are in scope;
+    - owning Project / Research Group context: Work Item events take it
+      from the Work Item's Project; Meeting events from the Meeting's
+      own scope (``projectId`` is null for group-scoped Meetings);
     - ``changes``: exactly ``AuditEvent.data["changes"]`` (the
-      Work Item structured diff contract; see work_items.services),
-      or ``{}`` for events that carry none (e.g. work_item.created).
-      The stored ``statusDefinition`` refs carry the fixed semantic
-      ``category``, so a completion (transition into ``done``) is
-      distinguishable from an ordinary status change from the
-      persisted event alone.
+      structured semantics contract; see work_items.services /
+      meetings.services), or ``{}`` for events that carry none (e.g.
+      work_item.created, meeting.created). The Work Item
+      ``statusDefinition`` refs carry the fixed semantic ``category``,
+      so a completion (transition into ``done``) is distinguishable
+      from an ordinary status change from the persisted event alone.
     """
 
     id = serializers.IntegerField()
@@ -43,23 +48,36 @@ class ActivityEventSerializer(serializers.Serializer):
     workItemId = serializers.PrimaryKeyRelatedField(
         source="work_item", read_only=True,
     )
-    workItemTitle = serializers.CharField(
-        source="work_item.title", read_only=True,
+    workItemTitle = serializers.SerializerMethodField()
+    meetingId = serializers.PrimaryKeyRelatedField(
+        source="meeting", read_only=True,
     )
-    projectId = serializers.PrimaryKeyRelatedField(
-        source="work_item.project", read_only=True,
-    )
-    projectName = serializers.CharField(
-        source="work_item.project.name", read_only=True,
-    )
-    researchGroupId = serializers.PrimaryKeyRelatedField(
-        source="work_item.project.research_group", read_only=True,
-    )
-    researchGroupName = serializers.CharField(
-        source="work_item.project.research_group.name", read_only=True,
-    )
+    meetingTitle = serializers.SerializerMethodField()
+    projectId = serializers.SerializerMethodField()
+    projectName = serializers.SerializerMethodField()
+    researchGroupId = serializers.SerializerMethodField()
+    researchGroupName = serializers.SerializerMethodField()
     changes = serializers.SerializerMethodField()
     createdAt = serializers.DateTimeField(source="created_at")
+
+    def _object(self, obj):
+        """The affected object: WorkItem or Meeting (never both)."""
+        if obj.work_item is not None:
+            return obj.work_item
+        return obj.meeting
+
+    def _project(self, obj):
+        target = self._object(obj)
+        if target is None:
+            return None
+        return target.project
+
+    def _research_group(self, obj):
+        if obj.work_item is not None:
+            return obj.work_item.project.research_group
+        if obj.meeting is not None:
+            return obj.meeting.research_group
+        return None
 
     def get_actor(self, obj):
         actor = obj.actor
@@ -73,6 +91,40 @@ class ActivityEventSerializer(serializers.Serializer):
             "firstName": actor.first_name,
             "lastName": actor.last_name,
         }
+
+    def get_workItemTitle(self, obj):
+        if obj.work_item is None:
+            return None
+        return obj.work_item.title
+
+    def get_meetingTitle(self, obj):
+        if obj.meeting is None:
+            return None
+        return obj.meeting.title
+
+    def get_projectId(self, obj):
+        project = self._project(obj)
+        if project is None:
+            return None
+        return project.pk
+
+    def get_projectName(self, obj):
+        project = self._project(obj)
+        if project is None:
+            return None
+        return project.name
+
+    def get_researchGroupId(self, obj):
+        group = self._research_group(obj)
+        if group is None:
+            return None
+        return group.pk
+
+    def get_researchGroupName(self, obj):
+        group = self._research_group(obj)
+        if group is None:
+            return None
+        return group.name
 
     def get_changes(self, obj):
         data = obj.data or {}

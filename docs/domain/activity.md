@@ -6,7 +6,9 @@ durable awareness/history stream of the workspace.
 Companion documents:
 
 - `docs/domain/foundation.md` — Work Item, definitions, and Board semantics
-  (the objects the first Activity slice covers).
+  (the objects the Work Item Activity slice covers).
+- `docs/domain/meetings.md` — Meeting occurrences, agenda, lifecycle, and
+  follow-up scheduling (the objects the Meeting Activity slice covers).
 - `docs/domain/authorization.md` — scopes and capabilities Activity reads
   must obey.
 - `docs/CURRENT_STATE.md` — implementation checkpoint.
@@ -49,13 +51,13 @@ enough information to reconstruct the five questions above:
 |---|---|
 | WHO | `actor` FK → User (`RESTRICT`; historical identities stay addressable) |
 | WHAT | `event_type` (stable machine code, ≤ 80 chars) + `data` (structured, ID-based) |
-| WHICH | affected-object FK (Work Item slice: `work_item` FK, `SET_NULL` so history survives an allowed hard delete) |
+| WHICH | affected-object FK: `work_item` FK (Work Item events) or `meeting` FK (Meeting events), both `SET_NULL` so history survives an allowed hard delete |
 | WHERE | `research_group` FK (always) + `project` FK (Project-scoped objects) — the access-control scope |
 | WHEN | `created_at` (occurrence timestamp, set on insert) |
 
-`record_audit_event` validates scope consistency: the referenced Project and
-Work Item must belong to the event's Research Group, and a Work Item to the
-event's Project.
+`record_audit_event` validates scope consistency: the referenced Project,
+Work Item, and Meeting must belong to the event's Research Group, and a
+Work Item / Project-scoped Meeting to the event's Project.
 
 ## 3. Structured semantics (no rendered strings as source of truth)
 
@@ -114,6 +116,52 @@ fake changes.
 Work Item comments are human discussion, not Activity, and are never
 recorded as events.
 
+## 4a. Meeting event set (second slice)
+
+The same emission granularity applies: **one event per logical
+operation**, recorded transactionally through `record_audit_event`
+inside the Meeting domain operation's `transaction.atomic()` block.
+
+| Domain action | Persisted as |
+|---|---|
+| Meeting created (standalone or from a Series occurrence) | `meeting.created` (`data = {}`) |
+| Meeting rescheduled (a real `scheduled_at` change, in one atomic update) | `meeting.rescheduled` (`data = {"changes": {"scheduledAt": {"from", "to"}}}`) |
+| Meeting completed (live → completed via the End action) | `meeting.completed` (`data = {"changes": {"endedAt": ...}}`) |
+| Agenda item added | `meeting.agenda_item_added` (`data = {"changes": {"agendaItem": {"id", "title"}}}`) |
+| Follow-up scheduled to a Meeting | `meeting.follow_up_scheduled` (see below) |
+
+Structured value rules for Meeting events:
+
+- datetimes are stored as **UTC ISO-8601 strings** (`scheduledAt`,
+  `endedAt`);
+- the event's `meeting` FK is the affected Meeting; the event's
+  `project` / `research_group` scope is that Meeting's own scope
+  (`project` is null for group-scoped Meetings);
+- a Meeting **title change is not a tracked aspect** in this slice: a
+  title-only update (or one that re-sends the same `scheduled_at`)
+  records **no event** — history must not contain fake changes;
+- internal ordering/index writes (item `position` allocation, Series
+  section snapshots, the default Agenda Section) never produce events;
+- **`meeting.follow_up_scheduled`** is anchored to the **target**
+  Meeting (the occurrence the follow-up was scheduled INTO):
+  `event.meeting` = target Meeting, event scope = the target's
+  Research Group / Project. Its structured payload:
+  `data["sourceMeetingId"]` (a stable flat integer reference used by
+  the feed's permission filter) plus
+  `data["changes"]["followUp"]` carrying `sourceMeeting` /
+  `sourceItem` / `targetSection` / `targetItem` refs
+  (`{"id", "title"}`; the section ref is `{"id", "name"}`). The
+  internally materialized target MeetingItem is an internal step of
+  the scheduling operation and records **no separate**
+  `meeting.agenda_item_added` event; an idempotent retry records no
+  second event.
+
+Deliberately **not** recorded in this slice (documented boundaries,
+not omissions by accident): Meeting start / reopen, participant
+add/remove, MeetingItem outcome transitions (done / follow-up /
+reopen), Meeting deletion, MeetingSeries (template) mutations,
+MeetingNotes.
+
 ## 5. Authorization (binding for every future Activity read)
 
 **Activity obeys exactly the same authorization boundaries as the
@@ -121,7 +169,14 @@ underlying object. It must never become a privacy bypass.**
 
 - A user may see an Activity entry about an object **iff the user can read
   that object today** through the canonical authorization path
-  (see `docs/domain/authorization.md`).
+  (see `docs/domain/authorization.md`). For Meetings this is the
+  **creator-or-explicit-participant** rule (`MEETING_READ`): Research
+  Group or Project membership, ownership, or admin status alone must
+  NEVER grant Meeting Activity visibility. A
+  `meeting.follow_up_scheduled` entry references BOTH Meetings, so it
+  is visible only while the requester can read the source **and** the
+  target Meeting today — target-only readability must not leak source
+  Meeting metadata.
 - The scope FKs on the event (`project`, `research_group`) exist precisely
   so a future Activity feed can be **permission-filtered at the service
   layer**: forbidden objects must not leak through the collection, and
@@ -133,15 +188,20 @@ underlying object. It must never become a privacy bypass.**
   without Project membership gets a non-leaking 404.
 
 The aggregate feed **`GET /api/activity/`** (Work Item slice events
-only) applies the **same** rule per event, evaluated at read time on
-every request:
+and Meeting slice events) applies the **same** rule per event,
+evaluated at read time on every request:
 
-- an event is returned only if the requester can read the affected
-  Work Item **today** — losing Project/Research Group membership
-  immediately removes its historical events (read-time, not
-  creation-time, authorization);
-- events whose Work Item was hard-deleted (FK nulled) are not
-  readable and never appear;
+- a Work Item event is returned only if the requester can read the
+  affected Work Item **today** — losing Project/Research Group
+  membership immediately removes its historical events (read-time,
+  not creation-time, authorization);
+- a Meeting event is returned only if the requester can read the
+  affected Meeting **today** (creator-or-participant); removing a
+  participant immediately removes that Meeting's historical events;
+- a `meeting.follow_up_scheduled` event is returned only if the
+  requester can read BOTH the source and the target Meeting today;
+- events whose Work Item or Meeting was hard-deleted (FK nulled) are
+  not readable and never appear;
 - the filter runs in the database **before** bounded pagination
   (`?limit=` 1..100, default 50; `?offset=` non-negative with a hard
   bound; invalid values → 400), so inaccessible events leak nothing:
@@ -152,8 +212,10 @@ every request:
   first, event `id` as the stable tie-breaker;
 - structured projection only: event id / machine `eventType` /
   `createdAt`, the existing audit/history actor representation,
-  affected Work Item id + current title, Project and Research Group
-  context, and the structured `changes` diff (`category` makes a
+  affected Work Item id + current title **or** affected Meeting id +
+  current title (the non-matching identity pair is null), Project and
+  Research Group context (null Project for group-scoped Meetings), and
+  the structured `changes` payload (for Work Items, `category` makes a
   completion distinguishable from an ordinary status change). No
   rendered sentences, no arbitrary `AuditEvent` internals.
 
@@ -178,13 +240,20 @@ Implemented and proven in this slice:
   `audit_history.AuditEvent` + `record_audit_event`;
 - Work Item events: created, status changed, completed (distinct),
   assignee changed, due date changed;
-- the authorization rule above for Work Item history;
+- Meeting events: created, rescheduled, completed, agenda item added,
+  follow-up scheduled (see §4a);
+- the authorization rule above for Work Item history and Meeting
+  Activity (including the dual-readability rule for follow-up
+  schedules);
 - the permission-safe aggregate read API `GET /api/activity/`
-  (Work Item slice events only; see §5 for the binding read-time
+  (Work Item + Meeting slice events; see §5 for the binding read-time
   rule);
 - the transactional guarantee;
 - `docs` + tests (`apps/api/work_items/tests_activity_foundation.py`,
-  `apps/api/work_items/tests_history.py`, `apps/api/audit_history/tests.py`).
+  `apps/api/work_items/tests_history.py`, `apps/api/meetings/tests_activity.py`,
+  `apps/api/audit_history/tests.py`,
+  `apps/api/audit_history/tests_activity_feed.py`,
+  `apps/api/audit_history/tests_activity_feed_meetings.py`).
 
 Explicitly **not** in this slice:
 
@@ -192,7 +261,7 @@ Explicitly **not** in this slice:
   a later UI projection can summarize the events;
 - Activity is not a notification system (no push, no unread state, no
   inbox semantics);
-- no events for other object kinds yet (Meeting, Project, etc. will reuse
-  the same concept; any model/contract extension is follow-up work);
+- no events for other object kinds yet (Project, etc. will reuse the same
+  concept; any model/contract extension is follow-up work);
 - no Work Item **deletion** event (existing behavior: an allowed hard
   delete keeps earlier events with `work_item` nulled).

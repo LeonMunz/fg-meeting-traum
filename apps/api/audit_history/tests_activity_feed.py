@@ -201,7 +201,9 @@ class ActivityFeedVisibilityTest(_FeedClientMixin, APITestCase):
 
         entry = self._feed_entries(alex)[0]
 
-        # Exact contract: no arbitrary AuditEvent internals.
+        # Exact contract: no arbitrary AuditEvent internals. The
+        # Meeting slice extends the entry with the meeting identity
+        # pair; on a Work Item event both are null.
         self.assertEqual(
             set(entry.keys()),
             {
@@ -210,6 +212,8 @@ class ActivityFeedVisibilityTest(_FeedClientMixin, APITestCase):
                 "actor",
                 "workItemId",
                 "workItemTitle",
+                "meetingId",
+                "meetingTitle",
                 "projectId",
                 "projectName",
                 "researchGroupId",
@@ -218,6 +222,8 @@ class ActivityFeedVisibilityTest(_FeedClientMixin, APITestCase):
                 "createdAt",
             },
         )
+        self.assertIsNone(entry["meetingId"])
+        self.assertIsNone(entry["meetingTitle"])
         # Stable machine code, never a rendered sentence.
         self.assertIn(
             entry["eventType"],

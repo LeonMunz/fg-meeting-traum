@@ -10,8 +10,9 @@ class AuditEvent(models.Model):
     User references use RESTRICT because historical identities must remain
     addressable even after an account is disabled or anonymized.
 
-    Project and WorkItem references use SET_NULL so historical events survive
-    an explicitly allowed hard deletion of a disposable entity.
+    Project, WorkItem, and Meeting references use SET_NULL so historical
+    events survive an explicitly allowed hard deletion of a disposable
+    entity.
     """
 
     research_group = models.ForeignKey(
@@ -48,6 +49,14 @@ class AuditEvent(models.Model):
 
     work_item = models.ForeignKey(
         "work_items.WorkItem",
+        on_delete=models.SET_NULL,
+        related_name="audit_events",
+        null=True,
+        blank=True,
+    )
+
+    meeting = models.ForeignKey(
+        "meetings.Meeting",
         on_delete=models.SET_NULL,
         related_name="audit_events",
         null=True,

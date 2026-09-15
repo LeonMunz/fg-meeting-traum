@@ -14,6 +14,7 @@ class AuditEventAdmin(admin.ModelAdmin):
         "subject_user",
         "project",
         "work_item",
+        "meeting",
         "created_at",
     )
 
@@ -28,6 +29,7 @@ class AuditEventAdmin(admin.ModelAdmin):
         "subject_user__username",
         "project__name",
         "work_item__title",
+        "meeting__title",
     )
 
     raw_id_fields = (
@@ -36,6 +38,7 @@ class AuditEventAdmin(admin.ModelAdmin):
         "subject_user",
         "project",
         "work_item",
+        "meeting",
     )
 
     readonly_fields = (
@@ -46,6 +49,7 @@ class AuditEventAdmin(admin.ModelAdmin):
         "subject_user",
         "project",
         "work_item",
+        "meeting",
         "data",
         "created_at",
     )

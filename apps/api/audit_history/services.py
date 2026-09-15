@@ -19,6 +19,7 @@ def record_audit_event(
     subject_user=None,
     project=None,
     work_item=None,
+    meeting=None,
     data: Optional[dict] = None,
 ) -> AuditEvent:
     """Append one immutable historical event.
@@ -26,7 +27,8 @@ def record_audit_event(
     Permission checks belong to the calling domain operation.
 
     The event must remain scoped to exactly one Research Group. Optional
-    Project and WorkItem references therefore have to belong to that scope.
+    Project, WorkItem, and Meeting references therefore have to belong to
+    that scope.
     """
 
     normalized_event_type = (
@@ -85,6 +87,25 @@ def record_audit_event(
                 "the referenced Project."
             )
 
+    if meeting is not None:
+        if (
+            meeting.research_group_id
+            != research_group.pk
+        ):
+            raise AuditHistoryError(
+                "Audit event Meeting must belong to "
+                "the same Research Group."
+            )
+
+        if (
+            project is not None
+            and meeting.project_id != project.pk
+        ):
+            raise AuditHistoryError(
+                "Audit event Meeting must belong to "
+                "the referenced Project."
+            )
+
     return AuditEvent.objects.create(
         research_group=research_group,
         actor=actor,
@@ -92,5 +113,6 @@ def record_audit_event(
         subject_user=subject_user,
         project=project,
         work_item=work_item,
+        meeting=meeting,
         data=data,
     )

@@ -1,8 +1,12 @@
+from datetime import timedelta
+
 from django.contrib import admin
 from django.contrib.auth import get_user_model
 from django.db.models.deletion import RestrictedError
 from django.test import TestCase
+from django.utils import timezone
 
+from meetings.models import Meeting
 from projects.models import (
     Project,
     WorkItemStatusDefinition,
@@ -98,6 +102,27 @@ class AuditHistoryTest(TestCase):
             type_definition=cls.other_task_type,
             status_definition=cls.other_todo_status,
             title="Other Task",
+            created_by=cls.other_actor,
+        )
+
+        cls.meeting = Meeting.objects.create(
+            research_group=cls.group,
+            title="Audit Meeting",
+            scheduled_at=timezone.now() + timedelta(days=1),
+            created_by=cls.actor,
+        )
+        cls.project_meeting = Meeting.objects.create(
+            research_group=cls.group,
+            scope="project",
+            project=cls.project,
+            title="Audit Project Meeting",
+            scheduled_at=timezone.now() + timedelta(days=2),
+            created_by=cls.actor,
+        )
+        cls.other_meeting = Meeting.objects.create(
+            research_group=cls.other_group,
+            title="Other Audit Meeting",
+            scheduled_at=timezone.now() + timedelta(days=3),
             created_by=cls.other_actor,
         )
 
@@ -206,6 +231,45 @@ class AuditHistoryTest(TestCase):
                 work_item=self.other_work_item,
             )
 
+    def test_meeting_must_match_group(self):
+        with self.assertRaises(
+            AuditHistoryError,
+        ):
+            record_audit_event(
+                research_group=self.group,
+                actor=self.actor,
+                event_type="example",
+                meeting=self.other_meeting,
+            )
+
+    def test_meeting_must_match_referenced_project(
+        self,
+    ):
+        with self.assertRaises(
+            AuditHistoryError,
+        ):
+            record_audit_event(
+                research_group=self.group,
+                actor=self.actor,
+                event_type="example",
+                project=self.project,
+                meeting=self.meeting,
+            )
+
+    def test_meeting_event_carries_scope(self):
+        event = record_audit_event(
+            research_group=self.group,
+            actor=self.actor,
+            event_type="example",
+            project=self.project,
+            meeting=self.project_meeting,
+        )
+        self.assertEqual(event.meeting_id, self.project_meeting.pk)
+        self.assertEqual(event.project_id, self.project.pk)
+        self.assertEqual(
+            event.research_group_id, self.group.pk,
+        )
+
     def test_project_deletion_preserves_event(self):
         event = record_audit_event(
             research_group=self.group,
@@ -220,6 +284,11 @@ class AuditHistoryTest(TestCase):
                     self.project.name,
             },
         )
+
+        # The project-scoped Meeting references the project with
+        # RESTRICT: remove the fixture Meeting first (a Project with
+        # live Meetings is not deletable in the domain either).
+        self.project_meeting.delete()
 
         self.project.delete()
 
@@ -237,6 +306,32 @@ class AuditHistoryTest(TestCase):
             event.data["projectName"],
             "Audit Project",
         )
+
+    def test_meeting_deletion_preserves_event(self):
+        event = record_audit_event(
+            research_group=self.group,
+            actor=self.actor,
+            event_type="meeting.completed",
+            meeting=self.meeting,
+            data={
+                "changes": {
+                    "endedAt": "2026-01-01T00:00:00+00:00",
+                }
+            },
+        )
+
+        self.meeting.delete()
+
+        event.refresh_from_db()
+
+        self.assertIsNone(event.meeting_id)
+        # The event stays durable with its structured data intact.
+        self.assertEqual(event.event_type, "meeting.completed")
+        self.assertEqual(
+            event.data["changes"]["endedAt"],
+            "2026-01-01T00:00:00+00:00",
+        )
+        self.assertEqual(event.actor_id, self.actor.pk)
 
     def test_subject_user_is_protected_from_hard_delete(
         self,

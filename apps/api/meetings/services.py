@@ -1,7 +1,10 @@
+from datetime import timezone as dt_timezone
+
 from django.db import IntegrityError, models, transaction
 from django.utils import timezone
 from django.db.models import Max
 
+from audit_history.services import record_audit_event
 from authorization.capabilities import Capability
 from authorization.service import (
     has_group_capability,
@@ -37,6 +40,34 @@ class MeetingDomainError(Exception):
 
 class MeetingFollowUpConflictError(MeetingDomainError):
     """An active schedule exists and requires explicit rescheduling."""
+
+
+class MeetingAuditEventType:
+    """Event types recorded for Meeting history.
+
+    Intentionally coarse: ONE event per logical operation (not one per
+    changed field). Update details live in AuditEvent.data["changes"].
+    """
+
+    CREATED = "meeting.created"
+    RESCHEDULED = "meeting.rescheduled"
+    COMPLETED = "meeting.completed"
+    AGENDA_ITEM_ADDED = "meeting.agenda_item_added"
+    FOLLOW_UP_SCHEDULED = "meeting.follow_up_scheduled"
+
+
+def _iso8601_utc(value):
+    """Stable machine-readable UTC ISO-8601 form of a datetime value.
+
+    Persisted Activity data stores structured values, never rendered
+    strings; a scheduled datetime is stored exactly this way so a later
+    projection can render it without re-interpreting formats.
+    """
+    if value is None:
+        return None
+    if timezone.is_naive(value):
+        value = timezone.make_aware(value)
+    return value.astimezone(dt_timezone.utc).isoformat()
 
 
 def _require_research_group_membership(*, research_group, user):
@@ -480,6 +511,19 @@ def create_meeting_from_series(
             is_visible=True,
         )
 
+    # Recorded inside the same atomic block: if anything above rolls
+    # back, no AuditEvent survives either. The section snapshots are
+    # internal structure of the creation operation and produce no
+    # separate events.
+    record_audit_event(
+        research_group=meeting.research_group,
+        actor=actor,
+        event_type=MeetingAuditEventType.CREATED,
+        project=meeting.project,
+        meeting=meeting,
+        data={},
+    )
+
     return meeting
 
 
@@ -536,6 +580,17 @@ def create_meeting(
         is_visible=True,
     )
 
+    # The default Section is internal structure of the creation
+    # operation, not an agenda mutation: it produces no separate event.
+    record_audit_event(
+        research_group=meeting.research_group,
+        actor=actor,
+        event_type=MeetingAuditEventType.CREATED,
+        project=meeting.project,
+        meeting=meeting,
+        data={},
+    )
+
     return meeting
 
 
@@ -589,7 +644,16 @@ def create_meeting_item(
     actor,
     title,
     notes="",
+    record_activity=True,
 ):
+    """Create one agenda item in a Meeting Section.
+
+    ``record_activity`` is an internal emission switch: when another
+    domain operation creates an item as an internal step of its own
+    logical action (e.g. follow-up scheduling materializes the target
+    item), it passes ``record_activity=False`` so the single logical
+    operation records exactly one Activity event.
+    """
     _require_meeting_write_access(meeting=meeting, user=actor)
 
     if meeting_section.meeting_id != meeting.pk:
@@ -620,7 +684,7 @@ def create_meeting_item(
         else 0
     )
 
-    return MeetingItem.objects.create(
+    item = MeetingItem.objects.create(
         meeting=meeting,
         meeting_section=meeting_section,
         title=title,
@@ -628,6 +692,28 @@ def create_meeting_item(
         position=position,
         created_by=actor,
     )
+
+    if record_activity:
+        # The position allocation above is an internal ordering detail,
+        # not part of the event payload. Recorded inside the same atomic
+        # block: a rollback leaves no orphaned event.
+        record_audit_event(
+            research_group=meeting.research_group,
+            actor=actor,
+            event_type=MeetingAuditEventType.AGENDA_ITEM_ADDED,
+            project=meeting.project,
+            meeting=meeting,
+            data={
+                "changes": {
+                    "agendaItem": {
+                        "id": item.pk,
+                        "title": item.title,
+                    }
+                }
+            },
+        )
+
+    return item
 
 
 @transaction.atomic
@@ -723,11 +809,15 @@ def schedule_meeting_item_follow_up(
             "A follow-up target Section must be visible."
         )
 
+    # The target item is an internal step of the scheduling operation:
+    # the logical action is "follow-up scheduled", so it records its own
+    # event below and no separate agenda_item_added event.
     target_meeting_item = create_meeting_item(
         meeting=target_meeting,
         meeting_section=target_meeting_section,
         actor=actor,
         title=source_meeting_item.title,
+        record_activity=False,
     )
     follow_up = MeetingItemFollowUp.objects.create(
         source_meeting_item=source_meeting_item,
@@ -741,6 +831,45 @@ def schedule_meeting_item_follow_up(
         target_item_created_position=target_meeting_item.position,
         status=MeetingItemFollowUp.Status.SCHEDULED,
         created_by=actor,
+    )
+
+    # One event for the whole logical operation, anchored to the target
+    # Meeting (the occurrence the follow-up was scheduled INTO). The
+    # event's Research Group / Project scope is the target Meeting's
+    # scope; the source Meeting is referenced structurally. The flat
+    # data["sourceMeetingId"] is the stable machine reference the
+    # Activity feed uses to also require source-Meeting readability
+    # (the event references source Meeting metadata, so a reader must
+    # be able to read BOTH Meetings — no metadata leak).
+    record_audit_event(
+        research_group=target_meeting.research_group,
+        actor=actor,
+        event_type=MeetingAuditEventType.FOLLOW_UP_SCHEDULED,
+        project=target_meeting.project,
+        meeting=target_meeting,
+        data={
+            "sourceMeetingId": source_meeting.pk,
+            "changes": {
+                "followUp": {
+                    "sourceMeeting": {
+                        "id": source_meeting.pk,
+                        "title": source_meeting.title,
+                    },
+                    "sourceItem": {
+                        "id": source_meeting_item.pk,
+                        "title": source_meeting_item.title,
+                    },
+                    "targetSection": {
+                        "id": target_meeting_section.pk,
+                        "name": target_meeting_section.name,
+                    },
+                    "targetItem": {
+                        "id": target_meeting_item.pk,
+                        "title": target_meeting_item.title,
+                    },
+                }
+            },
+        },
     )
 
     source_meeting_item.outcome = MeetingItem.Outcome.FOLLOW_UP
@@ -1085,6 +1214,7 @@ def reorder_meeting_sections(
         ).update(position=new_position)
 
 
+@transaction.atomic
 def update_meeting(
     *,
     meeting,
@@ -1098,8 +1228,14 @@ def update_meeting(
     Status moves from upcoming to live and from live to completed must
     go through the explicit start/end domain actions below, so clients
     cannot bypass the state machine with an arbitrary status PATCH.
+
+    A real date-time change records exactly one structured
+    ``meeting.rescheduled`` event inside this transaction; a title-only
+    or no-op update records no Meeting Activity event.
     """
     _require_meeting_write_access(meeting=meeting, user=actor)
+
+    previous_scheduled_at = meeting.scheduled_at
 
     update_fields = []
 
@@ -1120,6 +1256,31 @@ def update_meeting(
         update_fields.append("updated_at")
         meeting.save(
             update_fields=update_fields,
+        )
+
+    # One logical reschedule = one event, with the previous/new
+    # scheduled datetime as structured values. A title change is not a
+    # tracked Meeting Activity aspect, and re-sending the same date-time
+    # is a no-op: neither produces an event.
+    if (
+        scheduled_at is not None
+        and _iso8601_utc(meeting.scheduled_at)
+        != _iso8601_utc(previous_scheduled_at)
+    ):
+        record_audit_event(
+            research_group=meeting.research_group,
+            actor=actor,
+            event_type=MeetingAuditEventType.RESCHEDULED,
+            project=meeting.project,
+            meeting=meeting,
+            data={
+                "changes": {
+                    "scheduledAt": {
+                        "from": _iso8601_utc(previous_scheduled_at),
+                        "to": _iso8601_utc(meeting.scheduled_at),
+                    }
+                }
+            },
         )
 
     return meeting
@@ -1191,6 +1352,21 @@ def end_meeting(*, meeting, actor):
     meeting.current_meeting_item_id = None
     meeting.save(
         update_fields=["status", "ended_at", "current_meeting_item_id", "updated_at"],
+    )
+
+    # Recorded inside the same atomic block as the lifecycle
+    # transition: a rollback leaves no orphaned event.
+    record_audit_event(
+        research_group=meeting.research_group,
+        actor=actor,
+        event_type=MeetingAuditEventType.COMPLETED,
+        project=meeting.project,
+        meeting=meeting,
+        data={
+            "changes": {
+                "endedAt": _iso8601_utc(meeting.ended_at),
+            }
+        },
     )
 
     return meeting
