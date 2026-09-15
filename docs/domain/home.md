@@ -174,7 +174,74 @@ Implementation: `apps/api/home_timeline/timeline.py`
 package (plain Python package, NOT a Django app), tested by
 `apps/api/home_timeline/tests.py`.
 
-## 4. Deferred (documented direction, NOT implemented)
+## 4. My work — implemented read model
+
+`My work` answers "what is my active personal work?" The backend
+read model is implemented (read service only: no Home API
+endpoint, no UI yet):
+
+- **Canonical personal My Work boundary, reused — never
+  re-interpreted**: a Work Item is a candidate iff the current
+  user is currently assigned to it (current `WorkItemAssignee`
+  row) **and** the identical current-membership read boundary of
+  personal My Work still holds — current `ProjectMembership`
+  (role `owner`/`member` — the canonical assignee-eligible roles)
+  in the Work Item's Project AND current
+  `ResearchGroupMembership` in the Project's Research Group.
+  Unassigned Work Items, Work Items assigned to someone else, and
+  Projects the user merely owns never qualify. Removing the
+  assignment or any membership removes the candidate immediately
+  at read time; historical assignment rows alone grant nothing.
+  General Work Item readability (`PROJECT_READ`, e.g. a viewer) is
+  NOT My Work eligibility: the read-time `owner`/`member` role
+  filter applies the canonical assignee-eligibility invariant (a
+  viewer cannot be assigned) at read time, as defense in depth,
+  identical to personal My Work.
+- **Responsibility-oriented, not urgency/time-oriented**: no
+  overdue/blocked reason codes, no time window, no relevance
+  scoring. The Home "My work" list is a compact responsibility
+  list and deliberately does **not** duplicate the `Needs
+  attention` urgency ranking or the `Today & next` chronological
+  merge.
+- **Active-only projection**: a Work Item whose
+  `status_definition.category` is `done` (canonical completion,
+  `foundation.md` §12 — category semantics, never display-name
+  matching) is excluded. This is the single documented
+  projection delta versus the personal My Work **endpoint**,
+  which is deliberately unchanged: personal My Work keeps
+  completed items (the My Work page shows them, sorted last;
+  `foundation.md` §14 lists "Done" as a possible UI filter).
+- **Overlap with the other Home modules is intentional**: a Work
+  Item may legitimately appear in `My work` **and** `Needs
+  attention` (e.g. blocked) **and** `Today & next` (e.g. due
+  inside the window) at the same time — each Home module answers
+  a different question, and no cross-module suppression is
+  performed.
+- **Complete candidate set, no Home row limit**: the read model
+  returns the complete canonical personal My Work candidate set
+  (active). The later Home composition layer decides the visible
+  row limit, "show more", and layout.
+- **Deterministic ordering**: the existing My Work projections
+  declare no canonical ordering (no model `Meta.ordering`, no
+  `order_by` in the views); the read model orders by stable Work
+  Item ID ascending — deterministic across repeated reads, with
+  no invented relevance score.
+
+Candidate contract: each candidate exposes Work Item identity,
+title, Project identity/name, Work Item type identity/name,
+current semantic status category, due value, and blocked reason —
+structured data only, no rendered sentences, no model internals.
+The canonical Work Item remains reachable by ID.
+
+Implementation: `apps/api/work_items/home_my_work.py`
+(`get_home_my_work_candidates`), tested by
+`apps/api/work_items/tests_home_my_work.py`. The canonical
+personal My Work projection query is the shared source
+`apps/api/work_items/personal_my_work.py`
+(`personal_my_work_queryset`), consumed by the personal and
+per-Research-Group My Work endpoints and by this read model.
+
+## 5. Deferred (documented direction, NOT implemented)
 
 - **Due-soon candidates**: no canonical due-soon threshold exists in
   this repository; none is invented.
@@ -182,4 +249,4 @@ package (plain Python package, NOT a Django app), tested by
 - **Follow-up attention** candidates.
 - Domain-specific Project-owner / decision problems.
 - The Home aggregate API endpoint and any Home UI.
-- General **My work** module wiring and **Continue working**.
+- **Continue working** module wiring.

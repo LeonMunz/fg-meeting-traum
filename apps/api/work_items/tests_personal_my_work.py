@@ -359,3 +359,45 @@ class PersonalMyWorkApiTest(APITestCase):
             "Rewrite Introduction",
             titles,
         )
+
+    def test_completed_work_item_is_still_returned(self):
+        """Pins the canonical ``done`` behavior of the personal
+        My Work endpoint: a completed Work Item (status category
+        ``done``) REMAINS part of the projection — the My Work
+        page shows completed items (sorted last), and
+        ``foundation.md`` §14 lists "Done" as a possible UI
+        filter. Home "My work" is an explicit active-only read
+        model and excludes it there; this endpoint must not
+        silently change (see work_items.tests_home_my_work)."""
+        done_status = (
+            self.project_a.status_definitions.get(name="Done")
+        )
+
+        create_work_item(
+            project=self.project_a,
+            actor=self.chris,
+            type_definition_id=(
+                self.project_a.type_definitions.get(name="Task").pk
+            ),
+            title="Completed Work",
+            status_definition_id=done_status.pk,
+            assignee_ids=[self.chris.pk],
+        )
+
+        self.login()
+
+        response = self.client.get(
+            "/api/me/work-items/"
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        titles = {
+            item["title"]
+            for item in response.json()
+        }
+
+        self.assertIn(
+            "Completed Work",
+            titles,
+        )

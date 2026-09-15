@@ -21,6 +21,7 @@ from projects.models import Project, ProjectMembership
 from research_groups.models import ResearchGroupMembership
 
 from .models import WorkItem, WorkItemAssignee, WorkItemComment
+from .personal_my_work import personal_my_work_queryset
 from .serializers import (
     WorkItemCommentSerializer,
     WorkItemHistoryEventSerializer,
@@ -707,25 +708,13 @@ class MyWorkView(APIView):
                 status=404,
             )
 
-        # Query: WorkItems assigned to current user where:
-        # 1. WorkItemAssignee.user == request.user
-        # 2. WorkItem.project.research_group_id == group_id
-        # 3. ProjectMembership exists for request.user on the project
-        # 4. ProjectMembership role is owner or member (defense-in-depth)
-        work_items = (
-            WorkItem.objects
-            .filter(
-                assignee_relations__user=request.user,
-                project__research_group_id=group_id,
-                project__memberships__user=request.user,
-                project__memberships__role__in=[
-                    ProjectMembership.Role.OWNER,
-                    ProjectMembership.Role.MEMBER,
-                ],
-            )
-            .distinct()
-            .select_related("project", "created_by", "parent")
-        )
+        # Query: the canonical personal My Work projection
+        # restricted to this Research Group (shared query source —
+        # work_items.personal_my_work; the group membership was
+        # already verified above with a non-leaking 404).
+        work_items = personal_my_work_queryset(
+            request.user, group_id=group_id,
+        ).select_related("project", "created_by", "parent")
 
         data = [serialize_work_item(wi, user=request.user) for wi in work_items]
         return Response(data)
@@ -784,30 +773,14 @@ class PersonalMyWorkView(APIView):
                     status=404,
                 )
 
-        work_items = (
-            WorkItem.objects
-            .filter(
-                assignee_relations__user=request.user,
-                project__memberships__user=request.user,
-                project__memberships__role__in=[
-                    ProjectMembership.Role.OWNER,
-                    ProjectMembership.Role.MEMBER,
-                ],
-                project__research_group__memberships__user=request.user,
-            )
-            .distinct()
-            .select_related(
-                "project",
-                "project__research_group",
-                "created_by",
-                "parent",
-            )
+        work_items = personal_my_work_queryset(
+            request.user, group_id=group_id,
+        ).select_related(
+            "project",
+            "project__research_group",
+            "created_by",
+            "parent",
         )
-
-        if group_id is not None:
-            work_items = work_items.filter(
-                project__research_group_id=group_id,
-            )
 
         data = []
 
