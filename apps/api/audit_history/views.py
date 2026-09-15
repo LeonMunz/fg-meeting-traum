@@ -220,6 +220,7 @@ class ActivityFeedView(APIView):
                 "meeting",
                 "meeting__project",
                 "meeting__project__research_group",
+                "meeting__research_group",
             )
             .order_by("-created_at", "-id")
         )
