@@ -666,4 +666,3 @@ class HomeAttentionQueryCountTest(_HomeAttentionBase):
             "row count; every serialized relation must be "
             "eager-loaded on the candidate queryset.",
         )
-
