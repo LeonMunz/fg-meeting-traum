@@ -159,7 +159,11 @@ Structured value rules for Meeting events:
   internally materialized target MeetingItem is an internal step of
   the scheduling operation and records **no separate**
   `meeting.agenda_item_added` event; an idempotent retry records no
-  second event.
+  second event. The feed's permission filter accepts only a JSON
+  **number** in `sourceMeetingId`; a persisted value in any other
+  form (missing key, JSON null, string, boolean, object, array, or
+  non-integral number) fails closed at read time — the event is
+  excluded from the feed and the feed request can never fail (§5).
 
 Deliberately **not** recorded in this slice (documented boundaries,
 not omissions by accident): Meeting start / reopen, participant
@@ -277,6 +281,14 @@ evaluated at read time on every request:
   participant immediately removes that Meeting's historical events;
 - a `meeting.follow_up_scheduled` event is returned only if the
   requester can read BOTH the source and the target Meeting today;
+- a `meeting.follow_up_scheduled` event whose stored
+  `sourceMeetingId` is malformed (missing key, JSON null, string,
+  boolean, object, array, or non-integral number) fails closed: the
+  read predicate type-checks the JSON value before any numeric
+  conversion, so exactly that event is excluded — the feed request
+  still succeeds, the reference is never coerced into another
+  Meeting ID, never skips the source Meeting read check, and never
+  falls back to any stored scope, actor, or subject identity;
 - a Project event is returned only if the requester can read the
   affected Project **today** through the canonical Project read rule
   (current ProjectMembership owner/member/viewer + current

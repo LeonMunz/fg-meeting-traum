@@ -14,6 +14,11 @@ Security contract under test (docs/domain/activity.md §5):
   returned only if the requester can read BOTH the source and the
   target Meeting today — target-only readability must not leak source
   Meeting metadata (title, id, item).
+- A malformed stored ``sourceMeetingId`` (missing key, JSON null,
+  string, boolean, object, array, or non-integral number) fails
+  closed per event: the endpoint still responds successfully and
+  exactly that event is excluded — a corrupted row never fails the
+  request and is never coerced into another Meeting ID.
 - Read-time revocation: removing a participant removes the Meeting's
   historical events from the feed immediately.
 - A hard-deleted Meeting's events leave the feed (the meeting FK is
@@ -37,6 +42,7 @@ from research_groups.models import (
     ResearchGroupMembership,
 )
 from work_items.services import create_work_item
+from audit_history.models import AuditEvent
 from meetings.models import (
     Meeting,
     MeetingParticipant,
@@ -317,6 +323,125 @@ class MeetingFeedFollowUpVisibilityTest(_MeetingFeedBase):
             )
         self.assertEqual(set(follow_up["targetSection"].keys()),
                          {"id", "name"})
+
+
+class MeetingFeedFollowUpMalformedSourceTest(_MeetingFeedBase):
+    """A corrupted stored ``sourceMeetingId`` fails closed per event.
+
+    The feed's follow-up predicate type-checks the stored JSON
+    reference: only a JSON number counts as a supported integer
+    reference. Missing key, JSON null, string, boolean, object,
+    array, and non-integral numbers exclude exactly that event —
+    they never fail the endpoint and are never coerced into another
+    Meeting ID (read-time fail closed).
+    """
+
+    def _corrupt_source(self, value, *, key_present=True):
+        event = AuditEvent.objects.get(
+            event_type="meeting.follow_up_scheduled",
+        )
+        data = dict(event.data)
+        if key_present:
+            data["sourceMeetingId"] = value
+        else:
+            data.pop("sourceMeetingId", None)
+        event.data = data
+        event.save(update_fields=["data"])
+        return event
+
+    def _feed(self):
+        self._login(self.alice)
+        response = self.client.get(FEED_URL)
+        # The endpoint itself must never fail because of a
+        # malformed stored reference.
+        self.assertEqual(response.status_code, 200)
+        return response.json()
+
+    def _follow_up_entries(self, entries):
+        return [
+            entry
+            for entry in entries
+            if entry["eventType"] == "meeting.follow_up_scheduled"
+        ]
+
+    def test_valid_integer_source_still_visible(self):
+        """Control: the producer-written integer reference still
+        returns the event when both Meetings are readable (current
+        behavior unchanged)."""
+        entries = self._feed()
+        follow_ups = self._follow_up_entries(entries)
+        self.assertEqual(len(follow_ups), 1)
+        self.assertEqual(follow_ups[0]["meetingId"], self.m2.pk)
+        self.assertEqual(
+            follow_ups[0]["changes"]["followUp"]["sourceMeeting"]["id"],
+            self.m1.pk,
+        )
+
+    def test_missing_source_excluded_without_error(self):
+        self._corrupt_source(None, key_present=False)
+        entries = self._feed()
+        self.assertEqual(self._follow_up_entries(entries), [])
+
+    def test_json_null_source_excluded_without_error(self):
+        self._corrupt_source(None)
+        entries = self._feed()
+        self.assertEqual(self._follow_up_entries(entries), [])
+
+    def test_json_string_source_excluded_without_error(self):
+        # The previous endpoint-wide failure condition: a JSON string
+        # (even a numeric-looking one such as "123") raised a cast
+        # error and failed the whole request. It must now simply hide
+        # the event while the endpoint responds successfully.
+        self._corrupt_source(str(self.m1.pk))
+        entries = self._feed()
+        self.assertEqual(self._follow_up_entries(entries), [])
+
+    def test_json_boolean_source_excluded_without_error(self):
+        self._corrupt_source(True)
+        entries = self._feed()
+        self.assertEqual(self._follow_up_entries(entries), [])
+
+    def test_json_object_source_excluded_without_error(self):
+        self._corrupt_source({"id": self.m1.pk})
+        entries = self._feed()
+        self.assertEqual(self._follow_up_entries(entries), [])
+
+    def test_json_array_source_excluded_without_error(self):
+        self._corrupt_source([self.m1.pk])
+        entries = self._feed()
+        self.assertEqual(self._follow_up_entries(entries), [])
+
+    def test_non_integral_number_never_coerced_to_another_meeting(self):
+        # A non-integral number: PostgreSQL bigint coercion would
+        # round it to a real, readable Meeting ID and leak the
+        # event. The predicate must compare it as a number and match
+        # nothing.
+        self._corrupt_source(float(self.m1.pk) + 0.5)
+        entries = self._feed()
+        self.assertEqual(self._follow_up_entries(entries), [])
+
+    def test_oversize_integer_excluded_without_error(self):
+        # A JSON integer far outside the bigint range: no cast may
+        # raise; the arbitrary-precision numeric comparison simply
+        # matches no Meeting.
+        self._corrupt_source(10**30)
+        entries = self._feed()
+        self.assertEqual(self._follow_up_entries(entries), [])
+
+    def test_malformed_source_does_not_block_unrelated_events(self):
+        # One corrupted follow-up row must not suppress the rest of
+        # the authorized feed in the same request.
+        self._corrupt_source(str(self.m1.pk))
+        entries = self._feed()
+        event_keys = {
+            (entry["eventType"], entry["meetingId"])
+            for entry in entries
+        }
+        self.assertIn(("meeting.created", self.m1.pk), event_keys)
+        self.assertIn(("meeting.created", self.m2.pk), event_keys)
+        self.assertIn(("meeting.rescheduled", self.m1.pk), event_keys)
+        self.assertIn(("meeting.completed", self.m3.pk), event_keys)
+        self.assertEqual(self._follow_up_entries(entries), [])
 
 
 class MeetingFeedRevocationTest(_MeetingFeedBase):

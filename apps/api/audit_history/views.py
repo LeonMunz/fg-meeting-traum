@@ -58,10 +58,12 @@ events never reach Python, so they cannot leak titles, actors,
 context, ordering, or page behavior.
 """
 
-from django.db.models import Q
-from django.db.models.fields import BigIntegerField
+from django.db import models
+from django.db.models import Case, Q, When
+from django.db.models.expressions import Func
+from django.db.models.fields import CharField
 from django.db.models.functions import Cast
-from django.db.models.lookups import In
+from django.db.models.lookups import Exact, In
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -97,6 +99,34 @@ def _parse_bounded_int(value, *, default, minimum, maximum):
         return None, f"must be between {minimum} and {maximum}."
 
     return parsed, None
+
+
+class _JsonbTypeof(Func):
+    """``jsonb_typeof()``: the JSON type of a jsonb value, as text.
+
+    PostgreSQL's ``::bigint`` cast of a jsonb value raises for every
+    non-numeric type (string, boolean, object, array, JSON null) and
+    silently rounds non-integer numbers — neither is acceptable in an
+    authorization predicate. This lets the feed type-check a stored
+    JSON reference *before* any conversion that can raise.
+    """
+
+    function = "jsonb_typeof"
+    output_field = CharField()
+
+
+class _NumericCastField(models.Field):
+    """Private ``Cast`` target rendering an unbounded ``numeric``.
+
+    A ``DecimalField`` without precision renders invalid SQL
+    (``numeric(None, None)``), and one with a fixed precision can
+    overflow on extreme JSON numbers. Unbounded ``numeric`` is
+    arbitrary precision: it can neither overflow nor round, which is
+    exactly what the authorization predicate needs.
+    """
+
+    def cast_db_type(self, connection):
+        return "numeric"
 
 
 # Upper bound on how deep a single request may page. Large enough for
@@ -285,13 +315,31 @@ class ActivityFeedView(APIView):
             meeting__isnull=False,
             meeting_id__in=readable_meeting_ids,
         )
-        # The stored source Meeting reference is a JSON id: cast it to
-        # bigint for the DB comparison. A missing/unknown reference
-        # evaluates NULL and fails closed.
+        # The stored source Meeting reference is a JSON value; it
+        # counts as a supported integer reference only when it is a
+        # JSON number. ``jsonb_typeof`` is checked first and the cast
+        # lives inside the CASE branch, which PostgreSQL evaluates
+        # only for JSON numbers (``::numeric`` is arbitrary
+        # precision, so it can neither overflow nor round). Every
+        # other shape — missing key, JSON null, string, boolean,
+        # object, array — yields NULL and fails closed: the event is
+        # simply excluded and a malformed row can never make the
+        # endpoint raise. A non-integer number (e.g. 5.5) compares
+        # numerically against the readable Meeting IDs and matches
+        # nothing — it is never coerced into another Meeting ID.
         follow_up_source_readable = In(
-            Cast(
-                "data__sourceMeetingId",
-                output_field=BigIntegerField(),
+            Case(
+                When(
+                    Exact(
+                        _JsonbTypeof("data__sourceMeetingId"), "number",
+                    ),
+                    then=Cast(
+                        "data__sourceMeetingId",
+                        output_field=_NumericCastField(),
+                    ),
+                ),
+                default=None,
+                output_field=_NumericCastField(),
             ),
             readable_meeting_ids,
         )
