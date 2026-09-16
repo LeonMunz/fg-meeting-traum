@@ -1,14 +1,19 @@
 import {
   useCallback,
   useEffect,
+  useRef,
   useState,
 } from 'react'
 import { useNavigate } from 'react-router'
 
 import { ApiError } from '../../api/client'
-import { listActivityFeed } from '../../api/activity'
+import {
+  ACTIVITY_DOMAINS,
+  listActivityFeed,
+} from '../../api/activity'
 import { getHome } from '../../api/home'
 import type {
+  ActivityDomain,
   ApiActivityEvent,
   ApiHome,
 } from '../../api/types'
@@ -80,6 +85,19 @@ export function HomePage() {
     setActivityError,
   ] = useState<string | null>(null)
 
+  // Activity domain filter — local to this Home session (no
+  // persistence). All four selected is the canonical unfiltered
+  // feed; only a strict subset goes on the wire.
+  const [activityDomains, setActivityDomains] = useState<
+    ActivityDomain[]
+  >([...ACTIVITY_DOMAINS])
+
+  // Monotonic guard for the Activity request: a filter change may
+  // refetch while an earlier request is still in flight, and only
+  // the newest request may settle the rail state (an out-of-order
+  // stale response must never overwrite a newer filter's results).
+  const activityRequestSeq = useRef(0)
+
   const loadHome = useCallback(async () => {
     setHomeLoading(true)
     setHomeError(null)
@@ -100,14 +118,34 @@ export function HomePage() {
   }, [])
 
   const loadActivity = useCallback(async () => {
+    const seq = ++activityRequestSeq.current
+
     setActivityLoading(true)
     setActivityError(null)
 
+    const isAllDomains =
+      activityDomains.length === ACTIVITY_DOMAINS.length
+
     try {
-      setActivity(
-        await listActivityFeed(ACTIVITY_RAIL_LIMIT),
-      )
+      const events = await listActivityFeed({
+        limit: ACTIVITY_RAIL_LIMIT,
+        // The absent parameter is the canonical all-domains
+        // state — never sent for the full selection.
+        domains: isAllDomains
+          ? undefined
+          : activityDomains,
+      })
+
+      if (seq !== activityRequestSeq.current) {
+        return
+      }
+
+      setActivity(events)
     } catch (error) {
+      if (seq !== activityRequestSeq.current) {
+        return
+      }
+
       setActivity([])
       setActivityError(
         getErrorMessage(
@@ -116,9 +154,11 @@ export function HomePage() {
         ),
       )
     } finally {
-      setActivityLoading(false)
+      if (seq === activityRequestSeq.current) {
+        setActivityLoading(false)
+      }
     }
-  }, [])
+  }, [activityDomains])
 
   useEffect(() => {
     void loadHome()
@@ -239,6 +279,8 @@ export function HomePage() {
             onRetry={() => void loadActivity()}
             onOpenWorkItemProject={openWorkItemProject}
             onOpenMeeting={openMeeting}
+            domains={activityDomains}
+            onDomainsChange={setActivityDomains}
           />
         </aside>
       </div>

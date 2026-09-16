@@ -452,3 +452,150 @@ test('Home stacks primary over Activity on narrow widths', async ({
     fullPage: true,
   })
 })
+
+test('Home Activity rail domain filter', async ({ page }, testInfo) => {
+  // Record every Activity request so the network contract
+  // (canonical serialization, absent-parameter default) is
+  // asserted against the wire, not the UI.
+  const activityRequestUrls: string[] = []
+  page.on('request', (request) => {
+    if (request.url().includes('/api/activity/')) {
+      activityRequestUrls.push(request.url())
+    }
+  })
+
+  await login(page, 'alex')
+
+  const activity = page.getByRole('complementary', {
+    name: 'Activity',
+  })
+
+  // The seeded Work Item creation event populates the rail.
+  await expect(
+    activity.getByRole('button', { name: /E2E Analyze robot data/ }),
+  ).toBeVisible()
+
+  // The canonical default request (all four selected) omits the
+  // domains parameter entirely.
+  expect(activityRequestUrls.length).toBeGreaterThanOrEqual(1)
+  expect(
+    new URL(activityRequestUrls[0]).searchParams.get('domains'),
+  ).toBeNull()
+
+  // The filter trigger is accessible and neutral by default.
+  const filterButton = activity.getByRole('button', {
+    name: 'Filter activity',
+  })
+  await expect(filterButton).toBeVisible()
+  await expect(filterButton).toHaveAttribute('aria-pressed', 'false')
+
+  // Open the filter popover; all four categories are selected.
+  await filterButton.click()
+
+  const popover = page.getByRole('dialog', {
+    name: 'Filter activity',
+  })
+  await expect(popover).toBeVisible()
+
+  const categoryLabels = [
+    'Work Items',
+    'Meetings',
+    'Projects',
+    'Research Groups',
+  ]
+
+  for (const label of categoryLabels) {
+    await expect(popover.getByLabel(label)).toBeChecked()
+  }
+
+  await page.screenshot({
+    path: testInfo.outputPath('home-activity-filter-desktop.png'),
+  })
+
+  // Deselect Projects and Research Groups: the filtered request
+  // carries the deterministic canonical subset on the wire.
+  const filteredRequest = page.waitForRequest((request) => {
+    if (!request.url().includes('/api/activity/')) {
+      return false
+    }
+
+    return (
+      new URL(request.url()).searchParams.get('domains') ===
+      'work_item,meeting'
+    )
+  })
+
+  await popover.getByLabel('Projects').uncheck()
+  await popover.getByLabel('Research Groups').uncheck()
+
+  await filteredRequest
+
+  await expect(popover.getByLabel('Work Items')).toBeChecked()
+  await expect(popover.getByLabel('Meetings')).toBeChecked()
+  await expect(popover.getByLabel('Projects')).not.toBeChecked()
+  await expect(
+    popover.getByLabel('Research Groups'),
+  ).not.toBeChecked()
+
+  // The subset state marks the trigger as active.
+  await expect(filterButton).toHaveAttribute('aria-pressed', 'true')
+
+  // Stable Activity rendering under the filter: the work_item
+  // event still renders, and Home remains fully rendered.
+  await expect(
+    activity.getByRole('button', { name: /E2E Analyze robot data/ }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole('heading', { name: 'Home', level: 1 }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole('region', { name: 'Needs attention' }),
+  ).toBeVisible()
+
+  // Reset restores the default and returns to the unfiltered
+  // request (no domains parameter on the wire).
+  const unfilteredRequest = page.waitForRequest((request) => {
+    if (!request.url().includes('/api/activity/')) {
+      return false
+    }
+
+    return (
+      new URL(request.url()).searchParams.get('domains') === null
+    )
+  })
+
+  await popover.getByRole('button', { name: 'Reset' }).click()
+
+  await unfilteredRequest
+
+  for (const label of categoryLabels) {
+    await expect(popover.getByLabel(label)).toBeChecked()
+  }
+  await expect(filterButton).toHaveAttribute('aria-pressed', 'false')
+
+  // Escape closes the popover (keyboard operable).
+  await page.keyboard.press('Escape')
+  await expect(popover).not.toBeVisible()
+
+  await expectNoHorizontalOverflow(page)
+
+  // Narrow width: the stacked filter control stays usable and the
+  // popover remains within the viewport.
+  await page.setViewportSize({ width: 1024, height: 768 })
+
+  await filterButton.click()
+  await expect(popover).toBeVisible()
+
+  const popoverBox = await popover.boundingBox()
+  expect(popoverBox).not.toBeNull()
+  expect(popoverBox!.x).toBeGreaterThanOrEqual(0)
+  expect(popoverBox!.x + popoverBox!.width).toBeLessThanOrEqual(
+    1024,
+  )
+
+  await page.screenshot({
+    path: testInfo.outputPath('home-activity-filter-narrow.png'),
+  })
+
+  await expectNoHorizontalOverflow(page)
+})

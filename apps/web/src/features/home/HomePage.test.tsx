@@ -85,6 +85,12 @@ vi.mock('../../api/home', () => ({
 
 vi.mock('../../api/activity', () => ({
   listActivityFeed: vi.fn(),
+  ACTIVITY_DOMAINS: [
+    'work_item',
+    'meeting',
+    'project',
+    'research_group',
+  ],
 }))
 
 /* ── Date helpers ─────────────────────────────────────────────── */
@@ -445,7 +451,11 @@ describe('Activity independence', () => {
 
     // It rendered from the independent Activity request.
     expect(listActivityFeed).toHaveBeenCalledTimes(1)
-    expect(listActivityFeed).toHaveBeenCalledWith(20)
+    // The default selection (all four domains) is the canonical
+    // unfiltered feed: no `domains` in the request options.
+    expect(listActivityFeed).toHaveBeenCalledWith({
+      limit: 20,
+    })
 
     // The Activity row is inside the Activity section and reads as
     // the human sentence: actor + verb + object.
@@ -585,9 +595,393 @@ describe('Activity independence', () => {
     ).toBeInTheDocument()
 
     // No canonical target: the row is not interactive.
+    // The only button in the section is the header's filter
+    // control; the non-navigable row itself renders no button.
+    const sectionButtons =
+      activitySection.queryAllByRole('button')
+
+    expect(sectionButtons).toHaveLength(1)
+    expect(sectionButtons[0]).toHaveAttribute(
+      'aria-label',
+      'Filter activity',
+    )
+  })
+})
+
+describe('Activity domain filter', () => {
+  const DOMAIN_LABELS = [
+    'Work Items',
+    'Meetings',
+    'Projects',
+    'Research Groups',
+  ]
+
+  function activityRail() {
+    return within(
+      screen.getByRole('complementary', {
+        name: 'Activity',
+      }),
+    )
+  }
+
+  function filterButton() {
+    return activityRail().getByRole('button', {
+      name: 'Filter activity',
+    })
+  }
+
+  function openFilter() {
+    fireEvent.click(filterButton())
+
+    return within(
+      screen.getByRole('dialog', {
+        name: 'Filter activity',
+      }),
+    )
+  }
+
+  async function renderLoadedHome() {
+    renderHome()
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('Activity Feed WI'),
+      ).toBeInTheDocument()
+    })
+  }
+
+  it('selects all four categories initially, with no active mark and no Reset', async () => {
+    await renderLoadedHome()
+
+    const popover = openFilter()
+
+    for (const label of DOMAIN_LABELS) {
+      expect(popover.getByLabelText(label)).toBeChecked()
+      expect(popover.getByLabelText(label)).toBeEnabled()
+    }
+
+    // The default all-domains state is not marked as active.
+    expect(filterButton()).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    )
     expect(
-      activitySection.queryByRole('button'),
+      popover.queryByRole('button', { name: 'Reset' }),
     ).not.toBeInTheDocument()
+  })
+
+  it('makes the initial Activity request without a domain filter', async () => {
+    await renderLoadedHome()
+
+    // The absent parameter is the canonical all-domains state.
+    expect(listActivityFeed).toHaveBeenCalledTimes(1)
+    expect(listActivityFeed).toHaveBeenCalledWith({
+      limit: 20,
+    })
+  })
+
+  it('refetches only Activity with the remaining domains when one is deselected', async () => {
+    await renderLoadedHome()
+
+    const popover = openFilter()
+    fireEvent.click(popover.getByLabelText('Projects'))
+
+    // The independent Activity request repeated with the strict
+    // subset; Home was not refetched.
+    expect(getHome).toHaveBeenCalledTimes(1)
+    expect(listActivityFeed).toHaveBeenCalledTimes(2)
+    expect(listActivityFeed).toHaveBeenLastCalledWith({
+      limit: 20,
+      domains: [
+        'work_item',
+        'meeting',
+        'research_group',
+      ],
+    })
+
+    // The deselected category is unchecked; the rest remain.
+    expect(popover.getByLabelText('Projects')).not.toBeChecked()
+
+    for (const label of [
+      'Work Items',
+      'Meetings',
+      'Research Groups',
+    ]) {
+      expect(popover.getByLabelText(label)).toBeChecked()
+    }
+
+    // The rail keeps rendering server results (the mocked feed
+    // resolved again), never a locally filtered stale list.
+    await waitFor(() => {
+      expect(
+        screen.getByText('Activity Feed WI'),
+      ).toBeInTheDocument()
+    })
+  })
+
+  it('serializes multiple selected domains in deterministic canonical order', async () => {
+    await renderLoadedHome()
+
+    const popover = openFilter()
+
+    // Deselect in a non-canonical order (Research Groups first,
+    // Work Items second); the request order must not follow click
+    // order.
+    fireEvent.click(popover.getByLabelText('Research Groups'))
+    fireEvent.click(popover.getByLabelText('Work Items'))
+
+    expect(listActivityFeed).toHaveBeenLastCalledWith({
+      limit: 20,
+      domains: ['meeting', 'project'],
+    })
+  })
+
+  it('does not refetch /api/home/ when the filter changes', async () => {
+    await renderLoadedHome()
+
+    const homeCallsBefore = vi.mocked(getHome).mock.calls.length
+
+    const popover = openFilter()
+    fireEvent.click(popover.getByLabelText('Meetings'))
+    fireEvent.click(popover.getByLabelText('Projects'))
+
+    await waitFor(() => {
+      expect(
+        vi.mocked(listActivityFeed).mock.calls.length,
+      ).toBeGreaterThanOrEqual(3)
+    })
+
+    expect(
+      vi.mocked(getHome).mock.calls.length,
+    ).toBe(homeCallsBefore)
+  })
+
+  it('never allows zero selected domains', async () => {
+    await renderLoadedHome()
+
+    const popover = openFilter()
+    fireEvent.click(popover.getByLabelText('Projects'))
+    fireEvent.click(popover.getByLabelText('Research Groups'))
+    fireEvent.click(popover.getByLabelText('Meetings'))
+
+    // Only Work Items remains: it cannot be deselected.
+    const last = popover.getByLabelText('Work Items')
+    expect(last).toBeChecked()
+    expect(last).toBeDisabled()
+
+    fireEvent.click(last)
+    expect(last).toBeChecked()
+
+    // The last request carries the single remaining domain; no
+    // call ever carries an empty selection.
+    expect(listActivityFeed).toHaveBeenLastCalledWith({
+      limit: 20,
+      domains: ['work_item'],
+    })
+
+    // Every request that carries a domain filter carries at least
+    // one domain (the empty selection never reaches the client).
+    for (const [options] of vi.mocked(
+      listActivityFeed,
+    ).mock.calls) {
+      if (options?.domains) {
+        expect(options.domains.length).toBeGreaterThanOrEqual(1)
+      }
+    }
+  })
+
+  it('Reset restores all four domains and the unfiltered request', async () => {
+    await renderLoadedHome()
+
+    const popover = openFilter()
+    fireEvent.click(popover.getByLabelText('Projects'))
+
+    // Reset exists only for a subset state.
+    const reset = popover.getByRole('button', {
+      name: 'Reset',
+    })
+
+    fireEvent.click(reset)
+
+    for (const label of DOMAIN_LABELS) {
+      expect(popover.getByLabelText(label)).toBeChecked()
+    }
+
+    expect(
+      popover.queryByRole('button', { name: 'Reset' }),
+    ).not.toBeInTheDocument()
+    expect(filterButton()).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    )
+
+    // Back to the canonical unfiltered request.
+    expect(listActivityFeed).toHaveBeenLastCalledWith({
+      limit: 20,
+    })
+  })
+
+  it('marks the filter button as active only for a strict subset', async () => {
+    await renderLoadedHome()
+
+    const popover = openFilter()
+
+    expect(filterButton()).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    )
+
+    fireEvent.click(popover.getByLabelText('Projects'))
+    expect(filterButton()).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+
+    fireEvent.click(
+      popover.getByRole('button', { name: 'Reset' }),
+    )
+    expect(filterButton()).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    )
+  })
+
+  it('keeps Home intact when a filtered Activity request fails, and retry repeats the filter', async () => {
+    await renderLoadedHome()
+
+    // The next Activity request (the filter refetch below) fails.
+    vi.mocked(listActivityFeed).mockRejectedValueOnce(
+      new Error('filtered activity boom'),
+    )
+
+    const popover = openFilter()
+    fireEvent.click(popover.getByLabelText('Projects'))
+
+    // Wait for the failed refetch to settle into the rail error.
+    await waitFor(() => {
+      expect(
+        screen.getByRole('alert'),
+      ).toHaveTextContent(
+        "Activity couldn't be loaded.",
+      )
+    })
+
+    // Home primary content is unaffected by the Activity failure.
+    expect(
+      screen.getByText('Overdue Draft Task'),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText('Recently Edited WI'),
+    ).toBeInTheDocument()
+
+    // The user's filter survives the failure: retry repeats the
+    // currently selected domain filter.
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Try again' }),
+    )
+
+    expect(listActivityFeed).toHaveBeenLastCalledWith({
+      limit: 20,
+      domains: [
+        'work_item',
+        'meeting',
+        'research_group',
+      ],
+    })
+  })
+
+  it('keeps explicit category labels and never exposes backend domain identifiers', async () => {
+    await renderLoadedHome()
+
+    const popover = openFilter()
+
+    for (const label of DOMAIN_LABELS) {
+      expect(popover.getByLabelText(label)).toBeInTheDocument()
+    }
+
+    const text =
+      screen
+        .getByRole('dialog', {
+          name: 'Filter activity',
+        })
+        .textContent ?? ''
+    expect(text).not.toContain('work_item')
+    expect(text).not.toContain('research_group')
+  })
+
+  it('closes the popover on Escape and returns focus to the trigger', async () => {
+    await renderLoadedHome()
+
+    openFilter()
+    expect(
+      screen.getByRole('dialog', {
+        name: 'Filter activity',
+      }),
+    ).toBeInTheDocument()
+
+    fireEvent.keyDown(document, { key: 'Escape' })
+
+    expect(
+      screen.queryByRole('dialog', {
+        name: 'Filter activity',
+      }),
+    ).not.toBeInTheDocument()
+    expect(filterButton()).toHaveFocus()
+  })
+
+  it('ignores a stale Activity response when a newer filter refetch resolves first', async () => {
+    let resolveStale: (
+      events: ApiActivityEvent[],
+    ) => void = () => {}
+
+    const staleRequest = new Promise<
+      ApiActivityEvent[]
+    >((resolve) => {
+      resolveStale = resolve
+    })
+
+    // Initial load resolves; the first filter refetch stays
+    // pending (and will resolve last); the second filter refetch
+    // resolves immediately.
+    vi.mocked(listActivityFeed)
+      .mockResolvedValueOnce(makeActivity())
+      .mockReturnValueOnce(staleRequest)
+      .mockResolvedValue(makeActivity())
+
+    await renderLoadedHome()
+
+    const popover = openFilter()
+    fireEvent.click(popover.getByLabelText('Projects'))
+    fireEvent.click(popover.getByLabelText('Research Groups'))
+
+    // The newest filter (work_item + meeting) resolved and
+    // rendered.
+    await waitFor(() => {
+      expect(
+        screen.getByText('Activity Feed WI'),
+      ).toBeInTheDocument()
+    })
+
+    // The stale first refetch now arrives with an empty feed,
+    // after the newer one; it must not blank the rail.
+    resolveStale([])
+
+    // Let the stale response settle fully (microtasks + render).
+    await new Promise((resolve) =>
+      setTimeout(resolve, 50),
+    )
+
+    expect(
+      screen.getByText('Activity Feed WI'),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByText('No recent activity.'),
+    ).not.toBeInTheDocument()
+
+    expect(listActivityFeed).toHaveBeenLastCalledWith({
+      limit: 20,
+      domains: ['work_item', 'meeting'],
+    })
   })
 })
 

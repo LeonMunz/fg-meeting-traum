@@ -838,6 +838,15 @@ export interface ApiActivityUserRef {
   lastName: string
 }
 
+/** The four canonical Activity domains accepted by the
+ * `GET /api/activity/` `?domains=` filter (OR semantics; an event's
+ * domain is its `event_type` prefix). */
+export type ActivityDomain =
+  | 'work_item'
+  | 'meeting'
+  | 'project'
+  | 'research_group'
+
 /** One structured entry from `GET /api/activity/`. The non-matching
  * object identity pair is null; context is scope-only (no raw payload). */
 export interface ApiActivityEvent {
