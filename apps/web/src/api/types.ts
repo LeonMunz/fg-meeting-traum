@@ -717,12 +717,20 @@ export type ApiHomeAttentionReason = 'overdue' | 'blocked'
 
 export type ApiHomeDomain = 'work_item' | 'meeting'
 
+/** The canonical Work Item type identity of a Home Work Item
+ * candidate (the Project-configured Work Item type definition). */
+export interface ApiHomeWorkItemType {
+  id: number
+  name: string
+}
+
 /** One Work Item candidate in Home "Needs attention". */
 export interface ApiHomeNeedsAttentionItem {
   workItemId: number
   title: string
   projectId: number
   projectName: string
+  workItemType: ApiHomeWorkItemType
   dueDate: string | null
   statusCategory: ApiWorkItemStatus
   blockedReason: string | null
@@ -790,6 +798,16 @@ export interface ApiHomeContinueWorkingMeeting {
   scheduledAt: string
 }
 
+/** Current access scope/context of a Continue working candidate:
+ * Work Item → owning Project; Meeting → owning Research Group. */
+export type ApiHomeContextKind = 'research_group' | 'project'
+
+export interface ApiHomeContext {
+  kind: ApiHomeContextKind
+  id: number
+  name: string
+}
+
 /** One flat "Continue working" recency candidate. Exactly one of
  * `workItem` / `meeting` is non-null (matching `domain`). */
 export interface ApiHomeContinueWorkingCandidate {
@@ -797,6 +815,7 @@ export interface ApiHomeContinueWorkingCandidate {
   objectId: number
   title: string
   latestPersonalActivityAt: string
+  context: ApiHomeContext
   workItem: ApiHomeContinueWorkingWorkItem | null
   meeting: ApiHomeContinueWorkingMeeting | null
 }

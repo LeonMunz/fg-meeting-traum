@@ -147,6 +147,7 @@ function makeHome(
         title: 'Overdue Draft Task',
         projectId: 7,
         projectName: 'Paper XYZ',
+        workItemType: { id: 4, name: 'Task' },
         dueDate: isoDate(-2),
         statusCategory: 'in_progress',
         blockedReason: null,
@@ -157,6 +158,7 @@ function makeHome(
         title: 'Blocked Review Task',
         projectId: 7,
         projectName: 'Paper XYZ',
+        workItemType: { id: 4, name: 'Task' },
         dueDate: null,
         statusCategory: 'review',
         blockedReason: 'Waiting on data',
@@ -216,6 +218,7 @@ function makeHome(
         objectId: 103,
         title: 'Recently Edited WI',
         latestPersonalActivityAt: isoDateTime(0, 8, 0),
+        context: { kind: 'project', id: 7, name: 'Paper XYZ' },
         workItem: {
           workItemId: 103,
           projectId: 7,
@@ -230,6 +233,7 @@ function makeHome(
         objectId: 201,
         title: 'Recently Touched Meeting',
         latestPersonalActivityAt: isoDateTime(-1, 9, 0),
+        context: { kind: 'research_group', id: 1, name: 'FG Example' },
         workItem: null,
         meeting: {
           meetingId: 201,
@@ -706,6 +710,7 @@ describe('Needs attention presentation rule', () => {
         title: `Attention ${i + 1}`,
         projectId: 7,
         projectName: 'Paper XYZ',
+        workItemType: { id: 4, name: 'Task' },
         dueDate: isoDate(-1),
         statusCategory: 'in_progress',
         blockedReason: null,
@@ -885,6 +890,7 @@ describe('Continue working semantics', () => {
         objectId: 500 + i,
         title: `Recent ${i + 1}`,
         latestPersonalActivityAt: isoDateTime(0, 8 - i, 0),
+        context: { kind: 'project' as const, id: 7, name: 'Paper XYZ' },
         workItem: {
           workItemId: 500 + i,
           projectId: 7,

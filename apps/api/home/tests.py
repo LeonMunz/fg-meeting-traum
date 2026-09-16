@@ -195,11 +195,12 @@ class _HomeAggregateBase(TestCase):
     # ── fixtures ──
 
     def _make_wi(self, *, title, assignees=(), actor=None,
-                 due_date=None, blocked_reason=None, status_id=None):
+                 due_date=None, blocked_reason=None, status_id=None,
+                 type_id=None):
         return create_work_item(
             project=self.project,
             actor=actor or self.data["chris"],
-            type_definition_id=self.task_type.pk,
+            type_definition_id=type_id or self.task_type.pk,
             title=title,
             status_definition_id=status_id,
             assignee_ids=[u.pk for u in assignees],
@@ -327,18 +328,53 @@ class NeedsAttentionSerializationTest(_HomeAggregateBase):
                 "title": c.title,
                 "projectId": c.project_id,
                 "projectName": c.project_name,
+                "workItemType": {
+                    "id": c.type_definition_id,
+                    "name": c.type_name,
+                },
                 "dueDate": _iso(c.due_date),
                 "statusCategory": c.status_category,
                 "blockedReason": c.blocked_reason,
                 "attentionReasons": list(c.attention_reasons),
             },
         )
-        # Explicit contract spot-check (stable reason codes, ISO date).
+        # Explicit contract spot-check (stable reason codes, ISO date,
+        # canonical Work Item type identity as display metadata).
         self.assertEqual(section[0]["title"], "Draft introduction")
         self.assertEqual(section[0]["projectName"], "Paper XYZ")
+        self.assertEqual(
+            section[0]["workItemType"],
+            {"id": self.task_type.pk, "name": "Task"},
+        )
         self.assertEqual(section[0]["dueDate"], _iso(TODAY - timedelta(days=1)))
         self.assertEqual(section[0]["statusCategory"], "todo")
         self.assertEqual(section[0]["attentionReasons"], ["overdue", "blocked"])
+
+    def test_distinct_work_item_types_retain_distinct_metadata(self):
+        chris = self.data["chris"]
+        epic = self.project.type_definitions.get(name="Epic")
+        self._make_wi(
+            title="Overdue task",
+            assignees=[chris],
+            due_date=TODAY - timedelta(days=1),
+        )
+        self._make_wi(
+            title="Overdue epic",
+            assignees=[chris],
+            due_date=TODAY - timedelta(days=2),
+            type_id=epic.pk,
+        )
+
+        data = self._get(chris).json()
+        by_type = {
+            row["workItemType"]["name"]: row["workItemType"]
+            for row in data["needsAttention"]
+        }
+        self.assertEqual(set(by_type), {"Task", "Epic"})
+        self.assertEqual(by_type["Task"]["id"], self.task_type.pk)
+        self.assertEqual(by_type["Epic"]["id"], epic.pk)
+        # Distinct definitions, distinct identities — no inference.
+        self.assertNotEqual(by_type["Task"]["id"], by_type["Epic"]["id"])
 
     def test_ordering_is_preserved(self):
         chris = self.data["chris"]
@@ -574,6 +610,11 @@ class ContinueWorkingSerializationTest(_HomeAggregateBase):
                 "objectId": wi.pk,
                 "title": "Touched work item",
                 "latestPersonalActivityAt": _iso_z(T1),
+                "context": {
+                    "kind": "project",
+                    "id": self.project.pk,
+                    "name": "Paper XYZ",
+                },
                 "workItem": {
                     "workItemId": wi.pk,
                     "projectId": self.project.pk,
@@ -604,6 +645,11 @@ class ContinueWorkingSerializationTest(_HomeAggregateBase):
                 "objectId": meeting.pk,
                 "title": "Touched meeting",
                 "latestPersonalActivityAt": _iso_z(T2),
+                "context": {
+                    "kind": "research_group",
+                    "id": self.group.pk,
+                    "name": self.group.name,
+                },
                 "workItem": None,
                 "meeting": {
                     "meetingId": meeting.pk,

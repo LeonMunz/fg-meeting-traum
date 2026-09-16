@@ -92,6 +92,13 @@ class WorkItemAttentionCandidate:
     title: str
     project_id: int
     project_name: str
+    # Canonical Work Item type identity (the Project-configured
+    # ``WorkItemTypeDefinition``) — display metadata for the Home
+    # composition layer. The type definition carries no stable
+    # semantic discriminator (e.g. task/epic/milestone/deliverable);
+    # the id/name are the existing canonical identity, nothing more.
+    type_definition_id: int
+    type_name: str
     due_date: date | None
     # Current semantic status category: todo / in_progress / review
     # (``done`` candidates are excluded by construction).
@@ -165,6 +172,13 @@ def get_work_item_attention_candidates(*, user) -> list[WorkItemAttentionCandida
        current application-timezone date) and/or blocked (canonical
        non-empty ``blocked_reason``).
 
+    Each candidate additionally carries the canonical Work Item type
+    identity (``type_definition_id`` / ``type_name`` — the
+    Project-configured ``WorkItemTypeDefinition``) as display
+    metadata. The type definition has no stable semantic
+    discriminator (e.g. task/epic/milestone/deliverable); the
+    id/name are the existing canonical identity, nothing is inferred.
+
     Deterministic ordering (single query; no hidden numeric score):
 
     1. overdue items before blocked-only items,
@@ -199,7 +213,7 @@ def get_work_item_attention_candidates(*, user) -> list[WorkItemAttentionCandida
             project__research_group__memberships__user=user,
         )
         .distinct()
-        .select_related("project", "status_definition")
+        .select_related("project", "type_definition", "status_definition")
         .order_by(
             _overdue_group_order(today),
             F("due_date").asc(nulls_last=True),
@@ -224,6 +238,8 @@ def get_work_item_attention_candidates(*, user) -> list[WorkItemAttentionCandida
                 title=work_item.title,
                 project_id=work_item.project_id,
                 project_name=work_item.project.name,
+                type_definition_id=work_item.type_definition_id,
+                type_name=work_item.type_definition.name,
                 due_date=work_item.due_date,
                 status_category=work_item.status_definition.category,
                 blocked_reason=work_item.blocked_reason or None,

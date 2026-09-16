@@ -24,6 +24,9 @@ Proves the canonical semantics of
   qualifying personal timestamp
 - deterministic ordering (timestamp DESC, domain rank tie-break,
   object ID ASC); no horizon; no row limit
+- stable display context per candidate (Work Item → owning Project,
+  Meeting → owning Research Group), derived only from the
+  already-authorized candidate row and failing closed with it
 - bounded, row-invariant query count (no N+1)
 
 Event / Note timestamps are pinned with queryset
@@ -73,6 +76,8 @@ from work_items.services import (
 from work_items.home_my_work import get_home_my_work_candidates
 
 from home_continue.continue_working import (
+    CONTEXT_KIND_PROJECT,
+    CONTEXT_KIND_RESEARCH_GROUP,
     DOMAIN_MEETING,
     DOMAIN_WORK_ITEM,
     get_continue_working_candidates,
@@ -889,13 +894,62 @@ class NoHorizonNoLimitTest(_ContinueBase):
             )
 
 
+# ── Display context ──
+
+
+class ContextMetadataTest(_ContinueBase):
+    """Every candidate carries a stable display context — Work Item
+    → owning Project, Meeting → owning Research Group — derived only
+    from the candidate row the read model has already authorized.
+    The context never widens eligibility and disappears together
+    with the candidate when access is lost."""
+
+    def test_work_item_candidate_exposes_project_context(self):
+        chris = self.data["chris"]
+        wi = self._make_wi(title="Touched item", actor=chris)
+        self._pin(chris, t(1), work_item=wi)
+
+        candidate = self._wi_candidate(chris, wi.pk)
+        self.assertIsNotNone(candidate)
+        self.assertEqual(candidate.context.kind, CONTEXT_KIND_PROJECT)
+        self.assertEqual(candidate.context.id, self.project.pk)
+        self.assertEqual(candidate.context.name, self.project.name)
+
+    def test_meeting_candidate_exposes_research_group_context(self):
+        chris = self.data["chris"]
+        meeting = self._make_meeting(title="Touched meeting", actor=chris)
+        self._pin(chris, t(1), meeting=meeting)
+
+        candidate = self._meeting_candidate(chris, meeting.pk)
+        self.assertIsNotNone(candidate)
+        self.assertEqual(candidate.context.kind,
+                         CONTEXT_KIND_RESEARCH_GROUP)
+        self.assertEqual(candidate.context.id, self.data["group"].pk)
+        self.assertEqual(candidate.context.name, self.data["group"].name)
+
+    def test_context_disappears_with_the_candidate_on_access_loss(self):
+        chris = self.data["chris"]
+        wi = self._make_wi(title="Secret item", actor=chris)
+        self._pin(chris, t(1), work_item=wi)
+        self.assertIsNotNone(self._wi_candidate(chris, wi.pk))
+
+        ProjectMembership.objects.filter(
+            project=self.project, user=chris,
+        ).delete()
+
+        # No candidate row at all — context fails closed with it.
+        self.assertIsNone(self._wi_candidate(chris, wi.pk))
+        self.assertEqual(self._pairs(chris), [])
+
+
 # ── Query behavior ──
 
 
 class QueryCountTest(_ContinueBase):
     """Bounded total query count consistent with the aggregate-then-
     bulk-fetch design, and NO N+1 on Work Item context (project /
-    status definition) or Meeting data as candidate rows grow."""
+    status definition), Meeting context (research group), or any
+    other candidate-row relation as candidate rows grow."""
 
     def _add_candidate_pair(self, index: int):
         chris = self.data["chris"]

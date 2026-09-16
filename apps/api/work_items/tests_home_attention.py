@@ -13,6 +13,9 @@ Proves the canonical semantics of
 - one candidate per Work Item with stable reason codes
 - deterministic ordering (overdue group first, earliest due first
   NULLS LAST, Work Item ID tie-break)
+- canonical Work Item type identity/name exposed as display metadata
+  (the Project-configured ``WorkItemTypeDefinition``; no semantic
+  discriminator exists on the type and none is inferred)
 - bounded query count (no N+1 per candidate row)
 
 Time is frozen for every test: ``_current_application_date`` is
@@ -123,11 +126,11 @@ class _HomeAttentionBase(TestCase):
         self.addCleanup(self._clock_patch.stop)
 
     def _make(self, *, title, assignees=(), due_date=None,
-              blocked_reason=None, status_id=None):
+              blocked_reason=None, status_id=None, type_id=None):
         return create_work_item(
             project=self.project,
             actor=self.data["alex"],
-            type_definition_id=self.task_type.pk,
+            type_definition_id=type_id or self.task_type.pk,
             title=title,
             status_definition_id=status_id,
             assignee_ids=[u.pk for u in assignees],
@@ -624,6 +627,50 @@ class HomeAttentionOrderingTest(_HomeAttentionBase):
         ])
 
 
+# ── Work Item type metadata ──
+
+
+class HomeAttentionTypeMetadataTest(_HomeAttentionBase):
+    """Candidates expose the canonical Work Item type identity
+    (``type_definition_id`` / ``type_name`` — the Project-configured
+    ``WorkItemTypeDefinition``) as display metadata."""
+
+    def test_candidate_exposes_canonical_type_identity(self):
+        epic = self.project.type_definitions.get(name="Epic")
+        wi = self._make(
+            title="Blocked epic",
+            assignees=[self.data["chris"]],
+            blocked_reason="Stuck",
+            type_id=epic.pk,
+        )
+        (candidate,) = self._candidates(self.data["chris"])
+        self.assertEqual(candidate.work_item_id, wi.pk)
+        self.assertEqual(candidate.type_definition_id, epic.pk)
+        self.assertEqual(candidate.type_name, "Epic")
+
+    def test_distinct_type_definitions_retain_distinct_metadata(self):
+        epic = self.project.type_definitions.get(name="Epic")
+        task_item = self._make(
+            title="Overdue task",
+            assignees=[self.data["chris"]],
+            due_date=TODAY - timedelta(days=1),
+        )
+        epic_item = self._make(
+            title="Overdue epic",
+            assignees=[self.data["chris"]],
+            due_date=TODAY - timedelta(days=2),
+            type_id=epic.pk,
+        )
+        by_id = {
+            c.work_item_id: c for c in self._candidates(self.data["chris"])
+        }
+        self.assertEqual(by_id[task_item.pk].type_definition_id,
+                         self.task_type.pk)
+        self.assertEqual(by_id[task_item.pk].type_name, "Task")
+        self.assertEqual(by_id[epic_item.pk].type_definition_id, epic.pk)
+        self.assertEqual(by_id[epic_item.pk].type_name, "Epic")
+
+
 # ── Query behavior ──
 
 
@@ -631,8 +678,9 @@ class HomeAttentionQueryCountTest(_HomeAttentionBase):
     """Behavioral query-count regression for the attention read model.
 
     The candidate provider must not add one query per candidate row
-    for Project / status definition context — those relations are
-    eager-loaded with ``select_related`` on the single page query.
+    for Project / Work Item type definition / status definition
+    context — those relations are eager-loaded with
+    ``select_related`` on the single page query.
     """
 
     def _add_overdue_items(self, count, start=0):

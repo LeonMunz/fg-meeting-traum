@@ -109,11 +109,17 @@ candidate set, with NO display row limit — the later Home
 composition layer decides how many recent rows to show.
 
 Candidate contract: a small structured representation — domain,
-object ID, title, ``latest_personal_activity_at``, and a
-domain-specific detail block (Work Item: Project ID/name — current
-Work Item read implies Project read — semantic status category, due
-date; Meeting: status, ``scheduled_at`` — only data safe under
-``MEETING_READ``, no Project/Research Group names). No raw
+object ID, title, ``latest_personal_activity_at``, the current
+access scope/context, and a domain-specific detail block (Work
+Item: Project ID/name — current Work Item read implies Project read
+— semantic status category, due date; Meeting: status,
+``scheduled_at`` — only data safe under ``MEETING_READ``, no
+Project names). The context is one stable additive structure for
+both domains (``kind`` / ``id`` / ``name``): a Work Item candidate
+carries its owning Project (kind ``project``) and a Meeting
+candidate carries its owning Research Group (kind
+``research_group``) — display metadata derived only from the
+already-authorized candidate row, never an access grant. No raw
 ``AuditEvent`` payload, no source Meeting details, no rendered
 sentences; the canonical object remains reachable by ID.
 
@@ -167,6 +173,15 @@ DOMAIN_RANK = {
 # operation). Deliberately NOT extended to comment, label, or
 # reorder interactions (no V1 canonical personal-action event
 # exists for them, and the event system is not broadened here).
+# Stable machine-readable display-context kinds. One stable additive
+# structure for both domains: Work Item → owning Project, Meeting →
+# owning Research Group. Display metadata only — eligibility,
+# authorization, ordering, and deduplication are never derived from
+# it.
+CONTEXT_KIND_PROJECT = "project"
+CONTEXT_KIND_RESEARCH_GROUP = "research_group"
+
+
 _WORK_ITEM_EVENT_TYPES = [
     WorkItemAuditEventType.CREATED,
     WorkItemAuditEventType.UPDATED,
@@ -210,14 +225,35 @@ class ContinueMeetingDetails:
     """Meeting-specific composition data.
 
     Exposes only data safe under canonical ``MEETING_READ``. No
-    Project / Research Group names: Meeting read never implies
-    Project or Research Group read. No source Meeting data of any
-    kind.
+    Project names: Meeting read never implies Project read. No
+    source Meeting data of any kind. The owning Research Group
+    context (kind/id/name) is carried on the candidate itself —
+    approved display metadata derived from the already-authorized
+    Meeting row.
     """
 
     meeting_id: int
     status: str
     scheduled_at: datetime
+
+
+@dataclass(frozen=True)
+class ContinueContext:
+    """Current access scope/context of one candidate (display metadata).
+
+    - Work Item candidate → the owning Project (current Work Item read
+      implies Project read), kind ``project``.
+    - Meeting candidate → the owning Research Group (the Meeting row's
+      own ``research_group`` relation), kind ``research_group``.
+
+    The context is derived only from the candidate object itself,
+    which the read model has already authorized as readable — it
+    never widens eligibility, authorization, or ordering.
+    """
+
+    kind: str
+    id: int
+    name: str
 
 
 @dataclass(frozen=True)
@@ -228,7 +264,9 @@ class ContinueWorkingCandidate:
     render the candidate; the canonical object (and its full API
     representation) remains reachable through ``object_id``.
     ``latest_personal_activity_at`` is the current user's LATEST
-    qualifying personal action for this object.
+    qualifying personal action for this object. ``context`` is the
+    current access scope of the candidate (Work Item → owning
+    Project; Meeting → owning Research Group).
     """
 
     domain: str
@@ -236,6 +274,7 @@ class ContinueWorkingCandidate:
     title: str
     latest_personal_activity_at: datetime
     details: ContinueWorkItemDetails | ContinueMeetingDetails
+    context: ContinueContext
 
 
 def _readable_project_ids(user):
@@ -318,6 +357,11 @@ def _work_item_candidates(*, user, readable_project_ids):
                 status_category=work_item.status_definition.category,
                 due_date=work_item.due_date,
             ),
+            context=ContinueContext(
+                kind=CONTEXT_KIND_PROJECT,
+                id=work_item.project_id,
+                name=work_item.project.name,
+            ),
         )
         for work_item in work_items
     ]
@@ -386,6 +430,7 @@ def _meeting_candidates(*, user, readable_meeting_ids):
             & (Q(created_by=user) | Q(participant_relations__user=user)),
         )
         .distinct()
+        .select_related("research_group")
         .order_by("pk")
     )
     return [
@@ -398,6 +443,11 @@ def _meeting_candidates(*, user, readable_meeting_ids):
                 meeting_id=meeting.pk,
                 status=meeting.status,
                 scheduled_at=meeting.scheduled_at,
+            ),
+            context=ContinueContext(
+                kind=CONTEXT_KIND_RESEARCH_GROUP,
+                id=meeting.research_group_id,
+                name=meeting.research_group.name,
             ),
         )
         for meeting in meetings

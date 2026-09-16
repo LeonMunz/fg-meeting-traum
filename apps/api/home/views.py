@@ -88,6 +88,13 @@ def _serialize_needs_attention(candidate):
         "title": candidate.title,
         "projectId": candidate.project_id,
         "projectName": candidate.project_name,
+        # Canonical Work Item type identity (Project-configured
+        # WorkItemTypeDefinition) — display metadata for the row's
+        # type icon; not inferred from status/title/ordering.
+        "workItemType": {
+            "id": candidate.type_definition_id,
+            "name": candidate.type_name,
+        },
         "dueDate": candidate.due_date,
         "statusCategory": candidate.status_category,
         "blockedReason": candidate.blocked_reason,
@@ -177,6 +184,13 @@ def _serialize_continue_working(candidate):
         "objectId": candidate.object_id,
         "title": candidate.title,
         "latestPersonalActivityAt": candidate.latest_personal_activity_at,
+        # Current access scope/context (display metadata): Work Item
+        # → owning Project, Meeting → owning Research Group.
+        "context": {
+            "kind": candidate.context.kind,
+            "id": candidate.context.id,
+            "name": candidate.context.name,
+        },
         "workItem": (
             None
             if is_meeting
