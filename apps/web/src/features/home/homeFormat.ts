@@ -1,4 +1,5 @@
 import type {
+  ApiActivityEvent,
   ApiHomeAttentionReason,
   ApiHomeDomain,
   ApiHomeTimelineCandidate,
@@ -201,6 +202,111 @@ export function groupTimelineByDay(
     groups.push({
       date,
       label: timelineGroupLabel(date, now),
+      items,
+    })
+  }
+  return groups
+}
+
+/* ── Activity feed date grouping (presentation only) ─────────── */
+
+const ACTIVITY_MONTH_DAY = new Intl.DateTimeFormat('en', {
+  month: 'short',
+  day: 'numeric',
+})
+
+const ACTIVITY_MONTH_DAY_YEAR = new Intl.DateTimeFormat('en', {
+  month: 'short',
+  day: 'numeric',
+  year: 'numeric',
+})
+
+/** A local calendar day key back to a local Date (never a UTC
+ * parse of `YYYY-MM-DD`, which would drift in negative
+ * offsets). */
+function dayKeyToLocalDate(key: string): Date | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(key)
+  if (!match) return null
+  return new Date(
+    Number(match[1]),
+    Number(match[2]) - 1,
+    Number(match[3]),
+  )
+}
+
+/**
+ * Date-group label for the Activity rail: "Today", "Yesterday",
+ * or the short explicit calendar date (e.g. "Sep 14" — rendered
+ * uppercase as "SEP 14"). A date from a different year includes
+ * the year ("Sep 14, 2025").
+ */
+export function activityDayLabel(
+  day: Date,
+  now: Date = new Date(),
+): string {
+  if (localDateStr(day) === localDateStr(now)) {
+    return 'Today'
+  }
+
+  const yesterday = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate() - 1,
+  )
+  if (localDateStr(day) === localDateStr(yesterday)) {
+    return 'Yesterday'
+  }
+
+  return day.getFullYear() === now.getFullYear()
+    ? ACTIVITY_MONTH_DAY.format(day)
+    : ACTIVITY_MONTH_DAY_YEAR.format(day)
+}
+
+export interface ActivityDayGroup {
+  /** Local calendar day (`YYYY-MM-DD`) identifying the group; a
+   * defensive non-date key for an unparseable timestamp. */
+  date: string
+  /** Display label for the group heading. */
+  label: string
+  /** True only for the group holding the current local day. */
+  isToday: boolean
+  items: ApiActivityEvent[]
+}
+
+/**
+ * Group an already-ordered Activity feed (API order: newest first)
+ * into per-local-calendar-day groups. Pure presentation: no event
+ * is ever reordered or resorted, and groups are emitted in the
+ * API's first-seen (newest-day-first) order. Events with an
+ * unparseable timestamp keep their API position in their own
+   * single-event group instead of crashing the rail.
+ */
+export function groupActivityByDay(
+  events: ApiActivityEvent[],
+  now: Date = new Date(),
+): ActivityDayGroup[] {
+  const byDay = new Map<string, ApiActivityEvent[]>()
+
+  for (const event of events) {
+    const date = parseDate(event.createdAt)
+    const key = date ? localDateStr(date) : `unknown-${event.id}`
+    const bucket = byDay.get(key)
+    if (bucket) {
+      bucket.push(event)
+    } else {
+      byDay.set(key, [event])
+    }
+  }
+
+  const groups: ActivityDayGroup[] = []
+  for (const [key, items] of byDay) {
+    const day = dayKeyToLocalDate(key)
+    groups.push({
+      date: key,
+      label: day ? activityDayLabel(day, now) : key,
+      isToday:
+        day != null &&
+        localDateStr(day) === localDateStr(now),
       items,
     })
   }

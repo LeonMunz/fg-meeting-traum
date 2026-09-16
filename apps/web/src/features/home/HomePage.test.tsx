@@ -144,6 +144,69 @@ function makeActivity(): ApiActivityEvent[] {
   ]
 }
 
+/* ── Activity presentation fixtures ─────────────────────────── */
+
+const LEON = {
+  id: 2,
+  username: 'leon',
+  firstName: 'Leon',
+  lastName: '',
+}
+
+const CHRIS = {
+  id: 3,
+  username: 'chris',
+  firstName: 'Chris',
+  lastName: '',
+}
+
+function activityEvent(
+  overrides: Partial<ApiActivityEvent> &
+    Pick<ApiActivityEvent, 'id' | 'eventType' | 'createdAt'>,
+): ApiActivityEvent {
+  return {
+    actor: LEON,
+    subjectUser: null,
+    workItemId: null,
+    workItemTitle: null,
+    meetingId: null,
+    meetingTitle: null,
+    projectId: null,
+    projectName: null,
+    researchGroupId: 1,
+    researchGroupName: 'FG Research Group',
+    changes: {},
+    ...overrides,
+  }
+}
+
+/** The Activity rail's event row texts (the inner list items —
+ * the date-group wrappers are list items of the outer list). */
+function activityRowTexts(): string[] {
+  const rail = screen.getByRole('complementary', {
+    name: 'Activity',
+  })
+
+  return Array.from(
+    rail.querySelectorAll('ul li'),
+  ).map((li) => li.textContent ?? '')
+}
+
+/** The exact primary sentence `<p>` of an Activity row. */
+function primarySentence(text: string) {
+  const rail = within(
+    screen.getByRole('complementary', {
+      name: 'Activity',
+    }),
+  )
+
+  return rail.getByText(
+    (_content, element) =>
+      element?.tagName === 'P' &&
+      element.textContent === text,
+  )
+}
+
 function makeHome(
   overrides: Partial<ApiHome> = {},
 ): ApiHome {
@@ -606,6 +669,333 @@ describe('Activity independence', () => {
       'aria-label',
       'Filter activity',
     )
+  })
+})
+
+describe('Activity date groups & event templates', () => {
+  /** A newest-first feed spanning three calendar days, in the
+   * order the API returns it. */
+  function multiDayFeed(): ApiActivityEvent[] {
+    return [
+      // TODAY
+      activityEvent({
+        id: 1,
+        eventType: 'meeting.created',
+        meetingId: 201,
+        meetingTitle: 'FG Meeting 2',
+        createdAt: isoDateTime(0, 14, 7),
+      }),
+      activityEvent({
+        id: 2,
+        eventType: 'work_item.updated',
+        workItemId: 101,
+        workItemTitle: 'jhvjhv',
+        projectId: 7,
+        projectName: 'Research Project 1',
+        createdAt: isoDateTime(0, 9, 12),
+      }),
+      // YESTERDAY
+      activityEvent({
+        id: 3,
+        eventType: 'meeting.follow_up_scheduled',
+        meetingId: 202,
+        meetingTitle: 'FG Planning',
+        changes: {
+          followUp: {
+            sourceMeeting: {
+              id: 201,
+              title: 'FG Weekly Meeting',
+            },
+          },
+        },
+        createdAt: isoDateTime(-1, 16, 40),
+      }),
+      activityEvent({
+        id: 4,
+        eventType: 'meeting.completed',
+        meetingId: 201,
+        meetingTitle: 'FG Weekly Meeting',
+        createdAt: isoDateTime(-1, 10, 5),
+      }),
+      // OLDER DAY
+      activityEvent({
+        id: 5,
+        eventType: 'work_item.created',
+        workItemId: 101,
+        workItemTitle: 'jhvjhv',
+        projectId: 7,
+        projectName: 'Research Project 1',
+        createdAt: isoDateTime(-4, 9, 0),
+      }),
+      activityEvent({
+        id: 6,
+        eventType: 'project.member_assignments_resolved',
+        projectId: 7,
+        projectName: 'Research Project 1',
+        subjectUser: CHRIS,
+        changes: {
+          resolution: 'reassigned',
+          membershipAction: 'role_changed',
+        },
+        createdAt: isoDateTime(-4, 8, 0),
+      }),
+    ]
+  }
+
+  async function renderWith(
+    feed: ApiActivityEvent[],
+  ) {
+    mockSuccessfulLoads(makeHome(), feed)
+    renderHome()
+
+    await waitFor(() => {
+      expect(
+        activityRowTexts().length,
+      ).toBe(feed.length)
+    })
+
+    return within(
+      screen.getByRole('complementary', {
+        name: 'Activity',
+      }),
+    )
+  }
+
+  it('groups same-day events beneath one label and preserves the API order', async () => {
+    const rail = await renderWith(
+      multiDayFeed(),
+    )
+
+    // One label per calendar day — never one per
+    // event.
+    expect(
+      rail.getAllByText('Today'),
+    ).toHaveLength(1)
+    expect(
+      rail.getAllByText('Yesterday'),
+    ).toHaveLength(1)
+
+    // The older day receives an explicit short
+    // date label.
+    const older = new Date()
+    older.setDate(older.getDate() - 4)
+    const olderLabel = new Intl.DateTimeFormat(
+      'en',
+      { month: 'short', day: 'numeric' },
+    ).format(older)
+    expect(rail.getByText(olderLabel)).toBeInTheDocument()
+
+    // The API's newest-first order is preserved within
+    // and across groups.
+    const rows = activityRowTexts()
+    expect(rows).toHaveLength(6)
+    expect(rows[0]).toContain('FG Meeting 2')
+    expect(rows[1]).toContain('jhvjhv')
+    expect(rows[2]).toContain('for follow-up')
+    expect(rows[3]).toContain('FG Weekly Meeting')
+    expect(rows[4]).toContain('jhvjhv')
+    expect(rows[5]).toContain('Research Project 1')
+  })
+
+  it('never repeats the relative day text inside event rows', async () => {
+    await renderWith(multiDayFeed())
+
+    for (const row of activityRowTexts()) {
+      expect(row).not.toContain('Yesterday')
+      expect(row).not.toMatch(/\bToday\b/)
+    }
+  })
+
+  it('keeps the concrete local time on Today events only', async () => {
+    await renderWith(multiDayFeed())
+
+    const rows = activityRowTexts()
+    // Today events carry context + clock time on
+    // the meta line.
+    expect(rows[0]).toContain(
+      'FG Research Group · 02:07 PM',
+    )
+    expect(rows[1]).toContain(
+      'Research Project 1 · 09:12 AM',
+    )
+    // Non-today rows repeat no per-event time or
+    // date.
+    expect(rows[2]).not.toMatch(/\d{1,2}:\d{2} (AM|PM)/)
+    expect(rows[3]).not.toMatch(/\d{1,2}:\d{2} (AM|PM)/)
+    expect(rows[4]).not.toMatch(/\d{1,2}:\d{2} (AM|PM)/)
+  })
+
+  it('removes the per-event dividers between Activity rows', async () => {
+    await renderWith(multiDayFeed())
+
+    const rail = screen.getByRole('complementary', {
+      name: 'Activity',
+    })
+
+    const divided = Array.from(
+      rail.querySelectorAll('*'),
+    ).filter((el) =>
+      Array.from(el.classList).some(
+        (className) =>
+          className.startsWith('divide-'),
+      ),
+    )
+
+    expect(divided).toHaveLength(0)
+  })
+
+  it('renders human-readable sentences with context only on the meta line', async () => {
+    const rail = await renderWith(
+      multiDayFeed(),
+    )
+
+    // Work Item templates.
+    expect(primarySentence('Leon updated jhvjhv')).toBeInTheDocument()
+    // Meeting templates.
+    expect(
+      primarySentence('Leon created FG Meeting 2'),
+    ).toBeInTheDocument()
+    expect(
+      primarySentence('Leon completed FG Weekly Meeting'),
+    ).toBeInTheDocument()
+    // Project administrative template.
+    expect(
+      primarySentence(
+        'Leon changed membership for Research Project 1',
+      ),
+    ).toBeInTheDocument()
+
+    // The context stays out of the primary sentence:
+    // it renders exclusively on the second (meta)
+    // line.
+    expect(
+      rail.getByText('FG Research Group · 02:07 PM'),
+    ).toBeInTheDocument()
+
+    // The raw machine event codes never surface.
+    expect(
+      screen.queryByText(/follow_up_scheduled/),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByText(/work_item\.created/),
+    ).not.toBeInTheDocument()
+  })
+
+  it('renders the follow-up schedule without duplicated wording', async () => {
+    const rail = await renderWith(
+      multiDayFeed(),
+    )
+
+    // The source Meeting is the object, completed by
+    // the trailing fragment — never
+    // "scheduled a follow-up for {target}".
+    expect(
+      primarySentence(
+        'Leon scheduled FG Weekly Meeting for follow-up',
+      ),
+    ).toBeInTheDocument()
+
+    expect(
+      rail.queryByText(/scheduled a follow-up for/),
+    ).not.toBeInTheDocument()
+  })
+
+  it('falls back to the target Meeting title when the follow-up source title is missing', async () => {
+    await renderWith([
+      activityEvent({
+        id: 10,
+        eventType: 'meeting.follow_up_scheduled',
+        meetingId: 202,
+        meetingTitle: 'FG Planning',
+        changes: {},
+        createdAt: isoDateTime(-1, 12, 0),
+      }),
+    ])
+
+    expect(
+      primarySentence(
+        'Leon scheduled FG Planning for follow-up',
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it('renders Project administrative events in readable grammar', async () => {
+    const rail = await renderWith([
+      activityEvent({
+        id: 11,
+        eventType: 'project.archived',
+        projectId: 7,
+        projectName: 'Research Project 1',
+        changes: { status: 'archived' },
+        createdAt: isoDateTime(-1, 12, 0),
+      }),
+      activityEvent({
+        id: 12,
+        eventType: 'project.restored',
+        projectId: 7,
+        projectName: 'Research Project 1',
+        changes: { status: 'active' },
+        createdAt: isoDateTime(-2, 12, 0),
+      }),
+      activityEvent({
+        id: 13,
+        eventType:
+        'project.ownership_resolved_for_offboarding',
+        projectId: 7,
+        projectName: 'Research Project 1',
+        subjectUser: CHRIS,
+        changes: {
+          resolution: 'transferred',
+          replacementUserId: 3,
+        },
+        createdAt: isoDateTime(-3, 12, 0),
+      }),
+    ])
+
+    expect(
+      primarySentence(
+        'Leon archived Research Project 1',
+      ),
+    ).toBeInTheDocument()
+    expect(
+      primarySentence(
+        'Leon restored Research Project 1',
+      ),
+    ).toBeInTheDocument()
+    expect(
+      primarySentence(
+        'Leon transferred ownership of Research Project 1',
+      ),
+    ).toBeInTheDocument()
+
+    // The subject (the offboarded final owner) stays
+    // on the meta line.
+    expect(
+      rail.getByText(/for Chris/),
+    ).toBeInTheDocument()
+  })
+
+  it('falls back safely for an unknown event type', async () => {
+    await renderWith([
+      activityEvent({
+        id: 14,
+        eventType: 'meeting.something_new',
+        meetingId: 203,
+        meetingTitle: 'Mystery Meeting',
+        createdAt: isoDateTime(0, 8, 0),
+      }),
+    ])
+
+    // No raw eventType, no crash: the generic
+    // "updated {object}" sentence renders.
+    expect(
+      primarySentence(
+        'Leon updated Mystery Meeting',
+      ),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByText(/something_new/),
+    ).not.toBeInTheDocument()
   })
 })
 

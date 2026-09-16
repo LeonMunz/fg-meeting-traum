@@ -7,7 +7,10 @@ import type {
   ApiActivityUserRef,
 } from '../../api/types'
 
-import { formatRelativeTime } from './homeFormat'
+import {
+  formatClockTime,
+  groupActivityByDay,
+} from './homeFormat'
 
 /*
  * The Home Activity rail: a compact, visually secondary context
@@ -18,13 +21,18 @@ import { formatRelativeTime } from './homeFormat'
  * history scrolls inside the rail. Below the stacking breakpoint it
  * becomes a full-width stacked section with a top divider.
  *
- * Every event reads as a human sentence:
+ * The feed is rendered as consecutive chronological date groups in
+ * the API's existing newest-first order — the group label (TODAY /
+ * YESTERDAY / SEP 14, year included for other years) names the day
+ * exactly once. Each event reads as a human sentence:
  *
- *     {Actor} {verb} {Object}
- *     {Context} · {relative time}
+ *     {Actor} {verb} {Object} [{suffix}]
+ *     {Context} [· for {subject}] [· {time}]
  *
- * It renders structured event semantics only — never the raw
- * `changes` payload — and never implies notification semantics.
+ * The concrete local time appears only on TODAY events (meta line);
+ * non-today events repeat no date. It renders structured event
+ * semantics only — never the raw `changes` payload, never the raw
+ * machine `eventType` — and never implies notification semantics.
  */
 
 export interface ActivityRowTarget {
@@ -36,6 +44,10 @@ export interface ActivityRowDescription {
   actorName: string
   verb: string
   objectTitle: string | null
+  /** Trailing fragment of the primary sentence rendered after the
+   * object title (follow-up scheduling only); null for every other
+   * event kind. */
+  objectSuffix: string | null
   context: string | null
   /** The user the operation acted upon (project / Research Group
    * membership events only); null for every other event kind. */
@@ -55,24 +67,49 @@ const ACTIVITY_DOMAIN_FILTER_LABELS: Record<
   research_group: 'Research Groups',
 }
 
-// Stable machine event code -> concise user-facing verb. Unlisted
-// codes fall back to a neutral verb (the feed is structured, never
-// a rendered backend sentence).
-const ACTIVITY_EVENT_VERBS: Record<string, string> = {
-  'work_item.created': 'created',
-  'work_item.updated': 'updated',
-  'meeting.created': 'created',
-  'meeting.rescheduled': 'rescheduled',
-  'meeting.completed': 'completed',
-  'meeting.agenda_item_added': 'added an agenda item to',
-  'meeting.follow_up_scheduled': 'scheduled a follow-up for',
-  'project.member_assignments_resolved': 'changed membership on',
-  'project.ownership_resolved_for_offboarding':
-    'transferred ownership of',
-  'project.archived': 'archived',
-  'project.restored': 'restored',
-  'research_group.member_offboarded':
-    'offboarded a member from',
+// Stable machine event code -> explicit human-readable presentation
+// template. The object slot is filled by the affected object's
+// current title; the optional trailing fragment completes the
+// sentence ("scheduled {source meeting} for follow-up"). Unlisted
+// codes fall back to a neutral verb — the feed is structured, and
+// the raw machine code never surfaces.
+interface ActivityEventTemplate {
+  verb: string
+  /** Trailing fragment rendered after the object title, when the
+   * sentence needs one to read naturally. */
+  suffix?: string
+}
+
+const ACTIVITY_EVENT_TEMPLATES: Record<
+  string,
+  ActivityEventTemplate
+> = {
+  'work_item.created': { verb: 'created' },
+  'work_item.updated': { verb: 'updated' },
+  'meeting.created': { verb: 'created' },
+  'meeting.rescheduled': { verb: 'rescheduled' },
+  'meeting.completed': { verb: 'completed' },
+  'meeting.agenda_item_added': {
+    verb: 'added an agenda item to',
+  },
+  // Follow-up scheduling reads with the SOURCE Meeting as its
+  // object ("scheduled {source} for follow-up") — never a doubled
+  // "scheduled a follow-up for {target}".
+  'meeting.follow_up_scheduled': {
+    verb: 'scheduled',
+    suffix: 'for follow-up',
+  },
+  'project.member_assignments_resolved': {
+    verb: 'changed membership for',
+  },
+  'project.ownership_resolved_for_offboarding': {
+    verb: 'transferred ownership of',
+  },
+  'project.archived': { verb: 'archived' },
+  'project.restored': { verb: 'restored' },
+  'research_group.member_offboarded': {
+    verb: 'offboarded a member from',
+  },
 }
 
 function userDisplayName(user: ApiActivityUserRef): string {
@@ -84,6 +121,32 @@ function userDisplayName(user: ApiActivityUserRef): string {
   return name || user.username
 }
 
+/** The source Meeting title of a follow-up schedule, from the
+ * structured payload (`changes.followUp.sourceMeeting.title`);
+ * null when the payload lacks it. */
+function followUpSourceTitle(
+  event: ApiActivityEvent,
+): string | null {
+  const followUp = event.changes.followUp
+
+  if (typeof followUp !== 'object' || followUp === null) {
+    return null
+  }
+
+  const source = (followUp as { sourceMeeting?: unknown })
+    .sourceMeeting
+
+  if (typeof source !== 'object' || source === null) {
+    return null
+  }
+
+  const title = (source as { title?: unknown }).title
+
+  return typeof title === 'string' && title.trim()
+    ? title
+    : null
+}
+
 /**
  * Project one structured Activity event into a compact row
  * description. Uses the existing object target semantics: Work Item
@@ -93,8 +156,10 @@ function userDisplayName(user: ApiActivityUserRef): string {
 export function describeActivityEvent(
   event: ApiActivityEvent,
 ): ActivityRowDescription {
-  const verb =
-    ACTIVITY_EVENT_VERBS[event.eventType] ?? 'updated'
+  const template =
+    ACTIVITY_EVENT_TEMPLATES[event.eventType] ?? {
+      verb: 'updated',
+    }
 
   const actorName = event.actor
     ? userDisplayName(event.actor)
@@ -110,8 +175,9 @@ export function describeActivityEvent(
   ) {
     return {
       actorName,
-      verb,
+      verb: template.verb,
       objectTitle: event.workItemTitle,
+      objectSuffix: template.suffix ?? null,
       context: event.projectName,
       subjectName,
       target:
@@ -122,10 +188,20 @@ export function describeActivityEvent(
   }
 
   if (event.meetingId != null && event.meetingTitle) {
+    // Follow-up scheduling names the SOURCE Meeting as its object
+    // ("scheduled {source} for follow-up"); the payload's source
+    // title is the canonical label, falling back to the target
+    // Meeting's title.
+    const objectTitle =
+      event.eventType === 'meeting.follow_up_scheduled'
+        ? followUpSourceTitle(event) ?? event.meetingTitle
+        : event.meetingTitle
+
     return {
       actorName,
-      verb,
-      objectTitle: event.meetingTitle,
+      verb: template.verb,
+      objectTitle,
+      objectSuffix: template.suffix ?? null,
       context: event.researchGroupName,
       subjectName,
       target: { kind: 'meeting', id: event.meetingId },
@@ -135,8 +211,9 @@ export function describeActivityEvent(
   if (event.projectId != null && event.projectName) {
     return {
       actorName,
-      verb,
+      verb: template.verb,
       objectTitle: event.projectName,
+      objectSuffix: template.suffix ?? null,
       context: event.researchGroupName,
       subjectName,
       target: { kind: 'project', id: event.projectId },
@@ -146,8 +223,9 @@ export function describeActivityEvent(
   if (event.researchGroupName) {
     return {
       actorName,
-      verb,
+      verb: template.verb,
       objectTitle: event.researchGroupName,
+      objectSuffix: template.suffix ?? null,
       context: null,
       subjectName,
       target: null,
@@ -156,15 +234,16 @@ export function describeActivityEvent(
 
   return {
     actorName,
-    verb,
+    verb: template.verb,
     objectTitle: null,
+    objectSuffix: null,
     context: null,
     subjectName,
     target: null,
   }
 }
 
-/** Compact neutral initials for the 24px actor mark. The Activity
+/** Compact neutral initials for the 22px actor mark. The Activity
  * contract carries no image URLs, so the mark is initials-only (no
  * avatar infrastructure). Unavailable actors fall back to "S". */
 function actorInitials(displayName: string): string {
@@ -180,25 +259,32 @@ function actorInitials(displayName: string): string {
 
 function ActivityRowContent({
   description,
+  isToday,
   createdAt,
 }: {
   description: ActivityRowDescription
+  isToday: boolean
   createdAt: string
 }) {
+  // The meta line carries the context (scope) and, for membership
+  // events, the subject. The concrete local time appears only on
+  // TODAY events — the group label names every other day, so no
+  // per-event relative date is repeated.
   const metaParts = [
     description.context ?? '',
     description.subjectName
       ? `for ${description.subjectName}`
       : '',
-    formatRelativeTime(createdAt),
+    isToday ? formatClockTime(createdAt) : '',
   ].filter(Boolean)
 
   return (
     <div className="min-w-0">
-      {/* Primary line: the human action sentence. Actor and object
-       * carry emphasis; the verb stays quiet so the sentence reads
-       * as one coherent statement. */}
-      <p className="min-w-0 break-words text-[13px] leading-5 text-text">
+      {/* Primary line: the human action sentence, clamped to two
+       * visible lines. Actor and object carry emphasis; the verb
+       * (and any trailing fragment) stays quiet so the sentence
+       * reads as one coherent statement. */}
+      <p className="line-clamp-2 min-w-0 break-words text-[12px] leading-[17px] text-text">
         <span className="font-semibold">
           {description.actorName}
         </span>
@@ -212,11 +298,17 @@ function ActivityRowContent({
             {description.objectTitle}
           </span>
         ) : null}
+        {description.objectSuffix ? (
+          <span className="text-text-muted">
+            {' '}
+            {description.objectSuffix}
+          </span>
+        ) : null}
       </p>
 
-      {/* Secondary line: where + when, in reading order. */}
+      {/* Secondary line: context only, visually subordinate. */}
       {metaParts.length > 0 ? (
-        <p className="mt-0.5 truncate text-[11px] leading-4 text-text-tertiary">
+        <p className="mt-[2px] truncate text-[10px] leading-[15px] text-text-tertiary">
           {metaParts.join(' · ')}
         </p>
       ) : null}
@@ -225,17 +317,79 @@ function ActivityRowContent({
 }
 
 const ROW_CLASSES =
-  'grid w-full min-h-[52px] grid-cols-[24px_minmax(0,1fr)] items-start gap-x-3 rounded-md px-1.5 py-2 text-left'
+  'grid w-full min-h-12 grid-cols-[22px_minmax(0,1fr)] items-center gap-x-2.5 rounded-md py-[7px] text-left'
 
 function ActorMark({ name }: { name: string }) {
   return (
     <span
       aria-hidden="true"
-      className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-surface-muted text-[10px] font-semibold leading-none text-text-muted"
+      className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full bg-surface-muted text-[9px] font-semibold leading-none text-text-muted"
     >
       {actorInitials(name)}
     </span>
   )
+}
+
+/** One Activity event row. Navigable events keep their existing
+ * canonical targets exactly (Work Item events -> the Work Item's
+ * Project read surface, Meeting events -> the Meeting); events
+ * without a target render a non-interactive row. */
+function ActivityRow({
+  event,
+  isToday,
+  onOpenWorkItemProject,
+  onOpenMeeting,
+}: {
+  event: ApiActivityEvent
+  isToday: boolean
+  onOpenWorkItemProject: (projectId: number) => void
+  onOpenMeeting: (meetingId: number) => void
+}) {
+  const description = describeActivityEvent(event)
+  const target = description.target
+
+  const content = (
+    <>
+      <ActorMark name={description.actorName} />
+
+      <ActivityRowContent
+        description={description}
+        isToday={isToday}
+        createdAt={event.createdAt}
+      />
+    </>
+  )
+
+  if (
+    target?.kind === 'work_item_project' ||
+    target?.kind === 'project'
+  ) {
+    return (
+      <button
+        type="button"
+        onClick={() =>
+          onOpenWorkItemProject(target.id)
+        }
+        className={`${ROW_CLASSES} transition hover:bg-surface-hover`}
+      >
+        {content}
+      </button>
+    )
+  }
+
+  if (target?.kind === 'meeting') {
+    return (
+      <button
+        type="button"
+        onClick={() => onOpenMeeting(target.id)}
+        className={`${ROW_CLASSES} transition hover:bg-surface-hover`}
+      >
+        {content}
+      </button>
+    )
+  }
+
+  return <div className={ROW_CLASSES}>{content}</div>
 }
 
 interface ActivityRailProps {
@@ -460,13 +614,17 @@ export function ActivityRail({
 
         <div className="xl:max-h-[calc(100dvh-112px)] xl:overflow-y-auto">
           {loading ? (
-            <div role="status" aria-label="Loading activity">
+            <div
+              role="status"
+              aria-label="Loading activity"
+              className="space-y-2"
+            >
               {[0, 1, 2, 3].map((i) => (
                 <div
                   key={i}
-                  className="grid grid-cols-[24px_minmax(0,1fr)] items-start gap-x-3 border-b border-border-subtle px-1.5 py-2"
+                  className="grid grid-cols-[22px_minmax(0,1fr)] items-center gap-x-2.5 py-[7px]"
                 >
-                  <span className="h-6 w-6 animate-pulse rounded-full bg-surface-muted" />
+                  <span className="h-[22px] w-[22px] animate-pulse rounded-full bg-surface-muted" />
 
                   <span className="flex w-full flex-col gap-1.5 pt-0.5">
                     <span className="h-3 w-4/5 animate-pulse rounded bg-surface-muted" />
@@ -505,59 +663,45 @@ export function ActivityRail({
               No recent activity.
             </p>
           ) : (
-            <ul className="divide-y divide-border-subtle">
-              {events.map((event) => {
-                const description =
-                  describeActivityEvent(event)
-                const target = description.target
+            // Consecutive chronological date groups in the API's
+            // existing newest-first order. The group label names
+            // the day exactly once; rows carry no per-event date.
+            // No dividers between rows — 8px between events, 20px
+            // between date groups.
+            <ol className="space-y-5">
+              {groupActivityByDay(events).map(
+                (group) => (
+                  <li
+                    key={group.date}
+                    className="min-w-0"
+                  >
+                    <h3 className="text-[10px] font-semibold uppercase leading-[14px] tracking-[0.06em] text-text-tertiary">
+                      {group.label}
+                    </h3>
 
-                return (
-                  <li key={event.id}>
-                    {target?.kind === 'meeting' ? (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          onOpenMeeting(target.id)
-                        }
-                        className={`${ROW_CLASSES} transition hover:bg-surface-hover`}
-                      >
-                        <ActorMark name={description.actorName} />
-
-                        <ActivityRowContent
-                          description={description}
-                          createdAt={event.createdAt}
-                        />
-                      </button>
-                    ) : target?.kind === 'work_item_project' ||
-                      target?.kind === 'project' ? (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          onOpenWorkItemProject(target.id)
-                        }
-                        className={`${ROW_CLASSES} transition hover:bg-surface-hover`}
-                      >
-                        <ActorMark name={description.actorName} />
-
-                        <ActivityRowContent
-                          description={description}
-                          createdAt={event.createdAt}
-                        />
-                      </button>
-                    ) : (
-                      <div className={ROW_CLASSES}>
-                        <ActorMark name={description.actorName} />
-
-                        <ActivityRowContent
-                          description={description}
-                          createdAt={event.createdAt}
-                        />
-                      </div>
-                    )}
+                    <ul className="mt-1.5 space-y-2">
+                      {group.items.map((event) => (
+                        <li
+                          key={event.id}
+                          className="min-w-0"
+                        >
+                          <ActivityRow
+                            event={event}
+                            isToday={group.isToday}
+                            onOpenWorkItemProject={
+                              onOpenWorkItemProject
+                            }
+                            onOpenMeeting={
+                              onOpenMeeting
+                            }
+                          />
+                        </li>
+                      ))}
+                    </ul>
                   </li>
-                )
-              })}
-            </ul>
+                ),
+              )}
+            </ol>
           )}
         </div>
       </div>

@@ -293,16 +293,32 @@ test('Home meeting + work item navigation and independent Activity', async ({
 
   await expect(meetingActivityRow).toBeVisible()
 
-  // The event reads as actor + verb + object on the primary line,
-  // with the context + time metadata line below it.
+  // The event reads as actor + verb + object on the primary line.
   await expect(meetingActivityRow).toHaveText(
     /Alex Dev created E2E Home Weekly/,
   )
-  // Secondary line semantics: the Research Group context + the
-  // relative time render together on the same row.
+  // Context + concrete time on the secondary line: the event
+  // happened TODAY, so the row carries the Research Group context
+  // and the clock time.
   await expect(meetingActivityRow).toHaveText(
-    /FG Example · (Just now|\d+ [mhd])/,
+    /FG Example · \d{1,2}:\d{2} (AM|PM)/,
   )
+
+  // The creation event sits under the TODAY date-group label,
+  // alongside the seeded Work Item creation event — one label
+  // names the day for every row in the group.
+  const seededActivityRow = activity.getByRole('button', {
+    name: /E2E Analyze robot data/,
+  })
+  await expect(seededActivityRow).toBeVisible()
+  await expect(activity.getByText('Today')).toBeVisible()
+
+  // The relative day text is not repeated inside the rows: the
+  // single TODAY group label is the only day text in the rail.
+  await expect(activity.getByText('Today')).toHaveCount(1)
+  await expect(
+    activity.getByText(/(Yesterday|Just now)/),
+  ).not.toBeVisible()
 
   // Activity row -> canonical Meeting detail route (Activity
   // navigation keeps its canonical target).
