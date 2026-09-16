@@ -25,6 +25,7 @@ import type {
   ApiActivityEvent,
   ApiHome,
   ApiHomeNeedsAttentionItem,
+  ApiHomeTimelineCandidate,
   ApiUser,
 } from '../../api/types'
 
@@ -1332,5 +1333,414 @@ describe('Continue working semantics', () => {
     expect(
       document.body.textContent,
     ).not.toContain('RAW-PAYLOAD-MARKER')
+  })
+})
+
+describe('Home primary-column final presentation', () => {
+  /* ── Helpers ───────────────────────────────────────────────── */
+
+  function timelineWI(
+    id: number,
+    title: string,
+    offsetDays: number,
+    hour: number,
+  ): ApiHomeTimelineCandidate {
+    return {
+      domain: 'work_item',
+      objectId: id,
+      title,
+      calendarDate: isoDate(offsetDays),
+      sortAt: isoDateTime(offsetDays, hour, 0),
+      workItem: {
+        workItemId: id,
+        projectId: 7,
+        projectName: 'Paper XYZ',
+        dueDate: isoDate(offsetDays),
+        statusCategory: 'todo',
+        blockedReason: null,
+      },
+      meeting: null,
+    }
+  }
+
+  function timelineMeeting(
+    id: number,
+    title: string,
+    offsetDays: number,
+    hour: number,
+  ): ApiHomeTimelineCandidate {
+    return {
+      domain: 'meeting',
+      objectId: id,
+      title,
+      calendarDate: isoDate(offsetDays),
+      sortAt: isoDateTime(offsetDays, hour, 0),
+      workItem: null,
+      meeting: {
+        meetingId: id,
+        scheduledAt: isoDateTime(
+          offsetDays,
+          hour,
+          0,
+        ),
+        status: 'upcoming',
+        scope: 'group',
+        researchGroupId: 1,
+        projectId: null,
+      },
+    }
+  }
+
+  /** The standalone date-group label for `text` — a leaf text
+   * element OUTSIDE any row button (row-side date values live
+   * inside buttons). */
+  function standaloneLabel(
+    section: HTMLElement,
+    text: string,
+  ): Element | null {
+    const matches = Array.from(
+      section.querySelectorAll('div, span'),
+    ).filter(
+      (el) =>
+        el.children.length === 0 &&
+        el.textContent === text,
+    )
+
+    return (
+      matches.find((el) => !el.closest('button')) ??
+      null
+    )
+  }
+
+  /** The count metadata rendered beside a section heading
+   * (a bare text sibling of the h2, not part of it). */
+  function sectionCount(title: string): string {
+    const heading = sectionHeading(title)
+    const row = heading.parentElement
+
+    return (row?.textContent ?? '')
+      .replace(title, '')
+      .trim()
+  }
+
+  function inDocumentOrder(
+    els: (Element | null)[],
+  ): boolean {
+    return els.every(
+      (el, i) =>
+        el !== null &&
+        (i === 0 ||
+          (els[i - 1]!.compareDocumentPosition(el) &
+            Node.DOCUMENT_POSITION_FOLLOWING) !==
+            0),
+    )
+  }
+
+  /* ── Continue working context ──────────────────────────────── */
+
+  it('renders the backend-provided context on every Continue row', async () => {
+    renderHome()
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('Recently Edited WI'),
+      ).toBeInTheDocument()
+    })
+
+    // Work Item → owning Project; Meeting → owning Research
+    // Group — both from the payload's `context` block.
+    expect(
+      screen.getByText('Paper XYZ · Work item'),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText('FG Example · Meeting'),
+    ).toBeInTheDocument()
+
+    // The old context-less bare "Meeting" meta is gone.
+    expect(
+      screen.queryByText('Meeting', {
+        exact: true,
+      }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('proves the Continue context comes from the API payload, not the detail block', async () => {
+    mockSuccessfulLoads(
+      makeHome({
+        continueWorking: [
+          {
+            domain: 'work_item',
+            objectId: 103,
+            title: 'Context Probe WI',
+            latestPersonalActivityAt:
+              isoDateTime(0, 8, 0),
+            context: {
+              kind: 'project',
+              id: 99,
+              name: 'Context Name From API',
+            },
+            workItem: {
+              workItemId: 103,
+              projectId: 7,
+              projectName:
+                'Detail Block Project',
+              statusCategory:
+                'in_progress',
+              dueDate: null,
+            },
+            meeting: null,
+          },
+        ],
+      }),
+      [],
+    )
+
+    renderHome()
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('Context Probe WI'),
+      ).toBeInTheDocument()
+    })
+
+    // The payload context name wins over the detail block.
+    expect(
+      screen.getByText(
+        'Context Name From API · Work item',
+      ),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByText(
+        'Detail Block Project · Work item',
+      ),
+    ).not.toBeInTheDocument()
+  })
+
+  it('keeps the Continue recency label visible on the row', async () => {
+    renderHome()
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('Recently Edited WI'),
+      ).toBeInTheDocument()
+    })
+
+    // Every Continue row carries the compact relative-time
+    // label. The exact wording depends on the wall clock, so
+    // assert the shape the formatter always produces.
+    const row = screen.getByRole('button', {
+      name: /Recently Edited WI/,
+    })
+
+    expect(row).toHaveTextContent(
+      /Just now|\d+ min|\d+ h|Yesterday|\d+ d|[A-Z][a-z]{2} \d{1,2}/,
+    )
+  })
+
+  /* ── Section counts ────────────────────────────────────────── */
+
+  it('shows section counts that track the visible row count', async () => {
+    const seven = Array.from(
+      { length: 7 },
+      (_, i) => timelineWI(
+        600 + i,
+        `Count Probe ${i + 1}`,
+        0,
+        9 + i,
+      ),
+    )
+    const fiveAttention: ApiHomeNeedsAttentionItem[] =
+      Array.from({ length: 5 }, (_, i) => ({
+        workItemId: 700 + i,
+        title: `Count Attention ${i + 1}`,
+        projectId: 7,
+        projectName: 'Paper XYZ',
+        workItemType: { id: 4, name: 'Task' },
+        dueDate: isoDate(-1),
+        statusCategory: 'in_progress',
+        blockedReason: null,
+        attentionReasons: ['overdue'],
+      }))
+
+    mockSuccessfulLoads(
+      makeHome({
+        needsAttention: fiveAttention,
+        todayAndNext: seven,
+      }),
+      [],
+    )
+
+    renderHome()
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('Count Attention 1'),
+      ).toBeInTheDocument()
+    })
+
+    // 5 attention candidates → 3 visible → count 3;
+    // 7 timeline candidates → 5 visible → count 5.
+    expect(
+      sectionCount('Needs attention'),
+    ).toBe('3')
+    expect(sectionCount('Today & next')).toBe('5')
+  })
+
+  it('renders the count as bare metadata, never a pill', async () => {
+    renderHome()
+
+    await waitFor(() => {
+      expect(
+        sectionHeading('Today & next'),
+      ).toBeInTheDocument()
+    })
+
+    const heading = sectionHeading('Today & next')
+    const countEl =
+      heading.nextElementSibling as HTMLElement
+
+    // Bare metadata text directly beside the heading, outside
+    // the heading itself.
+    expect(countEl).not.toBeNull()
+    expect(countEl.textContent).toBe('2')
+
+    // A pill is a filled, rounded badge. There is no semantic
+    // role for "not a pill", so the class contract is asserted
+    // directly.
+    expect(
+      countEl.classList.contains('rounded-full'),
+    ).toBe(false)
+    expect(
+      countEl.classList.contains('bg-surface-muted'),
+    ).toBe(false)
+  })
+
+  /* ── Today & next date groups ──────────────────────────────── */
+
+  it('groups rows under TODAY / TOMORROW / an explicit short date, preserving backend order', async () => {
+    const day3 = new Date()
+    day3.setDate(day3.getDate() + 3)
+    const day4 = new Date()
+    day4.setDate(day4.getDate() + 4)
+
+    // Independent formatting reference (same locale rules as the
+    // implementation, computed in the test, not imported).
+    const explicitLabel = (d: Date) =>
+      new Intl.DateTimeFormat('en', {
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric',
+      }).format(d)
+
+    mockSuccessfulLoads(
+      makeHome({
+        todayAndNext: [
+          timelineWI(801, 'Today WI One', 0, 9),
+          timelineMeeting(802, 'Today Meeting One', 0, 10),
+          timelineWI(803, 'Tomorrow WI One', 1, 9),
+          timelineWI(804, 'Later WI One', 3, 9),
+          timelineWI(805, 'Later WI Two', 4, 9),
+        ],
+      }),
+      [],
+    )
+
+    renderHome()
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('Today WI One'),
+      ).toBeInTheDocument()
+    })
+
+    const section = screen.getByRole('region', {
+      name: 'Today & next',
+    }) as HTMLElement
+
+    const todayLabel = standaloneLabel(
+      section,
+      'Today',
+    )
+    const tomorrowLabel = standaloneLabel(
+      section,
+      'Tomorrow',
+    )
+    const day3Label = standaloneLabel(
+      section,
+      explicitLabel(day3),
+    )
+    const day4Label = standaloneLabel(
+      section,
+      explicitLabel(day4),
+    )
+
+    // Each distinct calendar date gets its own label — later
+    // dates are explicit, never one permanent "Later".
+    expect(todayLabel).not.toBeNull()
+    expect(tomorrowLabel).not.toBeNull()
+    expect(day3Label).not.toBeNull()
+    expect(day4Label).not.toBeNull()
+    expect(standaloneLabel(section, 'Later')).toBeNull()
+
+    // Group labels and rows both follow the backend sequence.
+    expect(
+      inDocumentOrder([
+        todayLabel,
+        screen.getByText('Today WI One'),
+        screen.getByText('Today Meeting One'),
+        tomorrowLabel,
+        screen.getByText('Tomorrow WI One'),
+        day3Label,
+        screen.getByText('Later WI One'),
+        day4Label,
+        screen.getByText('Later WI Two'),
+      ]),
+    ).toBe(true)
+  })
+
+  /* ── Needs attention icon ──────────────────────────────────── */
+
+  it('does not render a completed/check-state icon on Needs attention rows', async () => {
+    renderHome()
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('Overdue Draft Task'),
+      ).toBeInTheDocument()
+    })
+
+    const attention = screen.getByRole('region', {
+      name: 'Needs attention',
+    }) as HTMLElement
+
+    // The row icons must stay neutral: no completion/check
+    // glyph (the configured type definition carries no stable
+    // semantic kind, so no type-based icon mapping exists).
+    const glyphs = Array.from(
+      attention.querySelectorAll(
+        '.material-symbols-outlined',
+      ),
+    ).map((el) => el.textContent ?? '')
+
+    const COMPLETION_GLYPHS = new Set([
+      'check',
+      'check_box',
+      'check_box_outline_blank',
+      'check_circle',
+      'check_circle_outline',
+      'done',
+      'done_all',
+      'task',
+      'task_alt',
+    ])
+
+    // Each row contributes its leading icon plus its reason
+    // icon(s) — both must be non-completion glyphs.
+    expect(glyphs.length).toBeGreaterThanOrEqual(4)
+    for (const glyph of glyphs) {
+      expect(
+        COMPLETION_GLYPHS.has(glyph),
+      ).toBe(false)
+    }
   })
 })

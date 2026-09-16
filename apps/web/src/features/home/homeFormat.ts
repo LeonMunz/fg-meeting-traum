@@ -114,10 +114,11 @@ function localDateStr(date: Date): string {
   return `${y}-${m}-${d}`
 }
 
-export type TimelineGroup =
-  | 'Today'
-  | 'Tomorrow'
-  | 'Later'
+const WEEKDAY_MONTH_DAY = new Intl.DateTimeFormat('en', {
+  weekday: 'short',
+  month: 'short',
+  day: 'numeric',
+})
 
 /**
  * Compact right-side date label for a `Today & next` candidate:
@@ -137,45 +138,71 @@ export function timelineDateLabel(
   return formatShortDate(calendarDate)
 }
 
+/**
+ * Date-group label for a `Today & next` group: "Today", "Tomorrow",
+ * or the short explicit calendar date (e.g. "Fri, Sep 18" — rendered
+ * uppercase as "FRI, SEP 18"). Derived from the group's actual
+ * calendar date; later dates are never collapsed into one permanent
+ * "Today" / "Later" heading.
+ */
+export function timelineGroupLabel(
+  calendarDate: string,
+  now: Date = new Date(),
+): string {
+  if (calendarDate === localDateStr(now)) return 'Today'
+  if (
+    calendarDate ===
+    localDateStr(new Date(now.getTime() + 86_400_000))
+  ) {
+    return 'Tomorrow'
+  }
+
+  const date = parseDate(calendarDate)
+  if (!date) return calendarDate
+  return WEEKDAY_MONTH_DAY.format(date)
+}
+
 export interface TimelineDayGroup {
-  group: TimelineGroup
+  /** Calendar date (`YYYY-MM-DD`) identifying the group. */
+  date: string
+  /** Display label for the group heading. */
+  label: string
   items: ApiHomeTimelineCandidate[]
 }
 
 /**
  * Group an already-ordered, already-truncated Today & next candidate
- * list into Today / Tomorrow / Later. Pure presentation: it preserves
- * backend ordering within each group and never reorders across groups.
- * Empty groups are omitted.
+ * list into per-calendar-date groups. Pure presentation: it preserves
+ * backend ordering within each group and emits groups in first-seen
+ * (backend) order, so no candidate is ever reordered. Empty groups are
+ * omitted.
  */
 export function groupTimelineByDay(
   candidates: ApiHomeTimelineCandidate[],
   now: Date = new Date(),
 ): TimelineDayGroup[] {
-  const today = localDateStr(now)
-  const tomorrow = localDateStr(
-    new Date(now.getTime() + 86_400_000),
-  )
-
-  const buckets: Record<TimelineGroup, ApiHomeTimelineCandidate[]> = {
-    Today: [],
-    Tomorrow: [],
-    Later: [],
-  }
+  const byDate = new Map<
+    string,
+    ApiHomeTimelineCandidate[]
+  >()
 
   for (const candidate of candidates) {
-    if (candidate.calendarDate === today) {
-      buckets.Today.push(candidate)
-    } else if (candidate.calendarDate === tomorrow) {
-      buckets.Tomorrow.push(candidate)
+    const date = candidate.calendarDate
+    const bucket = byDate.get(date)
+    if (bucket) {
+      bucket.push(candidate)
     } else {
-      buckets.Later.push(candidate)
+      byDate.set(date, [candidate])
     }
   }
 
   const groups: TimelineDayGroup[] = []
-  if (buckets.Today.length > 0) groups.push({ group: 'Today', items: buckets.Today })
-  if (buckets.Tomorrow.length > 0) groups.push({ group: 'Tomorrow', items: buckets.Tomorrow })
-  if (buckets.Later.length > 0) groups.push({ group: 'Later', items: buckets.Later })
+  for (const [date, items] of byDate) {
+    groups.push({
+      date,
+      label: timelineGroupLabel(date, now),
+      items,
+    })
+  }
   return groups
 }

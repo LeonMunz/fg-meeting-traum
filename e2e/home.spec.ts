@@ -261,6 +261,26 @@ test('Home meeting + work item navigation and independent Activity', async ({
     continueMeetingRow.getByText(/Just now|now/i),
   ).toBeVisible()
 
+  // The Continue Meeting row shows the backend-provided Research
+  // Group context (never derived from the title or IDs).
+  await expect(
+    continueMeetingRow.getByText('FG Example · Meeting'),
+  ).toBeVisible()
+
+  // The seeded Work Item Continue row shows its Project context.
+  // `E2E Analyze robot data` is created through the Work Item
+  // service (seed_e2e_scope), so it carries the attributable
+  // `work_item.created` event Continue working requires; the other
+  // seeded Work Items are ORM-created in the fixture and never
+  // qualify as personal-recency candidates.
+  const continueWorkItemRow = continueWorking.getByRole('button', {
+    name: /E2E Analyze robot data/,
+  })
+
+  await expect(
+    continueWorkItemRow.getByText('E2E Robot Study · Work item'),
+  ).toBeVisible()
+
   // The Activity rail (independent request) shows the creation
   // event with actor + verb semantics.
   const activity = page.getByRole('complementary', {

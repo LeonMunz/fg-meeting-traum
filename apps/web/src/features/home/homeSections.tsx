@@ -10,6 +10,7 @@ import type {
 import {
   attentionReasonLabels,
   domainIcon,
+  domainLabel,
   formatClockTime,
   formatRelativeTime,
   formatShortDate,
@@ -57,9 +58,9 @@ export function HomeSection({
   return (
     <section
       aria-labelledby={headingId}
-      className="min-w-0 border-t border-border-subtle pt-7 first:border-t-0 first:pt-0"
+      className="min-w-0 border-t border-surface-muted pt-6 first:border-t-0 first:pt-0"
     >
-      <div className="flex items-baseline gap-2">
+      <div className="flex items-baseline">
         <h2
           id={headingId}
           className="text-[15px] font-semibold leading-5 text-text"
@@ -68,7 +69,7 @@ export function HomeSection({
         </h2>
 
         {typeof count === 'number' && count > 0 && (
-          <span className="text-xs leading-4 text-text-tertiary">
+          <span className="ml-1.5 text-[10px] font-medium leading-[14px] text-text-tertiary">
             {count}
           </span>
         )}
@@ -130,11 +131,19 @@ function RowButton({
   )
 }
 
-function RowIcon({ name }: { name: string }) {
+function RowIcon({
+  name,
+  size = 'text-[20px]',
+  tone = 'text-text-tertiary',
+}: {
+  name: string
+  size?: string
+  tone?: string
+}) {
   return (
     <span
       aria-hidden="true"
-      className="material-symbols-outlined shrink-0 text-[20px] leading-none text-text-tertiary"
+      className={`material-symbols-outlined shrink-0 leading-none ${size} ${tone}`}
     >
       {name}
     </span>
@@ -229,7 +238,7 @@ export function NeedsAttentionSection({
     <HomeSection
       id="home-needs-attention"
       title="Needs attention"
-      count={items.length}
+      count={visible.length}
     >
       <ul className="divide-y divide-border-subtle">
         {visible.map((item) => (
@@ -240,7 +249,15 @@ export function NeedsAttentionSection({
                 onOpenWorkItemProject(item.projectId)
               }
             >
-              <RowIcon name="task_alt" />
+              {/* Neutral generic Work Item icon: the configured
+                  type definition carries no stable semantic kind, so
+                  no Task/Epic/Milestone/Deliverable mapping exists —
+                  and a completion/check glyph would miscommunicate. */}
+              <RowIcon
+                name="description"
+                size="text-[16px]"
+                tone="text-text-muted"
+              />
 
               <span className="min-w-0 flex-1">
                 <RowTitle>{item.title}</RowTitle>
@@ -352,24 +369,26 @@ export function TimelineSection({
         </SectionEmptyLine>
       ) : (
         <div>
-          {groups.map(({ group, items }) => (
-            <div key={group}>
-              <div className="px-2 pb-1.5 pt-3 text-[10px] font-semibold uppercase leading-[14px] tracking-[0.12em] text-text-tertiary first:pt-0">
-                {group}
-              </div>
+          {groups.map(({ date, label, items }) => (
+            <div key={date} className="mt-3 first:mt-0">
+              <div className="px-2">
+                <div className="mb-1.5 text-[10px] font-semibold uppercase leading-[14px] tracking-[0.06em] text-text-tertiary">
+                  {label}
+                </div>
 
-              <ul className="divide-y divide-border-subtle">
-                {items.map((candidate) => (
-                  <TimelineRow
-                    key={`${candidate.domain}-${candidate.objectId}`}
-                    candidate={candidate}
-                    onOpenWorkItemProject={
-                      onOpenWorkItemProject
-                    }
-                    onOpenMeeting={onOpenMeeting}
-                  />
-                ))}
-              </ul>
+                <ul className="divide-y divide-border-subtle">
+                  {items.map((candidate) => (
+                    <TimelineRow
+                      key={`${candidate.domain}-${candidate.objectId}`}
+                      candidate={candidate}
+                      onOpenWorkItemProject={
+                        onOpenWorkItemProject
+                      }
+                      onOpenMeeting={onOpenMeeting}
+                    />
+                  ))}
+                </ul>
+              </div>
             </div>
           ))}
         </div>
@@ -405,23 +424,24 @@ function ContinueWorkingRow({
   return (
     <li>
       <RowButton
-        minHeight="min-h-[52px]"
+        minHeight="min-h-12"
         onClick={handleClick}
       >
-        <RowIcon name={domainIcon(candidate.domain)} />
+        <RowIcon
+          name={domainIcon(candidate.domain)}
+          size="text-[16px]"
+        />
 
         <span className="min-w-0 flex-1">
           <RowTitle>{candidate.title}</RowTitle>
 
+          {/* Backend-provided access context: Work Item → owning
+              Project, Meeting → owning Research Group. Never
+              derived from the title or object IDs. */}
           <RowMeta>
-            {isMeeting ? (
-              'Meeting'
-            ) : candidate.workItem ? (
-              <>
-                {candidate.workItem.projectName}
-                {' · '}Work item
-              </>
-            ) : null}
+            {candidate.context?.name
+              ? `${candidate.context.name} · ${domainLabel(candidate.domain)}`
+              : domainLabel(candidate.domain)}
           </RowMeta>
         </span>
 
