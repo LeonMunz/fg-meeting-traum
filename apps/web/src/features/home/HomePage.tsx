@@ -17,7 +17,6 @@ import { ActivityRail } from './ActivityRail'
 import {
   ContinueWorkingSection,
   HomeSection,
-  MyWorkSection,
   NeedsAttentionSection,
   SectionLoading,
   TimelineSection,
@@ -55,7 +54,10 @@ function getErrorMessage(
  * Home — the authenticated personal re-entry surface at `/`.
  *
  * Two independent requests:
- * - `GET /api/home/` — the four Home sections (main column)
+ * - `GET /api/home/` — the Home primary column (Needs attention,
+ *   Today & next, Continue working). The API's `myWork` section is
+ *   intentionally NOT displayed on Home; the full My Work list
+ *   lives in its own application area.
  * - `GET /api/activity/` — the Activity rail (fetched and rendered
  *   independently; its failure never erases Home, and vice versa)
  */
@@ -137,13 +139,13 @@ export function HomePage() {
   }
 
   return (
-    <div className="w-full px-6 py-8 lg:px-8 lg:py-10 xl:px-10">
+    <div className="mx-auto w-full max-w-[1440px] px-5 py-8 md:px-8 md:py-10">
       <header>
-        <h1 className="text-3xl font-semibold tracking-tight text-text">
+        <h1 className="text-[28px] font-semibold leading-[34px] tracking-tight text-text">
           Home
         </h1>
 
-        <p className="mt-1.5 text-sm leading-6 text-text-muted">
+        <p className="mt-1.5 text-[13px] leading-5 text-text-muted">
           What needs your attention, what's coming up, and where
           you left off.
         </p>
@@ -157,7 +159,6 @@ export function HomePage() {
               <HomeSection
                 id="home-needs-attention"
                 title="Needs attention"
-                description="Assigned work that is overdue or blocked."
               >
                 <SectionLoading />
               </HomeSection>
@@ -165,15 +166,6 @@ export function HomePage() {
               <HomeSection
                 id="home-today-next"
                 title="Today & next"
-                description="Work and meetings scheduled for the coming days."
-              >
-                <SectionLoading />
-              </HomeSection>
-
-              <HomeSection
-                id="home-my-work"
-                title="My work"
-                description="Your active assigned work items."
               >
                 <SectionLoading />
               </HomeSection>
@@ -181,7 +173,6 @@ export function HomePage() {
               <HomeSection
                 id="home-continue-working"
                 title="Continue working"
-                description="Where you last made changes, based on your recent edits."
               >
                 <SectionLoading />
               </HomeSection>
@@ -189,26 +180,26 @@ export function HomePage() {
           ) : homeError ? (
             <div
               role="alert"
-              className="flex min-h-64 flex-col items-center justify-center rounded-xl border border-border-subtle bg-surface-quiet px-6 py-10 text-center"
+              className="flex flex-wrap items-center gap-x-3 gap-y-2 py-3 text-sm leading-5 text-text-muted"
             >
-              <span className="material-symbols-outlined text-[28px] text-danger">
+              <span className="material-symbols-outlined text-[18px] text-danger">
                 cloud_off
               </span>
 
-              <h2 className="mt-3 text-base font-semibold text-text">
+              <span className="font-medium text-text">
                 Home couldn't be loaded
-              </h2>
+              </span>
 
-              <p className="mt-1 max-w-md text-sm text-text-muted">
+              <span className="min-w-0 break-words">
                 {homeError}
-              </p>
+              </span>
 
               <button
                 type="button"
                 onClick={() => void loadHome()}
-                className="mt-4 inline-flex h-9 items-center gap-2 rounded-lg border border-border-subtle px-4 text-sm font-semibold text-text transition hover:bg-surface-hover"
+                className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border-default px-3 text-[13px] font-semibold text-text transition hover:bg-surface-hover"
               >
-                <span className="material-symbols-outlined text-[18px]">
+                <span className="material-symbols-outlined text-[15px]">
                   refresh
                 </span>
                 Try again
@@ -225,11 +216,6 @@ export function HomePage() {
                 candidates={home.todayAndNext}
                 onOpenWorkItemProject={openWorkItemProject}
                 onOpenMeeting={openMeeting}
-              />
-
-              <MyWorkSection
-                items={home.myWork}
-                onOpenWorkItemProject={openWorkItemProject}
               />
 
               <ContinueWorkingSection

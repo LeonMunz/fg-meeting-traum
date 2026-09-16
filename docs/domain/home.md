@@ -22,17 +22,23 @@ Home is **personal**, for the current user: it answers "what do I
 need to do now?". It is operational work for the user, **not**
 management reporting and not a KPI/dashboard surface.
 
-Home's module hierarchy:
+Home's module hierarchy (primary column):
 
 1. **Needs attention**
 2. **Today & next**
-3. **My work**
-4. **Continue working**
+3. **Continue working**
 
 **Activity is a separate parallel awareness feed** (see
 `docs/domain/activity.md`). It is never folded into Home module read
 models, and Home read models never fold Activity rows into their
-candidate sets.
+candidate sets. On the Home page it renders as a visually secondary
+rail beside/below the primary column.
+
+**My Work is its own application area.** The Home aggregate API's
+`myWork` section remains part of the API contract, but the full
+My Work list is NOT displayed on Home; the Home surface answers
+"where do I need to look now / what is coming up / where did I
+leave off", never "what are all my tasks".
 
 ## 2. Needs attention — implemented Work Item slice
 
@@ -146,8 +152,8 @@ section key `todayAndNext`; no Home UI yet):
   composition layer from the candidate's calendar date), and **no
   backend row limit** — the read model returns the complete eligible
   7-day candidate set. The settled V1 Home presentation rule (at
-  most **7 visible `Today & next` rows**) belongs to the later Home
-  composition/UI layer.
+  most **5 visible `Today & next` rows**) belongs to the Home
+  composition/UI layer (implemented in the Home frontend).
 - **Date-only Work Items are all-day entries**: their chronological
   sort point is the start of their due date in the application
   timezone, so they sort before timed Meetings later on the same
@@ -384,8 +390,8 @@ aggregate API:
   `hasMore` metadata.
 - **No API pagination, no API candidate truncation**: each
   section returns the COMPLETE candidate array of its read
-  model. The settled V1 Home presentation rule (at most 7 visible
-  `Today & next` rows) is a later UI presentation rule, not an
+  model. The settled V1 Home presentation rule (at most 5 visible
+  `Today & next` rows) is a UI presentation rule, not an
   API rule.
 - **Overlap is preserved**: a Work Item may appear in multiple
   applicable sections in the same response (e.g. `needsAttention`

@@ -2,8 +2,6 @@ import type {
   ApiHomeAttentionReason,
   ApiHomeDomain,
   ApiHomeTimelineCandidate,
-  ApiMeetingStatus,
-  ApiWorkItemStatus,
 } from '../../api/types'
 
 /*
@@ -73,10 +71,10 @@ export function formatRelativeTime(
   const minutes = Math.round(diffMs / 60_000)
 
   if (minutes < 1) return 'Just now'
-  if (minutes < 60) return `${minutes} min ago`
+  if (minutes < 60) return `${minutes} min`
 
   const hours = Math.round(minutes / 60)
-  if (hours < 24) return `${hours} h ago`
+  if (hours < 24) return `${hours} h`
 
   const dayDiff = Math.round(
     (startOfDay(now).getTime() - startOfDay(then).getTime()) /
@@ -84,28 +82,9 @@ export function formatRelativeTime(
   )
 
   if (dayDiff <= 1) return 'Yesterday'
-  if (dayDiff < 7) return `${dayDiff} days ago`
+  if (dayDiff < 7) return `${dayDiff} d`
 
   return SHORT_DATE.format(then)
-}
-
-export const statusCategoryLabels: Record<
-  ApiWorkItemStatus,
-  string
-> = {
-  todo: 'To do',
-  in_progress: 'In progress',
-  review: 'Review',
-  done: 'Done',
-}
-
-export const meetingStatusLabels: Record<
-  ApiMeetingStatus,
-  string
-> = {
-  upcoming: 'Upcoming',
-  live: 'Live',
-  completed: 'Completed',
 }
 
 /** Concise user-facing label for a backend attention reason code. */
@@ -139,6 +118,24 @@ export type TimelineGroup =
   | 'Today'
   | 'Tomorrow'
   | 'Later'
+
+/**
+ * Compact right-side date label for a `Today & next` candidate:
+ * "Today", "Tomorrow", or the short calendar date.
+ */
+export function timelineDateLabel(
+  calendarDate: string,
+  now: Date = new Date(),
+): string {
+  if (calendarDate === localDateStr(now)) return 'Today'
+  if (
+    calendarDate ===
+    localDateStr(new Date(now.getTime() + 86_400_000))
+  ) {
+    return 'Tomorrow'
+  }
+  return formatShortDate(calendarDate)
+}
 
 export interface TimelineDayGroup {
   group: TimelineGroup

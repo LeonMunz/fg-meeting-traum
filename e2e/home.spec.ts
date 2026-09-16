@@ -66,8 +66,8 @@ test('Home renders the four sections in order with seeded data', async ({
     'dark',
   )
 
-  // Hierarchy: single page heading + the four sections in order,
-  // Activity as a separate complementary rail.
+  // Hierarchy: single page heading + the three primary sections
+  // in order, Activity as a separate complementary rail.
   await expect(
     page.getByRole('heading', {
       name: 'Home',
@@ -81,10 +81,17 @@ test('Home renders the four sections in order with seeded data', async ({
   await expect(sectionHeadings).toHaveText([
     'Needs attention',
     'Today & next',
-    'My work',
     'Continue working',
     'Activity',
   ])
+
+  // The full My Work list no longer lives on Home.
+  await expect(
+    page.getByRole('heading', {
+      name: 'My work',
+      level: 2,
+    }),
+  ).not.toBeVisible()
 
   // Seeded overdue, assigned Work Item: the Needs attention row
   // shows the title, Project, due date, and the Overdue reason
@@ -107,23 +114,35 @@ test('Home renders the four sections in order with seeded data', async ({
       .getByText('Overdue'),
   ).toBeVisible()
 
-  // The same Work Item is also an active My work row (intentional
-  // overlap; each Home module answers a different question).
-  await expect(
-    page
-      .getByRole('region', { name: 'My work' })
-      .getByRole('button', {
-        name: /First Draft Complete/,
-      }),
-  ).toBeVisible()
+  // Needs attention is capped at three visible rows.
+  const attentionRows = needsAttention.getByRole('button')
+  await expect(attentionRows).not.toHaveCount(0)
+  expect(
+    await attentionRows.count(),
+  ).toBeLessThanOrEqual(3)
 
-  // No Meetings exist yet: Today & next shows its stable empty
-  // state.
+  // No Meetings exist yet: Today & next shows its compact empty
+  // line, and the timeline is capped at five visible rows.
+  const todayNext = page.getByRole('region', {
+    name: 'Today & next',
+  })
+
   await expect(
-    page
-      .getByRole('region', { name: 'Today & next' })
-      .getByText('Nothing upcoming in the current window.'),
+    todayNext.getByText(
+      'Nothing upcoming in the current window.',
+    ),
   ).toBeVisible()
+  expect(
+    await todayNext.getByRole('button').count(),
+  ).toBeLessThanOrEqual(5)
+
+  // Continue working is capped at four visible rows.
+  const continueRows = page
+    .getByRole('region', { name: 'Continue working' })
+    .getByRole('button')
+  expect(
+    await continueRows.count(),
+  ).toBeLessThanOrEqual(4)
 
   // The canonical E2E seed (seed_e2e_scope) creates the "E2E
   // Analyze robot data" Task through the Work Item service, which
@@ -135,17 +154,40 @@ test('Home renders the four sections in order with seeded data', async ({
       .getByRole('button', { name: /E2E Analyze robot data/ }),
   ).toBeVisible()
 
-  // Desktop two-area layout: main content dominates, Activity is a
-  // secondary right rail.
-  const mainBox = await needsAttention.boundingBox()
-  const activityBox = await page
+  // Desktop two-area layout: the primary column dominates, Activity
+  // is a secondary right rail.
+  const activityHeadingBox = await page
     .getByRole('complementary', { name: 'Activity' })
+    .getByRole('heading', { name: 'Activity' })
     .boundingBox()
 
-  expect(mainBox).not.toBeNull()
-  expect(activityBox).not.toBeNull()
-  expect(activityBox!.x).toBeGreaterThan(mainBox!.x)
-  expect(mainBox!.width).toBeGreaterThan(activityBox!.width)
+  // Measure the primary column extent across its sections.
+  const sectionNames = [
+    'Needs attention',
+    'Today & next',
+    'Continue working',
+  ]
+
+  let primaryRight = 0
+  let primaryLeft = Infinity
+  for (const name of sectionNames) {
+    const box = await page
+      .getByRole('region', { name })
+      .boundingBox()
+
+    if (box) {
+      primaryRight = Math.max(primaryRight, box.x + box.width)
+      primaryLeft = Math.min(primaryLeft, box.x)
+    }
+  }
+
+  expect(activityHeadingBox).not.toBeNull()
+  expect(primaryRight).toBeGreaterThan(0)
+  expect(activityHeadingBox!.x).toBeGreaterThan(primaryLeft)
+  // The primary column is wider than the Activity rail.
+  expect(
+    primaryRight - primaryLeft,
+  ).toBeGreaterThan(activityHeadingBox!.width)
 
   await expectNoHorizontalOverflow(page)
 
@@ -264,13 +306,13 @@ test('Home meeting + work item navigation and independent Activity', async ({
   })
 })
 
-test('Home falls back to a single column on narrow widths', async ({
+test('Home stacks primary over Activity on narrow widths', async ({
   page,
 }, testInfo) => {
   await login(page, 'alex')
 
-  // Below the two-column breakpoint the page stacks: main Home
-  // content first, Activity after — no crushed main column.
+  // Below the two-column breakpoint the page stacks: the main
+  // column first, Activity after it — no crushed main column.
   await page.setViewportSize({
     width: 1024,
     height: 768,
@@ -283,35 +325,75 @@ test('Home falls back to a single column on narrow widths', async ({
     }),
   ).toBeVisible()
 
-  const mainBox = await page
+  const attentionBox = await page
     .getByRole('region', { name: 'Needs attention' })
     .boundingBox()
   const activityBox = await page
     .getByRole('complementary', { name: 'Activity' })
     .boundingBox()
 
-  expect(mainBox).not.toBeNull()
+  expect(attentionBox).not.toBeNull()
   expect(activityBox).not.toBeNull()
 
-  // Stacked: the Activity rail starts below the main content and
-  // shares its left edge (full column width).
-  expect(activityBox!.y).toBeGreaterThan(mainBox!.y + mainBox!.height - 1)
-  expect(Math.abs(activityBox!.x - mainBox!.x)).toBeLessThanOrEqual(1)
+  // Stacked: Activity starts below the primary content and shares
+  // its left edge (full column width).
+  expect(
+    activityBox!.y,
+  ).toBeGreaterThan(attentionBox!.y + attentionBox!.height - 1)
+  expect(
+    Math.abs(activityBox!.x - attentionBox!.x),
+  ).toBeLessThanOrEqual(1)
 
-  // Rows remain readable: the Work Item title is visible and not
-  // clipped to nothing.
-  await expect(
-    page
-      .getByRole('region', { name: 'Needs attention' })
-      .getByRole('button', {
-        name: /First Draft Complete/,
-      }),
-  ).toBeVisible()
+  // Rows remain readable: the Work Item title is visible and the
+  // row keeps a tappable height.
+  const attentionRow = page
+    .getByRole('region', { name: 'Needs attention' })
+    .getByRole('button', {
+      name: /First Draft Complete/,
+    })
+  await expect(attentionRow).toBeVisible()
+  const rowBox = await attentionRow.boundingBox()
+  expect(rowBox).not.toBeNull()
+  expect(rowBox!.height).toBeGreaterThanOrEqual(44)
 
   await expectNoHorizontalOverflow(page)
 
   await page.screenshot({
     path: testInfo.outputPath('home-narrow.png'),
+    fullPage: true,
+  })
+
+  // Mobile-like width: still stacked, readable, no overflow.
+  await page.setViewportSize({
+    width: 390,
+    height: 844,
+  })
+
+  await expect(
+    page.getByRole('heading', {
+      name: 'Home',
+      level: 1,
+    }),
+  ).toBeVisible()
+  await expect(attentionRow).toBeVisible()
+
+  const mobileAttentionBox = await page
+    .getByRole('region', { name: 'Needs attention' })
+    .boundingBox()
+  const mobileActivityBox = await page
+    .getByRole('complementary', { name: 'Activity' })
+    .boundingBox()
+
+  expect(mobileAttentionBox).not.toBeNull()
+  expect(mobileActivityBox).not.toBeNull()
+  expect(
+    mobileActivityBox!.y,
+  ).toBeGreaterThan(mobileAttentionBox!.y)
+
+  await expectNoHorizontalOverflow(page)
+
+  await page.screenshot({
+    path: testInfo.outputPath('home-mobile.png'),
     fullPage: true,
   })
 })

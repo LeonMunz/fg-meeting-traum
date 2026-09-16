@@ -3,7 +3,6 @@ import type { ReactNode } from 'react'
 import type {
   ApiHomeAttentionReason,
   ApiHomeContinueWorkingCandidate,
-  ApiHomeMyWorkItem,
   ApiHomeNeedsAttentionItem,
   ApiHomeTimelineCandidate,
 } from '../../api/types'
@@ -15,30 +14,42 @@ import {
   formatRelativeTime,
   formatShortDate,
   groupTimelineByDay,
-  meetingStatusLabels,
-  statusCategoryLabels,
+  timelineDateLabel,
 } from './homeFormat'
 
 /*
- * Presentational Home sections. All rows are single keyboard-reachable
- * buttons (the canonical navigation target); no nested interactive
- * elements. Order, content, and eligibility come entirely from the
- * Home API payloads.
+ * Presentational Home primary-column sections.
+ *
+ * Home is a compact personal re-entry surface: the three primary
+ * modules (Needs attention, Today & next, Continue working) render
+ * directly on the page canvas — no section cards — separated by
+ * subtle dividers. Rows are single keyboard-reachable buttons
+ * (the canonical navigation target); no nested interactive elements.
+ * Order, content, and eligibility come entirely from the Home API
+ * payloads; the presentation only caps visible row counts.
  */
+
+/* ── Presentation limits (frontend only; the API returns complete
+ *    candidate sets in backend order, which is preserved) ────────── */
+
+const ATTENTION_VISIBLE_LIMIT = 3
+const TIMELINE_VISIBLE_LIMIT = 5
+const CONTINUE_VISIBLE_LIMIT = 4
 
 /* ── Shared section shell ─────────────────────────────────────── */
 
 interface HomeSectionProps {
   id: string
   title: string
-  description: string
+  /** Optional candidate count shown beside the heading (tertiary). */
+  count?: number
   children: ReactNode
 }
 
 export function HomeSection({
   id,
   title,
-  description,
+  count,
   children,
 }: HomeSectionProps) {
   const headingId = `${id}-heading`
@@ -46,35 +57,25 @@ export function HomeSection({
   return (
     <section
       aria-labelledby={headingId}
-      className="overflow-hidden rounded-xl border border-border-subtle bg-surface-quiet"
+      className="min-w-0 border-t border-border-subtle pt-7 first:border-t-0 first:pt-0"
     >
-      <div className="border-b border-border-subtle px-5 py-3.5 sm:px-6">
+      <div className="flex items-baseline gap-2">
         <h2
           id={headingId}
-          className="text-sm font-semibold text-text"
+          className="text-[15px] font-semibold leading-5 text-text"
         >
           {title}
         </h2>
 
-        <p className="mt-0.5 text-xs text-text-muted">
-          {description}
-        </p>
+        {typeof count === 'number' && count > 0 && (
+          <span className="text-xs leading-4 text-text-tertiary">
+            {count}
+          </span>
+        )}
       </div>
 
-      <div>{children}</div>
+      <div className="mt-3">{children}</div>
     </section>
-  )
-}
-
-export function SectionEmpty({
-  children,
-}: {
-  children: ReactNode
-}) {
-  return (
-    <p className="px-5 py-7 text-center text-sm text-text-muted sm:px-6">
-      {children}
-    </p>
   )
 }
 
@@ -82,16 +83,28 @@ export function SectionLoading() {
   return (
     <div
       role="status"
-      className="flex items-center gap-2 px-5 py-6 sm:px-6"
+      className="flex items-center gap-2 py-2"
     >
-      <span className="material-symbols-outlined animate-spin text-[16px] text-text-muted">
+      <span className="material-symbols-outlined animate-spin text-[16px] text-text-tertiary">
         refresh
       </span>
 
-      <span className="text-sm text-text-muted">
+      <span className="text-[13px] leading-5 text-text-tertiary">
         Loading…
       </span>
     </div>
+  )
+}
+
+function SectionEmptyLine({
+  children,
+}: {
+  children: ReactNode
+}) {
+  return (
+    <p className="py-2 text-[13px] leading-5 text-text-tertiary">
+      {children}
+    </p>
   )
 }
 
@@ -99,71 +112,101 @@ export function SectionLoading() {
 
 function RowButton({
   onClick,
+  minHeight,
   children,
 }: {
   onClick: () => void
+  minHeight: string
   children: ReactNode
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className="flex w-full items-start gap-3 px-5 py-3.5 text-left transition hover:bg-surface-hover sm:px-6"
+      className={`flex w-full items-center gap-3 rounded-md px-2 py-1 text-left transition hover:bg-surface-hover ${minHeight}`}
     >
       {children}
     </button>
   )
 }
 
-function MutedMeta({
-  children,
-}: {
-  children: ReactNode
-}) {
+function RowIcon({ name }: { name: string }) {
   return (
-    <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-text-muted">
+    <span
+      aria-hidden="true"
+      className="material-symbols-outlined shrink-0 text-[20px] leading-none text-text-tertiary"
+    >
+      {name}
+    </span>
+  )
+}
+
+function RowTitle({ children }: { children: ReactNode }) {
+  return (
+    <span className="block truncate text-[13px] font-semibold leading-[18px] text-text">
       {children}
     </span>
   )
 }
 
-function MetaDot() {
-  return <span aria-hidden="true">·</span>
+function RowMeta({ children }: { children: ReactNode }) {
+  return (
+    <span className="mt-0.5 block truncate text-[11px] leading-4 text-text-tertiary">
+      {children}
+    </span>
+  )
 }
 
-function BlockedIndicator({ label = 'Blocked' }: { label?: string }) {
+function RowSide({
+  children,
+  className = '',
+}: {
+  children: ReactNode
+  className?: string
+}) {
   return (
-    <span className="inline-flex items-center gap-1 font-medium text-danger">
-      <span className="material-symbols-outlined text-[13px]">
-        block
-      </span>
-      {label}
+    <span
+      className={`shrink-0 whitespace-nowrap text-[11px] leading-4 ${className}`}
+    >
+      {children}
     </span>
   )
 }
 
 /* ── Needs attention ──────────────────────────────────────────── */
 
-function AttentionReasonChip({
-  reason,
+function AttentionReasons({
+  reasons,
 }: {
-  reason: ApiHomeAttentionReason
+  reasons: ApiHomeAttentionReason[]
 }) {
-  const overdue = reason === 'overdue'
+  const overdue = reasons.includes('overdue')
+  const blocked = reasons.includes('blocked')
+
+  // Only the exception state carries semantic color: overdue reads
+  // as danger, blocked-only as warning. Overdue dominates the tone
+  // when both apply (it also sorts first in backend order).
+  const danger = overdue
+  const label =
+    overdue && blocked
+      ? `${attentionReasonLabels.overdue} · ${attentionReasonLabels.blocked}`
+      : attentionReasonLabels[overdue ? 'overdue' : 'blocked']
 
   return (
-    <span
+    <RowSide
       className={
-        overdue
-          ? 'inline-flex items-center gap-1 rounded-full bg-danger-subtle px-2 py-0.5 text-[11px] font-medium text-danger'
-          : 'inline-flex items-center gap-1 rounded-full bg-surface-muted px-2 py-0.5 text-[11px] font-medium text-text'
+        danger
+          ? 'font-medium text-danger'
+          : 'font-medium text-warning'
       }
     >
-      <span className="material-symbols-outlined text-[12px]">
-        {overdue ? 'schedule' : 'block'}
+      <span className="inline-flex items-center gap-1">
+        <span className="material-symbols-outlined text-[14px]">
+          {overdue ? 'event_busy' : 'block'}
+        </span>
+        {label}
       </span>
-      {attentionReasonLabels[reason]}
-    </span>
+    </RowSide>
   )
 }
 
@@ -174,83 +217,57 @@ export function NeedsAttentionSection({
   items: ApiHomeNeedsAttentionItem[]
   onOpenWorkItemProject: (projectId: number) => void
 }) {
+  // Presentation-only row cap, applied in backend order.
+  const visible = items.slice(0, ATTENTION_VISIBLE_LIMIT)
+
+  if (visible.length === 0) {
+    // Zero candidates: the section does not render at all.
+    return null
+  }
+
   return (
     <HomeSection
       id="home-needs-attention"
       title="Needs attention"
-      description="Assigned work that is overdue or blocked."
+      count={items.length}
     >
-      {items.length === 0 ? (
-        <SectionEmpty>
-          Nothing currently requires your attention.
-        </SectionEmpty>
-      ) : (
-        <ul className="divide-y divide-border-subtle">
-          {items.map((item) => (
-            <li key={item.workItemId}>
-              <RowButton
-                onClick={() =>
-                  onOpenWorkItemProject(item.projectId)
-                }
-              >
-                <span className="material-symbols-outlined mt-0.5 shrink-0 text-[18px] text-danger">
-                  warning
-                </span>
+      <ul className="divide-y divide-border-subtle">
+        {visible.map((item) => (
+          <li key={item.workItemId}>
+            <RowButton
+              minHeight="min-h-12"
+              onClick={() =>
+                onOpenWorkItemProject(item.projectId)
+              }
+            >
+              <RowIcon name="task_alt" />
 
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-semibold text-text">
-                    {item.title}
-                  </span>
+              <span className="min-w-0 flex-1">
+                <RowTitle>{item.title}</RowTitle>
 
-                  <MutedMeta>
-                    <span className="truncate">
-                      {item.projectName}
-                    </span>
-
-                    {item.dueDate && (
-                      <>
-                        <MetaDot />
-                        <span>
-                          Due {formatShortDate(item.dueDate)}
-                        </span>
-                      </>
-                    )}
-                  </MutedMeta>
-
-                  {item.blockedReason && (
-                    <span className="mt-1 flex items-center gap-1 text-xs text-danger">
-                      <span className="material-symbols-outlined text-[13px]">
-                        block
-                      </span>
-                      <span className="truncate">
-                        {item.blockedReason}
-                      </span>
-                    </span>
+                <RowMeta>
+                  {item.projectName}
+                  {item.dueDate && (
+                    <>
+                      {' · '}
+                      Due {formatShortDate(item.dueDate)}
+                    </>
                   )}
-                </span>
+                </RowMeta>
+              </span>
 
-                <span className="flex shrink-0 flex-wrap justify-end gap-1">
-                  {item.attentionReasons.map((reason) => (
-                    <AttentionReasonChip
-                      key={reason}
-                      reason={reason}
-                    />
-                  ))}
-                </span>
-              </RowButton>
-            </li>
-          ))}
-        </ul>
-      )}
+              <AttentionReasons
+                reasons={item.attentionReasons}
+              />
+            </RowButton>
+          </li>
+        ))}
+      </ul>
     </HomeSection>
   )
 }
 
 /* ── Today & next ─────────────────────────────────────────────── */
-
-// Settled V1 Home presentation rule: at most 7 visible Today & next
-// rows (frontend only; the API returns the complete candidate set).
-const TIMELINE_VISIBLE_LIMIT = 7
 
 function meetingScopeLabel(scope: string): string {
   return scope === 'project'
@@ -282,34 +299,29 @@ function TimelineRow({
 
   return (
     <li>
-      <RowButton onClick={handleClick}>
-        <span className="material-symbols-outlined mt-0.5 shrink-0 text-[18px] text-text-muted">
-          {domainIcon(candidate.domain)}
-        </span>
+      <RowButton
+        minHeight="min-h-12"
+        onClick={handleClick}
+      >
+        <RowIcon name={domainIcon(candidate.domain)} />
 
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-sm font-semibold text-text">
-            {candidate.title}
-          </span>
+          <RowTitle>{candidate.title}</RowTitle>
 
-          <MutedMeta>
-            {isMeeting && candidate.meeting ? (
-              <span>
-                {meetingScopeLabel(candidate.meeting.scope)}
-              </span>
-            ) : candidate.workItem ? (
-              <span className="truncate">
-                {candidate.workItem.projectName}
-              </span>
-            ) : null}
-          </MutedMeta>
+          <RowMeta>
+            {isMeeting && candidate.meeting
+              ? meetingScopeLabel(candidate.meeting.scope)
+              : candidate.workItem
+                ? candidate.workItem.projectName
+                : null}
+          </RowMeta>
         </span>
 
-        <span className="shrink-0 pt-0.5 text-xs font-medium text-text-muted">
+        <RowSide className="font-medium text-text-muted">
           {isMeeting && candidate.meeting
             ? formatClockTime(candidate.meeting.scheduledAt)
-            : formatShortDate(candidate.calendarDate)}
-        </span>
+            : timelineDateLabel(candidate.calendarDate)}
+        </RowSide>
       </RowButton>
     </li>
   )
@@ -332,26 +344,28 @@ export function TimelineSection({
     <HomeSection
       id="home-today-next"
       title="Today & next"
-      description="Work and meetings scheduled for the coming days."
+      count={visible.length}
     >
       {visible.length === 0 ? (
-        <SectionEmpty>
+        <SectionEmptyLine>
           Nothing upcoming in the current window.
-        </SectionEmpty>
+        </SectionEmptyLine>
       ) : (
         <div>
           {groups.map(({ group, items }) => (
             <div key={group}>
-              <div className="px-5 pt-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-text-muted sm:px-6">
+              <div className="px-2 pb-1.5 pt-3 text-[10px] font-semibold uppercase leading-[14px] tracking-[0.12em] text-text-tertiary first:pt-0">
                 {group}
               </div>
 
-              <ul className="mt-1 divide-y divide-border-subtle">
+              <ul className="divide-y divide-border-subtle">
                 {items.map((candidate) => (
                   <TimelineRow
                     key={`${candidate.domain}-${candidate.objectId}`}
                     candidate={candidate}
-                    onOpenWorkItemProject={onOpenWorkItemProject}
+                    onOpenWorkItemProject={
+                      onOpenWorkItemProject
+                    }
                     onOpenMeeting={onOpenMeeting}
                   />
                 ))}
@@ -359,93 +373,6 @@ export function TimelineSection({
             </div>
           ))}
         </div>
-      )}
-    </HomeSection>
-  )
-}
-
-/* ── My work ──────────────────────────────────────────────────── */
-
-const workItemTypeIcons: Record<string, string> = {
-  epic: 'account_tree',
-  milestone: 'flag',
-  deliverable: 'inventory_2',
-  task: 'check_box_outline_blank',
-}
-
-function workItemTypeIcon(typeName: string): string {
-  return workItemTypeIcons[typeName.toLowerCase()] ?? 'task_alt'
-}
-
-export function MyWorkSection({
-  items,
-  onOpenWorkItemProject,
-}: {
-  items: ApiHomeMyWorkItem[]
-  onOpenWorkItemProject: (projectId: number) => void
-}) {
-  return (
-    <HomeSection
-      id="home-my-work"
-      title="My work"
-      description="Your active assigned work items."
-    >
-      {items.length === 0 ? (
-        <SectionEmpty>
-          No active assigned work items.
-        </SectionEmpty>
-      ) : (
-        <ul className="divide-y divide-border-subtle">
-          {items.map((item) => (
-            <li key={item.workItemId}>
-              <RowButton
-                onClick={() =>
-                  onOpenWorkItemProject(item.projectId)
-                }
-              >
-                <span className="material-symbols-outlined mt-0.5 shrink-0 text-[18px] text-text-muted">
-                  {workItemTypeIcon(item.typeName)}
-                </span>
-
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-semibold text-text">
-                    {item.title}
-                  </span>
-
-                  <MutedMeta>
-                    <span className="truncate">
-                      {item.projectName}
-                    </span>
-
-                    <MetaDot />
-
-                    <span>{item.typeName}</span>
-
-                    {item.dueDate && (
-                      <>
-                        <MetaDot />
-                        <span>
-                          Due {formatShortDate(item.dueDate)}
-                        </span>
-                      </>
-                    )}
-
-                    {item.blockedReason && (
-                      <BlockedIndicator />
-                    )}
-                  </MutedMeta>
-                </span>
-
-                <span className="shrink-0">
-                  <span className="inline-flex rounded-full bg-surface-muted px-2.5 py-1 text-xs font-medium text-text">
-                    {statusCategoryLabels[item.statusCategory] ??
-                      item.statusCategory}
-                  </span>
-                </span>
-              </RowButton>
-            </li>
-          ))}
-        </ul>
       )}
     </HomeSection>
   )
@@ -477,46 +404,33 @@ function ContinueWorkingRow({
 
   return (
     <li>
-      <RowButton onClick={handleClick}>
-        <span className="material-symbols-outlined mt-0.5 shrink-0 text-[18px] text-text-muted">
-          {domainIcon(candidate.domain)}
-        </span>
+      <RowButton
+        minHeight="min-h-[52px]"
+        onClick={handleClick}
+      >
+        <RowIcon name={domainIcon(candidate.domain)} />
 
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-sm font-semibold text-text">
-            {candidate.title}
-          </span>
+          <RowTitle>{candidate.title}</RowTitle>
 
-          <MutedMeta>
-            {isMeeting && candidate.meeting ? (
-              <span>
-                {meetingStatusLabels[candidate.meeting.status] ??
-                  candidate.meeting.status}
-              </span>
+          <RowMeta>
+            {isMeeting ? (
+              'Meeting'
             ) : candidate.workItem ? (
-              <span className="truncate">
-                {candidate.workItem.projectName}
-              </span>
-            ) : null}
-
-            {isMeeting && candidate.meeting && (
               <>
-                <MetaDot />
-                <span>
-                  {formatShortDate(
-                    candidate.meeting.scheduledAt,
-                  )}
-                </span>
+                {candidate.workItem.projectName}
+                {' · '}Work item
               </>
-            )}
-          </MutedMeta>
+            ) : null}
+          </RowMeta>
         </span>
 
-        <span className="shrink-0 pt-0.5 text-xs text-text-muted">
+        {/* Personal attributable recency — never "last opened". */}
+        <RowSide className="text-text-muted">
           {formatRelativeTime(
             candidate.latestPersonalActivityAt,
           )}
-        </span>
+        </RowSide>
       </RowButton>
     </li>
   )
@@ -531,23 +445,28 @@ export function ContinueWorkingSection({
   onOpenWorkItemProject: (projectId: number) => void
   onOpenMeeting: (meetingId: number) => void
 }) {
+  // Presentation-only row cap, applied in backend order.
+  const visible = candidates.slice(0, CONTINUE_VISIBLE_LIMIT)
+
   return (
     <HomeSection
       id="home-continue-working"
       title="Continue working"
-      description="Where you last made changes, based on your recent edits."
+      count={visible.length}
     >
-      {candidates.length === 0 ? (
-        <SectionEmpty>
-          No recent attributable work.
-        </SectionEmpty>
+      {visible.length === 0 ? (
+        <SectionEmptyLine>
+          Recent work will appear here.
+        </SectionEmptyLine>
       ) : (
         <ul className="divide-y divide-border-subtle">
-          {candidates.map((candidate) => (
+          {visible.map((candidate) => (
             <ContinueWorkingRow
               key={`${candidate.domain}-${candidate.objectId}`}
               candidate={candidate}
-              onOpenWorkItemProject={onOpenWorkItemProject}
+              onOpenWorkItemProject={
+                onOpenWorkItemProject
+              }
               onOpenMeeting={onOpenMeeting}
             />
           ))}

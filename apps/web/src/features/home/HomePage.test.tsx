@@ -24,6 +24,7 @@ import {
 import type {
   ApiActivityEvent,
   ApiHome,
+  ApiHomeNeedsAttentionItem,
   ApiUser,
 } from '../../api/types'
 
@@ -321,17 +322,27 @@ describe('Home route (authenticated application state)', () => {
       ).toBeInTheDocument()
     })
 
-    // All four Home sections are present.
+    // All three primary sections are present.
     expect(
       sectionHeading('Needs attention'),
     ).toBeInTheDocument()
     expect(
       sectionHeading('Today & next'),
     ).toBeInTheDocument()
-    expect(sectionHeading('My work')).toBeInTheDocument()
     expect(
       sectionHeading('Continue working'),
     ).toBeInTheDocument()
+
+    // The full My Work list no longer lives on Home.
+    expect(
+      screen.queryByRole('heading', {
+        name: 'My work',
+        level: 2,
+      }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByText('My Active Task'),
+    ).not.toBeInTheDocument()
 
     // Both independent requests were made.
     expect(getHome).toHaveBeenCalledTimes(1)
@@ -340,10 +351,11 @@ describe('Home route (authenticated application state)', () => {
 })
 
 describe('Home section population', () => {
-  it('populates all four sections from the /api/home/ response', async () => {
+  it('populates the three primary sections from the /api/home/ response', async () => {
     renderHome()
 
-    // Needs attention: title, project, reason, due, blocked reason.
+    // Needs attention: title, project, and the backend attention
+    // reason labels.
     await waitFor(() => {
       expect(
         screen.getByText('Overdue Draft Task'),
@@ -352,20 +364,13 @@ describe('Home section population', () => {
     expect(
       screen.getByText('Blocked Review Task'),
     ).toBeInTheDocument()
-    expect(
-      screen.getByText('Waiting on data'),
-    ).toBeInTheDocument()
+    expect(screen.getByText('Overdue')).toBeInTheDocument()
+    expect(screen.getByText('Blocked')).toBeInTheDocument()
 
     // Today & next: both a Work Item and a Meeting candidate.
     expect(screen.getByText('Due Today WI')).toBeInTheDocument()
     expect(
       screen.getByText('FG Weekly Meeting'),
-    ).toBeInTheDocument()
-
-    // My work: title, type, status.
-    expect(screen.getByText('My Active Task')).toBeInTheDocument()
-    expect(
-      screen.getByText('In progress'),
     ).toBeInTheDocument()
 
     // Continue working: both domains.
@@ -375,6 +380,12 @@ describe('Home section population', () => {
     expect(
       screen.getByText('Recently Touched Meeting'),
     ).toBeInTheDocument()
+
+    // The myWork payload arrives but is intentionally not rendered.
+    expect(getHome).toHaveBeenCalled()
+    expect(
+      screen.queryByText('My Active Task'),
+    ).not.toBeInTheDocument()
   })
 
   it('renders sections in the fixed product order', async () => {
@@ -386,14 +397,16 @@ describe('Home section population', () => {
       ).toBeInTheDocument()
     })
 
+    // Primary-column headings, in order (the Activity rail has its
+    // own heading in the secondary column).
     const headings = screen
       .getAllByRole('heading', { level: 2 })
       .map((h) => h.textContent)
+      .filter((t) => t !== 'Activity')
 
-    expect(headings.slice(0, 4)).toEqual([
+    expect(headings).toEqual([
       'Needs attention',
       'Today & next',
-      'My work',
       'Continue working',
     ])
   })
@@ -468,7 +481,35 @@ describe('Activity independence', () => {
 })
 
 describe('Empty states', () => {
-  it('renders a stable empty state for each empty section', async () => {
+  it('hides Needs attention entirely with zero candidates', async () => {
+    mockSuccessfulLoads(
+      makeHome({ needsAttention: [] }),
+      [],
+    )
+
+    renderHome()
+
+    await waitFor(() => {
+      expect(
+        sectionHeading('Today & next'),
+      ).toBeInTheDocument()
+    })
+
+    // No section, no empty-state copy.
+    expect(
+      screen.queryByRole('heading', {
+        name: 'Needs attention',
+        level: 2,
+      }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByText(
+        /requires your attention/i,
+      ),
+    ).not.toBeInTheDocument()
+  })
+
+  it('renders compact empty lines for empty timeline + continue sections', async () => {
     mockSuccessfulLoads(
       makeHome({
         needsAttention: [],
@@ -483,9 +524,7 @@ describe('Empty states', () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText(
-          'Nothing currently requires your attention.',
-        ),
+        sectionHeading('Today & next'),
       ).toBeInTheDocument()
     })
 
@@ -495,25 +534,18 @@ describe('Empty states', () => {
       ),
     ).toBeInTheDocument()
     expect(
-      screen.getByText('No active assigned work items.'),
-    ).toBeInTheDocument()
-    expect(
-      screen.getByText('No recent attributable work.'),
-    ).toBeInTheDocument()
-    expect(
-      screen.getByText('No visible recent activity.'),
+      screen.getByText('Recent work will appear here.'),
     ).toBeInTheDocument()
 
-    // Section headings are NOT hidden when empty.
-    expect(
-      sectionHeading('Needs attention'),
-    ).toBeInTheDocument()
+    // The remaining section headings stay visible when empty.
     expect(
       sectionHeading('Today & next'),
     ).toBeInTheDocument()
-    expect(sectionHeading('My work')).toBeInTheDocument()
     expect(
       sectionHeading('Continue working'),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText('No visible recent activity.'),
     ).toBeInTheDocument()
   })
 })
@@ -558,6 +590,48 @@ describe('Error behavior', () => {
   })
 })
 
+describe('Needs attention presentation rule', () => {
+  it('renders at most 3 rows in backend order', async () => {
+    const five: ApiHomeNeedsAttentionItem[] = Array.from(
+      { length: 5 },
+      (_, i) => ({
+        workItemId: 400 + i,
+        title: `Attention ${i + 1}`,
+        projectId: 7,
+        projectName: 'Paper XYZ',
+        dueDate: isoDate(-1),
+        statusCategory: 'in_progress',
+        blockedReason: null,
+        attentionReasons: ['overdue'],
+      }),
+    )
+
+    mockSuccessfulLoads(
+      makeHome({ needsAttention: five }),
+      [],
+    )
+
+    renderHome()
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('Attention 1'),
+      ).toBeInTheDocument()
+    })
+
+    // First three render in backend order; the rest are dropped.
+    for (let i = 1; i <= 3; i++) {
+      expect(screen.getByText(`Attention ${i}`)).toBeInTheDocument()
+    }
+    expect(
+      screen.queryByText('Attention 4'),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByText('Attention 5'),
+    ).not.toBeInTheDocument()
+  })
+})
+
 describe('Navigation', () => {
   it('Work Item rows navigate to the canonical Project Work Items surface', async () => {
     renderHome()
@@ -595,9 +669,9 @@ describe('Navigation', () => {
 })
 
 describe('Today & next presentation rule', () => {
-  it('renders at most 7 candidates', async () => {
-    const nine = Array.from(
-      { length: 9 },
+  it('renders at most 5 candidates, in backend order', async () => {
+    const eight = Array.from(
+      { length: 8 },
       (_, i) => ({
         domain: 'work_item' as const,
         objectId: 300 + i,
@@ -617,7 +691,7 @@ describe('Today & next presentation rule', () => {
     )
 
     mockSuccessfulLoads(
-      makeHome({ todayAndNext: nine }),
+      makeHome({ todayAndNext: eight }),
       [],
     )
 
@@ -627,15 +701,19 @@ describe('Today & next presentation rule', () => {
       expect(screen.getByText('Candidate 1')).toBeInTheDocument()
     })
 
-    // First seven render, the rest are dropped (no pagination).
-    for (let i = 1; i <= 7; i++) {
+    // First five render in backend order; the rest are dropped
+    // (no pagination, no reordering).
+    for (let i = 1; i <= 5; i++) {
       expect(screen.getByText(`Candidate ${i}`)).toBeInTheDocument()
     }
     expect(
-      screen.queryByText('Candidate 8'),
+      screen.queryByText('Candidate 6'),
     ).not.toBeInTheDocument()
     expect(
-      screen.queryByText('Candidate 9'),
+      screen.queryByText('Candidate 7'),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByText('Candidate 8'),
     ).not.toBeInTheDocument()
   })
 
@@ -690,6 +768,47 @@ describe('Continue working semantics', () => {
     expect(
       /last viewed/i.test(containerText),
     ).toBe(false)
+  })
+
+  it('renders at most 4 rows', async () => {
+    const six = Array.from(
+      { length: 6 },
+      (_, i) => ({
+        domain: 'work_item' as const,
+        objectId: 500 + i,
+        title: `Recent ${i + 1}`,
+        latestPersonalActivityAt: isoDateTime(0, 8 - i, 0),
+        workItem: {
+          workItemId: 500 + i,
+          projectId: 7,
+          projectName: 'Paper XYZ',
+          statusCategory: 'in_progress' as const,
+          dueDate: null,
+        },
+        meeting: null,
+      }),
+    )
+
+    mockSuccessfulLoads(
+      makeHome({ continueWorking: six }),
+      [],
+    )
+
+    renderHome()
+
+    await waitFor(() => {
+      expect(screen.getByText('Recent 1')).toBeInTheDocument()
+    })
+
+    for (let i = 1; i <= 4; i++) {
+      expect(screen.getByText(`Recent ${i}`)).toBeInTheDocument()
+    }
+    expect(
+      screen.queryByText('Recent 5'),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByText('Recent 6'),
+    ).not.toBeInTheDocument()
   })
 
   it('never renders the Activity raw payload through Continue working', async () => {
