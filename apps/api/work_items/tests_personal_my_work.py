@@ -10,6 +10,7 @@ from rest_framework.test import APIClient, APITestCase
 
 from projects.models import (
     ProjectMembership,
+    WorkItemTypeDefinition,
     WorkItemStatusDefinition,
 )
 from projects.services import create_project
@@ -441,6 +442,10 @@ class PersonalMyWorkApiTest(APITestCase):
             item["typeDefinitionId"],
             self.project_a.type_definitions.get(name="Task").pk,
         )
+        # Concrete project-local type name (default Project
+        # configuration) — display metadata for the canonical
+        # ``typeDefinitionId``.
+        self.assertEqual(item["typeName"], "Task")
         self.assertEqual(item["assigneeIds"], [self.chris.pk])
         self.assertEqual(item["dueDate"], "2026-10-01")
 
@@ -475,6 +480,71 @@ class PersonalMyWorkApiTest(APITestCase):
         self.assertEqual(other["statusName"], "Todo")
         self.assertEqual(other["statusCategory"], "todo")
         self.assertEqual(other["projectId"], self.project_b.pk)
+
+    def test_response_returns_concrete_project_local_type_name(self):
+        """The payload carries the concrete project-local Work Item
+        type name (``typeName``) next to the canonical
+        ``typeDefinitionId``: project-configured custom names are
+        returned exactly, types from different Projects can have
+        different names, and NO semantic Task/Epic/Milestone/
+        Deliverable ``kind`` discriminator is introduced."""
+        # Custom, project-configured type names — one per Project,
+        # deliberately different across Projects.
+        type_a = WorkItemTypeDefinition.objects.create(
+            project=self.project_a,
+            name="Research Milestone",
+            order=10,
+        )
+        type_b = WorkItemTypeDefinition.objects.create(
+            project=self.project_b,
+            name="Robot Data Analysis",
+            order=10,
+        )
+        self.work_a.type_definition = type_a
+        self.work_a.save()
+        self.work_b.type_definition = type_b
+        self.work_b.save()
+
+        self.login()
+
+        response = self.client.get("/api/me/work-items/")
+
+        self.assertEqual(response.status_code, 200)
+        items = {
+            item["title"]: item
+            for item in response.json()
+        }
+
+        item_a = items["Rewrite Introduction"]
+        item_b = items["Analyze Robot Data"]
+
+        # Canonical identity stays authoritative and the concrete
+        # configured name is returned EXACTLY (per Project).
+        self.assertEqual(item_a["typeDefinitionId"], type_a.pk)
+        self.assertEqual(item_a["typeName"], "Research Milestone")
+        self.assertEqual(item_b["typeDefinitionId"], type_b.pk)
+        self.assertEqual(item_b["typeName"], "Robot Data Analysis")
+
+        # No semantic type kind: no discriminator field and no
+        # inferred Task/Epic/Milestone/Deliverable value.
+        for item in (item_a, item_b):
+            for forbidden in (
+                "typeKind",
+                "kind",
+                "semanticType",
+                "semanticKind",
+                "typeCategory",
+            ):
+                self.assertNotIn(
+                    forbidden,
+                    item,
+                    f"no semantic type {forbidden!r} field may be "
+                    "introduced into the personal My Work payload",
+                )
+            self.assertNotIn(
+                item["typeName"],
+                {"Task", "Epic", "Milestone", "Deliverable"},
+            )
 
     def test_removing_assignment_removes_item(self):
         WorkItemAssignee.objects.get(
@@ -557,7 +627,8 @@ class PersonalMyWorkQueryCountTest(APITestCase):
     endpoint.
 
     The read path must not add one query per returned Work Item:
-    Project / Research Group / status definition context is
+    Project / Research Group / type definition / status definition
+    context is
     eager-loaded with ``select_related``, assignees and labels with
     ``prefetch_related``, and Meeting origin links with one bulk
     query per request (not one per Work Item).
@@ -636,8 +707,9 @@ class PersonalMyWorkQueryCountTest(APITestCase):
         self.assertEqual(len(response.json()), 14)
 
         # Invariant: 7x the rows add ZERO queries — a per-row
-        # relation lookup (Project / Research Group / status
-        # definition / assignee / label N+1, or a per-item Meeting
+        # relation lookup (Project / Research Group / type
+        # definition / status definition / assignee / label N+1, or
+        # a per-item Meeting
         # origin check) would make the second request issue 12 more
         # queries.
         self.assertEqual(
@@ -645,7 +717,8 @@ class PersonalMyWorkQueryCountTest(APITestCase):
             len(large_ctx.captured_queries),
             "personal My Work query count must not scale with the "
             "returned row count; every serialized relation (Project, "
-            "Research Group, status definition, assignees, labels) "
+            "Research Group, type definition, status definition, "
+            "assignees, labels) "
             "and the Meeting origin check must be eager-loaded or "
             "bulk-fetched per request.",
         )

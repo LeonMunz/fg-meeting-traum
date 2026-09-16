@@ -779,8 +779,11 @@ My Work read API returns both the concrete Project StatusDefinition
 semantic category (`statusCategory`: `todo` / `in_progress` /
 `review` / `done`). The concrete project status is never collapsed
 into the global category, and the canonical Work Item type payload
-(`typeDefinitionId`) is preserved — no semantic Task/Epic/Milestone/
-Deliverable `kind` exists.
+(`typeDefinitionId`) is preserved; the read API also carries the
+concrete project-local type name (`typeName` — the display name of
+the Work Item's Project `WorkItemTypeDefinition`) as display
+metadata for that ID. No semantic Task/Epic/Milestone/Deliverable
+`kind` exists, and none is inferred from the name.
 
 Possible UI filters:
 

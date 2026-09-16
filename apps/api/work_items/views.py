@@ -798,6 +798,7 @@ class PersonalMyWorkView(APIView):
                 "project__research_group",
                 "created_by",
                 "parent",
+                "type_definition",
                 "status_definition",
             ).prefetch_related(
                 "assignee_relations",
@@ -838,6 +839,13 @@ class PersonalMyWorkView(APIView):
                 "researchGroupName": (
                     work_item.project.research_group.name
                 ),
+                # Concrete project-local type name (its Project
+                # WorkItemTypeDefinition display name) — display
+                # metadata for the canonical
+                # ``typeDefinitionId``. The definition carries no
+                # semantic Task/Epic/Milestone/Deliverable kind and
+                # none is derived here.
+                "typeName": work_item.type_definition.name,
                 # Concrete project-local status (its Project
                 # StatusDefinition) plus the definition's fixed
                 # semantic category — the global My Work grouping
