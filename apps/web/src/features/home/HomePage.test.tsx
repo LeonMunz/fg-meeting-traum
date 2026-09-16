@@ -1,0 +1,710 @@
+// @vitest-environment happy-dom
+
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest'
+import {
+  MemoryRouter,
+  useLocation,
+} from 'react-router'
+
+import type {
+  ApiActivityEvent,
+  ApiHome,
+  ApiUser,
+} from '../../api/types'
+
+import { App } from '../../app/App'
+import { getHome } from '../../api/home'
+import { listActivityFeed } from '../../api/activity'
+import { HomePage } from './HomePage'
+
+/* ── Mocked session (authenticated) ───────────────────────────── */
+
+const { sessionUser, session } = vi.hoisted(() => {
+  const sessionUser: ApiUser = {
+    id: 1,
+    username: 'alex',
+    firstName: 'Alex',
+    lastName: '',
+    email: 'alex@example.com',
+  }
+  const session = {
+    user: sessionUser,
+    loading: false,
+    error: null,
+    login: vi.fn(),
+    logout: vi.fn().mockResolvedValue(undefined),
+    setAuthenticatedUser: vi.fn(),
+  }
+  return { sessionUser, session }
+})
+
+vi.mock('../../api/useSession', () => ({
+  useSession: () => session,
+}))
+
+vi.mock('../../api/auth', () => ({
+  me: vi.fn().mockResolvedValue(sessionUser),
+  login: vi.fn(),
+  logout: vi.fn().mockResolvedValue(undefined),
+}))
+
+vi.mock('../../api/research-groups', () => ({
+  listResearchGroups: vi
+    .fn()
+    .mockResolvedValue([
+      {
+        id: 1,
+        name: 'FG Research Group',
+        description: '',
+        status: 'active',
+        createdById: 1,
+        createdAt: '2026-01-01T00:00:00Z',
+      },
+    ]),
+}))
+
+vi.mock('../../api/home', () => ({
+  getHome: vi.fn(),
+}))
+
+vi.mock('../../api/activity', () => ({
+  listActivityFeed: vi.fn(),
+}))
+
+/* ── Date helpers ─────────────────────────────────────────────── */
+
+function isoDate(offsetDays = 0): string {
+  const d = new Date()
+  d.setDate(d.getDate() + offsetDays)
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
+function isoDateTime(
+  offsetDays = 0,
+  hour = 10,
+  minute = 30,
+): string {
+  const d = new Date()
+  d.setDate(d.getDate() + offsetDays)
+  d.setHours(hour, minute, 0, 0)
+  return d.toISOString()
+}
+
+/* ── Fixtures ─────────────────────────────────────────────────── */
+
+function makeActivity(): ApiActivityEvent[] {
+  return [
+    {
+      id: 1,
+      eventType: 'work_item.updated',
+      actor: {
+        id: 1,
+        username: 'alex',
+        firstName: 'Alex',
+        lastName: '',
+      },
+      subjectUser: null,
+      workItemId: 101,
+      workItemTitle: 'Activity Feed WI',
+      meetingId: null,
+      meetingTitle: null,
+      projectId: 7,
+      projectName: 'Paper XYZ',
+      researchGroupId: 1,
+      researchGroupName: 'FG Research Group',
+      changes: { marker: 'RAW-PAYLOAD-MARKER' },
+      createdAt: isoDateTime(0, 9, 0),
+    },
+  ]
+}
+
+function makeHome(
+  overrides: Partial<ApiHome> = {},
+): ApiHome {
+  return {
+    needsAttention: [
+      {
+        workItemId: 101,
+        title: 'Overdue Draft Task',
+        projectId: 7,
+        projectName: 'Paper XYZ',
+        dueDate: isoDate(-2),
+        statusCategory: 'in_progress',
+        blockedReason: null,
+        attentionReasons: ['overdue'],
+      },
+      {
+        workItemId: 102,
+        title: 'Blocked Review Task',
+        projectId: 7,
+        projectName: 'Paper XYZ',
+        dueDate: null,
+        statusCategory: 'review',
+        blockedReason: 'Waiting on data',
+        attentionReasons: ['blocked'],
+      },
+    ],
+    todayAndNext: [
+      {
+        domain: 'work_item',
+        objectId: 103,
+        title: 'Due Today WI',
+        calendarDate: isoDate(0),
+        sortAt: isoDateTime(0, 0, 0),
+        workItem: {
+          workItemId: 103,
+          projectId: 7,
+          projectName: 'Paper XYZ',
+          dueDate: isoDate(0),
+          statusCategory: 'todo',
+          blockedReason: null,
+        },
+        meeting: null,
+      },
+      {
+        domain: 'meeting',
+        objectId: 201,
+        title: 'FG Weekly Meeting',
+        calendarDate: isoDate(0),
+        sortAt: isoDateTime(0, 10, 30),
+        workItem: null,
+        meeting: {
+          meetingId: 201,
+          scheduledAt: isoDateTime(0, 10, 30),
+          status: 'upcoming',
+          scope: 'group',
+          researchGroupId: 1,
+          projectId: null,
+        },
+      },
+    ],
+    myWork: [
+      {
+        workItemId: 103,
+        title: 'My Active Task',
+        projectId: 7,
+        projectName: 'Paper XYZ',
+        typeDefinitionId: 4,
+        typeName: 'Task',
+        statusCategory: 'in_progress',
+        dueDate: isoDate(4),
+        blockedReason: null,
+      },
+    ],
+    continueWorking: [
+      {
+        domain: 'work_item',
+        objectId: 103,
+        title: 'Recently Edited WI',
+        latestPersonalActivityAt: isoDateTime(0, 8, 0),
+        workItem: {
+          workItemId: 103,
+          projectId: 7,
+          projectName: 'Paper XYZ',
+          statusCategory: 'in_progress',
+          dueDate: null,
+        },
+        meeting: null,
+      },
+      {
+        domain: 'meeting',
+        objectId: 201,
+        title: 'Recently Touched Meeting',
+        latestPersonalActivityAt: isoDateTime(-1, 9, 0),
+        workItem: null,
+        meeting: {
+          meetingId: 201,
+          status: 'upcoming',
+          scheduledAt: isoDateTime(1, 10, 0),
+        },
+      },
+    ],
+    ...overrides,
+  }
+}
+
+/* ── Render helpers ───────────────────────────────────────────── */
+
+function LocationProbe() {
+  const location = useLocation()
+
+  return (
+    <output aria-label="Current location">
+      {location.pathname}
+    </output>
+  )
+}
+
+function renderApp() {
+  return render(
+    <MemoryRouter initialEntries={['/']}>
+      <LocationProbe />
+      <App />
+    </MemoryRouter>,
+  )
+}
+
+function renderHome() {
+  return render(
+    <MemoryRouter initialEntries={['/']}>
+      <LocationProbe />
+      <HomePage />
+    </MemoryRouter>,
+  )
+}
+
+function currentLocation(): string {
+  return (
+    screen
+      .getByLabelText('Current location')
+      .textContent ?? ''
+  )
+}
+
+function sectionHeading(title: string) {
+  return screen.getByRole('heading', {
+    name: title,
+    level: 2,
+  })
+}
+
+function mockSuccessfulLoads(
+  home: ApiHome = makeHome(),
+  activity: ApiActivityEvent[] = makeActivity(),
+) {
+  vi.mocked(getHome).mockResolvedValue(home)
+  vi.mocked(listActivityFeed).mockResolvedValue(
+    activity,
+  )
+}
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  mockSuccessfulLoads()
+})
+
+afterEach(() => {
+  cleanup()
+})
+
+/* ── Tests ────────────────────────────────────────────────────── */
+
+describe('Home route (authenticated application state)', () => {
+  it('renders the Home page at the canonical / route', async () => {
+    renderApp()
+
+    // The authenticated shell + Home heading render.
+    await waitFor(() => {
+      expect(
+        screen.getByRole('heading', {
+          name: 'Home',
+          level: 1,
+        }),
+      ).toBeInTheDocument()
+    })
+
+    // All four Home sections are present.
+    expect(
+      sectionHeading('Needs attention'),
+    ).toBeInTheDocument()
+    expect(
+      sectionHeading('Today & next'),
+    ).toBeInTheDocument()
+    expect(sectionHeading('My work')).toBeInTheDocument()
+    expect(
+      sectionHeading('Continue working'),
+    ).toBeInTheDocument()
+
+    // Both independent requests were made.
+    expect(getHome).toHaveBeenCalledTimes(1)
+    expect(listActivityFeed).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('Home section population', () => {
+  it('populates all four sections from the /api/home/ response', async () => {
+    renderHome()
+
+    // Needs attention: title, project, reason, due, blocked reason.
+    await waitFor(() => {
+      expect(
+        screen.getByText('Overdue Draft Task'),
+      ).toBeInTheDocument()
+    })
+    expect(
+      screen.getByText('Blocked Review Task'),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText('Waiting on data'),
+    ).toBeInTheDocument()
+
+    // Today & next: both a Work Item and a Meeting candidate.
+    expect(screen.getByText('Due Today WI')).toBeInTheDocument()
+    expect(
+      screen.getByText('FG Weekly Meeting'),
+    ).toBeInTheDocument()
+
+    // My work: title, type, status.
+    expect(screen.getByText('My Active Task')).toBeInTheDocument()
+    expect(
+      screen.getByText('In progress'),
+    ).toBeInTheDocument()
+
+    // Continue working: both domains.
+    expect(
+      screen.getByText('Recently Edited WI'),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText('Recently Touched Meeting'),
+    ).toBeInTheDocument()
+  })
+
+  it('renders sections in the fixed product order', async () => {
+    renderHome()
+
+    await waitFor(() => {
+      expect(
+        sectionHeading('Needs attention'),
+      ).toBeInTheDocument()
+    })
+
+    const headings = screen
+      .getAllByRole('heading', { level: 2 })
+      .map((h) => h.textContent)
+
+    expect(headings.slice(0, 4)).toEqual([
+      'Needs attention',
+      'Today & next',
+      'My work',
+      'Continue working',
+    ])
+  })
+
+  it('does not add KPI/statistic cards above the sections', async () => {
+    renderHome()
+
+    await waitFor(() => {
+      expect(
+        sectionHeading('Needs attention'),
+      ).toBeInTheDocument()
+    })
+
+    // The only page heading (h1) is "Home"; there are no extra
+    // dashboard KPI cards.
+    const h1s = screen.getAllByRole('heading', { level: 1 })
+    expect(h1s).toHaveLength(1)
+    expect(h1s[0]).toHaveTextContent('Home')
+  })
+})
+
+describe('Activity independence', () => {
+  it('comes from its own independent request, not Home', async () => {
+    renderHome()
+
+    // The activity object title is not part of any Home section.
+    await waitFor(() => {
+      expect(
+        screen.getByText('Activity Feed WI'),
+      ).toBeInTheDocument()
+    })
+
+    // It rendered from the independent Activity request.
+    expect(listActivityFeed).toHaveBeenCalledTimes(1)
+    expect(listActivityFeed).toHaveBeenCalledWith(20)
+
+    // The Activity row is inside the Activity section, with the
+    // actor + verb semantics.
+    const activitySection = within(
+      screen.getByRole('complementary', {
+        name: 'Activity',
+      }),
+    )
+    expect(
+      activitySection.getByText(/Alex updated/),
+    ).toBeInTheDocument()
+  })
+
+  it('Activity failure does not hide loaded Home content', async () => {
+    vi.mocked(listActivityFeed).mockRejectedValue(
+      new Error('activity boom'),
+    )
+
+    renderHome()
+
+    // Home content is still visible.
+    await waitFor(() => {
+      expect(
+        screen.getByText('Overdue Draft Task'),
+      ).toBeInTheDocument()
+    })
+
+    // The Activity rail shows its own error state.
+    await waitFor(() => {
+      expect(
+        screen.getByRole('alert'),
+      ).toHaveTextContent(
+        "Activity couldn't be loaded.",
+      )
+    })
+  })
+})
+
+describe('Empty states', () => {
+  it('renders a stable empty state for each empty section', async () => {
+    mockSuccessfulLoads(
+      makeHome({
+        needsAttention: [],
+        todayAndNext: [],
+        myWork: [],
+        continueWorking: [],
+      }),
+      [],
+    )
+
+    renderHome()
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          'Nothing currently requires your attention.',
+        ),
+      ).toBeInTheDocument()
+    })
+
+    expect(
+      screen.getByText(
+        'Nothing upcoming in the current window.',
+      ),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText('No active assigned work items.'),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText('No recent attributable work.'),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText('No visible recent activity.'),
+    ).toBeInTheDocument()
+
+    // Section headings are NOT hidden when empty.
+    expect(
+      sectionHeading('Needs attention'),
+    ).toBeInTheDocument()
+    expect(
+      sectionHeading('Today & next'),
+    ).toBeInTheDocument()
+    expect(sectionHeading('My work')).toBeInTheDocument()
+    expect(
+      sectionHeading('Continue working'),
+    ).toBeInTheDocument()
+  })
+})
+
+describe('Error behavior', () => {
+  it('Home failure does not masquerade as successful empty data', async () => {
+    vi.mocked(getHome).mockRejectedValue(
+      new Error('home boom'),
+    )
+
+    renderHome()
+
+    // A real error state is shown (not empty sections).
+    await waitFor(() => {
+      expect(
+        screen.getByRole('alert'),
+      ).toHaveTextContent(
+        "Home couldn't be loaded",
+      )
+    })
+
+    // No section headings are fabricated on failure.
+    expect(
+      screen.queryByRole('heading', {
+        name: 'Needs attention',
+        level: 2,
+      }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByText(
+        'Nothing currently requires your attention.',
+      ),
+    ).not.toBeInTheDocument()
+
+    // The app shell / page heading remain usable.
+    expect(
+      screen.getByRole('heading', {
+        name: 'Home',
+        level: 1,
+      }),
+    ).toBeInTheDocument()
+  })
+})
+
+describe('Navigation', () => {
+  it('Work Item rows navigate to the canonical Project Work Items surface', async () => {
+    renderHome()
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('Overdue Draft Task'),
+      ).toBeInTheDocument()
+    })
+
+    fireEvent.click(
+      screen.getByText('Overdue Draft Task'),
+    )
+
+    expect(currentLocation()).toBe(
+      '/projects/7/work-items',
+    )
+  })
+
+  it('Meeting rows navigate to the canonical Meeting route', async () => {
+    renderHome()
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('FG Weekly Meeting'),
+      ).toBeInTheDocument()
+    })
+
+    fireEvent.click(
+      screen.getByText('FG Weekly Meeting'),
+    )
+
+    expect(currentLocation()).toBe('/meetings/201')
+  })
+})
+
+describe('Today & next presentation rule', () => {
+  it('renders at most 7 candidates', async () => {
+    const nine = Array.from(
+      { length: 9 },
+      (_, i) => ({
+        domain: 'work_item' as const,
+        objectId: 300 + i,
+        title: `Candidate ${i + 1}`,
+        calendarDate: isoDate(0),
+        sortAt: isoDateTime(0, 9 + i, 0),
+        workItem: {
+          workItemId: 300 + i,
+          projectId: 7,
+          projectName: 'Paper XYZ',
+          dueDate: isoDate(0),
+          statusCategory: 'todo' as const,
+          blockedReason: null,
+        },
+        meeting: null,
+      }),
+    )
+
+    mockSuccessfulLoads(
+      makeHome({ todayAndNext: nine }),
+      [],
+    )
+
+    renderHome()
+
+    await waitFor(() => {
+      expect(screen.getByText('Candidate 1')).toBeInTheDocument()
+    })
+
+    // First seven render, the rest are dropped (no pagination).
+    for (let i = 1; i <= 7; i++) {
+      expect(screen.getByText(`Candidate ${i}`)).toBeInTheDocument()
+    }
+    expect(
+      screen.queryByText('Candidate 8'),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByText('Candidate 9'),
+    ).not.toBeInTheDocument()
+  })
+
+  it('renders both Work Item and Meeting timeline candidates', async () => {
+    renderHome()
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('Due Today WI'),
+      ).toBeInTheDocument()
+    })
+
+    // Both domains present in Today & next.
+    expect(
+      screen.getByText('FG Weekly Meeting'),
+    ).toBeInTheDocument()
+    // The Meeting context label distinguishes its domain.
+    expect(
+      screen.getByText('Research Group Meeting'),
+    ).toBeInTheDocument()
+  })
+})
+
+describe('Continue working semantics', () => {
+  it('supports both Work Item and Meeting domains', async () => {
+    renderHome()
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('Recently Edited WI'),
+      ).toBeInTheDocument()
+    })
+
+    expect(
+      screen.getByText('Recently Touched Meeting'),
+    ).toBeInTheDocument()
+  })
+
+  it('does not label its timestamp as "last opened"', async () => {
+    renderHome()
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('Recently Edited WI'),
+      ).toBeInTheDocument()
+    })
+
+    const containerText = document.body.textContent ?? ''
+    expect(
+      /last opened/i.test(containerText),
+    ).toBe(false)
+    expect(
+      /last viewed/i.test(containerText),
+    ).toBe(false)
+  })
+
+  it('never renders the Activity raw payload through Continue working', async () => {
+    renderHome()
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('Recently Edited WI'),
+      ).toBeInTheDocument()
+    })
+
+    // The raw `changes` marker (only present on the Activity event)
+    // must not appear anywhere on the page.
+    expect(
+      document.body.textContent,
+    ).not.toContain('RAW-PAYLOAD-MARKER')
+  })
+})

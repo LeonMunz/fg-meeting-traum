@@ -9,7 +9,7 @@ import { AppearanceProvider } from '../features/appearance/AppearanceProvider'
 import { AppearanceSettingsPage } from '../features/appearance/AppearanceSettingsPage'
 import { LoginPage } from '../features/auth/LoginPage'
 import { RegistrationPage } from '../features/auth/RegistrationPage'
-import { DashboardPage } from '../features/dashboard/DashboardPage'
+import { HomePage } from '../features/home/HomePage'
 import { MyWorkPage } from '../features/my-work/MyWorkPage'
 import { MeetingListPage } from '../features/meetings/MeetingListPage'
 import { MeetingDetailPage } from '../features/meetings/MeetingDetailPage'
@@ -115,7 +115,7 @@ function AppRoutes() {
             <ResearchGroupProvider>
               <AppShell>
                 <Routes>
-                <Route path="/" element={<DashboardPage />} />
+                <Route path="/" element={<HomePage />} />
 
                 <Route
                   path="/my-work"

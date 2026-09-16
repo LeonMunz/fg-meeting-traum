@@ -282,10 +282,6 @@
 
   --color-background: #f8f9ff;
 
-  /* TEMPORARY compatibility token — the old Material `surface` name is now owned by the
-   * functional `surface` (#FFFFFF). This preserves the historical legacy surface value
-   * for the single unmigrated Dashboard consumer; remove when Dashboard is migrated. */
-  --color-legacy-surface: #f8f9ff;
 
   --color-surface-container-lowest: #ffffff;
   --color-surface-container-low: #eff4ff;

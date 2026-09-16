@@ -316,27 +316,13 @@ until each area is explicitly migrated.
 
 - Functional tokens are canonical for new and migrated code (shell/chrome).
 - Legacy tokens temporarily retain their old values; unmigrated feature
-  screens (Meetings, Projects, Work Items, Dashboard, Research Group settings,
-  `.fg-prose` editor) continue to render exactly as before the foundation was
-  introduced.
+  screens (Meetings, Projects, Work Items, Research Group settings, `.fg-prose`
+  editor) continue to render exactly as before the foundation was introduced.
 - Migration is feature-by-feature. As a feature area is migrated, replace its
   legacy token usages with functional tokens and remove any direct raw palette
   colors / hex values. Do not use legacy aliases to recolor unmigrated screens.
 - Do **not** rename legacy tokens repo-wide. Remove a legacy token only when no
   feature screen consumes it.
-
-### Temporary `legacy-surface` token
-
-The old Material `surface` name collided with the new canonical functional
-`surface` token (`#FFFFFF`, used by the migrated shell). To preserve the
-historical appearance of the one unmigrated consumer (a Dashboard card that
-used legacy `surface` = `#F8F9FF`), a temporary compatibility token was added:
-
-- `--color-legacy-surface: #F8F9FF`
-
-It exists **only** to keep that unmigrated Dashboard surface at its exact
-pre-migration value (`#F8F9FF`). It must not be used anywhere else. Remove it
-when the Dashboard is intentionally migrated to the functional tokens.
 
 ## Contract
 

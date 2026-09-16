@@ -710,3 +710,130 @@ export interface ApiResearchGroupMemberOffboardingResponse {
   detail: string
   summary: ApiResearchGroupOffboardingSummary
 }
+
+/* ── Home (personal re-entry surface) ─────────────────────────── */
+
+export type ApiHomeAttentionReason = 'overdue' | 'blocked'
+
+export type ApiHomeDomain = 'work_item' | 'meeting'
+
+/** One Work Item candidate in Home "Needs attention". */
+export interface ApiHomeNeedsAttentionItem {
+  workItemId: number
+  title: string
+  projectId: number
+  projectName: string
+  dueDate: string | null
+  statusCategory: ApiWorkItemStatus
+  blockedReason: string | null
+  attentionReasons: ApiHomeAttentionReason[]
+}
+
+/** Today & next — Work Item detail block. */
+export interface ApiHomeTimelineWorkItem {
+  workItemId: number
+  projectId: number
+  projectName: string
+  dueDate: string | null
+  statusCategory: ApiWorkItemStatus
+  blockedReason: string | null
+}
+
+/** Today & next — Meeting detail block. */
+export interface ApiHomeTimelineMeeting {
+  meetingId: number
+  scheduledAt: string
+  status: ApiMeetingStatus
+  scope: ApiMeetingScope
+  researchGroupId: number | null
+  projectId: number | null
+}
+
+/** One flat "Today & next" timeline candidate. Exactly one of
+ * `workItem` / `meeting` is non-null (matching `domain`). */
+export interface ApiHomeTimelineCandidate {
+  domain: ApiHomeDomain
+  objectId: number
+  title: string
+  calendarDate: string
+  sortAt: string
+  workItem: ApiHomeTimelineWorkItem | null
+  meeting: ApiHomeTimelineMeeting | null
+}
+
+/** One "My work" Work Item candidate. */
+export interface ApiHomeMyWorkItem {
+  workItemId: number
+  title: string
+  projectId: number
+  projectName: string
+  typeDefinitionId: number
+  typeName: string
+  statusCategory: ApiWorkItemStatus
+  dueDate: string | null
+  blockedReason: string | null
+}
+
+/** Continue working — Work Item detail block. */
+export interface ApiHomeContinueWorkingWorkItem {
+  workItemId: number
+  projectId: number
+  projectName: string
+  statusCategory: ApiWorkItemStatus
+  dueDate: string | null
+}
+
+/** Continue working — Meeting detail block. */
+export interface ApiHomeContinueWorkingMeeting {
+  meetingId: number
+  status: ApiMeetingStatus
+  scheduledAt: string
+}
+
+/** One flat "Continue working" recency candidate. Exactly one of
+ * `workItem` / `meeting` is non-null (matching `domain`). */
+export interface ApiHomeContinueWorkingCandidate {
+  domain: ApiHomeDomain
+  objectId: number
+  title: string
+  latestPersonalActivityAt: string
+  workItem: ApiHomeContinueWorkingWorkItem | null
+  meeting: ApiHomeContinueWorkingMeeting | null
+}
+
+/** The stable top-level `GET /api/home/` response. All four section
+ * keys are always present; an empty section is `[]`. */
+export interface ApiHome {
+  needsAttention: ApiHomeNeedsAttentionItem[]
+  todayAndNext: ApiHomeTimelineCandidate[]
+  myWork: ApiHomeMyWorkItem[]
+  continueWorking: ApiHomeContinueWorkingCandidate[]
+}
+
+/* ── Activity feed ────────────────────────────────────────────── */
+
+export interface ApiActivityUserRef {
+  id: number
+  username: string
+  firstName: string
+  lastName: string
+}
+
+/** One structured entry from `GET /api/activity/`. The non-matching
+ * object identity pair is null; context is scope-only (no raw payload). */
+export interface ApiActivityEvent {
+  id: number
+  eventType: string
+  actor: ApiActivityUserRef | null
+  subjectUser: ApiActivityUserRef | null
+  workItemId: number | null
+  workItemTitle: string | null
+  meetingId: number | null
+  meetingTitle: string | null
+  projectId: number | null
+  projectName: string | null
+  researchGroupId: number | null
+  researchGroupName: string | null
+  changes: Record<string, unknown>
+  createdAt: string
+}
