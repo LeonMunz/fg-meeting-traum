@@ -101,6 +101,57 @@ def _parse_bounded_int(value, *, default, minimum, maximum):
     return parsed, None
 
 
+# The four approved Activity domains exposed through the optional
+# ``domains`` query parameter. This tuple IS the public filter
+# contract: the client may select from exactly these four names and
+# never an arbitrary ``event_type`` prefix.
+ACTIVITY_DOMAINS = (
+    "work_item",
+    "meeting",
+    "project",
+    "research_group",
+)
+_ALLOWED_ACTIVITY_DOMAINS = frozenset(ACTIVITY_DOMAINS)
+
+
+def _parse_activity_domains(value):
+    """Parse the optional comma-separated ``domains`` query param.
+
+    ``value`` is the raw (non-empty) string. Returns ``(frozenset,
+    error)``: the deduplicated set of approved domains, or a non-None
+    error message string on failure (caller answers 400).
+
+    - Duplicate valid values normalize harmlessly (a set).
+    - Stray empty segments (``meeting,`` / ``,meeting``) are ignored.
+    - Any non-empty segment that is not one of the four approved
+      domains is rejected outright: an unknown value is never silently
+      dropped and no part of the filter is executed.
+    - A value that names no domain (e.g. ``domains=,``) is a malformed
+      filter and is rejected.
+
+    Mirrors the ``_parse_bounded_int`` param-parsing convention (the
+    caller distinguishes absent vs. empty vs. present).
+    """
+    selected = set()
+    for token in value.split(","):
+        token = token.strip()
+        if token == "":
+            continue
+        if token not in _ALLOWED_ACTIVITY_DOMAINS:
+            return None, (
+                "domains contains an unknown domain "
+                f"'{token}'. Allowed values: "
+                + ", ".join(ACTIVITY_DOMAINS)
+                + "."
+            )
+        selected.add(token)
+
+    if not selected:
+        return None, "domains must name at least one known domain."
+
+    return frozenset(selected), None
+
+
 class _JsonbTypeof(Func):
     """``jsonb_typeof()``: the JSON type of a jsonb value, as text.
 
@@ -160,6 +211,16 @@ class ActivityFeedView(APIView):
     bound). No pagination metadata (count/next/prev) is exposed, so
     no total can reveal inaccessible rows.
 
+    Optional ``?domains=`` filter: a comma-separated list drawn from the
+    four approved domains ``work_item`` / ``meeting`` / ``project`` /
+    ``research_group`` (see ``ACTIVITY_DOMAINS``). Multiple values use
+    OR semantics; duplicate values normalize harmlessly. When absent the
+    feed is unchanged. The filter narrows the permission-filtered
+    queryset in the database BEFORE pagination (an event's domain is its
+    ``event_type`` prefix), so it never widens visibility and never
+    introduces per-domain regrouping or a new ordering. An unknown
+    domain value is rejected with 400 before any query runs.
+
     Authorization: authenticated (IsAuthenticated) + per-row read
     authorization through the canonical read boundary of the
     affected object (Project read rule for Work Items and for
@@ -200,6 +261,21 @@ class ActivityFeedView(APIView):
             return Response(
                 {"error": f"offset {offset_error}"}, status=400,
             )
+
+        # Optional domain filter (see _parse_activity_domains). An
+        # absent or empty ``domains`` param leaves the feed unfiltered
+        # (existing behavior); a present non-empty value is validated
+        # before any query runs, so an invalid value never partially
+        # executes and always answers 400.
+        raw_domains = request.query_params.get("domains")
+        if raw_domains is not None and raw_domains != "":
+            selected_domains, domains_error = _parse_activity_domains(
+                raw_domains,
+            )
+            if domains_error is not None:
+                return Response({"error": domains_error}, status=400)
+        else:
+            selected_domains = None
 
         user = request.user
 
@@ -344,15 +420,50 @@ class ActivityFeedView(APIView):
             readable_meeting_ids,
         )
 
+        # The Meeting domain spans BOTH the plain Meeting events and the
+        # follow-up-schedule event (a ``meeting.*`` event type), so its
+        # read-authorized branch combines the two Qs.
+        meeting_domain = meeting_events | (
+            follow_up_events & follow_up_source_readable
+        )
+        # Domain -> its read-authorized Q branch. Each branch already
+        # encodes the domain's current read authorization, so selecting
+        # a subset of domains only NARROWS otherwise-visible events; it
+        # can never widen visibility.
+        domain_filters = {
+            "work_item": work_item_events,
+            "meeting": meeting_domain,
+            "project": project_events,
+            "research_group": research_group_events,
+        }
+
+        if selected_domains is None:
+            # No filter: the pre-existing aggregate filter (all four
+            # domains), unchanged.
+            permission_filter = (
+                domain_filters["work_item"]
+                | domain_filters["meeting"]
+                | domain_filters["project"]
+                | domain_filters["research_group"]
+            )
+        else:
+            # Domain filter: OR of the requested domains' read-authorized
+            # branches only (OR semantics; duplicates already deduped).
+            # Applied BEFORE the bounded pagination slice below, so the
+            # page always holds the newest events of the selected
+            # domains - never an in-memory filter over an unfiltered
+            # page.
+            permission_filter = None
+            for domain in selected_domains:
+                branch = domain_filters[domain]
+                permission_filter = (
+                    branch if permission_filter is None
+                    else permission_filter | branch
+                )
+
         events = (
             AuditEvent.objects
-            .filter(
-                work_item_events
-                | project_events
-                | meeting_events
-                | research_group_events
-                | (follow_up_events & follow_up_source_readable)
-            )
+            .filter(permission_filter)
             .select_related(
                 "actor",
                 "subject_user",
