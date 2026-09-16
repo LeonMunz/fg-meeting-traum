@@ -26,6 +26,7 @@ from accounts.views import (
 )
 from accounts.views_e2e import E2EAccountInvitationFixtureView
 from config.health import HealthCheckView
+from home.views import HomeAggregateView
 from projects.views import (
     ProjectArchiveView,
     ProjectDetailView,
@@ -152,6 +153,10 @@ urlpatterns = [
     # My Work — authorized projection over assigned WorkItems
     path('api/me/work-items/', PersonalMyWorkView.as_view(), name='personal-my-work'),
     path('api/research-groups/<int:group_id>/my-work/', MyWorkView.as_view(), name='research-group-my-work'),
+
+    # Home aggregate — read-only authenticated composition of the
+    # four Home read models (Activity remains the separate /api/activity/)
+    path('api/home/', HomeAggregateView.as_view(), name='home-aggregate'),
 
     # Work Item Configuration
     path('api/projects/<int:project_id>/work-item-configuration/', csrf_protect_view(ProjectWorkItemConfigurationView), name='project-work-item-config'),

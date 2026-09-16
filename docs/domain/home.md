@@ -38,8 +38,9 @@ candidate sets.
 
 `Needs attention` will eventually combine several candidate
 families. Only the first objectively defined Work Item candidate
-family is implemented (backend read model, no Home API endpoint, no
-UI yet):
+family is implemented (backend read model, exposed read-only
+through the Home aggregate API `GET /api/home/` — section key
+`needsAttention`; no Home UI yet):
 
 - **assigned, open Work Items that are overdue and/or blocked**.
 
@@ -99,8 +100,9 @@ Implementation: `apps/api/work_items/home_attention.py`
 ## 3. Today & next — implemented V1 timeline read model
 
 `Today & next` answers "what is scheduled for me in the coming days?"
-The V1 backend read model is implemented (read service only: no Home
-API endpoint, no UI yet):
+The V1 backend read model is implemented (read service, exposed
+read-only through the Home aggregate API `GET /api/home/` —
+section key `todayAndNext`; no Home UI yet):
 
 - **Seven-day window including Today** (half-open, one clock
   observation per read, application timezone — currently UTC; no
@@ -177,8 +179,9 @@ package (plain Python package, NOT a Django app), tested by
 ## 4. My work — implemented read model
 
 `My work` answers "what is my active personal work?" The backend
-read model is implemented (read service only: no Home API
-endpoint, no UI yet):
+read model is implemented (read service, exposed read-only
+through the Home aggregate API `GET /api/home/` — section key
+`myWork`; no Home UI yet):
 
 - **Canonical personal My Work boundary, reused — never
   re-interpreted**: a Work Item is a candidate iff the current
@@ -244,8 +247,9 @@ per-Research-Group My Work endpoints and by this read model.
 ## 4a. Continue working — implemented LIMITED V1 read model
 
 `Continue working` answers "where was I working recently?" The
-LIMITED V1 backend read model is implemented (read service only: no
-Home API endpoint, no UI yet).
+LIMITED V1 backend read model is implemented (read service,
+exposed read-only through the Home aggregate API `GET /api/home/`
+— section key `continueWorking`; no Home UI yet).
 
 - **Continue working means recent personal persisted mutation —
   NOT "last opened".** Existing persistence reliably identifies
@@ -344,6 +348,78 @@ Implementation: `apps/api/home_continue/continue_working.py`
 (`get_continue_working_candidates`), tested by
 `apps/api/home_continue/tests.py`.
 
+## 4b. Home aggregate API — implemented
+
+The four read models above are composed into ONE stable,
+read-only, authenticated, user-scoped, non-paginated Home
+aggregate API:
+
+- **Endpoint**: `GET /api/home/` — read-only (GET only; no
+  POST/PATCH/DELETE behavior).
+- **Authentication**: authenticated through the existing session
+  authentication stack (DRF `IsAuthenticated`); anonymous
+  requests are rejected. The user scope comes from the
+  authenticated request identity, never from a client-supplied
+  user ID.
+- **Stable top-level contract**: exactly four section keys,
+  always present, never omitted, never `null`:
+
+  ```json
+  {
+    "needsAttention": [],
+    "todayAndNext": [],
+    "myWork": [],
+    "continueWorking": []
+  }
+  ```
+
+  An empty section serializes to `[]`.
+- **Composition + serialization only**: the endpoint calls the
+  four existing read services independently and serializes their
+  candidate dataclasses field-for-field. It does not move or
+  duplicate domain logic, does not re-derive eligibility or
+  authorization, does not re-sort (the order returned by each
+  read model is authoritative and is serialized as-is), does not
+  deduplicate across sections, and does not add counts or
+  `hasMore` metadata.
+- **No API pagination, no API candidate truncation**: each
+  section returns the COMPLETE candidate array of its read
+  model. The settled V1 Home presentation rule (at most 7 visible
+  `Today & next` rows) is a later UI presentation rule, not an
+  API rule.
+- **Overlap is preserved**: a Work Item may appear in multiple
+  applicable sections in the same response (e.g. `needsAttention`
+  + `todayAndNext` + `myWork`), and a `done` Work Item can still
+  appear in `continueWorking` while absent from the active Home
+  sections. No cross-module suppression is performed by the
+  endpoint.
+- **Activity remains separate**: `GET /api/activity/` is a
+  distinct endpoint; `activity` is never embedded in
+  `GET /api/home/`.
+- **No shared request clock, no query consolidation** (settled V1
+  decision): the services keep their independent time-observation
+  seams and their independent bounded query work (current
+  measured fully populated cost: Needs attention 1, Today & next
+  2, My work 1, Continue working 5 — 9 bounded service queries;
+  row-count invariance is pinned by tests, and the
+  request/authentication overhead is separate from and bounded
+  against that cost).
+- **Date/time encoding**: normal API ISO-8601 conventions —
+  dates `YYYY-MM-DD`, datetimes timezone-aware ISO-8601; no
+  manual local-time conversions.
+
+Candidate JSON shapes are documented per read model above
+(§2, §3, §4, §4a); the endpoint exposes exactly the fields
+present in the candidate dataclasses and nothing else (no model
+instances, no raw `AuditEvent.data`, no Activity text, no
+derived permissions or context).
+
+Implementation: `apps/api/home/views.py`
+(`HomeAggregateView`, routed at `api/home/` in
+`config/urls.py`) — a neutral cross-domain composition package
+(plain Python package, NOT a Django app), tested by
+`apps/api/home/tests.py`.
+
 ## 5. Deferred (documented direction, NOT implemented)
 
 - **Due-soon candidates**: no canonical due-soon threshold exists in
@@ -351,9 +427,9 @@ Implementation: `apps/api/home_continue/continue_working.py`
 - **Meeting preparation** candidates.
 - **Follow-up attention** candidates.
 - Domain-specific Project-owner / decision problems.
-- The Home aggregate API endpoint and any Home UI.
-- **Continue working** wiring into the Home aggregate API endpoint
-  and UI (the LIMITED V1 backend read model exists; no HTTP
-  exposure or presentation yet).
+- The Home UI (the Home aggregate API `GET /api/home/` is
+  implemented; no presentation layer consumes it yet).
+- **Continue working** UI (the LIMITED V1 backend read model is
+  exposed through the Home aggregate API; no presentation yet).
 - **Last-opened / last-viewed tracking** (no persistence exists;
   Continue working V1 is explicitly mutation-based).
