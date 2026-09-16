@@ -189,6 +189,15 @@ test('Home renders the four sections in order with seeded data', async ({
     primaryRight - primaryLeft,
   ).toBeGreaterThan(activityHeadingBox!.width)
 
+  // Sticky rail: scrolling the primary column keeps the Activity
+  // rail (and its header) visible.
+  await page.evaluate(() => window.scrollBy(0, 400))
+  await expect(
+    page
+      .getByRole('complementary', { name: 'Activity' })
+      .getByRole('heading', { name: 'Activity' }),
+  ).toBeInViewport()
+
   await expectNoHorizontalOverflow(page)
 
   await page.screenshot({
@@ -263,9 +272,34 @@ test('Home meeting + work item navigation and independent Activity', async ({
   })
 
   await expect(meetingActivityRow).toBeVisible()
-  await expect(meetingActivityRow).toHaveText(/Alex Dev created/)
 
-  // Meeting row -> canonical Meeting detail route.
+  // The event reads as actor + verb + object on the primary line,
+  // with the context + time metadata line below it.
+  await expect(meetingActivityRow).toHaveText(
+    /Alex Dev created E2E Home Weekly/,
+  )
+  // Secondary line semantics: the Research Group context + the
+  // relative time render together on the same row.
+  await expect(meetingActivityRow).toHaveText(
+    /FG Example · (Just now|\d+ [mhd])/,
+  )
+
+  // Activity row -> canonical Meeting detail route (Activity
+  // navigation keeps its canonical target).
+  await meetingActivityRow.click()
+
+  await expect(page).toHaveURL(/\/meetings\/\d+$/)
+
+  await page.getByRole('link', { name: /Home/ }).click()
+
+  await expect(
+    page.getByRole('heading', {
+      name: 'Home',
+      level: 1,
+    }),
+  ).toBeVisible()
+
+  // Meeting row (Today & next) -> canonical Meeting detail route.
   await todayNext
     .getByRole('button', {
       name: new RegExp(MEETING_TITLE),
@@ -344,6 +378,22 @@ test('Home stacks primary over Activity on narrow widths', async ({
     Math.abs(activityBox!.x - attentionBox!.x),
   ).toBeLessThanOrEqual(1)
 
+  // The stacked Activity section is no longer a constrained sticky
+  // rail: no independent internal scroll container.
+  const activityHasConstrainedScroll = await page
+    .getByRole('complementary', { name: 'Activity' })
+    .evaluate((root) =>
+      Array.from(root.querySelectorAll('*')).some((el) => {
+        const style = getComputedStyle(el)
+        return (
+          style.overflowY === 'auto' ||
+          style.overflowY === 'scroll'
+        )
+      }),
+    )
+
+  expect(activityHasConstrainedScroll).toBe(false)
+
   // Rows remain readable: the Work Item title is visible and the
   // row keeps a tappable height.
   const attentionRow = page
@@ -389,6 +439,11 @@ test('Home stacks primary over Activity on narrow widths', async ({
   expect(
     mobileActivityBox!.y,
   ).toBeGreaterThan(mobileAttentionBox!.y)
+
+  // Stacked Activity is a full-width section, not a narrow rail.
+  expect(mobileActivityBox!.width).toBeGreaterThanOrEqual(
+    mobileAttentionBox!.width - 1,
+  )
 
   await expectNoHorizontalOverflow(page)
 

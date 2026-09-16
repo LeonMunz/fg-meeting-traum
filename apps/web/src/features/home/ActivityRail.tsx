@@ -6,8 +6,19 @@ import type {
 import { formatRelativeTime } from './homeFormat'
 
 /*
- * The Home Activity rail: a compact, secondary awareness/history
- * feed over `GET /api/activity/` (fetched independently of Home).
+ * The Home Activity rail: a compact, visually secondary context
+ * column over `GET /api/activity/` (fetched independently of Home).
+ *
+ * Desktop: a 320px sticky rail, separated from the primary column
+ * by a subtle left divider (no card/panel surface), whose event
+ * history scrolls inside the rail. Below the stacking breakpoint it
+ * becomes a full-width stacked section with a top divider.
+ *
+ * Every event reads as a human sentence:
+ *
+ *     {Actor} {verb} {Object}
+ *     {Context} · {relative time}
+ *
  * It renders structured event semantics only — never the raw
  * `changes` payload — and never implies notification semantics.
  */
@@ -137,6 +148,20 @@ export function describeActivityEvent(
   }
 }
 
+/** Compact neutral initials for the 24px actor mark. The Activity
+ * contract carries no image URLs, so the mark is initials-only (no
+ * avatar infrastructure). Unavailable actors fall back to "S". */
+function actorInitials(displayName: string): string {
+  const parts = displayName.split(/\s+/).filter(Boolean)
+  if (parts.length === 0) return 'S'
+
+  const first = parts[0].charAt(0)
+  const last =
+    parts.length > 1 ? parts[parts.length - 1].charAt(0) : ''
+
+  return (first + last).toUpperCase()
+}
+
 function ActivityRowContent({
   description,
   createdAt,
@@ -144,28 +169,56 @@ function ActivityRowContent({
   description: ActivityRowDescription
   createdAt: string
 }) {
+  const metaParts = [
+    description.context ?? '',
+    description.subjectName
+      ? `for ${description.subjectName}`
+      : '',
+    formatRelativeTime(createdAt),
+  ].filter(Boolean)
+
   return (
-    <>
-      <div className="flex items-baseline justify-between gap-3">
-        <span className="min-w-0 truncate text-xs font-semibold text-text">
-          {description.objectTitle ?? 'Activity'}
+    <div className="min-w-0">
+      {/* Primary line: the human action sentence. Actor and object
+       * carry emphasis; the verb stays quiet so the sentence reads
+       * as one coherent statement. */}
+      <p className="min-w-0 break-words text-[13px] leading-5 text-text">
+        <span className="font-semibold">
+          {description.actorName}
         </span>
-
-        <span className="shrink-0 text-[11px] text-text-muted">
-          {formatRelativeTime(createdAt)}
+        <span className="text-text-muted">
+          {' '}
+          {description.verb}
         </span>
-      </div>
+        {description.objectTitle ? (
+          <span className="font-semibold">
+            {' '}
+            {description.objectTitle}
+          </span>
+        ) : null}
+      </p>
 
-      <div className="mt-0.5 truncate text-[11px] text-text-muted">
-        {description.actorName} {description.verb}
-        {description.context
-          ? ` · ${description.context}`
-          : ''}
-        {description.subjectName
-          ? ` · for ${description.subjectName}`
-          : ''}
-      </div>
-    </>
+      {/* Secondary line: where + when, in reading order. */}
+      {metaParts.length > 0 ? (
+        <p className="mt-0.5 truncate text-[11px] leading-4 text-text-tertiary">
+          {metaParts.join(' · ')}
+        </p>
+      ) : null}
+    </div>
+  )
+}
+
+const ROW_CLASSES =
+  'grid w-full min-h-[52px] grid-cols-[24px_minmax(0,1fr)] items-start gap-x-3 rounded-md px-1.5 py-2 text-left'
+
+function ActorMark({ name }: { name: string }) {
+  return (
+    <span
+      aria-hidden="true"
+      className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-surface-muted text-[10px] font-semibold leading-none text-text-muted"
+    >
+      {actorInitials(name)}
+    </span>
   )
 }
 
@@ -191,110 +244,125 @@ export function ActivityRail({
   return (
     <section
       aria-labelledby={headingId}
-      className="overflow-hidden rounded-xl border border-border-subtle bg-surface-quiet"
+      className="border-t border-border-subtle pt-7 xl:border-l xl:border-t-0 xl:pl-6 xl:pt-0"
     >
-      <div className="border-b border-border-subtle px-4 py-3.5">
-        <h2
-          id={headingId}
-          className="text-sm font-semibold text-text"
-        >
-          Activity
-        </h2>
-
-        <p className="mt-0.5 text-xs text-text-muted">
-          Recent activity you can see.
-        </p>
-      </div>
-
-      {loading ? (
-        <div
-          role="status"
-          className="flex items-center gap-2 px-4 py-6"
-        >
-          <span className="material-symbols-outlined animate-spin text-[16px] text-text-muted">
-            refresh
-          </span>
-
-          <span className="text-sm text-text-muted">
-            Loading…
-          </span>
-        </div>
-      ) : error ? (
-        <div className="px-4 py-6" role="alert">
-          <p className="text-sm font-medium text-text">
-            Activity couldn't be loaded.
-          </p>
-
-          <p className="mt-1 text-xs text-text-muted">
-            {error}
-          </p>
-
-          <button
-            type="button"
-            onClick={onRetry}
-            className="mt-3 inline-flex h-8 items-center gap-1.5 rounded-lg border border-border-subtle px-3 text-xs font-semibold text-text transition hover:bg-surface-hover"
+      {/* Sticky at desktop width only: the rail follows the primary
+       * column while Home scrolls, and the event history below the
+       * header scrolls inside the rail. */}
+      <div className="xl:sticky xl:top-20">
+        <div className="mb-4">
+          <h2
+            id={headingId}
+            className="text-[15px] font-semibold leading-5 text-text"
           >
-            <span className="material-symbols-outlined text-[15px]">
-              refresh
-            </span>
-            Try again
-          </button>
-        </div>
-      ) : events.length === 0 ? (
-        <p className="px-4 py-7 text-center text-sm text-text-muted">
-          No visible recent activity.
-        </p>
-      ) : (
-        <ul className="divide-y divide-border-subtle">
-          {events.map((event) => {
-            const description =
-              describeActivityEvent(event)
-            const target = description.target
+            Activity
+          </h2>
 
-            return (
-              <li key={event.id}>
-                {target?.kind === 'meeting' ? (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      onOpenMeeting(target.id)
-                    }
-                    className="w-full px-4 py-2.5 text-left transition hover:bg-surface-hover"
-                  >
-                    <ActivityRowContent
-                      description={description}
-                      createdAt={event.createdAt}
-                    />
-                  </button>
-                ) : target?.kind === 'work_item_project' ||
-                  target?.kind === 'project' ? (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      onOpenWorkItemProject(
-                        target.id,
-                      )
-                    }
-                    className="w-full px-4 py-2.5 text-left transition hover:bg-surface-hover"
-                  >
-                    <ActivityRowContent
-                      description={description}
-                      createdAt={event.createdAt}
-                    />
-                  </button>
-                ) : (
-                  <div className="px-4 py-2.5">
-                    <ActivityRowContent
-                      description={description}
-                      createdAt={event.createdAt}
-                    />
-                  </div>
-                )}
-              </li>
-            )
-          })}
-        </ul>
-      )}
+          <p className="mt-0.5 text-[11px] leading-4 text-text-tertiary">
+            Latest changes across your work.
+          </p>
+        </div>
+
+        <div className="xl:max-h-[calc(100dvh-112px)] xl:overflow-y-auto">
+          {loading ? (
+            <div role="status" aria-label="Loading activity">
+              {[0, 1, 2, 3].map((i) => (
+                <div
+                  key={i}
+                  className="grid grid-cols-[24px_minmax(0,1fr)] items-start gap-x-3 border-b border-border-subtle px-1.5 py-2"
+                >
+                  <span className="h-6 w-6 animate-pulse rounded-full bg-surface-muted" />
+
+                  <span className="flex w-full flex-col gap-1.5 pt-0.5">
+                    <span className="h-3 w-4/5 animate-pulse rounded bg-surface-muted" />
+
+                    <span className="h-2.5 w-3/5 animate-pulse rounded bg-surface-muted" />
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : error ? (
+            <div className="px-1.5 py-2" role="alert">
+              <p className="text-[13px] font-medium text-text">
+                Activity couldn't be loaded.
+              </p>
+
+              <p className="mt-0.5 break-words text-[11px] text-text-tertiary">
+                {error}
+              </p>
+
+              <button
+                type="button"
+                onClick={onRetry}
+                className="mt-2.5 inline-flex h-7 items-center gap-1.5 rounded-md border border-border-subtle px-2.5 text-[11px] font-semibold text-text transition hover:bg-surface-hover"
+              >
+                <span className="material-symbols-outlined text-[14px]">
+                  refresh
+                </span>
+                Try again
+              </button>
+            </div>
+          ) : events.length === 0 ? (
+            <p className="px-1.5 py-3 text-[13px] leading-5 text-text-tertiary">
+              No recent activity.
+            </p>
+          ) : (
+            <ul className="divide-y divide-border-subtle">
+              {events.map((event) => {
+                const description =
+                  describeActivityEvent(event)
+                const target = description.target
+
+                return (
+                  <li key={event.id}>
+                    {target?.kind === 'meeting' ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onOpenMeeting(target.id)
+                        }
+                        className={`${ROW_CLASSES} transition hover:bg-surface-hover`}
+                      >
+                        <ActorMark name={description.actorName} />
+
+                        <ActivityRowContent
+                          description={description}
+                          createdAt={event.createdAt}
+                        />
+                      </button>
+                    ) : target?.kind === 'work_item_project' ||
+                      target?.kind === 'project' ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onOpenWorkItemProject(target.id)
+                        }
+                        className={`${ROW_CLASSES} transition hover:bg-surface-hover`}
+                      >
+                        <ActorMark name={description.actorName} />
+
+                        <ActivityRowContent
+                          description={description}
+                          createdAt={event.createdAt}
+                        />
+                      </button>
+                    ) : (
+                      <div className={ROW_CLASSES}>
+                        <ActorMark name={description.actorName} />
+
+                        <ActivityRowContent
+                          description={description}
+                          createdAt={event.createdAt}
+                        />
+                      </div>
+                    )}
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+        </div>
+      </div>
     </section>
   )
 }

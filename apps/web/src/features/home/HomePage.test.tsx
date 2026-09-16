@@ -443,15 +443,27 @@ describe('Activity independence', () => {
     expect(listActivityFeed).toHaveBeenCalledTimes(1)
     expect(listActivityFeed).toHaveBeenCalledWith(20)
 
-    // The Activity row is inside the Activity section, with the
-    // actor + verb semantics.
+    // The Activity row is inside the Activity section and reads as
+    // the human sentence: actor + verb + object.
     const activitySection = within(
       screen.getByRole('complementary', {
         name: 'Activity',
       }),
     )
+    // The primary line is the complete human sentence.
     expect(
-      activitySection.getByText(/Alex updated/),
+      activitySection.getByText(
+        (_content, element) =>
+          element?.tagName === 'P' &&
+          element.textContent === 'Alex updated Activity Feed WI',
+      ),
+    ).toBeInTheDocument()
+
+    // Context + relative time render together as the secondary
+    // metadata line (time wording is relative, so match the
+    // context prefix).
+    expect(
+      activitySection.getByText(/Paper XYZ · /),
     ).toBeInTheDocument()
   })
 
@@ -477,6 +489,101 @@ describe('Activity independence', () => {
         "Activity couldn't be loaded.",
       )
     })
+  })
+
+  it('navigable Activity events keep their canonical targets', async () => {
+    renderHome()
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          (_content, element) =>
+            element?.tagName === 'P' &&
+            element.textContent === 'Alex updated Activity Feed WI',
+        ),
+      ).toBeInTheDocument()
+    })
+
+    const activitySection = within(
+      screen.getByRole('complementary', {
+        name: 'Activity',
+      }),
+    )
+
+    // The Work Item event opens the Work Item's Project read
+    // surface.
+    fireEvent.click(
+      activitySection.getByRole('button', {
+        name: /Activity Feed WI/,
+      }),
+    )
+
+    expect(currentLocation()).toBe(
+      '/projects/7/work-items',
+    )
+  })
+
+  it('non-navigable Activity events remain safe and non-interactive', async () => {
+    mockSuccessfulLoads(
+      makeHome(),
+      [
+        {
+          id: 2,
+          eventType: 'research_group.member_offboarded',
+          actor: {
+            id: 2,
+            username: 'leon',
+            firstName: 'Leon',
+            lastName: '',
+          },
+          subjectUser: {
+            id: 3,
+            username: 'pat',
+            firstName: 'Pat',
+            lastName: '',
+          },
+          workItemId: null,
+          workItemTitle: null,
+          meetingId: null,
+          meetingTitle: null,
+          projectId: null,
+          projectName: null,
+          researchGroupId: 1,
+          researchGroupName: 'FG Research Group',
+          changes: {},
+          createdAt: isoDateTime(0, 9, 0),
+        },
+      ],
+    )
+
+    renderHome()
+
+    // The membership event still reads as a meaningful sentence
+    // with its subject preserved.
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          (_content, element) =>
+            element?.tagName === 'P' &&
+            element.textContent ===
+              'Leon offboarded a member from FG Research Group',
+        ),
+      ).toBeInTheDocument()
+    })
+
+    const activitySection = within(
+      screen.getByRole('complementary', {
+        name: 'Activity',
+      }),
+    )
+    expect(
+      activitySection.getByText(/for Pat/),
+    ).toBeInTheDocument()
+
+    // No canonical target: the row is not interactive.
+    expect(
+      activitySection.queryByRole('button'),
+    ).not.toBeInTheDocument()
   })
 })
 
@@ -545,7 +652,7 @@ describe('Empty states', () => {
       sectionHeading('Continue working'),
     ).toBeInTheDocument()
     expect(
-      screen.getByText('No visible recent activity.'),
+      screen.getByText('No recent activity.'),
     ).toBeInTheDocument()
   })
 })

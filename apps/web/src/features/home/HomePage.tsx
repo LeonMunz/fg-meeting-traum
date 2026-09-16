@@ -151,7 +151,7 @@ export function HomePage() {
         </p>
       </header>
 
-      <div className="mt-8 grid gap-6 xl:grid-cols-[minmax(0,1fr)_340px] xl:items-start">
+      <div className="mt-8 grid gap-y-7 xl:grid-cols-[minmax(0,1fr)_320px] xl:gap-x-8">
         {/* Main Home content — dominant width */}
         <div className="min-w-0 space-y-6">
           {homeLoading ? (
@@ -227,7 +227,7 @@ export function HomePage() {
           ) : null}
         </div>
 
-        {/* Activity rail — visually secondary, independent state */}
+        {/* Activity rail — visually secondary sticky context column, independent state */}
         <aside
           aria-label="Activity"
           className="min-w-0"
