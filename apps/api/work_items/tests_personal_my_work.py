@@ -1,16 +1,23 @@
 """Tests for the personal cross-Research-Group My Work projection."""
 
+from datetime import date, datetime, timezone
+
 from django.contrib.auth import get_user_model
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 
 from rest_framework.test import APIClient, APITestCase
 
-from projects.models import ProjectMembership
+from projects.models import (
+    ProjectMembership,
+    WorkItemStatusDefinition,
+)
 from projects.services import create_project
 from research_groups.models import (
     ResearchGroup,
     ResearchGroupMembership,
 )
-from work_items.models import WorkItemAssignee
+from work_items.models import WorkItem, WorkItemAssignee
 from work_items.services import create_work_item
 
 User = get_user_model()
@@ -400,4 +407,245 @@ class PersonalMyWorkApiTest(APITestCase):
         self.assertIn(
             "Completed Work",
             titles,
+        )
+
+    def test_response_preserves_canonical_payload_and_status_representation(self):
+        # A concrete project-local status with a custom display
+        # name and the fixed semantic category ``in_progress``.
+        ready = WorkItemStatusDefinition.objects.create(
+            project=self.project_a,
+            name="Ready for Lab",
+            category=(
+                WorkItemStatusDefinition.Category.IN_PROGRESS
+            ),
+        )
+        self.work_a.status_definition = ready
+        self.work_a.due_date = date(2026, 10, 1)
+        self.work_a.save()
+
+        self.login()
+
+        response = self.client.get("/api/me/work-items/")
+
+        self.assertEqual(response.status_code, 200)
+        items = {
+            item["title"]: item
+            for item in response.json()
+        }
+        item = items["Rewrite Introduction"]
+
+        # Canonical Work Item identity/data (the Project Work Item
+        # API contract — definition IDs, not fixed strings).
+        self.assertEqual(item["id"], self.work_a.pk)
+        self.assertEqual(
+            item["typeDefinitionId"],
+            self.project_a.type_definitions.get(name="Task").pk,
+        )
+        self.assertEqual(item["assigneeIds"], [self.chris.pk])
+        self.assertEqual(item["dueDate"], "2026-10-01")
+
+        # Concrete project-local status AND its fixed semantic
+        # category — both preserved, never collapsed into one
+        # global status.
+        self.assertEqual(item["statusDefinitionId"], ready.pk)
+        self.assertEqual(item["statusName"], "Ready for Lab")
+        self.assertEqual(
+            item["statusCategory"],
+            "in_progress",
+        )
+
+        # Explicit cross-project context.
+        self.assertEqual(
+            item["projectId"],
+            self.project_a.pk,
+        )
+        self.assertEqual(item["projectName"], "Paper XYZ")
+        self.assertEqual(
+            item["researchGroupId"],
+            self.group_a.pk,
+        )
+        self.assertEqual(
+            item["researchGroupName"],
+            "FG Cognitive Science",
+        )
+
+        # The other Project keeps its own concrete status — the
+        # two items are not collapsed into one global status.
+        other = items["Analyze Robot Data"]
+        self.assertEqual(other["statusName"], "Todo")
+        self.assertEqual(other["statusCategory"], "todo")
+        self.assertEqual(other["projectId"], self.project_b.pk)
+
+    def test_removing_assignment_removes_item(self):
+        WorkItemAssignee.objects.get(
+            work_item=self.work_a,
+            user=self.chris,
+        ).delete()
+
+        self.login()
+
+        response = self.client.get("/api/me/work-items/")
+
+        self.assertEqual(response.status_code, 200)
+        titles = {
+            item["title"]
+            for item in response.json()
+        }
+        self.assertNotIn("Rewrite Introduction", titles)
+        self.assertIn("Analyze Robot Data", titles)
+
+    def test_deterministic_ordering(self):
+        """Document the endpoint's deterministic server ordering:
+        canonical creation order (``created_at`` ascending) with a
+        stable Work Item ID tie-break, across Projects and Research
+        Groups. ``board_position`` is Project-local Board state and
+        is never a cross-project ordering input; no
+        user-configurable sorting is exposed."""
+        qc_a = create_work_item(
+            project=self.project_a,
+            actor=self.chris,
+            type_definition_id=(
+                self.project_a.type_definitions.get(name="Task").pk
+            ),
+            title="QC mid A",
+            assignee_ids=[self.chris.pk],
+        )
+        qc_b = create_work_item(
+            project=self.project_b,
+            actor=self.chris,
+            type_definition_id=(
+                self.project_b.type_definitions.get(name="Task").pk
+            ),
+            title="QC mid B",
+            assignee_ids=[self.chris.pk],
+        )
+
+        # Deliberately decouple creation time from ID order (the
+        # items were created work_a, work_b, qc_a, qc_b).
+        WorkItem.objects.filter(pk=self.work_b.pk).update(
+            created_at=datetime(2026, 2, 1, 9, 0, tzinfo=timezone.utc),
+        )
+        WorkItem.objects.filter(pk=qc_a.pk).update(
+            created_at=datetime(2026, 2, 2, 9, 0, tzinfo=timezone.utc),
+        )
+        WorkItem.objects.filter(pk=qc_b.pk).update(
+            created_at=datetime(2026, 2, 2, 9, 0, tzinfo=timezone.utc),
+        )
+        WorkItem.objects.filter(pk=self.work_a.pk).update(
+            created_at=datetime(2026, 2, 3, 9, 0, tzinfo=timezone.utc),
+        )
+
+        self.login()
+
+        response = self.client.get("/api/me/work-items/")
+
+        self.assertEqual(response.status_code, 200)
+        # created_at ascending across Projects; the two equal
+        # timestamps tie-break by ascending Work Item ID (qc_a was
+        # created before qc_b).
+        self.assertEqual(
+            [item["id"] for item in response.json()],
+            [self.work_b.pk, qc_a.pk, qc_b.pk, self.work_a.pk],
+        )
+
+
+# ── Query behavior (no N+1 growth) ──
+
+
+class PersonalMyWorkQueryCountTest(APITestCase):
+    """Behavioral query-count regression for the personal My Work
+    endpoint.
+
+    The read path must not add one query per returned Work Item:
+    Project / Research Group / status definition context is
+    eager-loaded with ``select_related``, assignees and labels with
+    ``prefetch_related``, and Meeting origin links with one bulk
+    query per request (not one per Work Item).
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.alice = User.objects.create_user(
+            username="qc_alice",
+            password="TestPass1!",
+        )
+        cls.group = ResearchGroup.objects.create(
+            name="QC FG",
+            created_by=cls.alice,
+        )
+        ResearchGroupMembership.objects.create(
+            research_group=cls.group,
+            user=cls.alice,
+            role=ResearchGroupMembership.Role.MEMBER,
+        )
+        cls.project = create_project(
+            research_group=cls.group,
+            creator=cls.alice,
+            name="QC Project",
+        )
+
+    def setUp(self):
+        self.client = APIClient()
+
+    def _make(self, title):
+        create_work_item(
+            project=self.project,
+            actor=self.alice,
+            type_definition_id=(
+                self.project.type_definitions.get(name="Task").pk
+            ),
+            title=title,
+            assignee_ids=[self.alice.pk],
+        )
+
+    def _login(self):
+        self.client.get("/api/auth/csrf/")
+        csrf_token = (
+            self.client.cookies.get("csrftoken").value
+        )
+        response = self.client.post(
+            "/api/auth/login/",
+            data={
+                "username": "qc_alice",
+                "password": "TestPass1!",
+            },
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=csrf_token,
+        )
+        self.assertEqual(response.status_code, 200)
+
+    def test_query_count_does_not_scale_with_row_count(self):
+        # Request 1: 2 assigned Work Items.
+        self._make("QC work 1")
+        self._make("QC work 2")
+        self._login()
+
+        with CaptureQueriesContext(connection) as small_ctx:
+            response = self.client.get("/api/me/work-items/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.json()), 2)
+
+        # Request 2: 14 assigned Work Items (7x the rows, same
+        # shape).
+        for i in range(3, 15):
+            self._make(f"QC work {i}")
+
+        with CaptureQueriesContext(connection) as large_ctx:
+            response = self.client.get("/api/me/work-items/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.json()), 14)
+
+        # Invariant: 7x the rows add ZERO queries — a per-row
+        # relation lookup (Project / Research Group / status
+        # definition / assignee / label N+1, or a per-item Meeting
+        # origin check) would make the second request issue 12 more
+        # queries.
+        self.assertEqual(
+            len(small_ctx.captured_queries),
+            len(large_ctx.captured_queries),
+            "personal My Work query count must not scale with the "
+            "returned row count; every serialized relation (Project, "
+            "Research Group, status definition, assignees, labels) "
+            "and the Meeting origin check must be eager-loaded or "
+            "bulk-fetched per request.",
         )

@@ -65,14 +65,20 @@ class WorkItemSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
     def get_assigneeIds(self, obj):
-        return list(
-            obj.assignee_relations.values_list("user__pk", flat=True)
-        )
+        # Plain relation access (not values_list) so a prefetched
+        # ``assignee_relations`` queryset is honored — read paths
+        # that prefetch (personal My Work) keep a constant query
+        # count; unprefetched callers query exactly as before.
+        return [
+            assignee.user_id
+            for assignee in obj.assignee_relations.all()
+        ]
 
     def get_labelDefinitionIds(self, obj):
-        return list(
-            obj.label_relations.values_list("label__pk", flat=True)
-        )
+        return [
+            relation.label_id
+            for relation in obj.label_relations.all()
+        ]
 
 
 class WorkItemHistoryEventSerializer(serializers.Serializer):

@@ -762,6 +762,26 @@ WHERE current authenticated user is assignee
 AND current user still has Project access
 ```
 
+My Work is a derived personal view over canonical Project Work
+Items. Membership in My Work is never persisted independently; it is
+determined by current assignment plus current authorization (current
+`WorkItemAssignee` + current `ProjectMembership` `owner`/`member` in
+the Work Item's Project + current `ResearchGroupMembership` in the
+Project's Research Group). Removing the user as assignee, removing
+Project access, or losing the required Research Group access removes
+the item from My Work immediately. There is no denormalized My Work
+membership table and no cached membership snapshot.
+
+The global My Work Kanban will group by semantic status category
+while retaining each Work Item's concrete project-local status: the
+My Work read API returns both the concrete Project StatusDefinition
+(`statusDefinitionId` + `statusName`) and that definition's fixed
+semantic category (`statusCategory`: `todo` / `in_progress` /
+`review` / `done`). The concrete project status is never collapsed
+into the global category, and the canonical Work Item type payload
+(`typeDefinitionId`) is preserved — no semantic Task/Epic/Milestone/
+Deliverable `kind` exists.
+
 Possible UI filters:
 
 - All

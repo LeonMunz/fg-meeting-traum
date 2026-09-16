@@ -868,27 +868,43 @@ def _require_project_write_access(project: Project, actor) -> None:
         raise WorkItemDomainError("You do not have access to this Project.")
 
 
-def resolve_work_item_meeting_origin(work_item: WorkItem, user):
+# Sentinel distinguishing "origin not yet resolved by the caller"
+# from the explicit, pre-resolved "this Work Item has no note-backed
+# origin" (a caller-supplied ``None``), so read paths that bulk-fetch
+# origins for a whole page never re-query per Work Item.
+_ORIGIN_UNRESOLVED = object()
+
+
+def resolve_work_item_meeting_origin(
+    work_item: WorkItem, user, relation=_ORIGIN_UNRESOLVED,
+):
     """Resolve the persisted Meeting source of a WorkItem, if any.
 
     A WorkItem created from a MeetingNote carries exactly one source
     link (MeetingItem + MeetingNote). The origin is only exposed when
     the requesting user can read that Meeting, so Meeting content
     never leaks through Work Item representations.
+
+    ``relation`` accepts the caller's pre-fetched source link for
+    this Work Item (or an explicit ``None`` when the caller has
+    already established there is none) — the canonical per-item
+    query runs only when the relation was not resolved by the
+    caller.
     """
     from meetings.models import Meeting
 
-    relation = (
-        work_item.meeting_item_relations
-        .filter(meeting_note__isnull=False)
-        .select_related(
-            "meeting_item",
-            "meeting_item__meeting",
-            "meeting_note",
+    if relation is _ORIGIN_UNRESOLVED:
+        relation = (
+            work_item.meeting_item_relations
+            .filter(meeting_note__isnull=False)
+            .select_related(
+                "meeting_item",
+                "meeting_item__meeting",
+                "meeting_note",
+            )
+            .order_by("id")
+            .first()
         )
-        .order_by("id")
-        .first()
-    )
     if relation is None:
         return None
 

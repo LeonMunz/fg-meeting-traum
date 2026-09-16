@@ -17,6 +17,7 @@ from rest_framework.views import APIView
 from audit_history.models import AuditEvent
 from authorization.capabilities import Capability
 from authorization.service import resolve_project_scope
+from meetings.models import MeetingItemWorkItem
 from projects.models import Project, ProjectMembership
 from research_groups.models import ResearchGroupMembership
 
@@ -28,6 +29,7 @@ from .serializers import (
     WorkItemSerializer,
 )
 from .services import (
+    _ORIGIN_UNRESOLVED,
     WorkItemAuditEventType,
     WorkItemDomainError,
     create_work_item,
@@ -57,7 +59,9 @@ def _require_project_access(request, project_id):
     return project, scope
 
 
-def serialize_work_item(work_item, user=None):
+def serialize_work_item(
+    work_item, user=None, meeting_origin_relation=_ORIGIN_UNRESOLVED,
+):
     """Serialize a WorkItem to the API response shape.
 
     When ``user`` is provided, the response also carries
@@ -66,6 +70,11 @@ def serialize_work_item(work_item, user=None):
     resolved through the source relation and permission-filtered so
     Meeting content never leaks to users who cannot read that
     Meeting.
+
+    ``meeting_origin_relation`` lets a read path that bulk-fetches
+    origins for a whole page pass the pre-resolved source link (or
+    ``None`` when the Work Item has no note-backed origin) so no
+    per-item origin query runs.
     """
     serializer = WorkItemSerializer(work_item)
     data = serializer.data
@@ -90,8 +99,10 @@ def serialize_work_item(work_item, user=None):
         "labelDefinitionIds": data["labelDefinitionIds"],
     }
     if user is not None:
-        result["meetingOrigin"] = (
-            resolve_work_item_meeting_origin(work_item, user)
+        result["meetingOrigin"] = resolve_work_item_meeting_origin(
+            work_item,
+            user,
+            relation=meeting_origin_relation,
         )
     return result
 
@@ -773,19 +784,51 @@ class PersonalMyWorkView(APIView):
                     status=404,
                 )
 
-        work_items = personal_my_work_queryset(
-            request.user, group_id=group_id,
-        ).select_related(
-            "project",
-            "project__research_group",
-            "created_by",
-            "parent",
+        # Deterministic server ordering for the initial personal
+        # work list: canonical creation order (``created_at``) with a
+        # stable Work Item ID tie-break — no cross-project Board
+        # ordering convention exists (``board_position`` is only
+        # meaningful within one Project/status column) and no
+        # user-configurable sorting is exposed.
+        work_items = list(
+            personal_my_work_queryset(
+                request.user, group_id=group_id,
+            ).select_related(
+                "project",
+                "project__research_group",
+                "created_by",
+                "parent",
+                "status_definition",
+            ).prefetch_related(
+                "assignee_relations",
+                "label_relations",
+            ).order_by("created_at", "id")
         )
+
+        # One bulk origin check for the whole page instead of one
+        # per Work Item: the earliest note-backed link wins (same
+        # semantics as the canonical per-item ``.order_by("id")
+        # .first()`` lookup).
+        origins = {}
+        if work_items:
+            for origin in MeetingItemWorkItem.objects.filter(
+                work_item_id__in=[wi.pk for wi in work_items],
+                meeting_note__isnull=False,
+            ).select_related(
+                "meeting_item",
+                "meeting_item__meeting",
+                "meeting_note",
+            ).order_by("id"):
+                origins.setdefault(origin.work_item_id, origin)
 
         data = []
 
         for work_item in work_items:
-            item = serialize_work_item(work_item, user=request.user)
+            item = serialize_work_item(
+                work_item,
+                user=request.user,
+                meeting_origin_relation=origins.get(work_item.pk),
+            )
 
             item.update({
                 "projectName": work_item.project.name,
@@ -794,6 +837,17 @@ class PersonalMyWorkView(APIView):
                 ),
                 "researchGroupName": (
                     work_item.project.research_group.name
+                ),
+                # Concrete project-local status (its Project
+                # StatusDefinition) plus the definition's fixed
+                # semantic category — the global My Work grouping
+                # input. The two are never collapsed: the canonical
+                # ``statusDefinitionId`` stays authoritative and
+                # ``statusCategory`` is a fixed display/grouping
+                # attribute of that definition.
+                "statusName": work_item.status_definition.name,
+                "statusCategory": (
+                    work_item.status_definition.category
                 ),
             })
 
