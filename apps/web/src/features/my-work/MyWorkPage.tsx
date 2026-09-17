@@ -17,26 +17,36 @@ import { useResearchGroup } from '../research-group/useResearchGroup'
 type GroupFilter = 'all' | number
 
 /**
- * Personal cross-project My Work List View.
+ * Personal cross-project My Work (List + read-only Kanban).
  *
  * The page renders exactly what the canonical personal endpoint
  * `GET /api/me/work-items/` returns — one request, no per-Project or
  * per-Research-Group requests. Project / Research Group names and the
  * concrete project-local status (`statusName`) come from the payload
- * itself, so no Project configuration is fetched for display.
+ * itself, so no Project configuration is fetched for display. Both the
+ * List and the Kanban render the SAME canonical payload; switching
+ * views is presentation-only and never refetches.
  *
- * The row presentation mirrors the Project Work Items List View
+ * List: the row presentation mirrors the Project Work Items List View
  * conventions (54px rows, 11px column labels, semantic status glyphs,
  * due-date labels, hover treatment) expanded to personal
- * cross-project scope. The Work Item type is shown as the concrete
- * project-local `typeName` from the payload — a display name, not a
- * semantic discriminator: no Task/Epic/Milestone/Deliverable kind or
- * type-specific icon is inferred from it. The neutral canonical Work
- * Item icon remains (a semantic type icon mapping is future work).
+ * cross-project scope.
  *
- * Opening a row navigates to the item's canonical Project Work Items
- * surface (the same navigation the cross-project Home rows use); the
- * drawer and its mutations stay in their owning feature.
+ * Kanban (default): four fixed semantic columns (Todo / In progress /
+ * Review / Done) grouped SOLELY by `statusCategory`, preserving the
+ * canonical API order within each column. Read-only in this slice — no
+ * drag/drop, no status mutation, no drop zones from `statusTargets`, no
+ * global card ordering.
+ *
+ * The Work Item type is shown as the concrete project-local `typeName`
+ * from the payload — a display name, not a semantic discriminator: no
+ * Task/Epic/Milestone/Deliverable kind or type-specific icon is
+ * inferred from it. The neutral canonical Work Item icon remains (a
+ * semantic type icon mapping is future work).
+ *
+ * Opening a row / card navigates to the item's canonical Project Work
+ * Items surface (the same navigation the cross-project Home rows use);
+ * the drawer and its mutations stay in their owning feature.
  */
 
 // ── Presentation helpers ────────────────────────────────
@@ -189,6 +199,25 @@ function getErrorMessage(
 const gridColumns =
   'xl:grid-cols-[minmax(320px,1fr)_160px_220px_110px]'
 
+// Presentation-only personal view. No persistence (no localStorage /
+// URL query / backend preference) — a reload returns to the default
+// Kanban. Both views render the SAME canonical payload.
+type MyWorkView = 'kanban' | 'list'
+
+// Fixed global semantic columns for the personal Kanban. Grouping is
+// by the Work Item's `statusCategory` only (a fixed domain attribute
+// of its concrete StatusDefinition) — never by the concrete statusName,
+// the statusDefinitionId, boardPosition, Project, or Research Group.
+const GLOBAL_STATUS_COLUMNS: Array<{
+  value: ApiWorkItemStatus
+  label: string
+}> = [
+  { value: 'todo', label: 'Todo' },
+  { value: 'in_progress', label: 'In progress' },
+  { value: 'review', label: 'Review' },
+  { value: 'done', label: 'Done' },
+]
+
 export function MyWorkPage() {
   const navigate = useNavigate()
   const { groups } = useResearchGroup()
@@ -202,6 +231,12 @@ export function MyWorkPage() {
   >(null)
   const [groupFilter, setGroupFilter] =
     useState<GroupFilter>('all')
+
+  // Presentation-only view switch — see MyWorkView. Switching between
+  // List and Kanban is purely presentational: it never refetches
+  // /api/me/work-items/, fetches Project configuration, or fetches
+  // Projects / Research Groups individually.
+  const [view, setView] = useState<MyWorkView>('kanban')
 
   const loadMyWork = useCallback(
     async () => {
@@ -261,6 +296,31 @@ export function MyWorkPage() {
     [groupFilter, orderedItems],
   )
 
+  // Global Kanban grouping over the SAME canonical payload. The group
+  // filter applies equally. Within each column the canonical API order
+  // is preserved (Array.filter keeps relative order); Project
+  // `boardPosition` is never a global ordering input and no global
+  // sort is introduced.
+  const kanbanColumns = useMemo(() => {
+    const source =
+      groupFilter === 'all'
+        ? items
+        : items.filter(
+            (item) =>
+              item.researchGroupId ===
+              groupFilter,
+          )
+
+    return GLOBAL_STATUS_COLUMNS.map((column) => ({
+      value: column.value,
+      label: column.label,
+      items: source.filter(
+        (item) =>
+          item.statusCategory === column.value,
+      ),
+    }))
+  }, [groupFilter, items])
+
   function openItem(
     item: ApiPersonalWorkItem,
   ) {
@@ -289,36 +349,93 @@ export function MyWorkPage() {
           </p>
         </div>
 
-        {groups.length > 1 && (
-          <select
-            value={groupFilter}
-            onChange={(event) => {
-              const value =
-                event.target.value
+        {/* Controls: the group filter (only with more than one group)
+         *  and the presentation-only List/Kanban switch. Grouped so the
+         *  title stays left and the controls wrap together below it in
+         *  the narrow column without forcing the document wider. */}
+        <div className="flex min-w-0 max-w-full flex-wrap items-center gap-3">
+          {groups.length > 1 && (
+            <select
+              value={groupFilter}
+              onChange={(event) => {
+                const value =
+                  event.target.value
 
-              setGroupFilter(
-                value === 'all'
-                  ? 'all'
-                  : Number(value),
-              )
-            }}
-            aria-label="Filter by research group"
-            className="h-10 min-w-0 max-w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15"
-          >
-            <option value="all">
-              All research groups
-            </option>
-
-            {groups.map((group) => (
-              <option
-                key={group.id}
-                value={group.id}
-              >
-                {group.name}
+                setGroupFilter(
+                  value === 'all'
+                    ? 'all'
+                    : Number(value),
+                )
+              }}
+              aria-label="Filter by research group"
+              className="h-10 min-w-0 max-w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15"
+            >
+              <option value="all">
+                All research groups
               </option>
-            ))}
-          </select>
-        )}
+
+              {groups.map((group) => (
+                <option
+                  key={group.id}
+                  value={group.id}
+                >
+                  {group.name}
+                </option>
+              ))}
+            </select>
+          )}
+
+          {/* List/Kanban switch — same segmented control pattern as the
+           *  Project Work Items view switch. Presentation-only: it does
+           *  not refetch, fetch Project configuration, or persist. Each
+           *  button exposes its name and pressed state. */}
+          <div
+            role="group"
+            aria-label="My Work view"
+            className="inline-flex max-w-full flex-wrap rounded-lg border border-border-structural bg-segmented-bg p-1"
+          >
+            <button
+              type="button"
+              aria-pressed={view === 'kanban'}
+              onClick={() => setView('kanban')}
+              className={[
+                'inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-sm font-medium transition',
+                view === 'kanban'
+                  ? 'bg-segmented-selected text-segmented-selected-text shadow-sm'
+                  : 'text-work-content-muted hover:text-work-content-text',
+              ].join(' ')}
+            >
+              <span
+                aria-hidden="true"
+                className="material-symbols-outlined text-[17px]"
+              >
+                view_kanban
+              </span>
+              Kanban
+            </button>
+
+            <button
+              type="button"
+              aria-pressed={view === 'list'}
+              onClick={() => setView('list')}
+              className={[
+                'inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-sm font-medium transition',
+                view === 'list'
+                  ? 'bg-segmented-selected text-segmented-selected-text shadow-sm'
+                  : 'text-work-content-muted hover:text-work-content-text',
+              ].join(' ')}
+            >
+              <span
+                aria-hidden="true"
+                className="material-symbols-outlined text-[17px]"
+              >
+                view_list
+              </span>
+              List
+            </button>
+          </div>
+        </div>
+
       </header>
 
       {loading ? (
@@ -375,6 +492,11 @@ export function MyWorkPage() {
             Assigned project work will appear here.
           </p>
         </div>
+      ) : view === 'kanban' ? (
+        <MyWorkBoard
+          columns={kanbanColumns}
+          onOpen={openItem}
+        />
       ) : (
         <section className="mt-8 overflow-hidden rounded-xl border border-border-structural bg-surface-quiet shadow-sm">
           <div
@@ -518,5 +640,214 @@ export function MyWorkPage() {
         </section>
       )}
     </div>
+  )
+}
+
+
+/**
+ * Read-only global My Work Kanban.
+ *
+ * Four fixed semantic columns (Todo / In progress / Review / Done)
+ * rendered over the SAME canonical `GET /api/me/work-items/` payload
+ * the List renders. Grouping is by `statusCategory` only; within a
+ * column the canonical API order is preserved. Read-only in this slice:
+ * no drag/drop, no status mutation, no drop zones from `statusTargets`,
+ * and no global card ordering. At narrow widths the board scrolls
+ * horizontally inside its own region — the document itself never
+ * overflows.
+ */
+function MyWorkBoard({
+  columns,
+  onOpen,
+}: {
+  columns: Array<{
+    value: ApiWorkItemStatus
+    label: string
+    items: ApiPersonalWorkItem[]
+  }>
+  onOpen: (item: ApiPersonalWorkItem) => void
+}) {
+  return (
+    <section className="mt-8 overflow-hidden rounded-xl border border-border-structural bg-surface-quiet shadow-sm">
+      <div className="overflow-x-auto bg-workspace">
+        <div
+          className="grid min-w-max gap-3 p-4"
+          style={{
+            gridTemplateColumns: `repeat(${columns.length}, minmax(260px, 1fr))`,
+          }}
+        >
+          {columns.map((column) => (
+            <div
+              key={column.value}
+              data-board-column={column.value}
+              className="flex min-h-[26rem] min-w-0 flex-col rounded-lg bg-board-column"
+            >
+              <div className="flex items-center gap-1.5 px-3 py-2.5">
+                <h2 className="text-[13px] font-semibold text-work-content-text">
+                  {column.label}
+                </h2>
+
+                <span className="text-xs text-text-work-faded-70">
+                  {column.items.length}
+                </span>
+              </div>
+
+              <div className="flex flex-1 flex-col gap-2 px-2 pb-3">
+                {column.items.length === 0 ? (
+                  <div className="flex min-h-10 items-center justify-center rounded-md px-2 py-3 text-[11px] text-text-work-faded-70">
+                    No items
+                  </div>
+                ) : (
+                  column.items.map((item) => (
+                    <MyWorkBoardCard
+                      key={item.id}
+                      item={item}
+                      onOpen={onOpen}
+                    />
+                  ))
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  )
+}
+
+/**
+ * Read-only My Work Kanban card.
+ *
+ * Understandable without Project context: title, the concrete
+ * project-local `typeName`, the concrete project-local `statusName`
+ * (the column already communicates the broad state, so the concrete
+ * status stays visible as detail), Project + Research Group, and the
+ * due / blocked state. The neutral canonical Work Item icon is used —
+ * no semantic type icon mapping. Opening uses the same canonical
+ * navigation as the List (the item's Project Work Items surface).
+ */
+function MyWorkBoardCard({
+  item,
+  onOpen,
+}: {
+  item: ApiPersonalWorkItem
+  onOpen: (item: ApiPersonalWorkItem) => void
+}) {
+  const status =
+    statusGlyphs[item.statusCategory] ??
+    statusGlyphs.todo
+
+  const due = getDueDisplay(
+    item.statusCategory,
+    getWorkItemDueFields(item.dueDate),
+  )
+
+  // Show the due value only when meaningful: a completed item or an
+  // item with no due date renders '—' in the List but nothing here.
+  const showDue =
+    due.label != null && due.label !== '—'
+
+  return (
+    <article
+      role="button"
+      tabIndex={0}
+      aria-label={`Open ${item.title}`}
+      data-work-item-id={item.id}
+      onClick={() => onOpen(item)}
+      onKeyDown={(event) => {
+        if (
+          event.key === 'Enter' ||
+          event.key === ' '
+        ) {
+          event.preventDefault()
+          onOpen(item)
+        }
+      }}
+      className={[
+        'cursor-pointer rounded-lg border bg-surface px-3 py-2.5 transition hover:bg-work-surface-hover',
+        item.blockedReason
+          ? 'border-work-item-error-border'
+          : 'border-border-structural/50',
+      ].join(' ')}
+    >
+      <div className="flex items-start gap-2">
+        <span
+          title={item.typeName}
+          aria-label={item.typeName}
+          className="material-symbols-outlined mt-0.5 shrink-0 text-[15px] text-work-content-muted"
+        >
+          {WORK_ITEM_TYPE_ICON}
+        </span>
+
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-start gap-2">
+            <h3 className="min-w-0 flex-1 text-sm font-semibold leading-5 text-work-content-text">
+              {item.title}
+            </h3>
+
+            {item.blockedReason && (
+              <span
+                title={item.blockedReason}
+                className="mt-0.5 shrink-0 text-[11px] font-semibold text-work-item-error"
+              >
+                · Blocked
+              </span>
+            )}
+          </div>
+
+          <div className="mt-1 truncate text-[11px] text-work-content-muted">
+            {item.typeName}
+          </div>
+        </div>
+      </div>
+
+      <div
+        className={[
+          'mt-2 flex items-center gap-1.5 pl-[23px] text-xs',
+          status.className,
+        ].join(' ')}
+      >
+        <span
+          aria-hidden="true"
+          className="inline-flex w-4 shrink-0 justify-center text-[15px] leading-none"
+        >
+          {status.glyph}
+        </span>
+
+        <span className="truncate text-work-content-muted">
+          {item.statusName}
+        </span>
+      </div>
+
+      <div className="mt-1 flex min-w-0 items-center gap-1 pl-[23px] text-[11px] text-text-work-faded-75">
+        <span className="truncate">
+          {item.projectName}
+        </span>
+
+        <span
+          aria-hidden="true"
+          className="shrink-0"
+        >
+          ·
+        </span>
+
+        <span className="truncate">
+          {item.researchGroupName}
+        </span>
+      </div>
+
+      {showDue && (
+        <div
+          className={[
+            'mt-1 pl-[23px] text-[11px]',
+            due.attention
+              ? 'font-semibold text-work-item-error'
+              : 'font-normal text-work-content-muted',
+          ].join(' ')}
+        >
+          {due.label}
+        </div>
+      )}
+    </article>
   )
 }

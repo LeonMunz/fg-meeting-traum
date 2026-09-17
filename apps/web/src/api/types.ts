@@ -168,6 +168,12 @@ export interface ApiWorkItemMeetingOrigin {
   noteContent: string
 }
 
+export interface ApiWorkItemStatusTarget {
+  statusCategory: ApiWorkItemStatus
+  statusDefinitionId: number
+  statusName: string
+}
+
 export interface ApiPersonalWorkItem extends ApiWorkItem {
   projectName: string
   researchGroupId: number
@@ -187,6 +193,13 @@ export interface ApiPersonalWorkItem extends ApiWorkItem {
   // statusDefinitionId stays authoritative.
   statusName: string
   statusCategory: ApiWorkItemStatus
+  // Read-only global-Kanban status targets (see ApiWorkItemStatusTarget):
+  // the concrete project-local StatusDefinition resolved per fixed
+  // semantic category. Carried by GET /api/me/work-items/ for a future
+  // category-driven move; parsed and stored with the payload but NOT
+  // used for mutation, ordering, drop zones, or UI enablement in this
+  // slice.
+  statusTargets: ApiWorkItemStatusTarget[]
 }
 
 export interface ApiCreateWorkItemInput {
