@@ -30,6 +30,8 @@ Do not change these choices without an explicit architecture decision.
 - `docs/` — durable product, domain, architecture, and Living-Lab documentation
 - `docs/stitch_examples/` — visual reference exports only
 - `scripts/agent-verify.sh` — repository verification helper (frontend / backend / full)
+- `scripts/agent-doctor.sh` — read-only environment capability doctor (human + JSON)
+- `scripts/tests/agent-doctor.test.sh` — doctor tests (formats, exit codes, simulated blockers)
 
 ## Documentation usage
 
@@ -163,6 +165,12 @@ commands, environment requirements, and mutation flags without executing.
 Targeted validation during development stays available (see `apps/web/AGENTS.md`
 and `apps/api/AGENTS.md`), e.g. `npm run typecheck`, `npm run test:unit
 --workspace=web`, or `uv run python manage.py test <app>` from `apps/api/`.
+
+`./scripts/agent-doctor.sh` (read-only; `--json` for machine-readable output)
+diagnoses which verification capabilities are available or blocked in the
+current environment. It is not part of any verification profile. Status
+values, exit codes, and the post-blocker environment budget are documented in
+`docs/living-lab.md` (Environment doctor).
 
 Do not invent a new testing framework merely to complete a task.
 

@@ -183,6 +183,71 @@ The Living-Lab environment uses:
 
 A test session should be attributable to an identifiable product version/commit.
 
+## Environment doctor (read-only)
+
+`scripts/agent-doctor.sh` is a single read-only diagnostic command that reports
+which verification capabilities are available or blocked in the current
+environment. It is diagnostic only:
+
+- it never runs tests,
+- it never starts services or browsers (the bounded Chromium launch preflight
+  closes the browser before the doctor continues; nothing is left running),
+- it never installs dependencies,
+- it never mutates the working tree or any database (the only database
+  statement executed is a read-only `SELECT 1`),
+- it never sets `FG_ALLOW_E2E_RESET` and never touches the `fg_e2e` schema.
+
+### Invocation
+
+```text
+./scripts/agent-doctor.sh          human-readable capability matrix
+./scripts/agent-doctor.sh --json   stable machine-readable JSON (agents / CI)
+./scripts/agent-doctor.sh --help   usage, status values, exit codes
+```
+
+The JSON mode has a fixed structure (`schema_version: 1`): `repo`,
+`environment`, an ordered `capabilities` array (each capability has at least
+`name`, `status`, `detail`), and a `summary` block.
+
+### Status values
+
+- `available` — the capability is present and works in this environment.
+- `unavailable` — a required component or dependency is missing (installation
+  would be needed; the doctor never installs).
+- `blocked` — the component is present but unusable in this environment
+  (sandbox/policy, failing browser launch, database auth failure, network
+  policy). Known blockers are deliberately reported differently from missing
+  dependencies.
+- `unknown` — not determinable without mutation or extra context.
+
+### Exit codes
+
+- `0` — all capabilities `available`.
+- `1` — diagnosis completed; at least one capability is `blocked`,
+  `unavailable`, or `unknown`.
+- `2` — usage error.
+- `3` — internal doctor failure.
+
+A blocked browser is **not** a successful E2E verification: the `e2e_gate`
+capability is `available` only when the Chromium launch preflight succeeded and
+the database is reachable. Otherwise the `e2e` profile cannot pass and must be
+reported as blocked, not as verified.
+
+### Environment budget after a detected blocker
+
+After the doctor (or any preflight) detects a browser/environment blocker: one
+normal attempt plus at most one retry after an immediately plausible,
+non-mutating diagnosis. Then classify the blocker and stop — no repeated
+install or launch attempts.
+
+### Doctor tests
+
+`bash scripts/tests/agent-doctor.test.sh` covers the output formats, exit
+codes, non-mutation, and simulated blockers (missing runtimes via restricted
+PATH, missing browser via empty `PLAYWRIGHT_BROWSERS_PATH`, blocked-launch
+classification and cause sanitization). The doctor is not part of any
+`agent-verify.sh` profile; run it directly.
+
 ## Living-Lab tasks
 
 Core tasks:
