@@ -244,45 +244,124 @@ test(
       /\/my-work$/,
     )
 
+    // The My Work Kanban (default Board view) renders the four
+    // fixed semantic columns; a card's column IS its semantic
+    // status.
     await expect(
-      page.getByText(
-        TASK_TITLE,
-        { exact: true },
+      page.getByRole(
+        'button',
+        { name: 'Board' },
       ),
+    ).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+
+    const todoColumn = page.locator(
+      '[data-board-column="todo"]',
+    )
+    const card = todoColumn.getByRole(
+      'button',
+      { name: `Open ${TASK_TITLE}` },
+    )
+    await expect(
+      card,
     ).toBeVisible()
 
+    // The card carries the owning-Project context.
     await expect(
-      page.getByText(
+      card.getByText(
         PROJECT_NAME,
         { exact: true },
       ),
     ).toBeVisible()
 
-    const statusSelect =
-      page.getByLabel(
-        `Status for ${TASK_TITLE}`,
+    // The item is initially in the semantically expected status
+    // `todo`, and not yet in the In progress column.
+    const inProgressColumn = page.locator(
+      '[data-board-column="in_progress"]',
+    )
+    await expect(
+      inProgressColumn.getByRole(
+        'button',
+        { name: `Open ${TASK_TITLE}` },
+      ),
+    ).toHaveCount(0)
+
+    // --------------------------------------------------------
+    // Chris changes the status via the current canonical My
+    // Work interaction: a Kanban drag into the In progress
+    // column. The drop resolves the concrete target solely
+    // from the item's own statusTargets and mutates through
+    // POST /api/work-items/{id}/transition-status/.
+    // --------------------------------------------------------
+
+    // Await the successful server request BEFORE the drag
+    // gesture.
+    const transitionResponse =
+      page.waitForResponse(
+        (response) =>
+          response.request().method() ===
+            'POST' &&
+          /\/api\/work-items\/\d+\/transition-status\/$/.test(
+            new URL(response.url()).pathname,
+          ),
       )
 
-    await expect(
-      statusSelect,
-    ).toHaveValue('todo')
+    await inProgressColumn.scrollIntoViewIfNeeded()
 
-    await statusSelect.selectOption(
-      'in_progress',
+    // Native HTML5 drag-and-drop needs a real mouse gesture
+    // (not locator.dragTo's single jump) for Chromium to
+    // recognize the drag threshold and dispatch
+    // dragstart/dragover/drop.
+    const cardBox = await card.boundingBox()
+    const targetBox =
+      await inProgressColumn.boundingBox()
+    if (!cardBox || !targetBox) {
+      throw new Error(
+        'Card or target column bounding box not found.',
+      )
+    }
+
+    await page.mouse.move(
+      cardBox.x + cardBox.width / 2,
+      cardBox.y + cardBox.height / 2,
     )
+    await page.mouse.down()
+    await page.mouse.move(
+      targetBox.x + targetBox.width / 2,
+      targetBox.y + targetBox.height / 2,
+      { steps: 20 },
+    )
+    await page.mouse.up()
 
+    // The server accepted the canonical status-only transition.
+    expect(
+      (await transitionResponse).ok(),
+    ).toBe(true)
+
+    // The authoritative refetched payload moved the card: it
+    // is now in the In progress column and no longer in Todo.
+    const movedCard = inProgressColumn.getByRole(
+      'button',
+      { name: `Open ${TASK_TITLE}` },
+    )
     await expect(
-      statusSelect,
-    ).toHaveValue('in_progress')
+      movedCard,
+    ).toBeVisible()
+    await expect(
+      card,
+    ).toHaveCount(0)
 
-    // Reload proves Chris's PATCH persisted.
+    // Reload proves Chris's status change persisted.
     await page.reload()
 
     await expect(
-      page.getByLabel(
-        `Status for ${TASK_TITLE}`,
+      inProgressColumn.getByRole(
+        'button',
+        { name: `Open ${TASK_TITLE}` },
       ),
-    ).toHaveValue('in_progress')
+    ).toBeVisible()
 
     // --------------------------------------------------------
     // Alex sees the same canonical status.
