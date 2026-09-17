@@ -531,6 +531,27 @@ button {
   cursor: pointer;
 }
 
+/* ── Material Symbols icon box ─────────────────────────────────────
+ * Material Symbols is a ligature-based icon font loaded from the
+ * Google Fonts CDN without an explicit `display=` parameter, i.e.
+ * with the default (swap) font-display behavior. Until the woff2
+ * arrives, the browser renders the literal ligature keyword
+ * ("expand_more", "view_kanban", …) as ordinary text — much wider
+ * than the final 1em glyph. `.icon-stable` pins the span footprint
+ * to exactly 1em so that fallback text can never widen the layout:
+ * no CLS and no transient document horizontal overflow while the
+ * icon font loads.
+ *
+ * Loaded-icon rendering is unchanged: the glyph advance is 1em by
+ * design, so the box never clips the rendered icon. Currently
+ * applied to the My Work toolbar / applied-filter icons (Research
+ * Groups chevron, Board/List switch, applied-chip removal). */
+.icon-stable {
+  display: inline-block;
+  width: 1em;
+  overflow: hidden;
+}
+
 /* ── Markdown / Rich Text editor (Work Item Description) ───────────
  * Deliberate, dense typography for the 520px inspector — not a generic
  * prose/typography plugin. Scoped to `.fg-prose` (applied to Tiptap's

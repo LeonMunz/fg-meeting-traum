@@ -414,6 +414,36 @@ async function switchView(
   })
 }
 
+// Open the Research Group multi-select popover and toggle ONE group's
+// checkbox (addressed by its accessible name — the group name). This
+// is the behavioral path a user takes; it exercises the toggle ->
+// popover -> checkbox flow, not internal state.
+async function selectResearchGroup(
+  util: {
+    getByRole: (
+      role: string,
+      options?: { name?: string | RegExp },
+    ) => HTMLElement
+  },
+  groupName: string,
+) {
+  await act(async () => {
+    fireEvent.click(
+      util.getByRole('button', {
+        name: /Research groups,/,
+      }),
+    )
+  })
+
+  await act(async () => {
+    fireEvent.click(
+      util.getByRole('checkbox', {
+        name: groupName,
+      }),
+    )
+  })
+}
+
 // The `data-work-item-id` of every card inside one semantic column.
 function columnCardIds(
   container: HTMLElement,
@@ -1573,7 +1603,7 @@ describe('My Work Kanban — visual contract', () => {
     ])
   })
 
-  it('displays the complete "All research groups" filter label', async () => {
+  it('replaces the legacy single-select with the Research groups toolbar toggle', async () => {
     mockGroups = [
       { id: GROUP_A, name: 'Research Group A' },
       { id: GROUP_B, name: 'Research Group B' },
@@ -1583,25 +1613,27 @@ describe('My Work Kanban — visual contract', () => {
       todoItem(),
     ])
 
-    const { container } = renderPage()
+    const { container, getByRole } = renderPage()
 
     await waitFor(() => {
       expect(
-        container.querySelector(
-          'select[aria-label="Filter by research group"]',
-        ),
-      ).not.toBeNull()
+        getByRole('button', {
+          name: 'Research groups, none selected',
+        }),
+      ).toBeInTheDocument()
     })
 
-    const select = container.querySelector(
-      'select[aria-label="Filter by research group"]',
-    ) as HTMLSelectElement
-
-    // The default option keeps its full, untruncated label.
+    // The legacy native single-select is gone entirely (there is no
+    // separate transient filter state — the persisted snapshot is the
+    // only source of truth).
     expect(
-      select.querySelector('option[value="all"]')
-        ?.textContent,
-    ).toBe('All research groups')
+      container.querySelector(
+        'select[aria-label="Filter by research group"]',
+      ),
+    ).toBeNull()
+    expect(
+      container.querySelector('select'),
+    ).toBeNull()
   })
 
   it('labels the view switch Board (not Kanban)', async () => {
@@ -2216,7 +2248,7 @@ describe('My Work Kanban — interaction, filter, and contract', () => {
     })
   })
 
-  it('closing the drawer returns to the board without navigation, keeping the group filter and the Kanban view', async () => {
+  it('closing the drawer returns to the board without navigation, keeping the Research Group filter and the Kanban view', async () => {
     mockGroups = [
       { id: GROUP_A, name: 'Research Group A' },
       { id: GROUP_B, name: 'Research Group B' },
@@ -2229,6 +2261,13 @@ describe('My Work Kanban — interaction, filter, and contract', () => {
         id: 100,
         projectId: PROJECT_A,
         researchGroupId: GROUP_A,
+        statusCategory: 'todo',
+      }),
+      makeItem({
+        id: 2,
+        title: 'Group B item',
+        researchGroupId: GROUP_B,
+        researchGroupName: 'Research Group B',
         statusCategory: 'todo',
       }),
     ])
@@ -2244,13 +2283,15 @@ describe('My Work Kanban — interaction, filter, and contract', () => {
       expect(card()).toBeInTheDocument()
     })
 
-    // Select the Research Group filter.
-    const select = container.querySelector(
-      'select[aria-label="Filter by research group"]',
-    ) as HTMLSelectElement
-    await act(async () => {
-      select.value = String(GROUP_A)
-      fireEvent.change(select)
+    // Apply the Research Group A filter via the multiselect popover.
+    await selectResearchGroup(
+      { getByRole },
+      'Research Group A',
+    )
+    await waitFor(() => {
+      expect(
+        container.querySelector('[data-work-item-id="2"]'),
+      ).toBeNull()
     })
 
     // Open the card, then close the drawer.
@@ -2288,7 +2329,13 @@ describe('My Work Kanban — interaction, filter, and contract', () => {
       ),
     ).toBeNull()
     expect(card()).toBeInTheDocument()
-    expect(select.value).toBe(String(GROUP_A))
+    // The applied chip is still present (the filter survived).
+    expect(
+      getByRole('button', {
+        name:
+          'Remove Research Group filter Research Group A',
+      }),
+    ).toBeInTheDocument()
     expect(
       getByRole('button', { name: 'Board' }),
     ).toHaveAttribute('aria-pressed', 'true')
@@ -2297,7 +2344,7 @@ describe('My Work Kanban — interaction, filter, and contract', () => {
     ).toHaveAttribute('aria-pressed', 'false')
   })
 
-  it('applies the Research Group filter to the Kanban', async () => {
+  it('filters the Kanban when a Research Group is selected in the popover', async () => {
     mockGroups = [
       { id: GROUP_A, name: 'Research Group A' },
       { id: GROUP_B, name: 'Research Group B' },
@@ -2320,8 +2367,7 @@ describe('My Work Kanban — interaction, filter, and contract', () => {
       }),
     ])
 
-    const { container, getByLabelText } =
-      renderPage()
+    const { container, getByRole } = renderPage()
 
     await waitFor(() => {
       expect(
@@ -2331,9 +2377,9 @@ describe('My Work Kanban — interaction, filter, and contract', () => {
       ).toBe(2)
     })
 
-    fireEvent.change(
-      getByLabelText('Filter by research group'),
-      { target: { value: String(GROUP_A) } },
+    await selectResearchGroup(
+      { getByRole },
+      'Research Group A',
     )
 
     await waitFor(() => {
@@ -2346,9 +2392,12 @@ describe('My Work Kanban — interaction, filter, and contract', () => {
     expect(
       container.querySelector('[data-work-item-id="2"]'),
     ).toBeNull()
+    // The filter is presentation-only: no refetch of the personal
+    // endpoint.
+    expect(listMyWork).toHaveBeenCalledTimes(1)
   })
 
-  it('preserves the Research Group filter selection across List/Kanban switching', async () => {
+  it('preserves the Research Group filter across List/Board switching', async () => {
     mockGroups = [
       { id: GROUP_A, name: 'Research Group A' },
       { id: GROUP_B, name: 'Research Group B' },
@@ -2376,7 +2425,6 @@ describe('My Work Kanban — interaction, filter, and contract', () => {
       getByText,
       queryByText,
       getByRole,
-      getByLabelText,
     } = renderPage()
 
     await waitFor(() => {
@@ -2387,10 +2435,10 @@ describe('My Work Kanban — interaction, filter, and contract', () => {
       ).toBe(2)
     })
 
-    // Filter to Group A while in the Kanban.
-    fireEvent.change(
-      getByLabelText('Filter by research group'),
-      { target: { value: String(GROUP_A) } },
+    // Filter to Group A while in the Board view.
+    await selectResearchGroup(
+      { getByRole },
+      'Research Group A',
     )
     await waitFor(() => {
       expect(columnCardIds(container, 'todo')).toEqual(['1'])
@@ -2404,7 +2452,7 @@ describe('My Work Kanban — interaction, filter, and contract', () => {
     expect(getByText('Group A item')).toBeInTheDocument()
     expect(queryByText('Group B item')).toBeNull()
 
-    // Switch back to Kanban — still filtered.
+    // Switch back to Board — still filtered.
     await switchView({ getByRole }, 'Board')
     await waitFor(() => {
       expect(
@@ -4053,14 +4101,15 @@ describe('My Work Kanban — cross-category drag and drop', () => {
       ).not.toBeNull()
     })
 
-    // Select the Research Group A filter.
-    await act(async () => {
-      fireEvent.change(
-        container.querySelector(
-          'select[aria-label="Filter by research group"]',
-        ) as HTMLSelectElement,
-        { target: { value: String(GROUP_A) } },
-      )
+    // Apply the Research Group A filter via the multiselect popover.
+    await selectResearchGroup(
+      { getByRole },
+      'Research Group A',
+    )
+    await waitFor(() => {
+      expect(
+        container.querySelector('[data-work-item-id="200"]'),
+      ).toBeNull()
     })
 
     const card = container.querySelector(
@@ -4081,14 +4130,17 @@ describe('My Work Kanban — cross-category drag and drop', () => {
       ).toContain('100')
     })
 
-    // The filter selection survives the move.
+    // The filter selection survives the move (the applied chip is
+    // still present and the other group's item is still hidden).
     expect(
-      (
-        container.querySelector(
-          'select[aria-label="Filter by research group"]',
-        ) as HTMLSelectElement
-      ).value,
-    ).toBe(String(GROUP_A))
+      getByRole('button', {
+        name:
+          'Remove Research Group filter Research Group A',
+      }),
+    ).toBeInTheDocument()
+    expect(
+      container.querySelector('[data-work-item-id="200"]'),
+    ).toBeNull()
 
     // The view is still Kanban.
     expect(
@@ -4927,5 +4979,1245 @@ describe('My Work preferences — hydration and view mode persistence', () => {
     expect(
       listMyWork,
     ).toHaveBeenCalledTimes(2)
+  })
+})
+
+// ── Research Group multi-select filter (this slice) ──────────────
+// Behavioral coverage for the persistent Research Groups multi-select
+// filter over the canonical My Work payload. The selection lives ONLY
+// in `preferences.researchGroupIds`; the popover drives it and the
+// Board/List/counts/chips are all derived from it.
+describe('My Work — Research Group multi-select filter', () => {
+  const GROUP_C = 3
+
+  const TWO_GROUPS = [
+    { id: GROUP_A, name: 'Research Group A' },
+    { id: GROUP_B, name: 'Research Group B' },
+  ]
+
+  const THREE_GROUPS = [
+    { id: GROUP_A, name: 'Research Group A' },
+    { id: GROUP_B, name: 'Research Group B' },
+    { id: GROUP_C, name: 'Research Group C' },
+  ]
+
+  function groupItems() {
+    return [
+      makeItem({
+        id: 1,
+        title: 'Group A one',
+        researchGroupId: GROUP_A,
+        researchGroupName: 'Research Group A',
+        statusCategory: 'todo',
+      }),
+      makeItem({
+        id: 2,
+        title: 'Group B one',
+        researchGroupId: GROUP_B,
+        researchGroupName: 'Research Group B',
+        statusCategory: 'todo',
+      }),
+      makeItem({
+        id: 3,
+        title: 'Group A two',
+        researchGroupId: GROUP_A,
+        researchGroupName: 'Research Group A',
+        statusCategory: 'in_progress',
+      }),
+    ]
+  }
+
+  // Open the popover once (idempotent guard) and toggle the named
+  // group's checkbox. The menu stays open after a selection, so this
+  // can be called repeatedly within one open popover.
+  async function toggleGroup(
+    util: {
+      queryByRole: (
+        role: string,
+        options?: { name?: string | RegExp },
+      ) => HTMLElement | null
+      getByRole: (
+        role: string,
+        options?: { name?: string | RegExp },
+      ) => HTMLElement
+    },
+    groupName: string,
+  ) {
+    const dialogOpen = () =>
+      util.queryByRole('dialog', {
+        name: 'Research groups',
+      }) != null
+
+    if (!dialogOpen()) {
+      await act(async () => {
+        fireEvent.click(
+          util.getByRole('button', {
+            name: /Research groups,/,
+          }),
+        )
+      })
+    }
+
+    await act(async () => {
+      fireEvent.click(
+        util.getByRole('checkbox', {
+          name: groupName,
+        }),
+      )
+    })
+  }
+
+  function columnCount(
+    container: HTMLElement,
+    category: string,
+  ): number {
+    const col = container.querySelector(
+      `[data-board-column="${category}"]`,
+    ) as HTMLElement
+    const header =
+      col.firstElementChild as HTMLElement
+    const countSpan =
+      header.lastElementChild as HTMLElement
+
+    return Number(countSpan.textContent)
+  }
+
+  it('shows every assigned Work Item when no Research Group is selected', async () => {
+    mockGroups = TWO_GROUPS
+    vi.mocked(listMyWork).mockResolvedValue(
+      groupItems(),
+    )
+
+    const { container } = renderPage()
+
+    await waitFor(() => {
+      expect(
+        container.querySelectorAll(
+          '[data-work-item-id]',
+        ).length,
+      ).toBe(3)
+    })
+  })
+
+  it('renders the Research groups toolbar toggle with an inactive accessible name', async () => {
+    mockGroups = TWO_GROUPS
+    vi.mocked(listMyWork).mockResolvedValue(
+      groupItems(),
+    )
+
+    const { getByRole } = renderPage()
+
+    await waitFor(() => {
+      expect(
+        getByRole('button', {
+          name: 'Research groups, none selected',
+        }),
+      ).toBeInTheDocument()
+    })
+  })
+
+  it('uses OR semantics (not AND) across multiple selected groups', async () => {
+    mockGroups = THREE_GROUPS
+    vi.mocked(listMyWork).mockResolvedValue([
+      makeItem({
+        id: 1,
+        title: 'A one',
+        researchGroupId: GROUP_A,
+        researchGroupName: 'Research Group A',
+        statusCategory: 'todo',
+      }),
+      makeItem({
+        id: 2,
+        title: 'B one',
+        researchGroupId: GROUP_B,
+        researchGroupName: 'Research Group B',
+        statusCategory: 'todo',
+      }),
+      makeItem({
+        id: 3,
+        title: 'C one',
+        researchGroupId: GROUP_C,
+        researchGroupName: 'Research Group C',
+        statusCategory: 'todo',
+      }),
+      makeItem({
+        id: 4,
+        title: 'A two',
+        researchGroupId: GROUP_A,
+        researchGroupName: 'Research Group A',
+        statusCategory: 'todo',
+      }),
+    ])
+
+    const { container, getByRole, queryByRole } =
+      renderPage()
+
+    await waitFor(() => {
+      expect(
+        container.querySelectorAll(
+          '[data-work-item-id]',
+        ).length,
+      ).toBe(4)
+    })
+
+    // Select A and B (menu stays open for the second).
+    await toggleGroup(
+      { getByRole, queryByRole },
+      'Research Group A',
+    )
+    await toggleGroup(
+      { getByRole, queryByRole },
+      'Research Group B',
+    )
+
+    // OR: A or B visible; C excluded (an AND would be empty).
+    await waitFor(() => {
+      expect(
+        Array.from(
+          container.querySelectorAll(
+            '[data-work-item-id]',
+          ),
+        )
+          .map((el) =>
+            el.getAttribute(
+              'data-work-item-id',
+            )
+          )
+          .sort(),
+      ).toEqual(['1', '2', '4'])
+    })
+  })
+
+  it('renders the identical filtered result in the List', async () => {
+    mockGroups = TWO_GROUPS
+    vi.mocked(listMyWork).mockResolvedValue(
+      groupItems(),
+    )
+
+    const { getByRole, queryByRole, getByText, queryByText } =
+      renderPage()
+
+    await waitFor(() => {
+      expect(
+        getByRole('button', { name: 'Board' }),
+      ).toHaveAttribute('aria-pressed', 'true')
+    })
+
+    await toggleGroup(
+      { getByRole, queryByRole },
+      'Research Group A',
+    )
+    await switchView({ getByRole }, 'List')
+
+    await waitFor(() => {
+      expect(
+        getByText('Work item'),
+      ).toBeInTheDocument()
+    })
+
+    // The List shows exactly the Group A items — the same set the
+    // Board shows.
+    expect(
+      getByText('Group A one'),
+    ).toBeInTheDocument()
+    expect(
+      getByText('Group A two'),
+    ).toBeInTheDocument()
+    expect(
+      queryByText('Group B one'),
+    ).toBeNull()
+  })
+
+  it('derives the Board column counts from the filtered set', async () => {
+    mockGroups = TWO_GROUPS
+    vi.mocked(listMyWork).mockResolvedValue([
+      makeItem({
+        id: 1,
+        title: 'A todo 1',
+        researchGroupId: GROUP_A,
+        researchGroupName: 'Research Group A',
+        statusCategory: 'todo',
+      }),
+      makeItem({
+        id: 2,
+        title: 'A todo 2',
+        researchGroupId: GROUP_A,
+        researchGroupName: 'Research Group A',
+        statusCategory: 'todo',
+      }),
+      makeItem({
+        id: 3,
+        title: 'A in progress',
+        researchGroupId: GROUP_A,
+        researchGroupName: 'Research Group A',
+        statusCategory: 'in_progress',
+      }),
+      makeItem({
+        id: 4,
+        title: 'B todo',
+        researchGroupId: GROUP_B,
+        researchGroupName: 'Research Group B',
+        statusCategory: 'todo',
+      }),
+    ])
+
+    const { container, getByRole, queryByRole } =
+      renderPage()
+
+    await waitFor(() => {
+      expect(
+        container.querySelectorAll(
+          '[data-work-item-id]',
+        ).length,
+      ).toBe(4)
+    })
+
+    await toggleGroup(
+      { getByRole, queryByRole },
+      'Research Group A',
+    )
+
+    await waitFor(() => {
+      expect(
+        columnCount(container, 'todo'),
+      ).toBe(2)
+    })
+    expect(
+      columnCount(container, 'in_progress'),
+    ).toBe(1)
+    expect(
+      columnCount(container, 'review'),
+    ).toBe(0)
+    expect(
+      columnCount(container, 'done'),
+    ).toBe(0)
+  })
+
+  it('does not refetch /api/me/work-items/ when the filter changes', async () => {
+    mockGroups = TWO_GROUPS
+    vi.mocked(listMyWork).mockResolvedValue(
+      groupItems(),
+    )
+
+    const { getByRole, queryByRole } = renderPage()
+
+    await waitFor(() => {
+      expect(
+        getByRole('button', { name: 'Board' }),
+      ).toHaveAttribute('aria-pressed', 'true')
+    })
+    expect(listMyWork).toHaveBeenCalledTimes(1)
+
+    await toggleGroup(
+      { getByRole, queryByRole },
+      'Research Group A',
+    )
+    await toggleGroup(
+      { getByRole, queryByRole },
+      'Research Group B',
+    )
+
+    // Two filter changes, still exactly one personal request.
+    expect(listMyWork).toHaveBeenCalledTimes(1)
+  })
+
+  it('PATCHes the COMPLETE snapshot and preserves projectIds / workItemTypes on an RG change', async () => {
+    mockGroups = TWO_GROUPS
+    vi.mocked(listMyWork).mockResolvedValue(
+      groupItems(),
+    )
+    // Seed the persisted snapshot with non-empty (not-yet-active)
+    // Project / Type selections that an RG change must not touch.
+    vi.mocked(fetchMyWorkPreferences).mockResolvedValue(
+      makePreferences({
+        projectIds: [PROJECT_A],
+        workItemTypes: ['task'],
+      }),
+    )
+
+    const { getByRole, queryByRole } = renderPage()
+
+    await waitFor(() => {
+      expect(
+        getByRole('button', { name: 'Board' }),
+      ).toHaveAttribute('aria-pressed', 'true')
+    })
+
+    vi.useFakeTimers()
+    try {
+      await toggleGroup(
+        { getByRole, queryByRole },
+        'Research Group A',
+      )
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(300)
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+
+    expect(
+      updateMyWorkPreferences,
+    ).toHaveBeenCalledTimes(1)
+    expect(
+      vi.mocked(updateMyWorkPreferences)
+        .mock.calls[0][0],
+    ).toEqual({
+      viewMode: 'board',
+      researchGroupIds: [GROUP_A],
+      projectIds: [PROJECT_A],
+      workItemTypes: ['task'],
+    })
+  })
+
+  it('applies persisted researchGroupIds on the first final render', async () => {
+    mockGroups = TWO_GROUPS
+    vi.mocked(listMyWork).mockResolvedValue(
+      groupItems(),
+    )
+    vi.mocked(fetchMyWorkPreferences).mockResolvedValue(
+      makePreferences({
+        researchGroupIds: [GROUP_A],
+      }),
+    )
+
+    const { container, getByRole } = renderPage()
+
+    // Once the final view resolves, the persisted filter is ALREADY
+    // applied — Group B items are never shown.
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          '[data-my-work-board-skeleton]',
+        ),
+      ).toBeNull()
+    })
+
+    expect(
+      container.querySelector('[data-work-item-id="1"]'),
+    ).not.toBeNull()
+    expect(
+      container.querySelector('[data-work-item-id="2"]'),
+    ).toBeNull()
+    expect(
+      getByRole('button', {
+        name: 'Research groups, 1 selected',
+      }),
+    ).toBeInTheDocument()
+  })
+
+  it('shows no unfiltered final render before a persisted RG filter is known', async () => {
+    let resolveItems:
+      | ((items: ApiPersonalWorkItem[]) => void)
+      | undefined
+    let resolvePrefs:
+      | ((p: ApiMyWorkPreferences) => void)
+      | undefined
+    vi.mocked(listMyWork).mockReturnValue(
+      new Promise<ApiPersonalWorkItem[]>(
+        (resolve) => {
+          resolveItems = resolve
+        },
+      ),
+    )
+    vi.mocked(fetchMyWorkPreferences).mockReturnValue(
+      new Promise<ApiMyWorkPreferences>(
+        (resolve) => {
+          resolvePrefs = resolve
+        },
+      ),
+    )
+
+    const { container } = renderPage()
+
+    // Neither resolved: skeleton only.
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(
+      container.querySelector(
+        '[data-my-work-board-skeleton]',
+      ),
+    ).not.toBeNull()
+
+    // Items resolved but the persisted filter is still unknown:
+    // no final (unfiltered) content may render.
+    await act(async () => {
+      resolveItems!(groupItems())
+    })
+    expect(
+      container.querySelector(
+        '[data-board-column]',
+      ),
+    ).toBeNull()
+    expect(
+      container.querySelector(
+        '[data-work-item-id]',
+      ),
+    ).toBeNull()
+
+    // The persisted filter arrives: the FIRST final render is the
+    // already-filtered view (Group B never flashes).
+    await act(async () => {
+      resolvePrefs!(
+        makePreferences({
+          researchGroupIds: [GROUP_A],
+        }),
+      )
+    })
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          '[data-my-work-board-skeleton]',
+        ),
+      ).toBeNull()
+    })
+    expect(
+      container.querySelector('[data-work-item-id="1"]'),
+    ).not.toBeNull()
+    expect(
+      container.querySelector('[data-work-item-id="2"]'),
+    ).toBeNull()
+  })
+
+  it('removes a server-dropped (stale) Research Group from the UI and filtering', async () => {
+    mockGroups = TWO_GROUPS
+    vi.mocked(listMyWork).mockResolvedValue(
+      groupItems(),
+    )
+    // The server sanitizes the write: Group B is no longer
+    // accessible, so it is dropped from the normalized response.
+    vi.mocked(updateMyWorkPreferences).mockImplementation(
+      async (snapshot: ApiMyWorkPreferences) => ({
+        ...snapshot,
+        researchGroupIds: snapshot.researchGroupIds.filter(
+          (id) => id === GROUP_A,
+        ),
+      }),
+    )
+
+    const { container, getByRole, queryByRole } =
+      renderPage()
+
+    await waitFor(() => {
+      expect(
+        container.querySelectorAll(
+          '[data-work-item-id]',
+        ).length,
+      ).toBe(3)
+    })
+
+    vi.useFakeTimers()
+    try {
+      await toggleGroup(
+        { getByRole, queryByRole },
+        'Research Group A',
+      )
+      await toggleGroup(
+        { getByRole, queryByRole },
+        'Research Group B',
+      )
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(300)
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+
+    // Reconciled to the authoritative response: Group B is gone from
+    // the chips and from filtering; the toggle count reflects one.
+    await waitFor(() => {
+      expect(
+        getByRole('button', {
+          name: 'Research groups, 1 selected',
+        }),
+      ).toBeInTheDocument()
+    })
+    expect(
+      getByRole('button', {
+        name:
+          'Remove Research Group filter Research Group A',
+      }),
+    ).toBeInTheDocument()
+    expect(
+      queryByRole('button', {
+        name:
+          'Remove Research Group filter Research Group B',
+      }),
+    ).toBeNull()
+    // Filtering recalculated from the authoritative result.
+    expect(
+      container.querySelector('[data-work-item-id="1"]'),
+    ).not.toBeNull()
+    expect(
+      container.querySelector('[data-work-item-id="2"]'),
+    ).toBeNull()
+  })
+
+  it('shows the applied row only while a Research Group filter is active', async () => {
+    mockGroups = TWO_GROUPS
+    vi.mocked(listMyWork).mockResolvedValue(
+      groupItems(),
+    )
+
+    const { getByRole, queryByRole } = renderPage()
+
+    await waitFor(() => {
+      expect(
+        getByRole('button', { name: 'Board' }),
+      ).toHaveAttribute('aria-pressed', 'true')
+    })
+
+    // No active filter → no applied row.
+    expect(
+      queryByRole('button', { name: 'Clear filters' }),
+    ).toBeNull()
+
+    await toggleGroup(
+      { getByRole, queryByRole },
+      'Research Group A',
+    )
+
+    // Active filter → the applied row (with Clear filters) appears.
+    await waitFor(() => {
+      expect(
+        getByRole('button', { name: 'Clear filters' }),
+      ).toBeInTheDocument()
+    })
+  })
+
+  it('renders a visible applied chip per selected Research Group', async () => {
+    mockGroups = TWO_GROUPS
+    vi.mocked(listMyWork).mockResolvedValue(
+      groupItems(),
+    )
+
+    const { getByRole, queryByRole } = renderPage()
+
+    await waitFor(() => {
+      expect(
+        getByRole('button', { name: 'Board' }),
+      ).toHaveAttribute('aria-pressed', 'true')
+    })
+
+    await toggleGroup(
+      { getByRole, queryByRole },
+      'Research Group A',
+    )
+
+    await waitFor(() => {
+      expect(
+        getByRole('button', {
+          name:
+            'Remove Research Group filter Research Group A',
+        }),
+      ).toBeInTheDocument()
+    })
+    // The chip label shows the "FG: <name>" convention.
+    expect(
+      document.body.textContent,
+    ).toContain('FG: Research Group A')
+  })
+
+  it('keeps the active toggle count in step with the number selected', async () => {
+    mockGroups = TWO_GROUPS
+    vi.mocked(listMyWork).mockResolvedValue(
+      groupItems(),
+    )
+
+    const { getByRole, queryByRole } = renderPage()
+
+    await waitFor(() => {
+      expect(
+        getByRole('button', {
+          name: 'Research groups, none selected',
+        }),
+      ).toBeInTheDocument()
+    })
+
+    await toggleGroup(
+      { getByRole, queryByRole },
+      'Research Group A',
+    )
+    await waitFor(() => {
+      expect(
+        getByRole('button', {
+          name: 'Research groups, 1 selected',
+        }),
+      ).toBeInTheDocument()
+    })
+
+    await toggleGroup(
+      { getByRole, queryByRole },
+      'Research Group B',
+    )
+    await waitFor(() => {
+      expect(
+        getByRole('button', {
+          name: 'Research groups, 2 selected',
+        }),
+      ).toBeInTheDocument()
+    })
+  })
+
+  it('removes only the targeted Research Group when a chip is removed', async () => {
+    mockGroups = TWO_GROUPS
+    vi.mocked(listMyWork).mockResolvedValue(
+      groupItems(),
+    )
+
+    const { container, getByRole, queryByRole } =
+      renderPage()
+
+    await waitFor(() => {
+      expect(
+        container.querySelectorAll(
+          '[data-work-item-id]',
+        ).length,
+      ).toBe(3)
+    })
+
+    await toggleGroup(
+      { getByRole, queryByRole },
+      'Research Group A',
+    )
+    await toggleGroup(
+      { getByRole, queryByRole },
+      'Research Group B',
+    )
+
+    await act(async () => {
+      fireEvent.click(
+        getByRole('button', {
+          name:
+            'Remove Research Group filter Research Group A',
+        }),
+      )
+    })
+
+    // Only Group A removed: the Group B chip remains and Group A
+    // items are now hidden (Group B items visible).
+    await waitFor(() => {
+      expect(
+        getByRole('button', {
+          name:
+            'Remove Research Group filter Research Group B',
+        }),
+      ).toBeInTheDocument()
+    })
+    expect(
+      queryByRole('button', {
+        name:
+          'Remove Research Group filter Research Group A',
+      }),
+    ).toBeNull()
+    expect(
+      container.querySelector('[data-work-item-id="1"]'),
+    ).toBeNull()
+    expect(
+      container.querySelector('[data-work-item-id="2"]'),
+    ).not.toBeNull()
+  })
+
+  it('clears all selected Research Groups from the popover Clear action', async () => {
+    mockGroups = TWO_GROUPS
+    vi.mocked(listMyWork).mockResolvedValue(
+      groupItems(),
+    )
+
+    const { container, getByRole, queryByRole } =
+      renderPage()
+
+    await waitFor(() => {
+      expect(
+        container.querySelectorAll(
+          '[data-work-item-id]',
+        ).length,
+      ).toBe(3)
+    })
+
+    await toggleGroup(
+      { getByRole, queryByRole },
+      'Research Group A',
+    )
+    await toggleGroup(
+      { getByRole, queryByRole },
+      'Research Group B',
+    )
+
+    // The popover Clear action (exact name, distinct from
+    // "Clear filters").
+    await act(async () => {
+      fireEvent.click(
+        getByRole('button', { name: 'Clear' }),
+      )
+    })
+
+    await waitFor(() => {
+      expect(
+        container.querySelectorAll(
+          '[data-work-item-id]',
+        ).length,
+      ).toBe(3)
+    })
+    expect(
+      getByRole('button', {
+        name: 'Research groups, none selected',
+      }),
+    ).toBeInTheDocument()
+  })
+
+  it('Clear filters removes the RG filter without zeroing projectIds / workItemTypes', async () => {
+    mockGroups = TWO_GROUPS
+    vi.mocked(listMyWork).mockResolvedValue(
+      groupItems(),
+    )
+    vi.mocked(fetchMyWorkPreferences).mockResolvedValue(
+      makePreferences({
+        researchGroupIds: [GROUP_A],
+        projectIds: [PROJECT_A],
+        workItemTypes: ['task'],
+      }),
+    )
+
+    const { getByRole } = renderPage()
+
+    await waitFor(() => {
+      expect(
+        getByRole('button', { name: 'Clear filters' }),
+      ).toBeInTheDocument()
+    })
+
+    vi.useFakeTimers()
+    try {
+      await act(async () => {
+        fireEvent.click(
+          getByRole('button', { name: 'Clear filters' }),
+        )
+      })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(300)
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+
+    // The snapshot sent clears ONLY researchGroupIds; the not-yet-
+    // active project / type selections are preserved untouched.
+    expect(
+      vi.mocked(updateMyWorkPreferences)
+        .mock.calls[0][0],
+    ).toEqual({
+      viewMode: 'board',
+      researchGroupIds: [],
+      projectIds: [PROJECT_A],
+      workItemTypes: ['task'],
+    })
+  })
+
+  it('shows the current filtered result count in the applied row', async () => {
+    mockGroups = TWO_GROUPS
+    vi.mocked(listMyWork).mockResolvedValue(
+      groupItems(),
+    )
+
+    const { getByRole, queryByRole, getByText } =
+      renderPage()
+
+    await waitFor(() => {
+      expect(
+        getByRole('button', { name: 'Board' }),
+      ).toHaveAttribute('aria-pressed', 'true')
+    })
+
+    await toggleGroup(
+      { getByRole, queryByRole },
+      'Research Group A',
+    )
+
+    // Two Group A items → "2 work items".
+    await waitFor(() => {
+      expect(
+        getByText('2 work items'),
+      ).toBeInTheDocument()
+    })
+  })
+
+  it('shows the filtered-empty state when an active filter yields zero items', async () => {
+    mockGroups = TWO_GROUPS
+    vi.mocked(listMyWork).mockResolvedValue([
+      makeItem({
+        id: 1,
+        title: 'Group A one',
+        researchGroupId: GROUP_A,
+        researchGroupName: 'Research Group A',
+        statusCategory: 'todo',
+      }),
+    ])
+
+    const { container, getByRole, queryByRole } =
+      renderPage()
+
+    await waitFor(() => {
+      expect(
+        container.querySelector('[data-work-item-id="1"]'),
+      ).not.toBeNull()
+    })
+
+    // Select the group that holds no assigned items.
+    await toggleGroup(
+      { getByRole, queryByRole },
+      'Research Group B',
+    )
+
+    await waitFor(() => {
+      expect(
+        document.body.textContent,
+      ).toContain(
+        'No work items match these filters.',
+      )
+    })
+    // The active filter is never hidden: the applied chip remains.
+    expect(
+      getByRole('button', {
+        name:
+          'Remove Research Group filter Research Group B',
+      }),
+    ).toBeInTheDocument()
+    // All four Board lanes stay visible with counts of 0.
+    for (
+      const category of [
+        'todo',
+        'in_progress',
+        'review',
+        'done',
+      ]
+    ) {
+      expect(
+        columnCount(container, category),
+      ).toBe(0)
+    }
+  })
+
+  it('restores items when Clear filters is used on a zero-result filter', async () => {
+    mockGroups = TWO_GROUPS
+    vi.mocked(listMyWork).mockResolvedValue([
+      makeItem({
+        id: 1,
+        title: 'Group A one',
+        researchGroupId: GROUP_A,
+        researchGroupName: 'Research Group A',
+        statusCategory: 'todo',
+      }),
+    ])
+
+    const { container, getByRole, queryByRole } =
+      renderPage()
+
+    await waitFor(() => {
+      expect(
+        container.querySelector('[data-work-item-id="1"]'),
+      ).not.toBeNull()
+    })
+
+    await toggleGroup(
+      { getByRole, queryByRole },
+      'Research Group B',
+    )
+    await waitFor(() => {
+      expect(
+        document.body.textContent,
+      ).toContain(
+        'No work items match these filters.',
+      )
+    })
+
+    // Click the "Clear filters" inside the filtered-empty state
+    // (scoped, since the applied row carries its own Clear filters).
+    const emptyStateHeading = getByRole('heading', {
+      name: 'No work items match these filters.',
+    })
+    await act(async () => {
+      fireEvent.click(
+        within(emptyStateHeading.parentElement as HTMLElement)
+          .getByRole('button', {
+            name: 'Clear filters',
+          }),
+      )
+    })
+
+    await waitFor(() => {
+      expect(
+        container.querySelector('[data-work-item-id="1"]'),
+      ).not.toBeNull()
+    })
+    expect(
+      document.body.textContent,
+    ).not.toContain(
+      'No work items match these filters.',
+    )
+  })
+
+  it('omits the search field at eight or fewer available groups', async () => {
+    mockGroups = TWO_GROUPS
+    vi.mocked(listMyWork).mockResolvedValue(
+      groupItems(),
+    )
+
+    const { getByRole, queryByRole } = renderPage()
+
+    await waitFor(() => {
+      expect(
+        getByRole('button', { name: 'Board' }),
+      ).toHaveAttribute('aria-pressed', 'true')
+    })
+
+    await act(async () => {
+      fireEvent.click(
+        getByRole('button', {
+          name: 'Research groups, none selected',
+        }),
+      )
+    })
+
+    expect(
+      queryByRole('searchbox', {
+        name: 'Search research groups',
+      }),
+    ).toBeNull()
+  })
+
+  it('shows a search field above eight groups that filters the options', async () => {
+    mockGroups = Array.from(
+      { length: 9 },
+      (_, index) => ({
+        id: index + 1,
+        name: `Group ${index + 1}`,
+      }),
+    )
+    vi.mocked(listMyWork).mockResolvedValue([])
+
+    const { getByRole, queryByRole } = renderPage()
+
+    await waitFor(() => {
+      expect(
+        getByRole('button', { name: 'Board' }),
+      ).toHaveAttribute('aria-pressed', 'true')
+    })
+
+    await act(async () => {
+      fireEvent.click(
+        getByRole('button', {
+          name: 'Research groups, none selected',
+        }),
+      )
+    })
+
+    const search = getByRole('searchbox', {
+      name: 'Search research groups',
+    })
+    expect(search).toBeInTheDocument()
+
+    // All nine options render initially.
+    expect(
+      getByRole('checkbox', { name: 'Group 1' }),
+    ).toBeInTheDocument()
+    expect(
+      getByRole('checkbox', { name: 'Group 9' }),
+    ).toBeInTheDocument()
+
+    // The search query is transient local filtering.
+    await act(async () => {
+      fireEvent.change(search, {
+        target: { value: 'Group 9' },
+      })
+    })
+    expect(
+      getByRole('checkbox', { name: 'Group 9' }),
+    ).toBeInTheDocument()
+    expect(
+      queryByRole('checkbox', { name: 'Group 1' }),
+    ).toBeNull()
+    expect(
+      queryByRole('checkbox', { name: 'Group 2' }),
+    ).toBeNull()
+  })
+
+  it('keeps the multiselect menu open after a checkbox selection', async () => {
+    mockGroups = TWO_GROUPS
+    vi.mocked(listMyWork).mockResolvedValue(
+      groupItems(),
+    )
+
+    const { getByRole, queryByRole } = renderPage()
+
+    await waitFor(() => {
+      expect(
+        getByRole('button', { name: 'Board' }),
+      ).toHaveAttribute('aria-pressed', 'true')
+    })
+
+    await act(async () => {
+      fireEvent.click(
+        getByRole('button', {
+          name: 'Research groups, none selected',
+        }),
+      )
+    })
+    expect(
+      getByRole('dialog', { name: 'Research groups' }),
+    ).toBeInTheDocument()
+
+    // Selecting a group does NOT close the menu (no Apply button).
+    await act(async () => {
+      fireEvent.click(
+        getByRole('checkbox', {
+          name: 'Research Group A',
+        }),
+      )
+    })
+    expect(
+      queryByRole('dialog', { name: 'Research groups' }),
+    ).not.toBeNull()
+    // The second option is still reachable in the same open menu.
+    expect(
+      getByRole('checkbox', { name: 'Research Group B' }),
+    ).toBeInTheDocument()
+  })
+
+  it('collapses more than six selections into the first two chips plus a +N summary', async () => {
+    const seven = Array.from(
+      { length: 7 },
+      (_, index) => ({
+        id: index + 1,
+        name: `Group ${index + 1}`,
+      }),
+    )
+    mockGroups = seven
+    vi.mocked(listMyWork).mockResolvedValue([])
+    vi.mocked(fetchMyWorkPreferences).mockResolvedValue(
+      makePreferences({
+        researchGroupIds: [1, 2, 3, 4, 5, 6, 7],
+      }),
+    )
+
+    const { getByRole, queryByRole } = renderPage()
+
+    await waitFor(() => {
+      expect(
+        getByRole('button', {
+          name: 'Research groups, 7 selected',
+        }),
+      ).toBeInTheDocument()
+    })
+
+    // First two individual chips...
+    expect(
+      getByRole('button', {
+        name: 'Remove Research Group filter Group 1',
+      }),
+    ).toBeInTheDocument()
+    expect(
+      getByRole('button', {
+        name: 'Remove Research Group filter Group 2',
+      }),
+    ).toBeInTheDocument()
+    // ...and the remainder collapsed into a single +N summary.
+    expect(
+      queryByRole('button', {
+        name: 'Remove Research Group filter Group 3',
+      }),
+    ).toBeNull()
+    expect(
+      getByRole('button', {
+        name: 'Research groups: +5',
+      }),
+    ).toBeInTheDocument()
+  })
+
+  it('keeps the locally filtered state and shows the save warning when the save fails', async () => {
+    mockGroups = TWO_GROUPS
+    vi.mocked(listMyWork).mockResolvedValue(
+      groupItems(),
+    )
+    vi.mocked(updateMyWorkPreferences).mockRejectedValue(
+      new ApiError(500, 'oops'),
+    )
+
+    const { container, getByRole, queryByRole } =
+      renderPage()
+
+    await waitFor(() => {
+      expect(
+        container.querySelectorAll(
+          '[data-work-item-id]',
+        ).length,
+      ).toBe(3)
+    })
+
+    vi.useFakeTimers()
+    try {
+      await toggleGroup(
+        { getByRole, queryByRole },
+        'Research Group A',
+      )
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(300)
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+
+    // The local filter is KEPT (Group B item hidden)...
+    expect(
+      container.querySelector('[data-work-item-id="2"]'),
+    ).toBeNull()
+    expect(
+      container.querySelector('[data-work-item-id="1"]'),
+    ).not.toBeNull()
+    // ...and the established non-fatal save notice is shown.
+    expect(
+      document.body.textContent,
+    ).toContain(
+      "Couldn't save your My Work preferences.",
+    )
+  })
+
+  it('closes the popover with Escape and returns focus to the toggle', async () => {
+    mockGroups = TWO_GROUPS
+    vi.mocked(listMyWork).mockResolvedValue(
+      groupItems(),
+    )
+
+    const { getByRole } = renderPage()
+
+    const toggle =
+      (await waitFor(() =>
+        getByRole('button', {
+          name: 'Research groups, none selected',
+        }),
+      )) as HTMLButtonElement
+
+    // A native <button>: Tab focusable and Enter/Space activatable
+    // by the browser (the popover opens on activation).
+    expect(toggle.tagName).toBe('BUTTON')
+    expect(toggle).toHaveAttribute('type', 'button')
+
+    // Open (activation) — the popover is a labeled dialog.
+    fireEvent.click(toggle)
+    await waitFor(() => {
+      expect(
+        getByRole('dialog', { name: 'Research groups' }),
+      ).toBeInTheDocument()
+    })
+
+    // Escape closes and returns focus to the toggle.
+    fireEvent.keyDown(document, { key: 'Escape' })
+    await waitFor(() => {
+      expect(
+        document.querySelector('[role="dialog"]'),
+      ).toBeNull()
+    })
+    expect(document.activeElement).toBe(toggle)
   })
 })

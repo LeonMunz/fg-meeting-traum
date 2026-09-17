@@ -3,7 +3,6 @@ import {
   type Page,
   test,
 } from '@playwright/test'
-
 import { login } from './helpers'
 
 /**
@@ -46,6 +45,23 @@ function expectNoHorizontalOverflow(page: Page) {
     .then((overflow) => {
       expect(overflow).toBeLessThanOrEqual(0)
     })
+}
+
+/**
+ * Resolves once the debounced My Work preference snapshot save
+ * (PATCH /api/me/preferences/my-work/) reaches the server.
+ * Preferences are server-persistent, so a test that reloads must
+ * first wait for the save to flush — otherwise the reload restores
+ * the pre-change snapshot.
+ */
+function expectPreferenceSave(page: Page) {
+  return page.waitForResponse(
+    (response) =>
+      response
+        .url()
+        .includes('/api/me/preferences/my-work/') &&
+      response.request().method() === 'PATCH',
+  )
 }
 
 test('My Work lists assigned Work Items across Projects and Research Groups', async ({ page }, testInfo) => {
@@ -476,8 +492,62 @@ test('My Work Kanban has no document horizontal overflow at a narrow viewport', 
   }
   expect(doneBox.x).toBeGreaterThan(viewport.width)
 
-  // Critical invariant: the document itself does not overflow.
-  await expectNoHorizontalOverflow(page)
+  // Critical invariant: the document itself never overflows — in
+  // BOTH user-visible layout states. Material Symbols is a
+  // ligature icon font loaded with default (swap) font-display:
+  // before the woff2 arrives, the literal keywords render as wide
+  // fallback text, so the mid-font-swap render is user-visible too
+  // and must not overflow. The immediate sample is taken right
+  // after the final board render (hydration complete, Done column
+  // attached); the settled sample after document.fonts.ready plus
+  // two animation frames. Font timing is nondeterministic, so the
+  // test asserts only on layout, never on font state.
+  const measureDocumentOverflow = (): number =>
+    document.documentElement.scrollWidth -
+    document.documentElement.clientWidth
+
+  const overflowImmediate =
+    await page.evaluate(measureDocumentOverflow)
+  expect(
+    overflowImmediate,
+    `immediate (pre-font-settle) document overflow at ${viewport.width}px viewport`,
+  ).toBeLessThanOrEqual(0)
+
+  await page.evaluate(() =>
+    Promise.all([
+      document.fonts.ready,
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() =>
+          requestAnimationFrame(
+            () => resolve(),
+          )
+        )
+      }),
+    ])
+  )
+
+  const overflowSettled =
+    await page.evaluate(measureDocumentOverflow)
+  expect(
+    overflowSettled,
+    `settled (post-font-settle) document overflow at ${viewport.width}px viewport`,
+  ).toBeLessThanOrEqual(0)
+
+  // Intentional board-scroll contract: the full grid extends past
+  // the narrow viewport but is contained by its own scroller, so
+  // the scroller must actually scroll horizontally.
+  const scroller = await page
+    .locator(
+      '[data-testid="my-work-board-scroller"]',
+    )
+    .evaluate((el) => ({
+      clientWidth: el.clientWidth,
+      scrollWidth: el.scrollWidth,
+    }))
+  expect(
+    scroller.scrollWidth,
+    'board scroller must contain a horizontally scrollable grid',
+  ).toBeGreaterThan(scroller.clientWidth)
 
   await page.screenshot({
     path: testInfo.outputPath('my-work-kanban-narrow.png'),
@@ -493,6 +563,18 @@ test('My Work List has no horizontal overflow at a narrow viewport', async ({ pa
 
   await login(page, 'alex')
   await page.goto('/my-work')
+
+  // The final content (Board or List) renders only after the items
+  // AND the preference snapshot have resolved; the view switch is
+  // inert while the snapshot is still hydrating (it only acts on
+  // the loaded preference). Wait for the seeded card first so the
+  // List switch below acts on hydrated state — the required
+  // baseline for this test.
+  await expect(
+    page.getByRole('button', {
+      name: 'Open First Draft Complete',
+    }),
+  ).toBeVisible()
 
   // Switch to the List view at the narrow width.
   await page
@@ -540,6 +622,176 @@ test('My Work List has no horizontal overflow at a narrow viewport', async ({ pa
 
   await page.screenshot({
     path: testInfo.outputPath('my-work-list-narrow.png'),
+    fullPage: true,
+  })
+})
+
+test('My Work Research Groups multiselect filters, persists, and restores', async ({ page }, testInfo) => {
+  const myWorkRequests: string[] = []
+  page.on('request', (request) => {
+    if (request.url().includes('/api/me/work-items/')) {
+      myWorkRequests.push(request.url())
+    }
+  })
+
+  await login(page, 'alex')
+  await page.goto('/my-work')
+
+  const firstDraftCard = page.getByRole('button', {
+    name: 'Open First Draft Complete',
+  })
+  const robotCard = page.getByRole('button', {
+    name: 'Open E2E Analyze robot data',
+  })
+
+  // Both seeded items are visible by default (no active filter).
+  await expect(firstDraftCard).toBeVisible()
+  await expect(robotCard).toBeVisible()
+
+  // The Research Groups multiselect toggle is visible in the toolbar.
+  const toggle = page.getByRole('button', {
+    name: 'Research groups, none selected',
+  })
+  await expect(toggle).toBeVisible()
+
+  // The page is fully loaded (final content + hydrated preference).
+  // The ABSOLUTE initial request count is deliberately not asserted:
+  // the dev harness (React StrictMode) may legitimately issue the
+  // canonical GET more than once on mount. The contract under test
+  // is that changing the filter adds NO further items request.
+  const requestCountBeforeFilterChange =
+    myWorkRequests.length
+  expect(requestCountBeforeFilterChange).toBeGreaterThanOrEqual(
+    1,
+  )
+
+  // Open the popover and select "FG Example".
+  await toggle.click()
+  const groupCheckbox = page.getByRole('checkbox', {
+    name: 'FG Example',
+  })
+  await expect(groupCheckbox).toBeVisible()
+
+  // The complete-snapshot save is debounced (300ms); await its
+  // server-side flush so the later reload restores what was really
+  // persisted (not the pre-change snapshot).
+  const preferenceSaveFlushed =
+    expectPreferenceSave(page)
+
+  await groupCheckbox.check()
+
+  // Filtering applies immediately WITHOUT a page reload or a
+  // refetch of the personal endpoint.
+  await expect(robotCard).toBeHidden()
+  await expect(firstDraftCard).toBeVisible()
+  expect(myWorkRequests.length).toBe(
+    requestCountBeforeFilterChange,
+  )
+
+  // The active filter is visible: the toggle shows a count badge
+  // and the applied row shows an "FG: ..." chip.
+  await expect(
+    page.getByRole('button', {
+      name: 'Research groups, 1 selected',
+    }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole('button', {
+      name: 'Remove Research Group filter FG Example',
+    }),
+  ).toBeVisible()
+
+  // The applied filter survives a full reload (server-side
+  // preference restore) — the debounced save must have flushed
+  // first.
+  await preferenceSaveFlushed
+  await page.reload()
+  await expect(
+    page.getByRole('button', {
+      name: 'Research groups, 1 selected',
+    }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole('button', {
+      name: 'Open First Draft Complete',
+    }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole('button', {
+      name: 'Open E2E Analyze robot data',
+    }),
+  ).toBeHidden()
+
+  // Board -> List keeps the same active filter (one row only).
+  await page
+    .getByRole('button', { name: 'List' })
+    .click()
+  await expect(
+    page.getByRole('button', {
+      name: 'Open First Draft Complete',
+    }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole('button', {
+      name: 'Open E2E Analyze robot data',
+    }),
+  ).toBeHidden()
+
+  // Back to Board, then remove the single applied chip: both items
+  // return (and the filter is left clean for the later specs).
+  await page
+    .getByRole('button', { name: 'Board' })
+    .click()
+  await page
+    .getByRole('button', {
+      name: 'Remove Research Group filter FG Example',
+    })
+    .click()
+  await expect(
+    page.getByRole('button', {
+      name: 'Research groups, none selected',
+    }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole('button', {
+      name: 'Open First Draft Complete',
+    }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole('button', {
+      name: 'Open E2E Analyze robot data',
+    }),
+  ).toBeVisible()
+
+  // Preferences are server-persistent across the test run: wait
+  // until the clearing save has actually landed (it is debounced
+  // 300ms) so the later specs start from a known clean baseline
+  // (Board view, no active Research Group filter) and never depend
+  // on this test's execution order or an in-flight save.
+  await expect
+    .poll(async () => {
+      const response = await page.request.get(
+        '/api/me/preferences/my-work/',
+      )
+      const snapshot = (await response.json()) as {
+        viewMode: string
+        researchGroupIds: number[]
+      }
+      return {
+        viewMode: snapshot.viewMode,
+        researchGroupIds:
+          snapshot.researchGroupIds,
+      }
+    })
+    .toEqual({
+      viewMode: 'board',
+      researchGroupIds: [],
+    })
+
+  await page.screenshot({
+    path: testInfo.outputPath(
+      'my-work-research-group-filter.png',
+    ),
     fullPage: true,
   })
 })

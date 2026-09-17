@@ -46,8 +46,18 @@ import {
   buildCreateWorkItemInput,
   resolveWorkItemType,
 } from '../projects/workItemMapping'
+import {
+  collapseResearchGroupChips,
+  filterMyWorkItemsByResearchGroup,
+  formatWorkItemResultCount,
+} from './myWorkGroupFilter'
+import {
+  MyWorkResearchGroupFilter,
+} from './MyWorkResearchGroupFilter'
 
-type GroupFilter = 'all' | number
+// A stable empty reference so a null preference snapshot never
+// allocates a fresh array each render (keeps the filter memo stable).
+const EMPTY_RESEARCH_GROUP_IDS: readonly number[] = []
 
 /**
  * Personal cross-project My Work (List + Kanban).
@@ -547,6 +557,35 @@ const GLOBAL_STATUS_COLUMNS: Array<{
   { value: 'done', label: 'Done' },
 ]
 
+/**
+ * The restrained filtered-empty state: assigned work EXISTS, but the
+ * active Research Group filter yields zero results. Deliberately
+ * distinct from the "Nothing assigned to you" unfiltered empty state
+ * (no illustration). "Clear filters" removes the active Research
+ * Group selections (this slice's only implemented filter).
+ */
+function FilteredEmptyState({
+  onClear,
+}: {
+  onClear: () => void
+}) {
+  return (
+    <div className="mt-6 flex min-h-64 flex-col items-center justify-center rounded-xl border border-dashed border-outline-variant bg-surface-container-lowest px-6 py-12 text-center">
+      <h2 className="text-base font-semibold text-on-surface">
+        No work items match these filters.
+      </h2>
+
+      <button
+        type="button"
+        onClick={onClear}
+        className="mt-3 text-sm font-semibold text-on-surface-variant underline-offset-2 transition hover:text-on-surface hover:underline"
+      >
+        Clear filters
+      </button>
+    </div>
+  )
+}
+
 export function MyWorkPage() {
   const navigate = useNavigate()
   const { groups } = useResearchGroup()
@@ -563,8 +602,18 @@ export function MyWorkPage() {
   const [error, setError] = useState<
     string | null
   >(null)
-  const [groupFilter, setGroupFilter] =
-    useState<GroupFilter>('all')
+
+  // Research Group multi-select filter (this slice activates ONLY
+  // researchGroupIds). The single source of truth is the persisted
+  // preference snapshot field `preferences.researchGroupIds` — there
+  // is no separate transient filter state. The popover open/closed
+  // state is the only transient UI concern, and it is lifted here so
+  // the applied-row "+N" summary can open + focus the control.
+  const [groupFilterOpen, setGroupFilterOpen] =
+    useState(false)
+  const groupFilterTriggerRef = useRef<
+    HTMLButtonElement | null
+  >(null)
 
   // The COMPLETE persisted My Work preference snapshot (the server
   // is the source of truth). `null` until the initial GET has
@@ -1305,53 +1354,152 @@ export function MyWorkPage() {
   // The single established presentation rule: completed items render
   // last — a stable partition, so backend relative order is
   // preserved within each group.
+  // ── Research Group multi-select filter (this slice) ─────────
+  // The single source of truth for the selection is the persisted
+  // preference snapshot field `researchGroupIds`. `projectIds` and
+  // `workItemTypes` remain preserved in the snapshot but are NOT yet
+  // applied to Work Item visibility (their UI slices come later).
+  const selectedGroupIds =
+    preferences?.researchGroupIds ??
+    EMPTY_RESEARCH_GROUP_IDS
+  const hasGroupFilter =
+    selectedGroupIds.length > 0
+
+  // The canonical accessible Research Group id → name map, used to
+  // label applied chips (NEVER derived from Work Items — a selected
+  // group may hold zero assigned items and still be named here).
+  const groupNameById = useMemo(() => {
+    const map = new Map<number, string>()
+    for (const group of groups) {
+      map.set(group.id, group.name)
+    }
+    return map
+  }, [groups])
+
+  // PRESENTATION-ONLY OR filter over the canonical payload — never a
+  // refetch of /api/me/work-items/. Empty selection = no restriction
+  // (the exact `items` reference is preserved for memo stability).
+  const filteredItems = useMemo(
+    () =>
+      filterMyWorkItemsByResearchGroup(
+        items,
+        selectedGroupIds,
+      ),
+    [items, selectedGroupIds],
+  )
+
+  // The selected groups resolved to renderable chips (id + name).
+  const selectedGroupChips = useMemo(() => {
+    const chips: Array<{
+      id: number
+      name: string
+    }> = []
+
+    for (const id of selectedGroupIds) {
+      const name = groupNameById.get(id)
+      if (name !== undefined) {
+        chips.push({ id, name })
+      }
+    }
+
+    return chips
+  }, [selectedGroupIds, groupNameById])
+
+  const collapsedChips =
+    collapseResearchGroupChips(selectedGroupChips)
+
+  const resultCount = formatWorkItemResultCount(
+    filteredItems.length,
+  )
+
+  // Toggle one Research Group in the persisted selection. The list is
+  // kept in ascending-PK order — the exact deterministic order the
+  // server returns — so the complete-snapshot dirty check stays exact.
+  const handleGroupToggle = useCallback(
+    (groupId: number, checked: boolean) => {
+      if (preferences == null) {
+        return
+      }
+
+      const selected = new Set(
+        preferences.researchGroupIds,
+      )
+
+      if (checked) {
+        selected.add(groupId)
+      } else {
+        selected.delete(groupId)
+      }
+
+      setPreferences({
+        ...preferences,
+        researchGroupIds: Array.from(selected).sort(
+          (a, b) => a - b,
+        ),
+      })
+    },
+    [preferences],
+  )
+
+  const handleRemoveGroupChip = useCallback(
+    (groupId: number) => {
+      handleGroupToggle(groupId, false)
+    },
+    [handleGroupToggle],
+  )
+
+  const handleClearGroupFilter = useCallback(() => {
+    if (preferences == null) {
+      return
+    }
+
+    // TEMPORARY intermediate-slice behavior: "Clear filters" clears
+    // ONLY the currently implemented Research Group filter. The
+    // persisted `projectIds` / `workItemTypes` categories are NOT yet
+    // active in the UI, so they are preserved untouched (never zeroed
+    // or rewritten) — a later slice makes them real filters.
+    setPreferences({
+      ...preferences,
+      researchGroupIds: [],
+    })
+  }, [preferences])
+
+  // The applied-row "+N" summary opens AND focuses the toggle.
+  const openGroupFilter = useCallback(() => {
+    setGroupFilterOpen(true)
+    groupFilterTriggerRef.current?.focus()
+  }, [])
+
   const orderedItems = useMemo(() => {
-    const active = items.filter(
+    const active = filteredItems.filter(
       (item) => item.statusCategory !== 'done',
     )
-    const completed = items.filter(
+    const completed = filteredItems.filter(
       (item) => item.statusCategory === 'done',
     )
 
     return [...active, ...completed]
-  }, [items])
+  }, [filteredItems])
 
-  const visibleItems = useMemo(
-    () =>
-      groupFilter === 'all'
-        ? orderedItems
-        : orderedItems.filter(
-            (item) =>
-              item.researchGroupId ===
-              groupFilter,
-          ),
-    [groupFilter, orderedItems],
-  )
+  // The List renders exactly the ordered filtered set (identical to
+  // the Board's item set — switching views never changes the filter).
+  const visibleItems = orderedItems
 
-  // Global Kanban grouping over the SAME canonical payload. The group
+  // Global Kanban grouping over the SAME filtered payload. The group
   // filter applies equally. Within each column the canonical API order
   // is preserved (Array.filter keeps relative order); Project
   // `boardPosition` is never a global ordering input and no global
   // sort is introduced.
   const kanbanColumns = useMemo(() => {
-    const source =
-      groupFilter === 'all'
-        ? items
-        : items.filter(
-            (item) =>
-              item.researchGroupId ===
-              groupFilter,
-          )
-
     return GLOBAL_STATUS_COLUMNS.map((column) => ({
       value: column.value,
       label: column.label,
-      items: source.filter(
+      items: filteredItems.filter(
         (item) =>
           item.statusCategory === column.value,
       ),
     }))
-  }, [groupFilter, items])
+  }, [filteredItems])
 
   function openItem(
     item: ApiPersonalWorkItem,
@@ -1428,12 +1576,7 @@ export function MyWorkPage() {
        * board keeps its comfortable column width instead of stretching
        * across the whole window. */}
       <div className="mx-auto w-full max-w-[1440px]">
-        {/* flex-wrap + a shrinkable select: in the narrow content column
-         * (fixed 240px sidebar margin) the title block and the group
-         * filter must not force the document wider than the viewport —
-         * the filter wraps below the title and shrinks with it. At
-         * desktop widths there is ample space and nothing wraps. */}
-        <header className="flex flex-wrap items-start justify-between gap-6">
+        <header>
           <div className="min-w-0">
             <h1 className="text-[28px] font-semibold leading-[34px] tracking-[-0.015em] text-text">
               My Work
@@ -1443,104 +1586,153 @@ export function MyWorkPage() {
               Everything currently assigned to you.
             </p>
           </div>
+        </header>
 
-          {/* Controls: the group filter (only with more than one group)
-           *  and the presentation-only Board/List switch. Grouped so the
-           *  title stays left and the controls wrap together below it in
-           *  the narrow column without forcing the document wider. */}
-          <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
-            {groups.length > 1 && (
-              <select
-                value={groupFilter}
-                onChange={(event) => {
-                  const value =
-                    event.target.value
-
-                  setGroupFilter(
-                    value === 'all'
-                      ? 'all'
-                      : Number(value),
-                  )
-                }}
-                aria-label="Filter by research group"
-                className="h-8 w-[196px] min-w-0 max-w-full cursor-pointer rounded border border-border-subtle bg-surface-quiet pl-2.5 pr-[30px] text-[13px] font-medium text-text outline-none transition focus:border-focus focus:ring-2 focus:ring-focus/20"
-              >
-                <option value="all">
-                  All research groups
-                </option>
-
-                {groups.map((group) => (
-                  <option
-                    key={group.id}
-                    value={group.id}
-                  >
-                    {group.name}
-                  </option>
-                ))}
-              </select>
-            )}
-
-            {/* Board/List switch — same segmented control pattern as the
-             *  Project Work Items view switch. Presentation-only for the
-             *  Work Item data (no refetch, no Project configuration);
-             *  the chosen mode is persisted as part of the complete
-             *  personal preference snapshot (debounced). The pressed
-             *  state reflects the persisted preference. Each button
-             *  exposes its name and pressed state. */}
-            <div
-              role="group"
-              aria-label="My Work view"
-              className="inline-flex h-8 max-w-full flex-wrap items-center rounded-[5px] border border-border-structural bg-segmented-bg p-0.5"
-            >
-              <button
-                type="button"
-                aria-pressed={view === 'board'}
-                data-work-item-inspector-keep-open="true"
-                onClick={() =>
-                  handleViewModeChange('board')
-                }
-                className={[
-                  'inline-flex h-[26px] items-center gap-1.5 rounded px-[9px] text-xs font-medium transition',
-                  view === 'board'
-                    ? 'bg-segmented-selected text-segmented-selected-text'
-                    : 'text-work-content-muted hover:text-work-content-text',
-                ].join(' ')}
-              >
-                <span
-                  aria-hidden="true"
-                  className="material-symbols-outlined text-[14px]"
-                >
-                  view_kanban
-                </span>
-                Board
-              </button>
-
-              <button
-                type="button"
-                aria-pressed={view === 'list'}
-                data-work-item-inspector-keep-open="true"
-                onClick={() =>
-                  handleViewModeChange('list')
-                }
-                className={[
-                  'inline-flex h-[26px] items-center gap-1.5 rounded px-[9px] text-xs font-medium transition',
-                  view === 'list'
-                    ? 'bg-segmented-selected text-segmented-selected-text'
-                    : 'text-work-content-muted hover:text-work-content-text',
-                ].join(' ')}
-              >
-                <span
-                  aria-hidden="true"
-                  className="material-symbols-outlined text-[14px]"
-                >
-                  view_list
-                </span>
-                List
-              </button>
-            </div>
+        {/* Filter toolbar row. This intermediate slice exposes ONLY
+         * the Research Groups category on the left; the Projects and
+         * Types categories are added by their own slices (no fake /
+         * disabled controls here). Board/List stays on the right,
+         * unchanged. flex-wrap keeps the row usable in the narrow
+         * column without forcing document horizontal overflow. */}
+        <div
+          className="mt-5 flex w-full flex-wrap items-center justify-between gap-2"
+        >
+          <div className="flex min-w-0 items-center gap-2">
+            <MyWorkResearchGroupFilter
+              ref={groupFilterTriggerRef}
+              options={groups}
+              selectedIds={selectedGroupIds}
+              open={groupFilterOpen}
+              onOpenChange={setGroupFilterOpen}
+              onToggle={handleGroupToggle}
+              onClear={handleClearGroupFilter}
+            />
           </div>
 
-        </header>
+          {/* Board/List switch — same segmented control pattern as the
+           *  Project Work Items view switch. Presentation-only for the
+           *  Work Item data (no refetch, no Project configuration);
+           *  the chosen mode is persisted as part of the complete
+           *  personal preference snapshot (debounced). The pressed
+           *  state reflects the persisted preference. Each button
+           *  exposes its name and pressed state. */}
+          <div
+            role="group"
+            aria-label="My Work view"
+            className="inline-flex h-8 max-w-full flex-wrap items-center rounded-[5px] border border-border-structural bg-segmented-bg p-0.5"
+          >
+            <button
+              type="button"
+              aria-pressed={view === 'board'}
+              data-work-item-inspector-keep-open="true"
+              onClick={() =>
+                handleViewModeChange('board')
+              }
+              className={[
+                'inline-flex h-[26px] items-center gap-1.5 rounded px-[9px] text-xs font-medium transition',
+                view === 'board'
+                  ? 'bg-segmented-selected text-segmented-selected-text'
+                  : 'text-work-content-muted hover:text-work-content-text',
+              ].join(' ')}
+            >
+              <span
+                aria-hidden="true"
+                className="material-symbols-outlined icon-stable text-[14px]"
+              >
+                view_kanban
+              </span>
+              Board
+            </button>
+
+            <button
+              type="button"
+              aria-pressed={view === 'list'}
+              data-work-item-inspector-keep-open="true"
+              onClick={() =>
+                handleViewModeChange('list')
+              }
+              className={[
+                'inline-flex h-[26px] items-center gap-1.5 rounded px-[9px] text-xs font-medium transition',
+                view === 'list'
+                  ? 'bg-segmented-selected text-segmented-selected-text'
+                  : 'text-work-content-muted hover:text-work-content-text',
+              ].join(' ')}
+            >
+              <span
+                aria-hidden="true"
+                className="material-symbols-outlined icon-stable text-[14px]"
+              >
+                view_list
+              </span>
+              List
+            </button>
+          </div>
+        </div>
+
+        {/* Applied-filters row — rendered ONLY while at least one
+         * Research Group filter is active (an active filter must
+         * never be invisible). Shows the current filtered result
+         * count, the selected-group chips (density-collapsed), and a
+         * "Clear filters" action that clears ONLY the implemented
+         * Research Group filter. */}
+        {hasGroupFilter && (
+          <div className="mt-2 flex w-full flex-wrap items-center gap-x-3 gap-y-2">
+            <span className="shrink-0 text-[11px] leading-4 text-text-tertiary">
+              {resultCount}
+            </span>
+
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
+              {collapsedChips.chips.map((chip) => (
+                <span
+                  key={chip.id}
+                  title={`FG: ${chip.name}`}
+                  className="flex h-6 max-w-[220px] items-center gap-1.5 rounded border border-border-subtle bg-surface-muted pl-2 pr-[7px]"
+                >
+                  <span className="min-w-0 truncate text-[11px] font-medium leading-4 text-text">
+                    FG: {chip.name}
+                  </span>
+
+                  <button
+                    type="button"
+                    aria-label={`Remove Research Group filter ${chip.name}`}
+                    onClick={() =>
+                      handleRemoveGroupChip(chip.id)
+                    }
+                    className="shrink-0 rounded text-text-tertiary transition hover:text-text focus-visible:outline-2 focus-visible:outline focus-visible:outline-focus"
+                  >
+                    <span
+                      aria-hidden="true"
+                      className="material-symbols-outlined icon-stable text-[12px]"
+                    >
+                      close
+                    </span>
+                  </button>
+                </span>
+              ))}
+
+              {collapsedChips.overflowCount != null && (
+                // Shrinkable (label truncates) so the summary chip
+                // cannot push the applied row past the narrow column
+                // width and overflow the document.
+                <button
+                  type="button"
+                  onClick={openGroupFilter}
+                  className="flex h-6 min-w-0 max-w-full items-center overflow-hidden text-ellipsis whitespace-nowrap rounded border border-border-subtle bg-surface-muted px-2 text-[11px] font-medium leading-4 text-text transition hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline focus-visible:outline-focus"
+                >
+                  Research groups: +{collapsedChips.overflowCount}
+                </button>
+              )}
+            </div>
+
+            <button
+              type="button"
+              onClick={handleClearGroupFilter}
+              className="shrink-0 text-[11px] font-semibold leading-4 text-text-muted transition hover:text-text focus-visible:outline-2 focus-visible:outline focus-visible:outline-focus"
+            >
+              Clear filters
+            </button>
+          </div>
+        )}
 
       {/* Non-fatal preference save failure: the established
        * page-local dismissible error treatment (the same as the
@@ -1611,7 +1803,7 @@ export function MyWorkPage() {
         // treatment. Unreachable in practice: the snapshot and
         // the loading flag resolve in one batched update.
         boardSkeleton
-      ) : visibleItems.length === 0 ? (
+      ) : items.length === 0 ? (
         <div className="mt-8 flex min-h-64 flex-col items-center justify-center rounded-xl border border-dashed border-outline-variant bg-surface-container-lowest px-6 py-12 text-center">
           <span className="material-symbols-outlined text-[28px] text-on-surface-variant">
             task_alt
@@ -1626,27 +1818,42 @@ export function MyWorkPage() {
           </p>
         </div>
       ) : view === 'board' ? (
-        <MyWorkBoard
-          columns={kanbanColumns}
-          onOpen={openWorkItemCard}
-          draggedItemId={draggedItemId}
-          pendingItemIds={pendingMoveItemIds}
-          statusDropError={statusDropError}
-          onDismissStatusDropError={() =>
-            setStatusDropError(null)
-          }
-          onDragStart={(itemId) =>
-            setDraggedItemId(itemId)
-          }
-          onDragEnd={() =>
-            setDraggedItemId(null)
-          }
-          onDrop={(itemId, category) =>
-            void handleKanbanDrop(
-              itemId,
-              category,
-            )
-          }
+        <>
+          <MyWorkBoard
+            columns={kanbanColumns}
+            onOpen={openWorkItemCard}
+            draggedItemId={draggedItemId}
+            pendingItemIds={pendingMoveItemIds}
+            statusDropError={statusDropError}
+            onDismissStatusDropError={() =>
+              setStatusDropError(null)
+            }
+            onDragStart={(itemId) =>
+              setDraggedItemId(itemId)
+            }
+            onDragEnd={() =>
+              setDraggedItemId(null)
+            }
+            onDrop={(itemId, category) =>
+              void handleKanbanDrop(
+                itemId,
+                category,
+              )
+            }
+          />
+
+          {/* A zero-result ACTIVE filter in Board mode: all four
+           * lanes stay visible with counts of 0, plus the restrained
+           * filtered-empty state (distinct from "nothing assigned"). */}
+          {filteredItems.length === 0 && (
+            <FilteredEmptyState
+              onClear={handleClearGroupFilter}
+            />
+          )}
+        </>
+      ) : filteredItems.length === 0 ? (
+        <FilteredEmptyState
+          onClear={handleClearGroupFilter}
         />
       ) : (
         <section className="mt-6 overflow-hidden rounded-xl border border-border-structural bg-surface-quiet shadow-sm">
@@ -2024,7 +2231,10 @@ function MyWorkBoard({
         </div>
       )}
 
-      <div className="overflow-x-auto">
+      <div
+        data-testid="my-work-board-scroller"
+        className="overflow-x-auto"
+      >
         <div
           className="grid min-w-max items-start gap-3"
           style={{
