@@ -43,6 +43,11 @@ Each kind of truth has one canonical owner:
 - **Implemented API contract** → DRF serializers/endpoints
 - **Frontend contract representation** → TypeScript API/domain types
 
+`CURRENT_STATE.md` is the sole live checkpoint for the implemented
+repository state. Historical checkpoints belong in Git history, not in
+parallel status files, and no new aliases or differently-cased
+current-status documents may be created.
+
 If implementation and documentation diverge, do not silently choose one. Report the mismatch and resolve it deliberately.
 
 ## Change discipline
