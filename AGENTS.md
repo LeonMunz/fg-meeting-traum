@@ -140,24 +140,29 @@ Session guidance:
 
 ## Validation
 
-For frontend changes, from repository root run:
+`./scripts/agent-verify.sh` (repository root, any caller CWD) is the single
+executable verification interface. Profiles:
 
-```bash
-npm run build
-npm run lint
-```
+- `quick` — fast static validation: repo hygiene, frontend typecheck,
+  frontend lint, Django system check, migration-drift check. No unit tests,
+  no builds, no backend test suite, no E2E. Safe in the agent sandbox.
+- `frontend` — complete non-browser frontend: typecheck, lint, complete unit
+  suite, design-token contract suite, production build.
+- `backend` — complete backend: Django system check, migration-drift check,
+  complete Django test suite (canonical uv environment).
+- `core` — all complete non-browser validation: repo hygiene + `frontend` +
+  `backend`. Strongest profile expected to pass in the agent sandbox.
+- `e2e` — browser E2E only. Requires a browser-capable environment and
+  `FG_ALLOW_E2E_RESET=1` (the configured Playwright startup resets the
+  `fg_e2e` schema); refuses without the opt-in.
+- `full` — `core` + `e2e`. Fails clearly when the E2E opt-in or browser
+  environment is absent; never silently skips E2E.
 
-For a fast structural check use `npm run typecheck` (delegates to the web
-workspace). For a combined frontend/backend verification pass use
-`./scripts/agent-verify.sh frontend|backend|full`.
-
-For backend changes (from `apps/api/`), at minimum run Django system checks, `makemigrations --check`, and the relevant backend tests:
-
-```bash
-uv run python manage.py check
-uv run python manage.py makemigrations --check --dry-run
-uv run python manage.py test <app>
-```
+Use `./scripts/agent-verify.sh plan <profile>` to inspect a profile's exact
+commands, environment requirements, and mutation flags without executing.
+Targeted validation during development stays available (see `apps/web/AGENTS.md`
+and `apps/api/AGENTS.md`), e.g. `npm run typecheck`, `npm run test:unit
+--workspace=web`, or `uv run python manage.py test <app>` from `apps/api/`.
 
 Do not invent a new testing framework merely to complete a task.
 

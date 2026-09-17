@@ -49,6 +49,9 @@ PRECHECK
 - Immediately after structural edits: restore and confirm structural validity.
   - Frontend: `npm run typecheck` must pass.
   - Backend: `uv run python manage.py check` must pass.
+- `./scripts/agent-verify.sh quick` is the fast, sandbox-safe combined pass
+  (repo hygiene + typecheck + lint + Django system check + migration drift).
+  Use it during development instead of ad-hoc command lists.
 - Do not proceed to behavioral diagnosis while the tree does not parse/typecheck.
 
 ### TARGET VERIFY
@@ -59,9 +62,16 @@ PRECHECK
 
 ### FINAL VERIFY
 
-- At task completion run the full relevant pass:
-  - `./scripts/agent-verify.sh frontend` or `backend` (or `full`)
-  - Plus any targeted E2E or app tests justified by scope.
+- Before completing a non-browser slice run `./scripts/agent-verify.sh core`
+  (complete frontend + complete backend + repo hygiene).
+- `./scripts/agent-verify.sh e2e` only in a browser-capable environment and
+  only with explicit consent to the destructive reset:
+  `FG_ALLOW_E2E_RESET=1 ./scripts/agent-verify.sh e2e` (the configured
+  Playwright startup resets the `fg_e2e` schema).
+- `./scripts/agent-verify.sh full` is the genuinely complete gate
+  (`core` + `e2e`) and the eventual CI/release gate; it cannot pass without
+  actually running E2E.
+- Plus any targeted E2E spec or app test justified by scope.
 - `git diff HEAD --check` must be clean.
 
 ### REPORT

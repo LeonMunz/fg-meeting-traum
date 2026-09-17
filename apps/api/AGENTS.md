@@ -30,9 +30,18 @@ Run from `apps/api/`, widening only as far as the task requires:
    specific test method) for the changed area.
 4. **Full backend suite** only when justified by scope.
 
-A fast combined pass (system check + migration check + repo hygiene) is available via
-`./scripts/agent-verify.sh backend` from the repository root. Targeted and full
-application tests remain task-dependent and are not run automatically by the helper.
+Repository-wide passes are available from the repository root via
+`./scripts/agent-verify.sh`:
+
+- `quick` — fast static pass (repo hygiene, frontend typecheck/lint, Django
+  system check, migration-drift check); safe in the agent sandbox.
+- `backend` — complete backend pass: Django system check, migration-drift
+  check, and the complete Django test suite.
+- `core` — `frontend` + `backend` + repo hygiene (strongest non-browser
+  profile).
+
+Targeted app/test subsets (step 3 above) remain the default while developing;
+run the complete pass before finishing a slice.
 
 ## Debugging
 

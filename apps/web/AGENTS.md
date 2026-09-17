@@ -20,10 +20,15 @@ Verify in this order, widening only as far as the task requires:
    (delegates to `tsc -b --pretty false`). Do not continue on a file that does not typecheck.
 2. **After behavior changes:** run the smallest relevant unit test —
    `npm run test:unit --workspace=web` (optionally narrowed to the affected spec).
-3. **At task completion:** typecheck + lint + relevant unit tests, plus targeted E2E
-   when the change touches a covered flow —
-   `npm run lint`, then `npx playwright test <spec>` for the relevant spec.
-4. **Full/broad E2E** only when justified by task scope.
+3. **At task completion (non-browser):** run `./scripts/agent-verify.sh frontend`
+   from the repository root (typecheck + lint + complete unit suite +
+   design-token contract suite + production build).
+4. **Targeted E2E** when the change touches a covered flow — from the
+   repository root, `npx playwright test <spec>` for the relevant spec.
+   Requires a browser-capable environment and `FG_ALLOW_E2E_RESET=1` consent
+   to the `fg_e2e` schema reset performed by the Playwright startup.
+5. **Full/broad E2E** (`./scripts/agent-verify.sh e2e`) only when justified by
+   task scope and in a browser-capable environment with the same consent.
 
 ## Playwright rules
 
