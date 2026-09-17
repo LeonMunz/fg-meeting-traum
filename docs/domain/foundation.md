@@ -875,6 +875,45 @@ then appends the item to the **end** of the target column. Board drag/drop
 uses `reposition_work_item` instead, which honors an explicit insertion
 anchor.
 
+### Status-only transition (preserves board position, implemented)
+
+There are three explicit mutation modes for a Work Item status change;
+each is a dedicated operation, so the distinction is intentional and
+never inferred from caller identity:
+
+- **Editor status update** (`update_work_item`, a `statusDefinitionId`
+  patch) repositions the status-changed item to the **end** of the target
+  column. This is the Project-context editor/drawer path.
+- **Board drag** (`reposition_work_item`, `POST /api/work-items/{id}/reorder/`)
+  sets an **exact** insertion position (and changes status on a
+  cross-column drop).
+- **Status-only transition** (`transition_work_item_status`,
+  `POST /api/work-items/{id}/transition-status/`) changes the concrete
+  `statusDefinitionId` **without** changing the Work Item's
+  `board_position`, without reordering or renumbering any sibling, and
+  without performing a Project-board reposition.
+
+The status-only transition exists because a global cross-category status
+change (for example, from My Work) must move the canonical Work Item status
+without silently reordering the Project Kanban. A project-local
+`board_position` is per-Project ordering metadata and must not be a side
+effect of a global status change. It is therefore a **canonical Work Item
+capability** — a dedicated endpoint on the canonical Work Item resource —
+not a My Work-specific mutation endpoint, and it introduces no My
+Work-specific persisted state.
+
+**Semantics.** The target must be an existing `WorkItemStatusDefinition`
+belonging to the Work Item's Project (the same-Project invariant, section
+3a.4) and must be active (an inactive status cannot be selected as a new
+transition target, section 3a.2). Authorization is identical to the ordinary
+update path (PROJECT_WORK: owner/member, not viewer; archived Projects are
+read-only). `completed_at` follows the target category through the canonical
+completion semantics (section 12). A transition to the current status is a
+no-op and records no history; a real change records exactly one
+`work_item.updated` event carrying the `statusDefinition` from/to (with the
+fixed semantic `category`), identical to the ordinary update path —
+`board_position` never appears in the history diff.
+
 No `KanbanTask` entity exists.
 
 ## 16. Dashboard

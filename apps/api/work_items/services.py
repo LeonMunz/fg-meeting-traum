@@ -1228,3 +1228,107 @@ def reposition_work_item(
             )
 
     return work_item
+
+
+def transition_work_item_status(
+    *,
+    work_item: WorkItem,
+    actor,
+    status_definition_id: int,
+) -> WorkItem:
+    """Canonical status-only transition that preserves board position.
+
+    Changes the Work Item's concrete ``status_definition`` to a valid
+    target ``WorkItemStatusDefinition`` of the same Project WITHOUT
+    changing the Work Item's project-local ``board_position`` and
+    WITHOUT reordering any sibling. No Project-board reposition is
+    performed and no sibling ``board_position`` is renumbered.
+
+    This is the explicit "status change that preserves Project-board
+    order" counterpart to the ordinary update path (``update_work_item``),
+    which — on a status change — repositions the item to the end of the
+    target column, and to the Board drag/drop operation
+    (``reposition_work_item``), which sets an exact position. A global
+    cross-category status change (e.g. My Work) must move the canonical
+    status without silently reordering the Project Board, so it uses this
+    operation rather than the ordinary PATCH. The distinction is explicit
+    (a dedicated operation), never inferred from caller identity.
+
+    Semantics:
+    - Authorization is identical to the ordinary update path: the actor
+      must hold the PROJECT_WORK capability (current ProjectMembership
+      owner/member plus current ResearchGroupMembership; default deny;
+      archived Projects read-only).
+    - The target must be an existing ``WorkItemStatusDefinition`` that
+      belongs to the Work Item's Project (canonical same-Project
+      invariant) and must be active (an inactive status cannot be
+      selected as a new transition target).
+    - ``completed_at`` follows the target category through the canonical
+      completion semantics (set on entering ``done``, cleared on leaving
+      it, preserved across ``done`` -> ``done``).
+    - ``board_position`` is never written — not for the moved item and
+      not for any sibling.
+    - A transition to the current status is a no-op and records no
+      history event; a real status change records exactly one
+      ``work_item.updated`` event carrying the ``statusDefinition``
+      from/to (with the fixed semantic ``category``), identical to the
+      ordinary update path.
+    """
+    project = work_item.project
+
+    with transaction.atomic():
+        # Lock the Project row to serialize against concurrent membership
+        # changes (identical to the ordinary update path).
+        locked_project = Project.objects.select_for_update().get(pk=project.pk)
+        work_item = WorkItem.objects.select_for_update().get(pk=work_item.pk)
+
+        # Re-check write access under the lock (canonical authorization).
+        _require_project_write_access(locked_project, actor)
+
+        # Canonical status-definition validation: exists + same Project.
+        status_def = _resolve_status_definition(
+            locked_project, status_definition_id
+        )
+
+        # Domain rule (foundation.md section 3a.2): an inactive
+        # StatusDefinition cannot be selected as a new transition target.
+        if not status_def.active:
+            raise WorkItemDomainError(
+                "Status definition is not active and cannot be selected "
+                "as a transition target."
+            )
+
+        status_changing = status_def.pk != work_item.status_definition_id
+
+        before_state = _snapshot_work_item_state(work_item)
+
+        if status_changing:
+            work_item.status_definition = status_def
+            _apply_status_completion(work_item, status_def)
+            # Deliberately NOT writing board_position: a status-only
+            # transition preserves the Work Item's project-local board
+            # order. No sibling is touched, so no column is renumbered.
+            work_item.save(update_fields=["status_definition", "completed_at"])
+        # else: transition to the current status — nothing to write.
+
+        work_item.refresh_from_db()
+        after_state = _snapshot_work_item_state(work_item)
+
+        changes = _diff_work_item_changes(
+            project_id=locked_project.pk,
+            before=before_state,
+            after=after_state,
+        )
+        # Only a real status change produces history. Recorded inside the
+        # same atomic block so a rollback never leaves an AuditEvent.
+        if changes:
+            record_audit_event(
+                research_group=locked_project.research_group,
+                actor=actor,
+                event_type=WorkItemAuditEventType.UPDATED,
+                project=locked_project,
+                work_item=work_item,
+                data={"changes": changes},
+            )
+
+    return work_item

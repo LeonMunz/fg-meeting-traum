@@ -43,6 +43,7 @@ from .services import (
     update_work_item,
     update_work_item_comment,
     reposition_work_item,
+    transition_work_item_status,
     resolve_work_item_meeting_origin,
 )
 
@@ -444,6 +445,78 @@ class WorkItemReorderView(APIView):
             return Response({"error": exc.message}, status=400)
 
         return Response(serialize_work_item(repositioned, user=request.user))
+
+
+# ── WorkItem Status-only transition (preserves board position) ──
+
+
+class WorkItemStatusTransitionView(APIView):
+    """POST /api/work-items/{work_item_id}/transition-status/
+
+    Canonical status-only transition: changes the Work Item's concrete
+    status to a valid target StatusDefinition of the same Project
+    WITHOUT changing the Work Item's project-local board_position (and
+    without reordering any sibling). This is the explicit
+    "status change that preserves Project-board order" counterpart to
+    the ordinary PATCH status update, which repositions a
+    status-changed item to the end of the target column, and to the
+    Board drag/drop reorder operation, which sets an exact position.
+
+    Body:
+    - statusDefinitionId: required. Target Project StatusDefinition ID.
+
+    Requires ProjectMembership owner/member (not viewer).
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, work_item_id):
+        try:
+            work_item = WorkItem.objects.get(pk=work_item_id)
+        except WorkItem.DoesNotExist:
+            return Response(
+                {"error": "WorkItem not found"},
+                status=404,
+            )
+
+        result = _require_project_access(request, work_item.project_id)
+        if result is None:
+            return Response(
+                {"error": "WorkItem not found"},
+                status=404,
+            )
+        project, scope = result
+
+        if not scope.has(Capability.PROJECT_WORK):
+            return Response(
+                {"error": "A viewer cannot modify WorkItems."},
+                status=403,
+            )
+
+        status_definition_id = request.data.get("statusDefinitionId")
+        if status_definition_id is None:
+            return Response(
+                {"error": "statusDefinitionId is required."},
+                status=400,
+            )
+        try:
+            status_definition_id = int(status_definition_id)
+        except (TypeError, ValueError):
+            return Response(
+                {"error": "statusDefinitionId is invalid."},
+                status=400,
+            )
+
+        try:
+            transitioned = transition_work_item_status(
+                work_item=work_item,
+                actor=request.user,
+                status_definition_id=status_definition_id,
+            )
+        except WorkItemDomainError as exc:
+            return Response({"error": exc.message}, status=400)
+
+        return Response(serialize_work_item(transitioned, user=request.user))
 
 
 # ── WorkItem History (read-only) ──

@@ -62,6 +62,7 @@ from work_items.views import (
     WorkItemDetailView,
     WorkItemReorderView,
     WorkItemHistoryView,
+    WorkItemStatusTransitionView,
 )
 
 from meetings.views import (
@@ -145,6 +146,7 @@ urlpatterns = [
     path('api/projects/<int:project_id>/work-items/', ProjectWorkItemListCreateView.as_view(), name='project-work-items-list'),
     path('api/work-items/<int:work_item_id>/', WorkItemDetailView.as_view(), name='work-item-detail'),
     path('api/work-items/<int:work_item_id>/reorder/', csrf_protect_view(WorkItemReorderView), name='work-item-reorder'),
+    path('api/work-items/<int:work_item_id>/transition-status/', csrf_protect_view(WorkItemStatusTransitionView), name='work-item-status-transition'),
     path('api/work-items/<int:work_item_id>/history/', WorkItemHistoryView.as_view(), name='work-item-history'),
     path('api/work-items/<int:work_item_id>/comments/', WorkItemCommentListCreateView.as_view(), name='work-item-comments-list'),
     path('api/work-item-comments/<int:comment_id>/', WorkItemCommentDetailView.as_view(), name='work-item-comment-detail'),
