@@ -883,6 +883,84 @@ Possible UI filters:
 
 No `MyWorkTask` entity is created.
 
+## 14a. My Work preferences (server-side personal view state)
+
+My Work preferences are personal view state over the canonical Work
+Items, persisted server-side per user (NOT localStorage), so they
+survive navigation, reload, logout/login, and device changes.
+
+Persisted per user (one row per user):
+
+```text
+MyWorkPreferences
+
+user_id          (one-to-one with the User)
+view_mode        board | list
+research_groups  (selected Research Groups; relational)
+projects         (selected Projects; relational)
+work_item_types  (selected semantic type kinds; validated set)
+created_at / updated_at
+```
+
+- **Board vs List is part of the persisted preference.** `view_mode`
+  is exactly `board` or `list`; anything else is rejected.
+- **Empty filter arrays mean "no restriction" within the user's
+  current access.** `researchGroupIds = []` means all currently
+  accessible Research Groups; `projectIds = []` means all currently
+  accessible Projects; `workItemTypes = []` means all semantic Work
+  Item types.
+- **Semantic type kinds only.** `workItemTypes` holds ONLY canonical
+  semantic kind values from `WorkItemTypeDefinition.Kind`
+  (`task` / `epic` / `milestone` / `deliverable`). Type display
+  names — including canonical-looking names on custom
+  (kind-less) definitions — are never persisted and never
+  interpreted as semantic kinds (Section 3a.1).
+- **Current access always wins over stored preferences.** Every
+  read and write is constrained by the user's CURRENT access:
+  Research Group selections retain only groups the user currently
+  belongs to; Project selections retain only Projects the user
+  currently has effective access to under the canonical Project +
+  Research Group membership rules; and — when a non-empty Research
+  Group selection exists — selected Projects must also belong to
+  one of those selected groups.
+- **Stale selections are sanitized on the next load, and the
+  cleaned state is persisted.** Losing a Research Group membership
+  removes that group (and Projects invalidated by the surviving
+  group filter) from the preference on the next load; losing
+  Project access removes that Project. The sanitized preference
+  state becomes the persisted state; stale inaccessible IDs are
+  never returned as if still valid.
+- **Preferences are never authorization.** They grant no
+  membership, never grant access to any Research Group, Project, or
+  Work Item, and never restore lost access. They never mutate Work
+  Items, assignments, statuses, Memberships, or Project/Research
+  Group data. `GET /api/me/work-items/` is unaffected by stored
+  preferences.
+
+API (authenticated; the client contract is a COMPLETE current
+snapshot, not incremental toggle actions — a PATCH persists the
+complete normalized state atomically and returns it):
+
+```text
+GET   /api/me/preferences/my-work/
+PATCH /api/me/preferences/my-work/
+
+{
+  "viewMode": "board" | "list",
+  "researchGroupIds": [...],
+  "projectIds": [...],
+  "workItemTypes": [...]
+}
+```
+
+A first GET for a user with no preference row returns the default
+snapshot (`board` + three empty filter arrays).
+
+The user-facing My Work filter toolbar (Research Group / Project /
+Type filter controls, chips, and client-side filtering over the My
+Work payload) is follow-up work; this section defines the
+persistent backend preference domain and API foundation only.
+
 ## 15. Project Board (implemented)
 
 The Project Board is a projection over the same canonical Project Work Items
@@ -1040,6 +1118,7 @@ These are the non-negotiable contract of the Core phase:
 24. Project authorization is enforced by the server.
 25. Permission-filtered list endpoints do not leak private resources.
 26. A WorkItemTypeDefinition's semantic kind is system-assigned only at canonical default creation, is never editable through the configuration API, and is never inferred from the display name — not at runtime and not during data migration; legacy definitions without provable machine-readable semantic provenance have `kind = null`.
+27. My Work preferences are server-side personal view state, never authorization: every read/write is re-sanitized against the user's CURRENT Research Group / Project access and the canonical semantic type kinds, stale inaccessible selections are removed and persisted as removed on the next load, and preferences never grant access to or mutate any Research Group, Project, Work Item, assignment, or Membership (Section 14a).
 
 ## 20. Core acceptance flow
 

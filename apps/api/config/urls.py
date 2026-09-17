@@ -56,6 +56,7 @@ from research_groups.views import (
 from work_items.views import (
     PersonalMyWorkView,
     MyWorkView,
+    MyWorkPreferencesView,
     ProjectWorkItemListCreateView,
     WorkItemCommentDetailView,
     WorkItemCommentListCreateView,
@@ -154,6 +155,8 @@ urlpatterns = [
     path('api/activity/', ActivityFeedView.as_view(), name='activity-feed'),
     # My Work — authorized projection over assigned WorkItems
     path('api/me/work-items/', PersonalMyWorkView.as_view(), name='personal-my-work'),
+    # My Work preferences — persisted personal view state (never authorization)
+    path('api/me/preferences/my-work/', MyWorkPreferencesView.as_view(), name='my-work-preferences'),
     path('api/research-groups/<int:group_id>/my-work/', MyWorkView.as_view(), name='research-group-my-work'),
 
     # Home aggregate — read-only authenticated composition of the

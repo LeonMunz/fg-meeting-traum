@@ -172,3 +172,84 @@ class WorkItemLabel(models.Model):
 
     def __str__(self):
         return f"{self.label.name} → [{self.work_item.type_definition.name}] {self.work_item.title}"
+
+
+class MyWorkPreferences(models.Model):
+    """Persisted personal My Work view state for one user.
+
+    My Work preferences are personal view state over the canonical
+    Work Items (``docs/domain/foundation.md`` §14/§14a): the Board
+    vs List presentation plus the user's selected Research Group,
+    Project, and semantic Work Item type kind filters.
+
+    Invariants:
+
+    - One row per user (OneToOne). The row is created on first
+      explicit save; a read with no row answers the default
+      snapshot.
+    - Preferences are NEVER authorization. They grant no
+      membership, never grant access to any Research Group,
+      Project, or Work Item, and never mutate Work Items,
+      assignments, statuses, Memberships, or Project/Research
+      Group data. Every read and write is re-sanitized against
+      the user's CURRENT access by
+      ``work_items.my_work_preferences``; stale inaccessible
+      selections are dropped and the cleaned state is persisted.
+    - Research Group and Project selections are relational (M2M to
+      the canonical ``ResearchGroup`` / ``Project`` rows), never
+      opaque ID lists.
+    - ``work_item_types`` holds ONLY canonical semantic type kind
+      values (``WorkItemTypeDefinition.Kind``: ``task`` / ``epic``
+      / ``milestone`` / ``deliverable``). Display names, arbitrary
+      project-local type names, and definition IDs are never
+      persisted and never interpreted.
+    - An empty selection means "no restriction" within the user's
+      current access.
+    """
+
+    class ViewMode(models.TextChoices):
+        BOARD = "board", "Board"
+        LIST = "list", "List"
+
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="my_work_preferences",
+    )
+    view_mode = models.CharField(
+        max_length=8,
+        choices=ViewMode.choices,
+        default=ViewMode.BOARD,
+    )
+    # Selected My Work filter targets. A row here is a presentation
+    # filter over canonical rows — it confers no access on its own.
+    # An empty selection means no restriction.
+    research_groups = models.ManyToManyField(
+        "research_groups.ResearchGroup",
+        blank=True,
+        related_name="my_work_preferences",
+        db_table="work_items_myworkpreferences_research_groups",
+    )
+    projects = models.ManyToManyField(
+        Project,
+        blank=True,
+        related_name="my_work_preferences",
+        db_table="work_items_myworkpreferences_projects",
+    )
+    # Canonical semantic Work Item type kinds only
+    # (WorkItemTypeDefinition.Kind values). Empty list = no
+    # restriction. Never display names, never definition IDs.
+    work_item_types = models.JSONField(default=list)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "work_items_my_work_preferences"
+        verbose_name = "my work preferences"
+        verbose_name_plural = "my work preferences"
+
+    def __str__(self):
+        return (
+            f"MyWorkPreferences(user={self.user_id}, "
+            f"view={self.view_mode})"
+        )

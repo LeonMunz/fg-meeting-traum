@@ -26,6 +26,11 @@ from projects.models import (
 from research_groups.models import ResearchGroupMembership
 
 from .models import WorkItem, WorkItemAssignee, WorkItemComment
+from .my_work_preferences import (
+    MyWorkPreferencesError,
+    get_my_work_preferences,
+    update_my_work_preferences,
+)
 from .personal_my_work import personal_my_work_queryset
 from .serializers import (
     WorkItemCommentSerializer,
@@ -989,3 +994,37 @@ class PersonalMyWorkView(APIView):
             data.append(item)
 
         return Response(data)
+
+
+class MyWorkPreferencesView(APIView):
+    """GET/PATCH /api/me/preferences/my-work/
+
+    The user's persisted personal My Work view state: the Board
+    vs List presentation plus the selected Research Group,
+    Project, and semantic Work Item type kind filters over
+    canonical Work Items.
+
+    The client contract is a COMPLETE current snapshot, not
+    incremental toggle actions: a PATCH persists the complete
+    normalized state atomically and returns it.
+
+    Preferences are personal view state, never authorization:
+    every read and write is constrained by the user's CURRENT
+    access (inaccessible/stale IDs are dropped — and persisted as
+    dropped), and preferences never grant access, never mutate
+    Work Items, Memberships, assignments, or statuses.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        return Response(get_my_work_preferences(request.user))
+
+    def patch(self, request):
+        try:
+            snapshot = update_my_work_preferences(
+                request.user, request.data
+            )
+        except MyWorkPreferencesError as exc:
+            return Response({"error": str(exc)}, status=400)
+        return Response(snapshot)
