@@ -11,13 +11,16 @@ import type {
   ApiPersonalWorkItem,
   ApiWorkItemStatus,
 } from '../../api/types'
-import { listMyWork } from '../../api/work-items'
+import {
+  listMyWork,
+  transitionWorkItemStatus,
+} from '../../api/work-items'
 import { useResearchGroup } from '../research-group/useResearchGroup'
 
 type GroupFilter = 'all' | number
 
 /**
- * Personal cross-project My Work (List + read-only Kanban).
+ * Personal cross-project My Work (List + Kanban).
  *
  * The page renders exactly what the canonical personal endpoint
  * `GET /api/me/work-items/` returns — one request, no per-Project or
@@ -34,9 +37,16 @@ type GroupFilter = 'all' | number
  *
  * Kanban (default): four fixed semantic columns (Todo / In progress /
  * Review / Done) grouped SOLELY by `statusCategory`, preserving the
- * canonical API order within each column. Read-only in this slice — no
- * drag/drop, no status mutation, no drop zones from `statusTargets`, no
- * global card ordering.
+ * canonical API order within each column. Cross-category drag/drop
+ * moves a card to the concrete project-local status resolved by that
+ * item's own `statusTargets` (at most one target per semantic
+ * category, derived read-only from the item's Project): exactly one
+ * canonical Work Item status mutation is issued, then the board
+ * re-renders the authoritative refetched payload. The item's current
+ * category is never a mutation target and a category without a
+ * target is not a drop destination. No global card ordering exists,
+ * no within-column reordering is supported, and no My Work-specific
+ * status or position state is introduced.
  *
  * The Work Item type is shown as the concrete project-local `typeName`
  * from the payload — a display name, not a semantic discriminator: no
@@ -238,6 +248,28 @@ export function MyWorkPage() {
   // Projects / Research Groups individually.
   const [view, setView] = useState<MyWorkView>('kanban')
 
+  // Kanban drag state (native HTML5 drag-and-drop — the same
+  // mechanism the Project Work Items Board uses). Only the Kanban is
+  // draggable; the List stays behaviorally unchanged. `draggedItemId`
+  // drives the valid/unavailable drop-target presentation while a
+  // drag is active; nothing is decorated when no drag is active.
+  const [draggedItemId, setDraggedItemId] = useState<
+    number | null
+  >(null)
+
+  // Cards with an in-flight status mutation: duplicate drops of the
+  // same card are ignored and the card shows restrained pending
+  // feedback while the mutation + authoritative refetch run.
+  const [pendingMoveItemIds, setPendingMoveItemIds] = useState<
+    ReadonlySet<number>
+  >(() => new Set())
+
+  // The established board error pattern for a failed drop mutation
+  // (page-local, dismissible — no global notification architecture).
+  const [statusDropError, setStatusDropError] = useState<
+    string | null
+  >(null)
+
   const loadMyWork = useCallback(
     async () => {
       setLoading(true)
@@ -268,6 +300,107 @@ export function MyWorkPage() {
   useEffect(() => {
     void loadMyWork()
   }, [loadMyWork])
+
+  // Authoritative, SILENT refetch of the canonical personal
+  // projection, used after a successful Kanban status mutation.
+  // Unlike `loadMyWork` it does not toggle the page-level loading
+  // state — the rest of the board is preserved while the server
+  // result replaces the payload.
+  const refreshMyWork = useCallback(async () => {
+    try {
+      setItems(await listMyWork())
+      setError(null)
+    } catch {
+      // The mutation already succeeded; keep the last authoritative
+      // payload (no optimistic state was introduced, so nothing
+      // false is rendered) — the next load reconciles.
+    }
+  }, [])
+
+  // Cross-category Kanban drop: mutates the SAME canonical Work
+  // Item through the canonical status-only transition
+  // (`POST /api/work-items/{id}/transition-status/`) — the
+  // dedicated status change that preserves the item's project-local
+  // `board_position` (no Project-board reposition, no sibling
+  // renumbering). The ordinary status PATCH is NOT used here: it
+  // would reposition the item to the end of the target column. The
+  // board then renders the authoritative refetched My Work payload.
+  const handleKanbanDrop = useCallback(
+    async (
+      itemId: number,
+      category: ApiWorkItemStatus,
+    ) => {
+      const item = items.find(
+        (candidate) => candidate.id === itemId,
+      )
+
+      // A drop into the item's CURRENT category is a no-op by
+      // contract: this board has no within-column reordering, so no
+      // mutation and no refetch.
+      if (!item || item.statusCategory === category) {
+        return
+      }
+
+      // The concrete target comes ONLY from the item's
+      // statusTargets (its Project's first active status definition
+      // in the target category). No target → not a valid drop: no
+      // mutation, no refetch, no fallback status is invented and no
+      // status is chosen by name.
+      const target = item.statusTargets.find(
+        (candidate) =>
+          candidate.statusCategory === category,
+      )
+
+      if (!target) {
+        return
+      }
+
+      // At most one in-flight mutation per card: a second drop of
+      // the same card while the first is pending is ignored.
+      if (pendingMoveItemIds.has(itemId)) {
+        return
+      }
+
+      setPendingMoveItemIds((current) =>
+        new Set(current).add(itemId),
+      )
+      setStatusDropError(null)
+
+      try {
+        // Only the concrete target statusDefinitionId is sent —
+        // never boardPosition, never an insertion anchor, never any
+        // My Work ordering state (no global card ordering exists).
+        await transitionWorkItemStatus(
+          itemId,
+          target.statusDefinitionId,
+        )
+
+        // The backend result is authoritative: the refetched
+        // payload — not local inference — decides the card's final
+        // column (its returned statusCategory) and concrete
+        // statusName.
+        await refreshMyWork()
+      } catch (mutationError) {
+        // No optimistic relocation was made, so the card remains in
+        // its authoritative category; expose the failure with the
+        // established board error pattern and allow a retry by
+        // dragging again.
+        setStatusDropError(
+          getErrorMessage(
+            mutationError,
+            'Work item could not be moved.',
+          ),
+        )
+      } finally {
+        setPendingMoveItemIds((current) => {
+          const next = new Set(current)
+          next.delete(itemId)
+          return next
+        })
+      }
+    },
+    [items, pendingMoveItemIds, refreshMyWork],
+  )
 
   // Server ordering (`created_at`, ID tie-break) is authoritative.
   // The single established presentation rule: completed items render
@@ -496,6 +629,24 @@ export function MyWorkPage() {
         <MyWorkBoard
           columns={kanbanColumns}
           onOpen={openItem}
+          draggedItemId={draggedItemId}
+          pendingItemIds={pendingMoveItemIds}
+          statusDropError={statusDropError}
+          onDismissStatusDropError={() =>
+            setStatusDropError(null)
+          }
+          onDragStart={(itemId) =>
+            setDraggedItemId(itemId)
+          }
+          onDragEnd={() =>
+            setDraggedItemId(null)
+          }
+          onDrop={(itemId, category) =>
+            void handleKanbanDrop(
+              itemId,
+              category,
+            )
+          }
         />
       ) : (
         <section className="mt-8 overflow-hidden rounded-xl border border-border-structural bg-surface-quiet shadow-sm">
@@ -645,20 +796,39 @@ export function MyWorkPage() {
 
 
 /**
- * Read-only global My Work Kanban.
+ * Global My Work Kanban with cross-category drag/drop.
  *
  * Four fixed semantic columns (Todo / In progress / Review / Done)
  * rendered over the SAME canonical `GET /api/me/work-items/` payload
  * the List renders. Grouping is by `statusCategory` only; within a
- * column the canonical API order is preserved. Read-only in this slice:
- * no drag/drop, no status mutation, no drop zones from `statusTargets`,
- * and no global card ordering. At narrow widths the board scrolls
- * horizontally inside its own region — the document itself never
- * overflows.
+ * column the canonical API order is preserved.
+ *
+ * Drag/drop reuses the Project Work Items Board's native HTML5
+ * mechanism (draggable card, column drop zones, `dataTransfer` item
+ * id). While a drag is active, each column presents its DROP
+ * AVAILABILITY for that specific dragged item: a different category
+ * that the item's `statusTargets` resolves to a concrete
+ * project-local definition for is a valid target (quiet ring,
+ * emphasized on hover — the Project Board's drop-target language);
+ * the item's own category and categories without a target are
+ * unavailable (quiet dim, and the browser drop is refused because
+ * `dragover` is not accepted). No decoration exists when no drag is
+ * active. Dropping issues exactly one canonical status mutation and
+ * one authoritative My Work refetch — no global card ordering, no
+ * within-column reordering, no `boardPosition`. At narrow widths the
+ * board scrolls horizontally inside its own region — the document
+ * itself never overflows.
  */
 function MyWorkBoard({
   columns,
   onOpen,
+  draggedItemId,
+  pendingItemIds,
+  statusDropError,
+  onDismissStatusDropError,
+  onDragStart,
+  onDragEnd,
+  onDrop,
 }: {
   columns: Array<{
     value: ApiWorkItemStatus
@@ -666,9 +836,72 @@ function MyWorkBoard({
     items: ApiPersonalWorkItem[]
   }>
   onOpen: (item: ApiPersonalWorkItem) => void
+  draggedItemId: number | null
+  pendingItemIds: ReadonlySet<number>
+  statusDropError: string | null
+  onDismissStatusDropError: () => void
+  onDragStart: (itemId: number) => void
+  onDragEnd: () => void
+  onDrop: (
+    itemId: number,
+    category: ApiWorkItemStatus,
+  ) => void
 }) {
+  // The dragged item, looked up in the SAME canonical payload the
+  // board renders — its `statusTargets` (not any status name) decide
+  // which columns are valid drop destinations for this drag. A card
+  // with a pending mutation offers no valid targets: its in-flight
+  // mutation is the only thing that may move it.
+  const draggedItem = useMemo(() => {
+    if (draggedItemId == null) {
+      return null
+    }
+
+    if (pendingItemIds.has(draggedItemId)) {
+      return null
+    }
+
+    return (
+      columns
+        .flatMap((column) => column.items)
+        .find(
+          (item) => item.id === draggedItemId,
+        ) ?? null
+    )
+  }, [columns, draggedItemId, pendingItemIds])
+
+  // The column currently hovered by a valid drag (pure UI state,
+  // cleared on drop/drag-end).
+  const [dragOverColumn, setDragOverColumn] = useState<
+    ApiWorkItemStatus | null
+  >(null)
+
   return (
     <section className="mt-8 overflow-hidden rounded-xl border border-border-structural bg-surface-quiet shadow-sm">
+      {statusDropError && (
+        <div
+          role="alert"
+          className="flex items-start gap-2.5 border-b border-work-item-error-border bg-work-item-error-bg px-6 py-3 text-sm text-work-item-error"
+        >
+          <span
+            aria-hidden="true"
+            className="material-symbols-outlined mt-0.5 text-[18px]"
+          >
+            error
+          </span>
+
+          <p className="flex-1">{statusDropError}</p>
+
+          <button
+            type="button"
+            onClick={onDismissStatusDropError}
+            className="shrink-0 text-xs font-semibold text-work-item-error underline-offset-2 hover:underline"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       <div className="overflow-x-auto bg-workspace">
         <div
           className="grid min-w-max gap-3 p-4"
@@ -676,12 +909,120 @@ function MyWorkBoard({
             gridTemplateColumns: `repeat(${columns.length}, minmax(260px, 1fr))`,
           }}
         >
-          {columns.map((column) => (
-            <div
-              key={column.value}
-              data-board-column={column.value}
-              className="flex min-h-[26rem] min-w-0 flex-col rounded-lg bg-board-column"
-            >
+          {columns.map((column) => {
+            // Drop availability for the ACTIVE drag. The current
+            // category is never a mutation target (no within-column
+            // reordering exists here), and a category the item's
+            // statusTargets do not cover is unavailable — the board
+            // never invents a fallback status.
+            const isSameCategory =
+              draggedItem?.statusCategory ===
+              column.value
+            const hasStatusTarget =
+              draggedItem?.statusTargets.some(
+                (target) =>
+                  target.statusCategory ===
+                  column.value,
+              ) ?? false
+            const isValidDropTarget =
+              draggedItem != null &&
+              !isSameCategory &&
+              hasStatusTarget
+            const isDragOver =
+              isValidDropTarget &&
+              dragOverColumn === column.value
+            const isUnavailable =
+              draggedItem != null &&
+              !isValidDropTarget
+
+            const handleColumnDragOver = (
+              event: React.DragEvent,
+            ) => {
+              if (!isValidDropTarget) {
+                // NOT preventing the default makes the browser
+                // refuse the drop — the card returns to its own
+                // column and no mutation can occur.
+                return
+              }
+
+              event.preventDefault()
+              event.dataTransfer.dropEffect = 'move'
+
+              if (dragOverColumn !== column.value) {
+                setDragOverColumn(column.value)
+              }
+            }
+
+            const handleColumnDragLeave = (
+              event: React.DragEvent,
+            ) => {
+              if (
+                event.currentTarget.contains(
+                  event.relatedTarget as
+                    | Node
+                    | null,
+                )
+              ) {
+                return
+              }
+
+              setDragOverColumn((current) =>
+                current === column.value
+                  ? null
+                  : current,
+              )
+            }
+
+            const handleColumnDrop = (
+              event: React.DragEvent,
+            ) => {
+              event.preventDefault()
+
+              const droppedId =
+                event.dataTransfer.getData(
+                  'text/plain',
+                )
+              setDragOverColumn(null)
+
+              const numericId = Number(droppedId)
+
+              // Backstop: only the actively dragged item can be
+              // dropped (stale/foreign payloads are ignored).
+              if (
+                !Number.isInteger(numericId) ||
+                numericId !== draggedItemId
+              ) {
+                return
+              }
+
+              onDrop(numericId, column.value)
+            }
+
+            return (
+              <div
+                key={column.value}
+                data-board-column={column.value}
+                data-board-column-drop-state={
+                  draggedItem == null
+                    ? undefined
+                    : isValidDropTarget
+                      ? 'valid'
+                      : 'unavailable'
+                }
+                onDragOver={handleColumnDragOver}
+                onDragLeave={handleColumnDragLeave}
+                onDrop={handleColumnDrop}
+                className={[
+                  'flex min-h-[26rem] min-w-0 flex-col rounded-lg transition-colors',
+                  isDragOver
+                    ? 'bg-drag-target-bg ring-1 ring-inset ring-drag-target-ring'
+                    : isValidDropTarget
+                      ? 'bg-board-column ring-1 ring-inset ring-drag-target-ring/30'
+                      : isUnavailable
+                        ? 'bg-board-column opacity-60'
+                        : 'bg-board-column',
+                ].join(' ')}
+              >
               <div className="flex items-center gap-1.5 px-3 py-2.5">
                 <h2 className="text-[13px] font-semibold text-work-content-text">
                   {column.label}
@@ -703,12 +1044,26 @@ function MyWorkBoard({
                       key={item.id}
                       item={item}
                       onOpen={onOpen}
+                      dragging={
+                        draggedItemId === item.id
+                      }
+                      pendingMove={
+                        pendingItemIds.has(
+                          item.id,
+                        )
+                      }
+                      onDragStart={onDragStart}
+                      onDragEnd={() => {
+                        setDragOverColumn(null)
+                        onDragEnd()
+                      }}
                     />
                   ))
                 )}
               </div>
             </div>
-          ))}
+          )
+          })}
         </div>
       </div>
     </section>
@@ -716,7 +1071,7 @@ function MyWorkBoard({
 }
 
 /**
- * Read-only My Work Kanban card.
+ * My Work Kanban card with cross-category drag.
  *
  * Understandable without Project context: title, the concrete
  * project-local `typeName`, the concrete project-local `statusName`
@@ -725,13 +1080,30 @@ function MyWorkBoard({
  * due / blocked state. The neutral canonical Work Item icon is used —
  * no semantic type icon mapping. Opening uses the same canonical
  * navigation as the List (the item's Project Work Items surface).
+ *
+ * Drag reuses the Project Work Items Board card's native HTML5
+ * convention: the whole card is `draggable` (grab cursor),
+ * `dragstart` carries the Work Item id on `dataTransfer`, and the
+ * drag ghost is browser-native (the card itself dims while the drag
+ * is active). A native HTML5 drag never dispatches a trailing
+ * "click", so click/Enter/Space keep opening the item exactly as
+ * before. A pending mutation shows restrained feedback
+ * (dimmed + progress cursor) without moving the card optimistically.
  */
 function MyWorkBoardCard({
   item,
   onOpen,
+  dragging,
+  pendingMove,
+  onDragStart,
+  onDragEnd,
 }: {
   item: ApiPersonalWorkItem
   onOpen: (item: ApiPersonalWorkItem) => void
+  dragging: boolean
+  pendingMove: boolean
+  onDragStart: (itemId: number) => void
+  onDragEnd: () => void
 }) {
   const status =
     statusGlyphs[item.statusCategory] ??
@@ -753,6 +1125,7 @@ function MyWorkBoardCard({
       tabIndex={0}
       aria-label={`Open ${item.title}`}
       data-work-item-id={item.id}
+      draggable
       onClick={() => onOpen(item)}
       onKeyDown={(event) => {
         if (
@@ -763,11 +1136,25 @@ function MyWorkBoardCard({
           onOpen(item)
         }
       }}
+      onDragStart={(event) => {
+        event.dataTransfer.setData(
+          'text/plain',
+          String(item.id),
+        )
+        event.dataTransfer.effectAllowed = 'move'
+        onDragStart(item.id)
+      }}
+      onDragEnd={onDragEnd}
       className={[
-        'cursor-pointer rounded-lg border bg-surface px-3 py-2.5 transition hover:bg-work-surface-hover',
+        'rounded-lg border bg-surface px-3 py-2.5 transition hover:bg-work-surface-hover',
         item.blockedReason
           ? 'border-work-item-error-border'
           : 'border-border-structural/50',
+        dragging
+          ? 'opacity-40'
+          : pendingMove
+            ? 'cursor-progress opacity-60'
+            : 'cursor-grab active:cursor-grabbing',
       ].join(' ')}
     >
       <div className="flex items-start gap-2">

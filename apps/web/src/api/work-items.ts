@@ -75,6 +75,28 @@ export async function updateWorkItem(
   )
 }
 
+/**
+ * Canonical status-only transition: changes the Work Item's
+ * concrete `statusDefinitionId` WITHOUT changing its project-local
+ * `board_position` (no Project-board reposition, no sibling
+ * renumbering). The dedicated "status change that preserves Project
+ * board order" counterpart to `updateWorkItem` (which repositions a
+ * status-changed item to the end of the target column) and to
+ * `reorderWorkItem` (which sets an exact position).
+ *
+ * The body carries exactly the target `statusDefinitionId` — no
+ * board position, no insertion anchor, no other state.
+ */
+export async function transitionWorkItemStatus(
+  workItemId: number,
+  statusDefinitionId: number,
+): Promise<ApiWorkItem> {
+  return apiPost<ApiWorkItem>(
+    `/api/work-items/${workItemId}/transition-status/`,
+    { statusDefinitionId },
+  )
+}
+
 export async function listWorkItemHistory(
   workItemId: number,
 ): Promise<ApiWorkItemHistoryEvent[]> {

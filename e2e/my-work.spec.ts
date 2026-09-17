@@ -19,8 +19,21 @@ import { login } from './helpers'
  *    concrete status "Todo" (category todo), concrete type "Task"
  *
  * Both seeded items resolve to the `todo` semantic category, so in
- * the read-only global Kanban they both sit in the Todo column (the
- * other three global columns render empty).
+ * the global Kanban they both sit in the Todo column (the other
+ * three global columns render empty).
+ *
+ * The final test drags "First Draft Complete" into In progress and
+ * therefore mutates the canonical seed data; it is deliberately the
+ * LAST test in this file (the specs that run afterwards only assert
+ * card visibility, never its category). The Playwright webServer
+ * resets the E2E schema before the run, so the mutation never leaks
+ * into a later run.
+ *
+ * That drag test proves the canonical wire contract: exactly one
+ * `POST /api/work-items/{id}/transition-status/` carrying only the
+ * concrete target `statusDefinitionId` (no boardPosition, no
+ * status-changing PATCH, no reorder), followed by exactly one
+ * authoritative `GET /api/me/work-items/` refetch.
  */
 
 function expectNoHorizontalOverflow(page: Page) {
@@ -399,4 +412,314 @@ test('My Work List has no horizontal overflow at a narrow viewport', async ({ pa
     path: testInfo.outputPath('my-work-list-narrow.png'),
     fullPage: true,
   })
+})
+
+test('My Work Kanban drag: cross-category drop mutates the canonical status from statusTargets and refetches My Work', async ({ page }, testInfo) => {
+  // Capture the wire contract: exactly one canonical status-only
+  // transition (POST /api/work-items/{id}/transition-status/
+  // carrying only the concrete target statusDefinitionId — no
+  // boardPosition), zero ordinary status-changing PATCH
+  // /api/work-items/{id}/ requests, zero reorder requests, followed
+  // by exactly one authoritative GET /api/me/work-items/ refetch,
+  // with zero per-Project configuration requests.
+  const myWorkRequestUrls: string[] = []
+  const projectConfigRequestUrls: string[] = []
+  const transitionRequests: Array<{
+    url: string
+    payload: Record<string, unknown>
+  }> = []
+  const statusPatchRequests: string[] = []
+  const reorderRequests: string[] = []
+
+  type StatusTarget = {
+    statusCategory: string
+    statusDefinitionId: number
+    statusName: string
+  }
+
+  type PersonalWorkItem = {
+    id: number
+    title: string
+    statusCategory: string
+    statusName: string
+    statusTargets: StatusTarget[]
+  }
+
+  let myWorkPayload: PersonalWorkItem[] = []
+
+  page.on('request', (request) => {
+    const url = request.url()
+
+    if (url.includes('/api/me/work-items/')) {
+      myWorkRequestUrls.push(url)
+    }
+
+    if (url.includes('/work-item-configuration/')) {
+      projectConfigRequestUrls.push(url)
+    }
+
+    const pathname = new URL(url).pathname
+
+    if (
+      request.method() === 'POST' &&
+      /\/api\/work-items\/\d+\/transition-status\/$/.test(
+        pathname,
+      )
+    ) {
+      transitionRequests.push({
+        url,
+        payload: JSON.parse(
+          request.postData() ?? '{}',
+        ) as Record<string, unknown>,
+      })
+    }
+
+    if (
+      request.method() === 'POST' &&
+      /\/api\/work-items\/\d+\/reorder\/$/.test(
+        pathname,
+      )
+    ) {
+      reorderRequests.push(url)
+    }
+
+    if (
+      request.method() === 'PATCH' &&
+      /\/api\/work-items\/\d+\/$/.test(
+        pathname,
+      )
+    ) {
+      statusPatchRequests.push(url)
+    }
+  })
+
+  page.on('response', (response) => {
+    if (
+      response.url().includes(
+        '/api/me/work-items/',
+      ) &&
+      response.request().method() === 'GET'
+    ) {
+      void response
+        .json()
+        .then((payload) => {
+          if (Array.isArray(payload)) {
+            myWorkPayload =
+              payload as PersonalWorkItem[]
+          }
+        })
+        .catch(() => {
+          // Non-JSON body; keep the last payload.
+        })
+    }
+  })
+
+  // Wide enough that all four columns are visible at once, so the
+  // drag source and drop target are both on-screen (the same
+  // convention the Project Board drag spec uses).
+  await page.setViewportSize({
+    width: 1920,
+    height: 1000,
+  })
+
+  await login(page, 'alex')
+  await page.goto('/my-work')
+
+  const todoColumn = page.locator(
+    '[data-board-column="todo"]',
+  )
+  const card = todoColumn.getByRole(
+    'button',
+    { name: 'Open First Draft Complete' },
+  )
+  await expect(card).toBeVisible()
+
+  // The concrete drop target is derived from the CANONICAL payload's
+  // statusTargets — never from a status name or any Project
+  // configuration.
+  await expect
+    .poll(() => myWorkPayload.length)
+    .toBeGreaterThan(0)
+
+  const item = myWorkPayload.find(
+    (candidate) =>
+      candidate.title ===
+      'First Draft Complete',
+  )
+  if (!item) {
+    throw new Error(
+      'Seeded "First Draft Complete" missing from the My Work payload.',
+    )
+  }
+  expect(item.statusCategory).toBe('todo')
+
+  const target = item.statusTargets.find(
+    (candidate) =>
+      candidate.statusCategory ===
+      'in_progress',
+  )
+  if (!target) {
+    throw new Error(
+      'Seeded item has no in_progress statusTarget.',
+    )
+  }
+
+  const myWorkRequestsAfterLoad =
+    myWorkRequestUrls.length
+  expect(myWorkRequestsAfterLoad).toBeGreaterThanOrEqual(
+    1,
+  )
+  expect(transitionRequests).toEqual([])
+  expect(statusPatchRequests).toEqual([])
+  expect(reorderRequests).toEqual([])
+
+  // --------------------------------------------------------
+  // 1. Drag the card into the "In progress" column.
+  // --------------------------------------------------------
+
+  const inProgressColumn = page.locator(
+    '[data-board-column="in_progress"]',
+  )
+  await inProgressColumn.scrollIntoViewIfNeeded()
+
+  // Native HTML5 drag-and-drop needs a real mouse gesture (not
+  // locator.dragTo's single jump) for Chromium to recognize the
+  // drag threshold and dispatch dragstart/dragover/drop.
+  const cardBox = await card.boundingBox()
+  const targetBox = await inProgressColumn.boundingBox()
+  if (!cardBox || !targetBox) {
+    throw new Error(
+      'Card or target column bounding box not found.',
+    )
+  }
+
+  await page.mouse.move(
+    cardBox.x + cardBox.width / 2,
+    cardBox.y + cardBox.height / 2,
+  )
+  await page.mouse.down()
+  await page.mouse.move(
+    targetBox.x + targetBox.width / 2,
+    targetBox.y + targetBox.height / 2,
+    { steps: 20 },
+  )
+  await page.mouse.up()
+
+  // --------------------------------------------------------
+  // 2. The card appears in In progress — the authoritative
+  //    refetched payload (not local inference) decided its column,
+  //    and the returned concrete statusName is displayed.
+  // --------------------------------------------------------
+
+  const movedCard = inProgressColumn.getByRole(
+    'button',
+    { name: 'Open First Draft Complete' },
+  )
+  await expect(movedCard).toBeVisible()
+  await expect(card).toHaveCount(0)
+
+  await expect(
+    movedCard.getByText(target.statusName, {
+      exact: true,
+    }),
+  ).toBeVisible()
+
+  // Project / Research Group context and the Kanban view survive
+  // the move (the filter was untouched — it stayed "all").
+  await expect(
+    movedCard.getByText('Paper XYZ', { exact: true }),
+  ).toBeVisible()
+  await expect(
+    movedCard.getByText('FG Example', { exact: true }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole('button', { name: 'Kanban' }),
+  ).toHaveAttribute('aria-pressed', 'true')
+
+  // --------------------------------------------------------
+  // 3. Wire contract: exactly one canonical mutation carrying only
+  //    the concrete target statusDefinitionId (no boardPosition),
+  //    followed by exactly one authoritative My Work refetch and
+  //    zero Project configuration requests.
+  // --------------------------------------------------------
+
+  // Exactly one canonical status-only transition — and the exact
+  // payload match proves nothing else (no boardPosition, no status
+  // name, no My Work state) was sent.
+  expect(transitionRequests).toHaveLength(1)
+  const [transition] = transitionRequests
+  expect(transition.url).toBe(
+    `http://127.0.0.1:4173/api/work-items/${item.id}/transition-status/`,
+  )
+  expect(transition.payload).toEqual({
+    statusDefinitionId: target.statusDefinitionId,
+  })
+
+  // The ordinary status PATCH (Project-board reposition-to-end
+  // semantics) and the reorder endpoint must NOT be used for the
+  // My Work move — project-local board_position is preserved.
+  expect(statusPatchRequests).toEqual([])
+  expect(reorderRequests).toEqual([])
+
+  // The refetch result is authoritative: the canonical payload now
+  // reports the item in the target category with the concrete
+  // target status name.
+  await expect
+    .poll(() =>
+      myWorkPayload.find(
+        (candidate) => candidate.id === item.id,
+      )?.statusCategory,
+    )
+    .toBe('in_progress')
+  expect(
+    myWorkPayload.find(
+      (candidate) => candidate.id === item.id,
+    )?.statusName,
+  ).toBe(target.statusName)
+
+  // Exactly one refetch: the mutation's authoritative read.
+  expect(myWorkRequestUrls.length).toBe(
+    myWorkRequestsAfterLoad + 1,
+  )
+  expect(projectConfigRequestUrls).toEqual([])
+
+  await page.screenshot({
+    path: testInfo.outputPath('my-work-drag-moved.png'),
+  })
+
+  // --------------------------------------------------------
+  // 4. Same-category drop: no mutation, no refetch (this board has
+  //    no within-column reordering).
+  // --------------------------------------------------------
+
+  const cardBoxAgain = await movedCard.boundingBox()
+  const targetBoxAgain = await inProgressColumn.boundingBox()
+  if (!cardBoxAgain || !targetBoxAgain) {
+    throw new Error(
+      'Card or target column bounding box not found for the same-category drag.',
+    )
+  }
+
+  await page.mouse.move(
+    cardBoxAgain.x + cardBoxAgain.width / 2,
+    cardBoxAgain.y + cardBoxAgain.height / 2,
+  )
+  await page.mouse.down()
+  await page.mouse.move(
+    targetBoxAgain.x + targetBoxAgain.width / 2,
+    targetBoxAgain.y + targetBoxAgain.height / 2,
+    { steps: 20 },
+  )
+  await page.mouse.up()
+
+  // Bounded quiet window: nothing should have happened at all.
+  await page.waitForTimeout(300)
+
+  expect(transitionRequests).toHaveLength(1)
+  expect(statusPatchRequests).toEqual([])
+  expect(reorderRequests).toEqual([])
+  expect(myWorkRequestUrls.length).toBe(
+    myWorkRequestsAfterLoad + 1,
+  )
+  await expect(movedCard).toBeVisible()
 })

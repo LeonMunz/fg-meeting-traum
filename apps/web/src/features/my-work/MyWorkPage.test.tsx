@@ -25,7 +25,12 @@ import {
   getProjectWorkItemConfiguration,
   getProject,
 } from '../../api/projects'
-import { listMyWork } from '../../api/work-items'
+import { ApiError } from '../../api/client'
+import {
+  listMyWork,
+  transitionWorkItemStatus,
+  updateWorkItem,
+} from '../../api/work-items'
 import type {
   ApiPersonalWorkItem,
 } from '../../api/types'
@@ -35,9 +40,14 @@ import { MyWorkPage } from './MyWorkPage'
 // The page must talk to exactly one personal endpoint and must NOT
 // fan out to per-Project / per-Research-Group requests to render
 // status, type, or names. Mock the whole API surface so any stray
-// call is a test failure.
+// call is a test failure. `updateWorkItem` is mocked too: My Work
+// drag/drop must NEVER use the ordinary status PATCH (it would
+// reposition the item on the Project Board) — a call to it is a
+// test failure.
 vi.mock('../../api/work-items', () => ({
   listMyWork: vi.fn(),
+  transitionWorkItemStatus: vi.fn(),
+  updateWorkItem: vi.fn(),
 }))
 
 vi.mock('../../api/projects', () => ({
@@ -1467,5 +1477,867 @@ describe('My Work Kanban — interaction, filter, and contract', () => {
       getProjectWorkItemConfiguration,
     ).not.toHaveBeenCalled()
     expect(getProject).not.toHaveBeenCalled()
+  })
+})
+
+// ── Cross-category drag & drop ──────────────────────────
+
+/**
+ * Minimal DataTransfer stand-in for native HTML5 drag/drop in
+ * happy-dom. React's synthetic drag events read `dataTransfer`
+ * straight off the native event, so the object passed through
+ * `fireEvent`'s event init is what the handlers see.
+ */
+function makeDataTransfer(): {
+  setData: (type: string, value: string) => void
+  getData: (type: string) => string
+  effectAllowed: string
+  dropEffect: string
+} {
+  let data = ''
+
+  return {
+    setData: (_type: string, value: string) => {
+      data = value
+    },
+    getData: () => data,
+    effectAllowed: '',
+    dropEffect: '',
+  }
+}
+
+/**
+ * The native HTML5 drag sequence the board relies on: dragstart on
+ * the card (id lands on dataTransfer), dragover + drop on the target
+ * column, dragend back on the card.
+ */
+async function dragCardToColumn(
+  container: HTMLElement,
+  card: HTMLElement,
+  category: string,
+) {
+  const column = container.querySelector(
+    `[data-board-column="${category}"]`,
+  ) as HTMLElement
+
+  const dataTransfer = makeDataTransfer()
+
+  await act(async () => {
+    fireEvent.dragStart(card, { dataTransfer })
+  })
+
+  await act(async () => {
+    fireEvent.dragOver(column, { dataTransfer })
+    fireEvent.drop(column, { dataTransfer })
+    fireEvent.dragEnd(card, { dataTransfer })
+  })
+}
+
+// The initial load is async; wait for the card to render before
+// interacting with it.
+async function waitForCard(
+  container: HTMLElement,
+  id: number,
+) {
+  await waitFor(() => {
+    expect(
+      container.querySelector(
+        `[data-work-item-id="${id}"]`,
+      ),
+    ).not.toBeNull()
+  })
+
+  return container.querySelector(
+    `[data-work-item-id="${id}"]`,
+  ) as HTMLElement
+}
+
+const ALL_TARGETS = [
+  {
+    statusCategory: 'todo' as const,
+    statusDefinitionId: 21,
+    statusName: 'To do',
+  },
+  {
+    statusCategory: 'in_progress' as const,
+    statusDefinitionId: 22,
+    statusName: 'In Progress',
+  },
+  {
+    statusCategory: 'review' as const,
+    statusDefinitionId: 23,
+    statusName: 'Review',
+  },
+  {
+    statusCategory: 'done' as const,
+    statusDefinitionId: 24,
+    statusName: 'Done',
+  },
+]
+
+function todoItem(
+  overrides: Partial<ApiPersonalWorkItem> = {},
+) {
+  return makeItem({
+    id: 100,
+    title: 'Prepare samples',
+    statusDefinitionId: 11,
+    statusName: 'Ready for Lab',
+    statusCategory: 'todo',
+    statusTargets: ALL_TARGETS,
+    ...overrides,
+  })
+}
+
+describe('My Work Kanban — cross-category drag and drop', () => {
+  it('moves a card from todo to in_progress with one canonical mutation and one authoritative refetch', async () => {
+    const item = todoItem()
+    const moved = {
+      ...item,
+      statusDefinitionId: 22,
+      statusName: 'In Progress',
+      statusCategory: 'in_progress' as const,
+    }
+
+    vi.mocked(listMyWork)
+      .mockResolvedValueOnce([item])
+      .mockResolvedValueOnce([moved])
+    vi.mocked(transitionWorkItemStatus).mockResolvedValue(moved)
+
+    const { container } = renderPage()
+
+    const card = await waitForCard(
+      container,
+      100,
+    )
+
+    await dragCardToColumn(
+      container,
+      card,
+      'in_progress',
+    )
+
+    await waitFor(() => {
+      expect(
+        columnCardIds(
+          container,
+          'in_progress',
+        ),
+      ).toContain('100')
+    })
+
+    // Exactly one canonical mutation, through the canonical
+    // status-only transition, sending ONLY the concrete target
+    // statusDefinitionId from the item's statusTargets — the
+    // exact-match assertion also proves no boardPosition (or any
+    // other field) was sent. The ordinary status PATCH must NOT be
+    // used for My Work drag/drop.
+    expect(transitionWorkItemStatus).toHaveBeenCalledTimes(1)
+    expect(transitionWorkItemStatus).toHaveBeenCalledWith(
+      100,
+      22,
+    )
+    expect(updateWorkItem).not.toHaveBeenCalled()
+
+    // Exactly one authoritative My Work refetch after the
+    // successful mutation (the initial load + the post-mutation
+    // refetch — nothing else).
+    expect(listMyWork).toHaveBeenCalledTimes(2)
+
+    // No Project configuration or Project fetch for the move —
+    // statusTargets already carried the concrete target.
+    expect(
+      getProjectWorkItemConfiguration,
+    ).not.toHaveBeenCalled()
+    expect(getProject).not.toHaveBeenCalled()
+
+    // The refetched payload is what renders: the card sits in the
+    // returned category with the returned concrete statusName, and
+    // the Project / Research Group context is intact.
+    expect(
+      columnCardIds(container, 'todo'),
+    ).not.toContain('100')
+
+    const movedCard = container.querySelector(
+      '[data-work-item-id="100"]',
+    ) as HTMLElement
+    expect(movedCard.textContent).toContain(
+      'In Progress',
+    )
+    expect(movedCard.textContent).toContain(
+      'Project Alpha',
+    )
+    expect(movedCard.textContent).toContain(
+      'Research Group A',
+    )
+
+    // No accidental navigation from the drag gesture itself:
+    // the canonical Project Work Items target is NOT rendered.
+    expect(
+      container.querySelector(
+        '[data-testid="work-items-target"]',
+      ),
+    ).toBeNull()
+
+    // The view remains Kanban (the switch did not flip).
+    expect(
+      container
+        .querySelectorAll('[data-board-column]')
+        .length,
+    ).toBe(4)
+  })
+
+  it('resolves the mutation target from statusTargets, never from status names', async () => {
+    // The item's CURRENT status is named "In Progress" (a name from
+    // a DIFFERENT project), and the in_progress target is named
+    // "On deck" — neither name matches the column label. The
+    // mutation must use the target's statusDefinitionId (33).
+    const item = todoItem({
+      statusName: 'In Progress',
+      statusTargets: [
+        {
+          statusCategory: 'in_progress',
+          statusDefinitionId: 33,
+          statusName: 'On deck',
+        },
+      ],
+    })
+    const moved = {
+      ...item,
+      statusDefinitionId: 33,
+      statusName: 'On deck',
+      statusCategory: 'in_progress' as const,
+    }
+
+    vi.mocked(listMyWork)
+      .mockResolvedValueOnce([item])
+      .mockResolvedValueOnce([moved])
+    vi.mocked(transitionWorkItemStatus).mockResolvedValue(moved)
+
+    const { container } = renderPage()
+
+    const card = await waitForCard(
+      container,
+      100,
+    )
+
+    await dragCardToColumn(
+      container,
+      card,
+      'in_progress',
+    )
+
+    await waitFor(() => {
+      expect(
+        columnCardIds(
+          container,
+          'in_progress',
+        ),
+      ).toContain('100')
+    })
+
+    // The target's ID is authoritative; display names (the item's
+    // own, the target's, or the column's) never participate.
+    expect(transitionWorkItemStatus).toHaveBeenCalledWith(
+      100,
+      33,
+    )
+    expect(updateWorkItem).not.toHaveBeenCalled()
+
+    // The refetched concrete statusName is what becomes visible.
+    const movedCard = container.querySelector(
+      '[data-work-item-id="100"]',
+    ) as HTMLElement
+    expect(movedCard.textContent).toContain('On deck')
+  })
+
+  it('performs no mutation and no refetch for a same-category drop', async () => {
+    const item = todoItem()
+
+    vi.mocked(listMyWork).mockResolvedValue([item])
+    vi.mocked(transitionWorkItemStatus).mockResolvedValue(item)
+
+    const { container } = renderPage()
+
+    const card = await waitForCard(
+      container,
+      100,
+    )
+
+    // Drop back into the item's OWN semantic column (this board
+    // has no within-column reordering).
+    await dragCardToColumn(
+      container,
+      card,
+      'todo',
+    )
+
+    expect(transitionWorkItemStatus).not.toHaveBeenCalled()
+    expect(listMyWork).toHaveBeenCalledTimes(1)
+
+    // The card stays where it was.
+    expect(columnCardIds(container, 'todo')).toEqual(
+      ['100'],
+    )
+  })
+
+  it('prevents mutation and refetch when the item has no statusTarget for the drop category', async () => {
+    // Only a `done` target exists — dropping into in_progress /
+    // review must be a no-op (no fallback status is invented, none
+    // is chosen by name).
+    const item = todoItem({
+      statusTargets: [
+        {
+          statusCategory: 'done',
+          statusDefinitionId: 24,
+          statusName: 'Done',
+        },
+      ],
+    })
+
+    vi.mocked(listMyWork).mockResolvedValue([item])
+    vi.mocked(transitionWorkItemStatus).mockResolvedValue(item)
+
+    const { container } = renderPage()
+
+    const card = await waitForCard(
+      container,
+      100,
+    )
+
+    await dragCardToColumn(
+      container,
+      card,
+      'in_progress',
+    )
+
+    expect(transitionWorkItemStatus).not.toHaveBeenCalled()
+    expect(listMyWork).toHaveBeenCalledTimes(1)
+    expect(columnCardIds(container, 'todo')).toEqual(
+      ['100'],
+    )
+
+    // The SAME card can still move to a category it DOES have a
+    // target for.
+    const doneTargetCard = container.querySelector(
+      '[data-work-item-id="100"]',
+    ) as HTMLElement
+    vi.mocked(listMyWork).mockResolvedValue([
+      {
+        ...item,
+        statusDefinitionId: 24,
+        statusName: 'Done',
+        statusCategory: 'done',
+      },
+    ])
+
+    await dragCardToColumn(
+      container,
+      doneTargetCard,
+      'done',
+    )
+
+    await waitFor(() => {
+      expect(
+        columnCardIds(container, 'done'),
+      ).toContain('100')
+    })
+    expect(transitionWorkItemStatus).toHaveBeenCalledTimes(1)
+    expect(transitionWorkItemStatus).toHaveBeenCalledWith(
+      100,
+      24,
+    )
+  })
+
+  it('distinguishes valid vs unavailable drop destinations only while a drag is active', async () => {
+    // Targets exist for in_progress + done; review is missing and
+    // todo is the item's own category.
+    const item = todoItem({
+      statusTargets: [
+        {
+          statusCategory: 'in_progress',
+          statusDefinitionId: 22,
+          statusName: 'In Progress',
+        },
+        {
+          statusCategory: 'done',
+          statusDefinitionId: 24,
+          statusName: 'Done',
+        },
+      ],
+    })
+
+    vi.mocked(listMyWork).mockResolvedValue([item])
+
+    const { container } = renderPage()
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          '[data-work-item-id="100"]',
+        ),
+      ).not.toBeNull()
+    })
+
+    // No drag active → no availability decoration at all.
+    for (const category of [
+      'todo',
+      'in_progress',
+      'review',
+      'done',
+    ]) {
+      expect(
+        container.querySelector(
+          `[data-board-column="${category}"][data-board-column-drop-state]`,
+        ),
+      ).toBeNull()
+    }
+
+    // Drag active → valid targets marked valid, the own category
+    // and the target-less category marked unavailable.
+    const card = container.querySelector(
+      '[data-work-item-id="100"]',
+    ) as HTMLElement
+
+    await act(async () => {
+      fireEvent.dragStart(card, {
+        dataTransfer: makeDataTransfer(),
+      })
+    })
+
+    expect(
+      container.querySelector(
+        '[data-board-column="in_progress"]',
+      )?.getAttribute(
+        'data-board-column-drop-state',
+      ),
+    ).toBe('valid')
+    expect(
+      container.querySelector(
+        '[data-board-column="done"]',
+      )?.getAttribute(
+        'data-board-column-drop-state',
+      ),
+    ).toBe('valid')
+    expect(
+      container.querySelector(
+        '[data-board-column="todo"]',
+      )?.getAttribute(
+        'data-board-column-drop-state',
+      ),
+    ).toBe('unavailable')
+    expect(
+      container.querySelector(
+        '[data-board-column="review"]',
+      )?.getAttribute(
+        'data-board-column-drop-state',
+      ),
+    ).toBe('unavailable')
+
+    // Drag cancelled → all decoration is removed again.
+    await act(async () => {
+      fireEvent.dragEnd(card, {
+        dataTransfer: makeDataTransfer(),
+      })
+    })
+
+    for (const category of [
+      'todo',
+      'in_progress',
+      'review',
+      'done',
+    ]) {
+      expect(
+        container.querySelector(
+          `[data-board-column="${category}"][data-board-column-drop-state]`,
+        ),
+      ).toBeNull()
+    }
+  })
+
+  it('keeps the card in its authoritative category on mutation failure and allows a retry', async () => {
+    const item = todoItem()
+    const moved = {
+      ...item,
+      statusDefinitionId: 22,
+      statusName: 'In Progress',
+      statusCategory: 'in_progress' as const,
+    }
+
+    vi.mocked(transitionWorkItemStatus)
+      .mockRejectedValueOnce(
+        new ApiError(403, {
+          error:
+            'You do not have permission to update this work item.',
+        }),
+      )
+      .mockResolvedValueOnce(moved)
+
+    // First load returns the original item; every later authoritative
+    // refetch (only the one after the successful retry) returns the
+    // moved item.
+    vi.mocked(listMyWork)
+      .mockResolvedValueOnce([item])
+      .mockResolvedValue([moved])
+
+    const { container } = renderPage()
+
+    const card = await waitForCard(
+      container,
+      100,
+    )
+
+    // First attempt fails.
+    await dragCardToColumn(
+      container,
+      card,
+      'in_progress',
+    )
+
+    // No refetch after a failed mutation; the card remains in its
+    // authoritative (previous) category — no optimistic state is
+    // left behind.
+    expect(listMyWork).toHaveBeenCalledTimes(1)
+    expect(columnCardIds(container, 'todo')).toEqual(
+      ['100'],
+    )
+
+    // The failure is exposed with the established board error
+    // pattern.
+    await waitFor(() => {
+      expect(
+        container.querySelector('[role="alert"]'),
+      ).not.toBeNull()
+    })
+    expect(
+      container.querySelector(
+        '[role="alert"]',
+      )?.textContent,
+    ).toContain(
+      'You do not have permission to update this work item.',
+    )
+
+    // Dismiss, then retry by dragging again — the second attempt
+    // succeeds and the board renders the refetched state.
+    await act(async () => {
+      fireEvent.click(
+        container.querySelector(
+          '[role="alert"] button',
+        ) as HTMLElement,
+      )
+    })
+    expect(
+      container.querySelector('[role="alert"]'),
+    ).toBeNull()
+
+    const retryCard = container.querySelector(
+      '[data-work-item-id="100"]',
+    ) as HTMLElement
+    await dragCardToColumn(
+      container,
+      retryCard,
+      'in_progress',
+    )
+
+    await waitFor(() => {
+      expect(
+        columnCardIds(
+          container,
+          'in_progress',
+        ),
+      ).toContain('100')
+    })
+
+    expect(transitionWorkItemStatus).toHaveBeenCalledTimes(2)
+    expect(listMyWork).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not create a duplicate mutation for a drop of a card that is already pending', async () => {
+    const item = todoItem()
+    const moved = {
+      ...item,
+      statusDefinitionId: 22,
+      statusName: 'In Progress',
+      statusCategory: 'in_progress' as const,
+    }
+
+    // A mutation that never resolves on its own, so the second
+    // drop of the same card lands while the first is still in
+    // flight.
+    let resolveFirstMutation: (
+      value: ApiPersonalWorkItem,
+    ) => void = () => undefined
+    vi.mocked(transitionWorkItemStatus).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveFirstMutation = resolve
+        }),
+    )
+
+    vi.mocked(listMyWork)
+      .mockResolvedValueOnce([item])
+      .mockResolvedValueOnce([moved])
+
+    const { container } = renderPage()
+
+    const card = await waitForCard(
+      container,
+      100,
+    )
+
+    // First drop → mutation in flight.
+    await dragCardToColumn(
+      container,
+      card,
+      'in_progress',
+    )
+
+    expect(transitionWorkItemStatus).toHaveBeenCalledTimes(1)
+
+    // The card is still in its original column (no optimistic
+    // relocation) and pending; a second full drag + drop of the
+    // SAME card must not start a second mutation.
+    expect(columnCardIds(container, 'todo')).toEqual(
+      ['100'],
+    )
+
+    const pendingCard = container.querySelector(
+      '[data-work-item-id="100"]',
+    ) as HTMLElement
+    await dragCardToColumn(
+      container,
+      pendingCard,
+      'in_progress',
+    )
+
+    expect(transitionWorkItemStatus).toHaveBeenCalledTimes(1)
+
+    // Completing the first mutation triggers exactly one
+    // authoritative refetch.
+    await act(async () => {
+      resolveFirstMutation(moved)
+    })
+
+    await waitFor(() => {
+      expect(
+        columnCardIds(
+          container,
+          'in_progress',
+        ),
+      ).toContain('100')
+    })
+
+    expect(transitionWorkItemStatus).toHaveBeenCalledTimes(1)
+    expect(listMyWork).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps the Research Group filter and the Kanban view after a successful move', async () => {
+    mockGroups = [
+      { id: GROUP_A, name: 'Research Group A' },
+      { id: GROUP_B, name: 'Research Group B' },
+    ]
+
+    const item = todoItem({
+      researchGroupId: GROUP_A,
+      researchGroupName: 'Research Group A',
+    })
+    const otherItem = makeItem({
+      id: 200,
+      title: 'Other group item',
+      projectId: PROJECT_B,
+      researchGroupId: GROUP_B,
+      researchGroupName: 'Research Group B',
+      statusCategory: 'todo',
+    })
+    const moved = {
+      ...item,
+      statusDefinitionId: 22,
+      statusName: 'In Progress',
+      statusCategory: 'in_progress' as const,
+    }
+
+    vi.mocked(listMyWork)
+      .mockResolvedValueOnce([item, otherItem])
+      .mockResolvedValueOnce([moved, otherItem])
+    vi.mocked(transitionWorkItemStatus).mockResolvedValue(moved)
+
+    const { container, getByRole } = renderPage()
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          '[data-work-item-id="100"]',
+        ),
+      ).not.toBeNull()
+    })
+
+    // Select the Research Group A filter.
+    await act(async () => {
+      fireEvent.change(
+        container.querySelector(
+          'select[aria-label="Filter by research group"]',
+        ) as HTMLSelectElement,
+        { target: { value: String(GROUP_A) } },
+      )
+    })
+
+    const card = container.querySelector(
+      '[data-work-item-id="100"]',
+    ) as HTMLElement
+    await dragCardToColumn(
+      container,
+      card,
+      'in_progress',
+    )
+
+    await waitFor(() => {
+      expect(
+        columnCardIds(
+          container,
+          'in_progress',
+        ),
+      ).toContain('100')
+    })
+
+    // The filter selection survives the move.
+    expect(
+      (
+        container.querySelector(
+          'select[aria-label="Filter by research group"]',
+        ) as HTMLSelectElement
+      ).value,
+    ).toBe(String(GROUP_A))
+
+    // The view is still Kanban.
+    expect(
+      getByRole('button', {
+        name: 'Kanban',
+      }),
+    ).toHaveAttribute('aria-pressed', 'true')
+
+    // The filtered group's item still renders (context intact).
+    expect(
+      columnCardIds(container, 'in_progress'),
+    ).toEqual(['100'])
+  })
+
+  it('lets the refetched statusCategory — not the drop column — decide the final column', async () => {
+    // The drop targets `in_progress`, but the authoritative
+    // refetched payload reports the item in `review` (e.g. the
+    // server applied its own canonical status). The board must
+    // render the payload, not the drop location.
+    const item = todoItem()
+    const refetched = {
+      ...item,
+      statusDefinitionId: 23,
+      statusName: 'Review',
+      statusCategory: 'review' as const,
+    }
+
+    vi.mocked(listMyWork)
+      .mockResolvedValueOnce([item])
+      .mockResolvedValueOnce([refetched])
+    vi.mocked(transitionWorkItemStatus).mockResolvedValue(refetched)
+
+    const { container } = renderPage()
+
+    const card = await waitForCard(
+      container,
+      100,
+    )
+
+    await dragCardToColumn(
+      container,
+      card,
+      'in_progress',
+    )
+
+    await waitFor(() => {
+      expect(
+        columnCardIds(container, 'review'),
+      ).toContain('100')
+    })
+
+    // The card is NOT in the column it was dropped on.
+    expect(
+      columnCardIds(container, 'in_progress'),
+    ).not.toContain('100')
+  })
+
+  it('keeps normal card clicks opening the canonical Project Work Items surface while draggable', async () => {
+    const item = todoItem()
+
+    vi.mocked(listMyWork).mockResolvedValue([item])
+
+    const { container } = renderPage()
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          '[data-work-item-id="100"]',
+        ),
+      ).not.toBeNull()
+    })
+
+    // The card is a draggable element…
+    const card = container.querySelector(
+      '[data-work-item-id="100"]',
+    ) as HTMLElement
+    // (React renders the `draggable` HTML attribute; happy-dom
+    // does not expose the IDL property, so assert the attribute.)
+    expect(card.getAttribute('draggable')).toBe(
+      'true',
+    )
+
+    // …but a plain click (no drag) still opens the item.
+    await act(async () => {
+      fireEvent.click(card)
+    })
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          '[data-testid="work-items-target"]',
+        ),
+      ).not.toBeNull()
+    })
+
+    // And no mutation was triggered by the click.
+    expect(transitionWorkItemStatus).not.toHaveBeenCalled()
+  })
+
+  it('leaves the List View rows non-draggable', async () => {
+    const item = todoItem()
+
+    vi.mocked(listMyWork).mockResolvedValue([item])
+
+    const { container, getByRole } = renderPage()
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          '[data-work-item-id="100"]',
+        ),
+      ).not.toBeNull()
+    })
+
+    // Switch to the List view — the same item renders as a row.
+    await switchView({ getByRole }, 'List')
+    await waitFor(() => {
+      expect(
+        getByRole('button', {
+          name: 'Open Prepare samples',
+        }),
+      ).toBeInTheDocument()
+    })
+
+    const row = container.querySelector(
+      '[data-work-item-id="100"]',
+    ) as HTMLElement
+    // The List row is NOT a drag source (only the Kanban card is).
+    expect(
+      row.hasAttribute('draggable'),
+    ).toBe(false)
+    expect(row.getAttribute('draggable')).toBeNull()
   })
 })

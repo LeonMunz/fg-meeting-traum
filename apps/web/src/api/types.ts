@@ -195,10 +195,13 @@ export interface ApiPersonalWorkItem extends ApiWorkItem {
   statusCategory: ApiWorkItemStatus
   // Read-only global-Kanban status targets (see ApiWorkItemStatusTarget):
   // the concrete project-local StatusDefinition resolved per fixed
-  // semantic category. Carried by GET /api/me/work-items/ for a future
-  // category-driven move; parsed and stored with the payload but NOT
-  // used for mutation, ordering, drop zones, or UI enablement in this
-  // slice.
+  // semantic category. Carried by GET /api/me/work-items/ so the
+  // global My Work Kanban can resolve a cross-category drag to the
+  // concrete project-local statusDefinitionId without any Project
+  // configuration request. The My Work Kanban uses these targets
+  // ONLY as drop-zone enablement and mutation targets — never for
+  // ordering, never by status name, and never for same-category
+  // moves.
   statusTargets: ApiWorkItemStatusTarget[]
 }
 
