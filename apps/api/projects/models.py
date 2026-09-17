@@ -140,7 +140,20 @@ class WorkItemTypeDefinition(models.Model):
 
     Each Project owns its own Types. Name uniqueness is case-insensitive
     within a Project. Inactive definitions still reserve their names.
+
+    ``kind`` is the stable, machine-readable semantic kind of the
+    definition (see ``Kind``). It is system-assigned only: the canonical
+    default definitions receive it at Project creation, custom
+    definitions carry no kind (NULL). The display ``name`` is
+    presentation metadata — runtime code must never infer the semantic
+    kind from it.
     """
+
+    class Kind(models.TextChoices):
+        TASK = "task", "Task"
+        EPIC = "epic", "Epic"
+        MILESTONE = "milestone", "Milestone"
+        DELIVERABLE = "deliverable", "Deliverable"
 
     project = models.ForeignKey(
         Project,
@@ -148,6 +161,15 @@ class WorkItemTypeDefinition(models.Model):
         related_name="type_definitions",
     )
     name = models.CharField(max_length=255)
+    # Stable semantic kind (see Kind). NULL = custom / unclassified
+    # project type with no canonical meaning. Not editable through the
+    # configuration API.
+    kind = models.CharField(
+        max_length=16,
+        choices=Kind.choices,
+        null=True,
+        blank=True,
+    )
     order = models.IntegerField(default=0)
     active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)

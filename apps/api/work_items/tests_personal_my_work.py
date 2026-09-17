@@ -484,12 +484,16 @@ class PersonalMyWorkApiTest(APITestCase):
     def test_response_returns_concrete_project_local_type_name(self):
         """The payload carries the concrete project-local Work Item
         type name (``typeName``) next to the canonical
-        ``typeDefinitionId``: project-configured custom names are
-        returned exactly, types from different Projects can have
-        different names, and NO semantic Task/Epic/Milestone/
-        Deliverable ``kind`` discriminator is introduced."""
+        ``typeDefinitionId`` and the stable semantic kind
+        (``typeKind``): project-configured custom names are returned
+        exactly, types from different Projects can have different
+        names, and custom / unclassified types carry no canonical
+        kind (``null`` — never inferred from the name, even when the
+        name contains a canonical word)."""
         # Custom, project-configured type names — one per Project,
-        # deliberately different across Projects.
+        # deliberately different across Projects. The first one
+        # deliberately CONTAINS a canonical kind word to prove no
+        # name-based inference.
         type_a = WorkItemTypeDefinition.objects.create(
             project=self.project_a,
             name="Research Milestone",
@@ -525,26 +529,11 @@ class PersonalMyWorkApiTest(APITestCase):
         self.assertEqual(item_b["typeDefinitionId"], type_b.pk)
         self.assertEqual(item_b["typeName"], "Robot Data Analysis")
 
-        # No semantic type kind: no discriminator field and no
-        # inferred Task/Epic/Milestone/Deliverable value.
-        for item in (item_a, item_b):
-            for forbidden in (
-                "typeKind",
-                "kind",
-                "semanticType",
-                "semanticKind",
-                "typeCategory",
-            ):
-                self.assertNotIn(
-                    forbidden,
-                    item,
-                    f"no semantic type {forbidden!r} field may be "
-                    "introduced into the personal My Work payload",
-                )
-            self.assertNotIn(
-                item["typeName"],
-                {"Task", "Epic", "Milestone", "Deliverable"},
-            )
+        # Stable semantic kind: custom / unclassified types carry
+        # no canonical kind — null, never inferred from the display
+        # name.
+        self.assertIsNone(item_a["typeKind"])
+        self.assertIsNone(item_b["typeKind"])
 
     def test_removing_assignment_removes_item(self):
         WorkItemAssignee.objects.get(
@@ -620,6 +609,193 @@ class PersonalMyWorkApiTest(APITestCase):
 
 
 # ── Query behavior (no N+1 growth) ──
+
+
+class PersonalMyWorkTypeKindTest(APITestCase):
+    """The personal My Work payload exposes the stable semantic kind
+    (``typeKind``) of each item's project-local type definition —
+    independent of the display name."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.chris = User.objects.create_user(
+            username="tk_chris",
+            password="TestPass1!",
+        )
+
+        cls.group_a = ResearchGroup.objects.create(
+            name="FG Kind A",
+            created_by=cls.chris,
+        )
+        cls.group_b = ResearchGroup.objects.create(
+            name="FG Kind B",
+            created_by=cls.chris,
+        )
+        ResearchGroupMembership.objects.create(
+            research_group=cls.group_a,
+            user=cls.chris,
+            role=ResearchGroupMembership.Role.MEMBER,
+        )
+        ResearchGroupMembership.objects.create(
+            research_group=cls.group_b,
+            user=cls.chris,
+            role=ResearchGroupMembership.Role.MEMBER,
+        )
+
+        cls.project_a = create_project(
+            research_group=cls.group_a,
+            creator=cls.chris,
+            name="Kind Paper",
+        )
+        cls.project_b = create_project(
+            research_group=cls.group_b,
+            creator=cls.chris,
+            name="Kind Robot",
+        )
+
+    def setUp(self):
+        self.client = APIClient()
+
+    def login(self):
+        self.client.get("/api/auth/csrf/")
+        csrf_token = (
+            self.client.cookies.get("csrftoken").value
+        )
+        response = self.client.post(
+            "/api/auth/login/",
+            data={
+                "username": "tk_chris",
+                "password": "TestPass1!",
+            },
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=csrf_token,
+        )
+        self.assertEqual(response.status_code, 200)
+
+    def _item_by_title(self, response, title):
+        items = {
+            item["title"]: item
+            for item in response.json()
+        }
+        return items[title]
+
+    def test_my_work_exposes_all_four_canonical_kinds(self):
+        for name, kind in (
+            ("Task", "task"),
+            ("Epic", "epic"),
+            ("Milestone", "milestone"),
+            ("Deliverable", "deliverable"),
+        ):
+            create_work_item(
+                project=self.project_a,
+                actor=self.chris,
+                type_definition_id=(
+                    self.project_a.type_definitions.get(name=name).pk
+                ),
+                title=f"kind item {name}",
+                assignee_ids=[self.chris.pk],
+            )
+
+        self.login()
+        response = self.client.get("/api/me/work-items/")
+        self.assertEqual(response.status_code, 200)
+
+        for name, kind in (
+            ("Task", "task"),
+            ("Epic", "epic"),
+            ("Milestone", "milestone"),
+            ("Deliverable", "deliverable"),
+        ):
+            item = self._item_by_title(response, f"kind item {name}")
+            self.assertEqual(
+                item["typeDefinitionId"],
+                self.project_a.type_definitions.get(name=name).pk,
+            )
+            self.assertEqual(item["typeName"], name)
+            self.assertEqual(item["typeKind"], kind)
+
+    def test_type_kind_is_independent_of_display_name(self):
+        create_work_item(
+            project=self.project_a,
+            actor=self.chris,
+            type_definition_id=(
+                self.project_a.type_definitions.get(name="Task").pk
+            ),
+            title="Renamed type item",
+            assignee_ids=[self.chris.pk],
+        )
+        # The display name changes; the semantic kind must not.
+        task = self.project_a.type_definitions.get(name="Task")
+        task.name = "Experiment step"
+        task.save()
+
+        self.login()
+        response = self.client.get("/api/me/work-items/")
+        self.assertEqual(response.status_code, 200)
+
+        item = self._item_by_title(response, "Renamed type item")
+        self.assertEqual(item["typeDefinitionId"], task.pk)
+        self.assertEqual(item["typeName"], "Experiment step")
+        self.assertEqual(item["typeKind"], "task")
+
+    def test_two_projects_different_names_same_kind(self):
+        create_work_item(
+            project=self.project_a,
+            actor=self.chris,
+            type_definition_id=(
+                self.project_a.type_definitions.get(name="Task").pk
+            ),
+            title="Project A task",
+            assignee_ids=[self.chris.pk],
+        )
+        create_work_item(
+            project=self.project_b,
+            actor=self.chris,
+            type_definition_id=(
+                self.project_b.type_definitions.get(name="Task").pk
+            ),
+            title="Project B task",
+            assignee_ids=[self.chris.pk],
+        )
+        task_b = self.project_b.type_definitions.get(name="Task")
+        task_b.name = "Aufgabe"
+        task_b.save()
+
+        self.login()
+        response = self.client.get("/api/me/work-items/")
+        self.assertEqual(response.status_code, 200)
+
+        item_a = self._item_by_title(response, "Project A task")
+        item_b = self._item_by_title(response, "Project B task")
+        self.assertEqual(item_a["typeName"], "Task")
+        self.assertEqual(item_b["typeName"], "Aufgabe")
+        # Same canonical semantic kind across both Projects despite
+        # the different display names.
+        self.assertEqual(item_a["typeKind"], "task")
+        self.assertEqual(item_b["typeKind"], "task")
+
+    def test_custom_type_carries_no_kind_in_my_work(self):
+        figure = WorkItemTypeDefinition.objects.create(
+            project=self.project_a,
+            name="Figure",
+            order=10,
+        )
+        create_work_item(
+            project=self.project_a,
+            actor=self.chris,
+            type_definition_id=figure.pk,
+            title="Custom type item",
+            assignee_ids=[self.chris.pk],
+        )
+
+        self.login()
+        response = self.client.get("/api/me/work-items/")
+        self.assertEqual(response.status_code, 200)
+
+        item = self._item_by_title(response, "Custom type item")
+        self.assertEqual(item["typeDefinitionId"], figure.pk)
+        self.assertEqual(item["typeName"], "Figure")
+        self.assertIsNone(item["typeKind"])
 
 
 class PersonalMyWorkQueryCountTest(APITestCase):
@@ -771,6 +947,13 @@ class PersonalMyWorkQueryCountTest(APITestCase):
             response = self.client.get("/api/me/work-items/")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.json()), 6)
+
+        # The stable semantic kind rides the same eager-loaded type
+        # definition — its presence in every item must not add any
+        # query (pinned by the count equality below).
+        for item in response.json():
+            self.assertIn("typeKind", item)
+            self.assertEqual(item["typeKind"], "task")
 
         # Invariant: 3x the represented Projects add ZERO queries —
         # the per-category status targets (like the Project /

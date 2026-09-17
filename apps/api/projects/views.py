@@ -752,6 +752,12 @@ def _serialize_type_definition(defn):
     return {
         "id": defn.pk,
         "name": defn.name,
+        # Stable semantic kind of the definition (task/epic/milestone/
+        # deliverable) or None for custom / unclassified types — the
+        # machine-readable counterpart of the display ``name`` (the
+        # StatusDefinition serializer exposes its fixed ``category``
+        # the same way).
+        "kind": defn.kind,
         "order": defn.order,
         "active": defn.active,
         "createdAt": defn.created_at.isoformat(),

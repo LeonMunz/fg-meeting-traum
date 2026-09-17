@@ -118,12 +118,23 @@ def create_project(
 
 
 def _create_default_work_item_configuration(project: Project) -> None:
-    """Create default WorkItem Types, Statuses for a new Project."""
-    type_names = ["Epic", "Milestone", "Deliverable", "Task"]
-    for idx, tname in enumerate(type_names):
+    """Create default WorkItem Types, Statuses for a new Project.
+
+    The four default TypeDefinitions are the canonical semantic kinds:
+    each carries its fixed ``kind`` (system-assigned). Custom types
+    created later carry no kind (NULL).
+    """
+    type_defaults = [
+        ("Epic", WorkItemTypeDefinition.Kind.EPIC),
+        ("Milestone", WorkItemTypeDefinition.Kind.MILESTONE),
+        ("Deliverable", WorkItemTypeDefinition.Kind.DELIVERABLE),
+        ("Task", WorkItemTypeDefinition.Kind.TASK),
+    ]
+    for idx, (tname, tkind) in enumerate(type_defaults):
         WorkItemTypeDefinition.objects.create(
             project=project,
             name=tname,
+            kind=tkind,
             order=idx,
         )
 

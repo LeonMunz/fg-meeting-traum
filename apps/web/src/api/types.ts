@@ -120,6 +120,18 @@ export type ApiWorkItemType =
   | 'deliverable'
   | 'task'
 
+// Stable, machine-readable semantic kind of a WorkItemTypeDefinition,
+// carried by the backend (project Work Item configuration as `kind`,
+// personal My Work as `typeKind`). A custom / unclassified project
+// type has no canonical kind (null). Type-specific presentation
+// (icons, colors) must key off this field — never off the `typeName`
+// display string.
+export type ApiWorkItemTypeKind =
+  | 'task'
+  | 'epic'
+  | 'milestone'
+  | 'deliverable'
+
 export type ApiWorkItemStatus =
   | 'todo'
   | 'in_progress'
@@ -186,6 +198,13 @@ export interface ApiPersonalWorkItem extends ApiWorkItem {
   // semantic type discriminator: no Task/Epic/Milestone/Deliverable
   // kind is inferred from it.
   typeName: string
+  // Stable semantic kind of the concrete project-local type
+  // definition (task | epic | milestone | deliverable) — null for
+  // custom / unclassified types. Machine-readable presentation
+  // discriminator for the canonical typeDefinitionId: type-specific
+  // rendering must depend on typeKind, never on the typeName display
+  // name.
+  typeKind: ApiWorkItemTypeKind | null
   // Concrete project-local status (its Project StatusDefinition display
   // name) plus that definition's fixed semantic category — carried by
   // GET /api/me/work-items/ so the personal list renders both without

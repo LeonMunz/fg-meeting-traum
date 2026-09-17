@@ -168,6 +168,7 @@ WorkItemTypeDefinition
 id
 project_id
 name
+kind
 order
 active
 ```
@@ -176,15 +177,68 @@ The stable identity is the definition ID. The display name is editable.
 Therefore a Project owner may rename a Type without recreating existing
 WorkItems.
 
+**Semantic Kind.** `WorkItemTypeDefinition` display name is presentation
+metadata. Canonical Work Item type semantics are represented by a stable
+machine-readable kind and must never be inferred from the display name.
+
+The kind is the stable, machine-readable semantic concept of the
+definition:
+
+```text
+kind
+
+task
+epic
+milestone
+deliverable
+```
+
+- **Canonical kinds.** The four starter (default) TypeDefinitions carry
+  their fixed canonical kind: `Epic → epic`, `Milestone → milestone`,
+  `Deliverable → deliverable`, `Task → task`. A default definition may be
+  renamed to any display name without changing its kind
+  (`kind = task`, `name = "Experiment step"` is the same canonical Task
+  type under a customized display name).
+- **Custom / unclassified types.** Project-specific types created by
+  owners (`Experiment`, `Manuscript Section`, `Figure`, `Dataset`, ...)
+  carry **no canonical kind** (`null`). Their semantic meaning is never
+  inferred from their names, and a custom type is never classified as one
+  of the four canonical kinds.
+- **Assignment and editability.** The kind is system-assigned only:
+  the canonical default definitions receive it when the system creates
+  them at Project creation — the system classifies the very rows it
+  creates. There is deliberately NO data backfill: the legacy
+  machine-readable type values lived on the Work Item (`type` choices)
+  and were dropped by the definition migration without ever being
+  stored on the definitions, so no machine-readable provenance
+  identifies which pre-existing definitions were canonical. Legacy
+  definitions without provable semantic provenance therefore have
+  `kind = null` — false negatives are acceptable, false semantic
+  attribution is not. The configuration API exposes the kind read-only;
+  there is no API or UI path to set or change a definition's kind. The
+  display name and `order`/`active` configuration remain owner-editable;
+  the semantic kind of an existing canonical definition is not casually
+  changed.
+- **Name rule.** Display names are presentation metadata and are never
+  an authoritative source for semantic kind, including during data
+  migration. Classification by any combination of `name`, `order`,
+  `active`, project age, or the "exact four-name set" is forbidden: an
+  owner-created custom type named exactly `Task` would be
+  misclassified, and a renamed canonical default would be lost.
+- **Runtime rule.** All runtime resolution (My Work, projections,
+  presentation) reads the stored `kind` field; it must never be derived
+  from the display `name` at runtime.
+
 **Default Types.** Every newly created Project receives starter
 TypeDefinitions:
 
-- Epic
-- Milestone
-- Deliverable
-- Task
+- Epic (kind `epic`)
+- Milestone (kind `milestone`)
+- Deliverable (kind `deliverable`)
+- Task (kind `task`)
 
-**Creating Types.** Project owners may create additional types:
+**Creating Types.** Project owners may create additional types (kind
+`null`):
 
 - Experiment
 - Manuscript Section
@@ -528,12 +582,15 @@ its Project. The Project is the configuration boundary.
 
 Newly created Projects receive default TypeDefinitions:
 
-- Epic — large initiative/work area
-- Milestone — important project checkpoint/target
-- Deliverable — concrete result to deliver
-- Task — concrete executable work
+- Epic (kind `epic`) — large initiative/work area
+- Milestone (kind `milestone`) — important project checkpoint/target
+- Deliverable (kind `deliverable`) — concrete result to deliver
+- Task (kind `task`) — concrete executable work
 
 Project owners may create additional Types or rename existing ones.
+Renaming changes only the display name; the canonical kind of a default
+definition is unchanged, and custom Types carry no canonical kind
+(see Section 3a.1).
 
 ### 6.2. WorkItem Status
 
@@ -782,8 +839,12 @@ into the global category, and the canonical Work Item type payload
 (`typeDefinitionId`) is preserved; the read API also carries the
 concrete project-local type name (`typeName` — the display name of
 the Work Item's Project `WorkItemTypeDefinition`) as display
-metadata for that ID. No semantic Task/Epic/Milestone/Deliverable
-`kind` exists, and none is inferred from the name.
+metadata for that ID, plus the definition's stable semantic kind
+(`typeKind`: `task` / `epic` / `milestone` / `deliverable`, or
+`null` for custom / unclassified types — Section 3a.1). The
+`typeKind` is the machine-readable presentation discriminator:
+type-specific presentation (icons, colors) must key off `typeKind`,
+never off the `typeName` display string.
 
 Global My Work Kanban columns represent semantic status
 categories. A cross-category move resolves to the first active
@@ -978,6 +1039,7 @@ These are the non-negotiable contract of the Core phase:
 23. Many-to-many relationships are relational.
 24. Project authorization is enforced by the server.
 25. Permission-filtered list endpoints do not leak private resources.
+26. A WorkItemTypeDefinition's semantic kind is system-assigned only at canonical default creation, is never editable through the configuration API, and is never inferred from the display name — not at runtime and not during data migration; legacy definitions without provable machine-readable semantic provenance have `kind = null`.
 
 ## 20. Core acceptance flow
 

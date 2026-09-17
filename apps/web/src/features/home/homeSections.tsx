@@ -249,10 +249,12 @@ export function NeedsAttentionSection({
                 onOpenWorkItemProject(item.projectId)
               }
             >
-              {/* Neutral generic Work Item icon: the configured
-                  type definition carries no stable semantic kind, so
-                  no Task/Epic/Milestone/Deliverable mapping exists —
-                  and a completion/check glyph would miscommunicate. */}
+              {/* Neutral generic Work Item icon: the Home read model
+                  does not carry the Work Item type's semantic kind
+                  (only the personal My Work contract exposes
+                  typeKind), so no Task/Epic/Milestone/Deliverable
+                  mapping exists here — and a completion/check glyph
+                  would miscommunicate. */}
               <RowIcon
                 name="description"
                 size="text-[16px]"

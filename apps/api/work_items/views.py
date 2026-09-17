@@ -945,10 +945,15 @@ class PersonalMyWorkView(APIView):
                 # Concrete project-local type name (its Project
                 # WorkItemTypeDefinition display name) — display
                 # metadata for the canonical
-                # ``typeDefinitionId``. The definition carries no
-                # semantic Task/Epic/Milestone/Deliverable kind and
-                # none is derived here.
+                # ``typeDefinitionId``.
                 "typeName": work_item.type_definition.name,
+                # Stable semantic kind of that type definition (its
+                # WorkItemTypeDefinition.kind: task/epic/milestone/
+                # deliverable) or None for custom / unclassified
+                # types. Presentation decisions (type-specific
+                # icons/colors) must key off this field — never off
+                # the ``typeName`` display string.
+                "typeKind": work_item.type_definition.kind,
                 # Concrete project-local status (its Project
                 # StatusDefinition) plus the definition's fixed
                 # semantic category — the global My Work grouping
