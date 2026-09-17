@@ -178,6 +178,9 @@ function makeItem(
     typeName: 'Sample Batch',
     statusName: 'Ready for Lab',
     statusCategory: 'in_progress',
+    // Canonical contract: custom / unclassified types carry a null
+    // kind. Tests that exercise a canonical kind set it explicitly.
+    typeKind: null,
     statusTargets: [],
     ...overrides,
   } as ApiPersonalWorkItem
@@ -351,7 +354,7 @@ function WorkItemsTarget() {
   )
 }
 
-// Click the presentation-only List/Kanban switch. The two buttons
+// Click the presentation-only Board/List switch. The two buttons
 // expose their view name as the accessible name (the icon is
 // aria-hidden).
 async function switchView(
@@ -361,7 +364,7 @@ async function switchView(
       options?: { name?: string | RegExp },
     ) => HTMLElement
   },
-  label: 'Kanban' | 'List',
+  label: 'Board' | 'List',
 ) {
   await act(async () => {
     fireEvent.click(
@@ -546,7 +549,12 @@ describe('My Work List View — status and type presentation', () => {
       }),
     ])
 
-    const { getByText } = renderPage()
+    const { getByText, getByRole } = renderPage()
+
+    // The concrete statusName is the List View's status column (the
+    // Kanban card deliberately does NOT render it — the column
+    // communicates the semantic status).
+    await switchView({ getByRole }, 'List')
 
     await waitFor(() => {
       expect(
@@ -1141,7 +1149,7 @@ describe('My Work Kanban — default, switch, and single data source', () => {
       expect(getByText('Work item')).toBeInTheDocument()
     })
 
-    await switchView({ getByRole }, 'Kanban')
+    await switchView({ getByRole }, 'Board')
     await waitFor(() => {
       expect(
         container.querySelector('[data-board-column]'),
@@ -1169,7 +1177,7 @@ describe('My Work Kanban — default, switch, and single data source', () => {
       expect(getByText('Work item')).toBeInTheDocument()
     })
 
-    await switchView({ getByRole }, 'Kanban')
+    await switchView({ getByRole }, 'Board')
     await waitFor(() => {
       expect(
         container.querySelector('[data-board-column]'),
@@ -1272,7 +1280,8 @@ describe('My Work Kanban — columns and grouping', () => {
       }),
     ])
 
-    const { container, getByText } = renderPage()
+    const { container, queryByText } =
+      renderPage()
 
     await waitFor(() => {
       expect(
@@ -1288,9 +1297,11 @@ describe('My Work Kanban — columns and grouping', () => {
       '2',
     ])
 
-    // Both concrete status names remain visible.
-    expect(getByText('Ready for Lab')).toBeInTheDocument()
-    expect(getByText('On the Bench')).toBeInTheDocument()
+    // The Kanban cards do NOT render the concrete statusName (the
+    // column communicates the semantic status); the names exist only
+    // in the data contract.
+    expect(queryByText('Ready for Lab')).toBeNull()
+    expect(queryByText('On the Bench')).toBeNull()
   })
 
   it('preserves the relative API order within a column', async () => {
@@ -1362,15 +1373,14 @@ describe('My Work Kanban — columns and grouping', () => {
     ])
   })
 
-  it('keeps an empty semantic column visible with a quiet empty state', async () => {
+  it('keeps all four semantic columns rendered even when three are empty', async () => {
     vi.mocked(listMyWork).mockResolvedValue([
       makeItem({
         statusCategory: 'todo',
       }),
     ])
 
-    const { container, getAllByText } =
-      renderPage()
+    const { container } = renderPage()
 
     await waitFor(() => {
       expect(
@@ -1387,7 +1397,11 @@ describe('My Work Kanban — columns and grouping', () => {
       'Review',
       'Done',
     ])
-    expect(getAllByText('No items').length).toBe(3)
+
+    expect(columnCardIds(container, 'todo')).toEqual(['100'])
+    expect(columnCardIds(container, 'in_progress')).toEqual([])
+    expect(columnCardIds(container, 'review')).toEqual([])
+    expect(columnCardIds(container, 'done')).toEqual([])
   })
 
   it('shows the personal empty state (no columns) for an empty response', async () => {
@@ -1408,55 +1422,370 @@ describe('My Work Kanban — columns and grouping', () => {
   })
 })
 
-describe('My Work Kanban — card content', () => {
-  it('shows type, concrete status, Project, and Research Group', async () => {
+describe('My Work Kanban — visual contract', () => {
+  // The card for the given Work Item (default fixture id).
+  function cardFor(
+    container: HTMLElement,
+    id: number = 100,
+  ) {
+    return container.querySelector(
+      `[data-work-item-id="${id}"]`,
+    ) as HTMLElement
+  }
+
+  // The type icon is the FIRST material symbol in the card (the
+  // top type/title row); exception-footer icons come after it.
+  function typeIcon(card: HTMLElement) {
+    return card.querySelector(
+      '.material-symbols-outlined',
+    ) as HTMLElement
+  }
+
+  it('labels the view switch Board (not Kanban)', async () => {
     vi.mocked(listMyWork).mockResolvedValue([
-      makeItem({
-        id: 100,
-        title: 'Prepare samples',
-        typeName: 'Sample Batch',
-        statusName: 'Ready for Lab',
-        projectName: 'Project Alpha',
-        researchGroupName: 'Research Group A',
-      }),
+      todoItem(),
     ])
 
-    const { container, getByText } = renderPage()
+    const { getByRole, queryByRole } =
+      renderPage()
 
     await waitFor(() => {
       expect(
-        getByText('Prepare samples'),
-      ).toBeInTheDocument()
+        getByRole('button', { name: 'Board' }),
+      ).toHaveAttribute('aria-pressed', 'true')
     })
 
-    const card = container.querySelector(
-      '[data-work-item-id="100"]',
-    )
-
-    // Concrete project-local type name.
-    expect(card?.textContent).toContain('Sample Batch')
-    // Concrete project-local status name.
-    expect(getByText('Ready for Lab')).toBeInTheDocument()
-    // Cross-Project + cross-Research-Group context.
-    expect(getByText('Project Alpha')).toBeInTheDocument()
-    expect(getByText('Research Group A')).toBeInTheDocument()
+    // The old "Kanban" label is gone; the same toggle keeps the
+    // List option.
+    expect(
+      queryByRole('button', {
+        name: 'Kanban',
+      }),
+    ).toBeNull()
+    expect(
+      getByRole('button', { name: 'List' }),
+    ).toHaveAttribute('aria-pressed', 'false')
   })
 
-  it('keeps the due state visible on the card', async () => {
+  it('exposes icon + written status + count in each column header', async () => {
+    vi.mocked(listMyWork).mockResolvedValue([
+      todoItem({ id: 1 }),
+      todoItem({ id: 2, statusCategory: 'in_progress' }),
+      todoItem({ id: 3, statusCategory: 'review' }),
+      todoItem({ id: 4, statusCategory: 'done' }),
+    ])
+
+    const { container } = renderPage()
+
+    await waitFor(() => {
+      expect(
+        container.querySelectorAll(
+          '[data-work-item-id]',
+        ).length,
+      ).toBe(4)
+    })
+
+    // Each column header communicates the semantic status through
+    // icon + WRITTEN label + count (never color alone).
+    const expected: Array<
+      [category: string, icon: string, label: string]
+    > = [
+      ['todo', 'circle', 'Todo'],
+      ['in_progress', 'progress_activity', 'In progress'],
+      ['review', 'circle_notifications', 'Review'],
+      ['done', 'check_circle', 'Done'],
+    ]
+
+    for (
+      const [category, icon, label] of
+        expected
+    ) {
+      const column = container.querySelector(
+        `[data-board-column="${category}"]`,
+      ) as HTMLElement
+      const header =
+        column.firstElementChild as HTMLElement
+      const iconSpan = header.querySelector(
+        '.material-symbols-outlined',
+      ) as HTMLElement
+
+      expect(iconSpan.textContent?.trim()).toBe(icon)
+      // The written status remains visible in the heading.
+      expect(
+        column.querySelector('h2')?.textContent,
+      ).toBe(label)
+      // One item per column → the quiet count is 1.
+      expect(column.textContent).toContain('1')
+    }
+  })
+
+  it('does not render the concrete statusName on Kanban cards', async () => {
     vi.mocked(listMyWork).mockResolvedValue([
       makeItem({
-        dueDate: isoDaysFromNow(1),
+        statusName: 'Ready for Lab',
+        statusCategory: 'in_progress',
       }),
     ])
 
-    const { getByText } = renderPage()
+    const { container } = renderPage()
 
-    await waitFor(() => {
-      expect(getByText('Tomorrow')).toBeInTheDocument()
-    })
+    const card = await waitForCard(
+      container,
+      100,
+    )
+
+    // The column communicates the semantic status; the card must
+    // not repeat it.
+    expect(card.textContent).not.toContain(
+      'Ready for Lab',
+    )
+    expect(
+      columnHeadingLabels(container),
+    ).toEqual([
+      'Todo',
+      'In progress',
+      'Review',
+      'Done',
+    ])
   })
 
-  it('renders an overdue due with the attention convention', async () => {
+  it('selects the semantic type presentation from typeKind, never from typeName', async () => {
+    vi.mocked(listMyWork).mockResolvedValue([
+      todoItem({
+        id: 1,
+        title: 'Task item',
+        typeKind: 'task',
+        typeName: 'Tasky',
+      }),
+      todoItem({
+        id: 2,
+        title: 'Epic item',
+        typeKind: 'epic',
+        typeName: 'Big Push',
+      }),
+      todoItem({
+        id: 3,
+        title: 'Milestone item',
+        typeKind: 'milestone',
+        typeName: 'M1',
+      }),
+      todoItem({
+        id: 4,
+        title: 'Deliverable item',
+        typeKind: 'deliverable',
+        typeName: 'Handoff',
+      }),
+    ])
+
+    const { container } = renderPage()
+
+    await waitFor(() => {
+      expect(
+        container.querySelectorAll(
+          '[data-work-item-id]',
+        ).length,
+      ).toBe(4)
+    })
+
+    // The semantic presentation is keyed by typeKind: each kind
+    // gets its own icon + semantic token.
+    const expected: Array<
+      [id: number, icon: string, token: string, typeName: string]
+    > = [
+      [1, 'assignment', 'text-work-type-task', 'Tasky'],
+      [2, 'account_tree', 'text-work-type-epic', 'Big Push'],
+      [3, 'flag', 'text-work-type-milestone', 'M1'],
+      [4, 'deployed_code', 'text-work-type-deliverable', 'Handoff'],
+    ]
+
+    for (
+      const [id, icon, token, typeName] of
+        expected
+    ) {
+      const card = cardFor(container, id)
+      const iconSpan = typeIcon(card)
+
+      expect(iconSpan.textContent?.trim()).toBe(icon)
+      // The semantic type token (not an inline color).
+      expect(iconSpan.className).toContain(token)
+      // The displayed type text remains the concrete typeName.
+      expect(card.textContent).toContain(typeName)
+    }
+  })
+
+  it('keeps a null typeKind visually neutral even when the typeName looks canonical', async () => {
+    // A CUSTOM type literally named "Epic" has typeKind null: it
+    // must stay neutral (no epic icon/token) while still showing
+    // its real name.
+    vi.mocked(listMyWork).mockResolvedValue([
+      makeItem({
+        statusCategory: 'todo',
+        typeKind: null,
+        typeName: 'Epic',
+      }),
+    ])
+
+    const { container } = renderPage()
+
+    const card = await waitForCard(
+      container,
+      100,
+    )
+
+    const iconSpan = typeIcon(card)
+
+    // The neutral Work Item icon + neutral (tertiary) color —
+    // never the semantic epic presentation.
+    expect(iconSpan.textContent?.trim()).toBe(
+      'assignment',
+    )
+    expect(iconSpan.className).toContain(
+      'text-text-tertiary',
+    )
+    expect(iconSpan.className).not.toContain(
+      'text-work-type-',
+    )
+
+    // The real configured name is displayed.
+    expect(card.textContent).toContain('Epic')
+  })
+
+  it('renders every card as Research Group › Project (group first)', async () => {
+    vi.mocked(listMyWork).mockResolvedValue([
+      makeItem({
+        id: 1,
+        statusCategory: 'todo',
+        projectName: 'Project Alpha',
+        researchGroupName: 'Research Group A',
+      }),
+      makeItem({
+        id: 2,
+        statusCategory: 'review',
+        projectName: 'Project Beta',
+        researchGroupName: 'Research Group B',
+      }),
+    ])
+
+    const { container } = renderPage()
+
+    await waitFor(() => {
+      expect(
+        container.querySelectorAll(
+          '[data-work-item-id]',
+        ).length,
+      ).toBe(2)
+    })
+
+    // The breadcrumb reads Research Group › Project — the group
+    // comes FIRST (not the reverse), on the card itself.
+    expect(
+      cardFor(container, 1).textContent,
+    ).toContain(
+      'Research Group A › Project Alpha',
+    )
+    expect(
+      cardFor(container, 2).textContent,
+    ).toContain(
+      'Research Group B › Project Beta',
+    )
+  })
+
+  it('renders no assignee UI on Kanban cards', async () => {
+    // The session user is "Alex" (username alex); neither form may
+    // surface on the card.
+    vi.mocked(listMyWork).mockResolvedValue([
+      makeItem({
+        statusCategory: 'todo',
+        assigneeIds: [1],
+      }),
+    ])
+
+    const { container } = renderPage()
+
+    const card = await waitForCard(
+      container,
+      100,
+    )
+
+    expect(card.textContent).not.toContain('Alex')
+    expect(card.textContent).not.toContain('alex')
+  })
+
+  it('renders no due metadata when the item has no due date', async () => {
+    vi.mocked(listMyWork).mockResolvedValue([
+      makeItem({
+        statusCategory: 'todo',
+        dueDate: null,
+        blockedReason: null,
+      }),
+    ])
+
+    const { container } = renderPage()
+
+    const card = await waitForCard(
+      container,
+      100,
+    )
+
+    // No due row, no exception wording.
+    expect(card.textContent).not.toMatch(
+      /Due today|overdue|Tomorrow|Today|Mon|Tue|Wed|Thu|Fri|Sat|Sun/,
+    )
+  })
+
+  it('renders a future due date as neutral compact date metadata', async () => {
+    vi.mocked(listMyWork).mockResolvedValue([
+      makeItem({
+        statusCategory: 'todo',
+        dueDate: isoDaysFromNow(3),
+      }),
+    ])
+
+    const { container } = renderPage()
+
+    const card = await waitForCard(
+      container,
+      100,
+    )
+
+    // The established short-date convention (same date logic as
+    // the List).
+    const d = new Date()
+    d.setDate(d.getDate() + 3)
+    const expected =
+      new Intl.DateTimeFormat('en', {
+        month: 'short',
+        day: 'numeric',
+      }).format(d)
+
+    expect(card.textContent).toContain(expected)
+    expect(card.textContent).not.toContain(
+      'Due today',
+    )
+    expect(card.textContent).not.toContain(
+      'overdue',
+    )
+  })
+
+  it('renders Due today explicitly when the item is due today', async () => {
+    vi.mocked(listMyWork).mockResolvedValue([
+      makeItem({
+        statusCategory: 'todo',
+        dueDate: isoDaysFromNow(0),
+      }),
+    ])
+
+    const { container } = renderPage()
+
+    const card = await waitForCard(
+      container,
+      100,
+    )
+
+    expect(card.textContent).toContain('Due today')
+  })
+
+  it('renders an overdue due as explicit overdue text', async () => {
     vi.mocked(listMyWork).mockResolvedValue([
       makeItem({
         dueDate: isoDaysFromNow(-3),
@@ -1464,11 +1793,14 @@ describe('My Work Kanban — card content', () => {
       }),
     ])
 
-    const { getByText } = renderPage()
+    const { container } = renderPage()
 
-    await waitFor(() => {
-      expect(getByText('3d overdue')).toBeInTheDocument()
-    })
+    const card = await waitForCard(
+      container,
+      100,
+    )
+
+    expect(card.textContent).toContain('3d overdue')
   })
 
   it('keeps the blocked state visible on the card', async () => {
@@ -1478,11 +1810,116 @@ describe('My Work Kanban — card content', () => {
       }),
     ])
 
-    const { getByText } = renderPage()
+    const { container } = renderPage()
+
+    const card = await waitForCard(
+      container,
+      100,
+    )
+
+    // Explicit "Blocked" text (icon + text, not a filled pill);
+    // the native tooltip carries the reason.
+    const blocked = card.querySelector(
+      '[title="Waiting on reagents"]',
+    ) as HTMLElement
+    expect(blocked).not.toBeNull()
+    expect(blocked.textContent).toContain('Blocked')
+  })
+
+  it('lets blocked and the due state coexist in one exception footer', async () => {
+    vi.mocked(listMyWork).mockResolvedValue([
+      makeItem({
+        statusCategory: 'todo',
+        blockedReason: 'Waiting on reagents',
+        dueDate: isoDaysFromNow(-12),
+      }),
+    ])
+
+    const { container } = renderPage()
+
+    const card = await waitForCard(
+      container,
+      100,
+    )
+
+    // Both exceptions render together.
+    expect(card.textContent).toContain('Blocked')
+    expect(card.textContent).toContain('12d overdue')
+  })
+
+  it('omits the exception footer for a completely normal item', async () => {
+    vi.mocked(listMyWork).mockResolvedValue([
+      makeItem({
+        statusCategory: 'todo',
+        dueDate: null,
+        blockedReason: null,
+      }),
+    ])
+
+    const { container } = renderPage()
+
+    const card = await waitForCard(
+      container,
+      100,
+    )
+
+    // Exactly three information groups (type+title, type label,
+    // breadcrumb) — no reserved empty footer — and only the type
+    // icon (no exception icons).
+    expect(card.children.length).toBe(3)
+    expect(
+      card.querySelectorAll(
+        '.material-symbols-outlined',
+      ).length,
+    ).toBe(1)
+  })
+
+  it('keeps empty semantic columns rendered (header + count, no cards)', async () => {
+    vi.mocked(listMyWork).mockResolvedValue([
+      makeItem({
+        statusCategory: 'todo',
+      }),
+    ])
+
+    const { container } = renderPage()
 
     await waitFor(() => {
-      expect(getByText('· Blocked')).toBeInTheDocument()
+      expect(
+        container.querySelector(
+          '[data-board-column="todo"]',
+        ),
+      ).not.toBeNull()
     })
+
+    // All four columns render; three are empty.
+    expect(columnHeadingLabels(container)).toEqual([
+      'Todo',
+      'In progress',
+      'Review',
+      'Done',
+    ])
+
+    // Empty columns keep their header with a quiet "0" count and
+    // no cards (no decorative empty-state placeholder).
+    expect(columnCardIds(container, 'todo')).toEqual(['100'])
+    expect(columnCardIds(container, 'in_progress')).toEqual([])
+    expect(columnCardIds(container, 'review')).toEqual([])
+    expect(columnCardIds(container, 'done')).toEqual([])
+
+    for (
+      const category of [
+        'in_progress',
+        'review',
+        'done',
+      ]
+    ) {
+      const column = container.querySelector(
+        `[data-board-column="${category}"]`,
+      ) as HTMLElement
+
+      expect(column.querySelector('h2')).not.toBeNull()
+      expect(column.textContent).toContain('0')
+    }
   })
 })
 
@@ -1690,7 +2127,7 @@ describe('My Work Kanban — interaction, filter, and contract', () => {
     expect(card()).toBeInTheDocument()
     expect(select.value).toBe(String(GROUP_A))
     expect(
-      getByRole('button', { name: 'Kanban' }),
+      getByRole('button', { name: 'Board' }),
     ).toHaveAttribute('aria-pressed', 'true')
     expect(
       getByRole('button', { name: 'List' }),
@@ -1805,7 +2242,7 @@ describe('My Work Kanban — interaction, filter, and contract', () => {
     expect(queryByText('Group B item')).toBeNull()
 
     // Switch back to Kanban — still filtered.
-    await switchView({ getByRole }, 'Kanban')
+    await switchView({ getByRole }, 'Board')
     await waitFor(() => {
       expect(
         container.querySelector('[data-board-column]'),
@@ -1902,7 +2339,7 @@ describe('My Work Kanban — lazy Project drawer context', () => {
       ).toBeInTheDocument()
     })
 
-    await switchView({ getByRole }, 'Kanban')
+    await switchView({ getByRole }, 'Board')
     await waitFor(() => {
       expect(
         container.querySelectorAll(
@@ -2212,7 +2649,7 @@ describe('My Work Kanban — lazy Project drawer context', () => {
     )
     expect(getProject).toHaveBeenCalledTimes(1)
 
-    await switchView({ getByRole }, 'Kanban')
+    await switchView({ getByRole }, 'Board')
 
     expect(drawer()).not.toBeNull()
   })
@@ -2922,8 +3359,9 @@ describe('My Work Kanban — cross-category drag and drop', () => {
     expect(getProject).not.toHaveBeenCalled()
 
     // The refetched payload is what renders: the card sits in the
-    // returned category with the returned concrete statusName, and
-    // the Project / Research Group context is intact.
+    // returned category (the concrete statusName is NOT rendered on
+    // the card — the column says so), and the Project / Research
+    // Group context is intact.
     expect(
       columnCardIds(container, 'todo'),
     ).not.toContain('100')
@@ -2932,13 +3370,14 @@ describe('My Work Kanban — cross-category drag and drop', () => {
       '[data-work-item-id="100"]',
     ) as HTMLElement
     expect(movedCard.textContent).toContain(
-      'In Progress',
-    )
-    expect(movedCard.textContent).toContain(
       'Project Alpha',
     )
     expect(movedCard.textContent).toContain(
       'Research Group A',
+    )
+    // No redundant concrete status on the card itself.
+    expect(movedCard.textContent).not.toContain(
+      'In Progress',
     )
 
     // No accidental navigation from the drag gesture itself:
@@ -3021,11 +3460,14 @@ describe('My Work Kanban — cross-category drag and drop', () => {
     )
     expect(updateWorkItem).not.toHaveBeenCalled()
 
-    // The refetched concrete statusName is what becomes visible.
+    // The refetched payload is what renders: the card sits in the
+    // target category. The concrete statusName is NOT rendered on
+    // the card (the column communicates the semantic status), so
+    // neither the item's old name nor the target's name surfaces.
     const movedCard = container.querySelector(
       '[data-work-item-id="100"]',
     ) as HTMLElement
-    expect(movedCard.textContent).toContain('On deck')
+    expect(movedCard.textContent).not.toContain('On deck')
   })
 
   it('performs no mutation and no refetch for a same-category drop', async () => {
@@ -3488,7 +3930,7 @@ describe('My Work Kanban — cross-category drag and drop', () => {
     // The view is still Kanban.
     expect(
       getByRole('button', {
-        name: 'Kanban',
+        name: 'Board',
       }),
     ).toHaveAttribute('aria-pressed', 'true')
 

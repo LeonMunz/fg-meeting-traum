@@ -17,6 +17,7 @@ import type {
   ApiUpdateWorkItemInput,
   ApiWorkItemStatus,
   ApiWorkItemType,
+  ApiWorkItemTypeKind,
 } from '../../api/types'
 import {
   createWorkItem,
@@ -71,11 +72,17 @@ type GroupFilter = 'all' | number
  * no within-column reordering is supported, and no My Work-specific
  * status or position state is introduced.
  *
- * The Work Item type is shown as the concrete project-local `typeName`
- * from the payload — a display name, not a semantic discriminator: no
- * Task/Epic/Milestone/Deliverable kind or type-specific icon is
- * inferred from it. The neutral canonical Work Item icon remains (a
- * semantic type icon mapping is future work).
+ * Kanban card presentation (the approved compact personal-board
+ * visual contract): column = semantic status, icon + label = Work
+ * Item type, breadcrumb = provenance (`Research Group › Project`),
+ * footer = exceptions only. The type icon + secondary label are
+ * driven by the machine-readable `typeKind` ONLY (task / epic /
+ * milestone / deliverable; `null` = the neutral Work Item
+ * presentation) — never inferred from the `typeName` display name,
+ * which is always shown as the type label text. The concrete
+ * `statusName` is NOT rendered on Kanban cards: the column already
+ * communicates the semantic status (it stays in the data contract
+ * and in the List View).
  *
  * List rows navigate to the item's canonical Project Work Items
  * surface (the same navigation the cross-project Home rows use) —
@@ -241,8 +248,80 @@ const statusGlyphs: Record<
 
 /** Neutral generic Work Item icon (see page doc). The concrete
  * `typeName` is rendered as row text; the icon intentionally stays
- * neutral — no semantic type icon mapping exists yet. */
+ * neutral for types WITHOUT a canonical kind; the semantic type
+ * icon mapping is driven by `typeKind` (WORK_TYPE_PRESENTATION). */
 const WORK_ITEM_TYPE_ICON = 'assignment'
+
+// Semantic presentation of the four fixed global columns: icon +
+// written status label + count. The written label is ALWAYS visible,
+// so the icon and accent reinforce the meaning — never color alone.
+const COLUMN_PRESENTATION: Record<
+  ApiWorkItemStatus,
+  {
+    icon: string
+    iconClassName: string
+  }
+> = {
+  todo: {
+    icon: 'circle',
+    iconClassName: 'text-work-status-todo',
+  },
+  in_progress: {
+    icon: 'progress_activity',
+    iconClassName: 'text-work-status-in-progress',
+  },
+  review: {
+    icon: 'circle_notifications',
+    iconClassName: 'text-work-status-review',
+  },
+  done: {
+    icon: 'check_circle',
+    iconClassName: 'text-work-status-done',
+  },
+}
+
+// Semantic Work Item type presentation, keyed ONLY by the
+// machine-readable `typeKind` — never by the `typeName` display
+// string. A `typeKind` of `null` (custom / unclassified project
+// type) keeps the existing neutral Work Item icon + neutral text: a
+// custom type named e.g. "Epic" stays visually neutral.
+const WORK_TYPE_PRESENTATION: Record<
+  ApiWorkItemTypeKind,
+  {
+    icon: string
+    iconClassName: string
+    labelClassName: string
+  }
+> = {
+  task: {
+    icon: 'assignment',
+    iconClassName: 'text-work-type-task',
+    labelClassName: 'text-work-type-task',
+  },
+  epic: {
+    icon: 'account_tree',
+    iconClassName: 'text-work-type-epic',
+    labelClassName: 'text-work-type-epic',
+  },
+  milestone: {
+    icon: 'flag',
+    iconClassName: 'text-work-type-milestone',
+    labelClassName: 'text-work-type-milestone',
+  },
+  deliverable: {
+    icon: 'deployed_code',
+    iconClassName: 'text-work-type-deliverable',
+    labelClassName: 'text-work-type-deliverable',
+  },
+}
+
+// Neutral fallback for `typeKind === null` (custom / unclassified
+// types): the existing neutral Work Item icon + tertiary text.
+const NEUTRAL_WORK_TYPE_PRESENTATION = {
+  icon: WORK_ITEM_TYPE_ICON,
+  iconClassName: 'text-text-tertiary',
+  labelClassName: 'text-text-tertiary',
+}
 
 function getWorkItemDueFields(
   dueDate: string | null,
@@ -331,6 +410,50 @@ function getDueDisplay(
   return {
     label: due.dueLabel ?? '—',
     attention: false,
+  }
+}
+
+// Due-date presentation for the Kanban card's exception footer —
+// reuses the repository's existing date logic (getWorkItemDueFields),
+// no second date interpretation. No due date (or a completed item)
+// renders NOTHING; a future due date is neutral metadata; due today
+// is an explicit warning; overdue is an explicit danger.
+type CardDueState =
+  | { kind: 'none' }
+  | { kind: 'future'; label: string }
+  | { kind: 'today' }
+  | { kind: 'overdue'; label: string }
+
+function getCardDueState(
+  item: ApiPersonalWorkItem,
+): CardDueState {
+  // Completed items carry no due exception (the List keeps its
+  // established '—' convention for them).
+  if (item.statusCategory === 'done') {
+    return { kind: 'none' }
+  }
+
+  const due =
+    getWorkItemDueFields(item.dueDate)
+
+  if (due.dueInDays == null) {
+    return { kind: 'none' }
+  }
+
+  if (due.dueInDays < 0) {
+    return {
+      kind: 'overdue',
+      label: `${Math.abs(due.dueInDays)}d overdue`,
+    }
+  }
+
+  if (due.dueInDays === 0) {
+    return { kind: 'today' }
+  }
+
+  return {
+    kind: 'future',
+    label: due.dueLabel ?? '',
   }
 }
 
@@ -1047,136 +1170,139 @@ export function MyWorkPage() {
 
   return (
     <div className="w-full px-6 py-8 lg:px-8 lg:py-10 xl:px-10">
-      {/* flex-wrap + a shrinkable select: in the narrow content column
-       * (fixed 240px sidebar margin) the title block and the group
-       * filter must not force the document wider than the viewport —
-       * the filter wraps below the title and shrinks with it. At
-       * desktop widths there is ample space and nothing wraps. */}
-      <header className="flex flex-wrap items-start justify-between gap-6">
-        <div className="min-w-0">
-          <h1 className="text-3xl font-semibold tracking-tight text-on-surface">
-            My Work
-          </h1>
+      {/* Content max width ~1440px, centered: at wide viewports the
+       * board keeps its comfortable column width instead of stretching
+       * across the whole window. */}
+      <div className="mx-auto w-full max-w-[1440px]">
+        {/* flex-wrap + a shrinkable select: in the narrow content column
+         * (fixed 240px sidebar margin) the title block and the group
+         * filter must not force the document wider than the viewport —
+         * the filter wraps below the title and shrinks with it. At
+         * desktop widths there is ample space and nothing wraps. */}
+        <header className="flex flex-wrap items-start justify-between gap-6">
+          <div className="min-w-0">
+            <h1 className="text-[28px] font-semibold leading-[34px] tracking-[-0.015em] text-text">
+              My Work
+            </h1>
 
-          <p className="mt-1.5 text-sm leading-6 text-on-surface-variant">
-            Everything currently assigned to you.
-          </p>
-        </div>
-
-        {/* Controls: the group filter (only with more than one group)
-         *  and the presentation-only List/Kanban switch. Grouped so the
-         *  title stays left and the controls wrap together below it in
-         *  the narrow column without forcing the document wider. */}
-        <div className="flex min-w-0 max-w-full flex-wrap items-center gap-3">
-          {groups.length > 1 && (
-            <select
-              value={groupFilter}
-              onChange={(event) => {
-                const value =
-                  event.target.value
-
-                setGroupFilter(
-                  value === 'all'
-                    ? 'all'
-                    : Number(value),
-                )
-              }}
-              aria-label="Filter by research group"
-              className="h-10 min-w-0 max-w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15"
-            >
-              <option value="all">
-                All research groups
-              </option>
-
-              {groups.map((group) => (
-                <option
-                  key={group.id}
-                  value={group.id}
-                >
-                  {group.name}
-                </option>
-              ))}
-            </select>
-          )}
-
-          {/* List/Kanban switch — same segmented control pattern as the
-           *  Project Work Items view switch. Presentation-only: it does
-           *  not refetch, fetch Project configuration, or persist. Each
-           *  button exposes its name and pressed state. */}
-          <div
-            role="group"
-            aria-label="My Work view"
-            className="inline-flex max-w-full flex-wrap rounded-lg border border-border-structural bg-segmented-bg p-1"
-          >
-            <button
-              type="button"
-              aria-pressed={view === 'kanban'}
-              data-work-item-inspector-keep-open="true"
-              onClick={() => setView('kanban')}
-              className={[
-                'inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-sm font-medium transition',
-                view === 'kanban'
-                  ? 'bg-segmented-selected text-segmented-selected-text shadow-sm'
-                  : 'text-work-content-muted hover:text-work-content-text',
-              ].join(' ')}
-            >
-              <span
-                aria-hidden="true"
-                className="material-symbols-outlined text-[17px]"
-              >
-                view_kanban
-              </span>
-              Kanban
-            </button>
-
-            <button
-              type="button"
-              aria-pressed={view === 'list'}
-              data-work-item-inspector-keep-open="true"
-              onClick={() => setView('list')}
-              className={[
-                'inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-sm font-medium transition',
-                view === 'list'
-                  ? 'bg-segmented-selected text-segmented-selected-text shadow-sm'
-                  : 'text-work-content-muted hover:text-work-content-text',
-              ].join(' ')}
-            >
-              <span
-                aria-hidden="true"
-                className="material-symbols-outlined text-[17px]"
-              >
-                view_list
-              </span>
-              List
-            </button>
+            <p className="mt-1 text-[13px] font-normal leading-5 text-text-muted">
+              Everything currently assigned to you.
+            </p>
           </div>
-        </div>
 
-      </header>
+          {/* Controls: the group filter (only with more than one group)
+           *  and the presentation-only Board/List switch. Grouped so the
+           *  title stays left and the controls wrap together below it in
+           *  the narrow column without forcing the document wider. */}
+          <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
+            {groups.length > 1 && (
+              <select
+                value={groupFilter}
+                onChange={(event) => {
+                  const value =
+                    event.target.value
+
+                  setGroupFilter(
+                    value === 'all'
+                      ? 'all'
+                      : Number(value),
+                  )
+                }}
+                aria-label="Filter by research group"
+                className="h-8 w-[180px] min-w-0 max-w-full cursor-pointer rounded border border-border-subtle bg-surface-quiet pl-2.5 pr-[30px] text-[13px] font-medium text-text outline-none transition focus:border-focus focus:ring-2 focus:ring-focus/20"
+              >
+                <option value="all">
+                  All research groups
+                </option>
+
+                {groups.map((group) => (
+                  <option
+                    key={group.id}
+                    value={group.id}
+                  >
+                    {group.name}
+                  </option>
+                ))}
+              </select>
+            )}
+
+            {/* Board/List switch — same segmented control pattern as the
+             *  Project Work Items view switch. Presentation-only: it does
+             *  not refetch, fetch Project configuration, or persist. Each
+             *  button exposes its name and pressed state. */}
+            <div
+              role="group"
+              aria-label="My Work view"
+              className="inline-flex h-8 max-w-full flex-wrap items-center rounded-[5px] border border-border-structural bg-segmented-bg p-0.5"
+            >
+              <button
+                type="button"
+                aria-pressed={view === 'kanban'}
+                data-work-item-inspector-keep-open="true"
+                onClick={() => setView('kanban')}
+                className={[
+                  'inline-flex h-[26px] items-center gap-1.5 rounded px-[9px] text-xs font-medium transition',
+                  view === 'kanban'
+                    ? 'bg-segmented-selected text-segmented-selected-text'
+                    : 'text-work-content-muted hover:text-work-content-text',
+                ].join(' ')}
+              >
+                <span
+                  aria-hidden="true"
+                  className="material-symbols-outlined text-[14px]"
+                >
+                  view_kanban
+                </span>
+                Board
+              </button>
+
+              <button
+                type="button"
+                aria-pressed={view === 'list'}
+                data-work-item-inspector-keep-open="true"
+                onClick={() => setView('list')}
+                className={[
+                  'inline-flex h-[26px] items-center gap-1.5 rounded px-[9px] text-xs font-medium transition',
+                  view === 'list'
+                    ? 'bg-segmented-selected text-segmented-selected-text'
+                    : 'text-work-content-muted hover:text-work-content-text',
+                ].join(' ')}
+              >
+                <span
+                  aria-hidden="true"
+                  className="material-symbols-outlined text-[14px]"
+                >
+                  view_list
+                </span>
+                List
+              </button>
+            </div>
+          </div>
+
+        </header>
 
       {loading ? (
-        // Themed board skeleton: the final Kanban's OWN chrome
-        // (surface-quiet section, workspace region, board-column
-        // columns at the final min-height, identical 4-column grid)
-        // with restrained pulse bars — the app's established
-        // skeleton convention (see the Project page skeleton). It
-        // occupies the final content region from the first paint,
-        // so the load never exposes a raw white/default panel
-        // (the legacy surface-container-lowest token is not
-        // dark-adapted) and the board resolves in place with no
-        // layout shift.
+        // Themed board skeleton: the final board's OWN geometry —
+        // the same transparent canvas region (no outer panel), the
+        // same four-column grid, the same column min-height, and
+        // card-shaped pulse bars at the card min-height — with
+        // restrained pulse bars (the app's established skeleton
+        // convention). It occupies the final content region from
+        // the first paint, so the load never exposes a raw
+        // white/default panel and the board resolves in place with
+        // no layout shift.
         <section
           aria-busy="true"
           data-my-work-board-skeleton="true"
-          className="mt-8 overflow-hidden rounded-xl border border-border-structural bg-surface-quiet shadow-sm"
+          className="mt-6"
         >
           <span className="sr-only">
             Loading your work…
           </span>
 
-          <div className="overflow-x-auto bg-workspace">
+          <div className="overflow-x-auto">
             <div
-              className="grid min-w-max gap-3 p-4"
+              className="grid min-w-max items-start gap-4"
               style={{
                 gridTemplateColumns: `repeat(${GLOBAL_STATUS_COLUMNS.length}, minmax(260px, 1fr))`,
               }}
@@ -1186,13 +1312,24 @@ export function MyWorkPage() {
                   <div
                     key={column.value}
                     data-my-work-skeleton-column="true"
-                    className="flex min-h-[26rem] flex-col gap-2 rounded-lg bg-board-column p-2"
+                    className="flex min-h-[26rem] flex-col rounded-lg bg-board-column"
                   >
-                    <div className="h-4 w-24 animate-pulse rounded bg-surface-hover" />
+                    <div className="flex h-8 items-center gap-1.5 px-3">
+                      <span
+                        aria-hidden="true"
+                        className={`material-symbols-outlined shrink-0 text-[14px] opacity-60 ${COLUMN_PRESENTATION[column.value].iconClassName}`}
+                      >
+                        {COLUMN_PRESENTATION[column.value].icon}
+                      </span>
 
-                    <div className="mt-1 h-16 animate-pulse rounded-md bg-surface-hover" />
+                      <div className="h-3 w-20 animate-pulse rounded bg-surface-hover" />
+                    </div>
 
-                    <div className="h-16 animate-pulse rounded-md bg-surface-hover" />
+                    <div className="flex flex-1 flex-col gap-2 p-2">
+                      <div className="h-24 animate-pulse rounded-md bg-surface-hover" />
+
+                      <div className="h-24 animate-pulse rounded-md bg-surface-hover" />
+                    </div>
                   </div>
                 ),
               )}
@@ -1267,7 +1404,7 @@ export function MyWorkPage() {
           }
         />
       ) : (
-        <section className="mt-8 overflow-hidden rounded-xl border border-border-structural bg-surface-quiet shadow-sm">
+        <section className="mt-6 overflow-hidden rounded-xl border border-border-structural bg-surface-quiet shadow-sm">
           <div
             className={[
               'hidden h-9 items-center gap-x-4 border-b border-border-structural/40 px-6',
@@ -1408,6 +1545,8 @@ export function MyWorkPage() {
           </div>
         </section>
       )}
+
+      </div>
 
       {/* The SAME canonical WorkItemDrawer the Project Work Items
        * board mounts — opened in place over My Work. The URL stays
@@ -1616,11 +1755,16 @@ function MyWorkBoard({
   >(null)
 
   return (
-    <section className="mt-8 overflow-hidden rounded-xl border border-border-structural bg-surface-quiet shadow-sm">
+    // The board renders directly on the page canvas: NO outer
+    // panel (no shared background, border, radius, or shadow) — the
+    // columns and cards provide the visual structure. The
+    // horizontal-scroll wrapper stays for narrow layouts but is
+    // visually transparent; the document itself never overflows.
+    <section className="mt-6">
       {statusDropError && (
         <div
           role="alert"
-          className="flex items-start gap-2.5 border-b border-work-item-error-border bg-work-item-error-bg px-6 py-3 text-sm text-work-item-error"
+          className="mb-3 flex items-start gap-2.5 rounded-md border border-work-item-error-border bg-work-item-error-bg px-4 py-3 text-sm text-work-item-error"
         >
           <span
             aria-hidden="true"
@@ -1641,9 +1785,9 @@ function MyWorkBoard({
         </div>
       )}
 
-      <div className="overflow-x-auto bg-workspace">
+      <div className="overflow-x-auto">
         <div
-          className="grid min-w-max gap-3 p-4"
+          className="grid min-w-max items-start gap-4"
           style={{
             gridTemplateColumns: `repeat(${columns.length}, minmax(260px, 1fr))`,
           }}
@@ -1762,22 +1906,31 @@ function MyWorkBoard({
                         : 'bg-board-column',
                 ].join(' ')}
               >
-              <div className="flex items-center gap-1.5 px-3 py-2.5">
-                <h2 className="text-[13px] font-semibold text-work-content-text">
+              {/* Column header: icon + WRITTEN status + count. The
+                 written label is always visible, so the semantic
+                 icon/accent is reinforcement — never color alone.
+                 The count is quiet plain text (no pill). */}
+              <div className="flex h-8 items-center gap-1.5 px-3">
+                <span
+                  aria-hidden="true"
+                  className={`material-symbols-outlined shrink-0 text-[14px] ${COLUMN_PRESENTATION[column.value].iconClassName}`}
+                >
+                  {COLUMN_PRESENTATION[column.value].icon}
+                </span>
+
+                <h2 className="text-[13px] font-semibold leading-[18px] text-text">
                   {column.label}
                 </h2>
 
-                <span className="text-xs text-text-work-faded-70">
+                <span className="text-[10px] leading-4 text-text-work-faded-70">
                   {column.items.length}
                 </span>
               </div>
 
-              <div className="flex flex-1 flex-col gap-2 px-2 pb-3">
-                {column.items.length === 0 ? (
-                  <div className="flex min-h-10 items-center justify-center rounded-md px-2 py-3 text-[11px] text-text-work-faded-70">
-                    No items
-                  </div>
-                ) : (
+              {/* Empty columns stay visible (header + count) with no
+                  decorative placeholder. */}
+              <div className="flex flex-1 flex-col gap-2 p-2">
+                {column.items.length === 0 ? null : (
                   column.items.map((item) => (
                     <MyWorkBoardCard
                       key={item.id}
@@ -1812,24 +1965,33 @@ function MyWorkBoard({
 /**
  * My Work Kanban card with cross-category drag.
  *
- * Understandable without Project context: title, the concrete
- * project-local `typeName`, the concrete project-local `statusName`
- * (the column already communicates the broad state, so the concrete
- * status stays visible as detail), Project + Research Group, and the
- * due / blocked state. The neutral canonical Work Item icon is used —
- * no semantic type icon mapping. Opening (click / Enter / Space)
- * calls `onOpen`, which opens the canonical WorkItemDrawer IN PLACE
- * over My Work (the List rows keep their navigation behavior — see
- * the page doc).
+ * Compact personal-board card with exactly four information
+ * groups, in order:
+ *   1. type icon (semantic per `typeKind`; neutral for a null kind)
+ *      + title
+ *   2. the concrete project-local `typeName` as a secondary label
+ *   3. provenance breadcrumb `Research Group › Project` (one line)
+ *   4. exception footer — ONLY when an exception exists (blocked
+ *      and/or a due date): due state and/or Blocked, icon + text.
+ *
+ * The concrete `statusName` is NOT rendered: the column already
+ * communicates the semantic status, so a card inside "Todo" must
+ * not also say "Todo" (the status stays in the data contract and in
+ * the List View). No assignee UI.
+ *
+ * Opening (click / Enter / Space) calls `onOpen`, which opens the
+ * canonical WorkItemDrawer IN PLACE over My Work (the List rows keep
+ * their navigation behavior — see the page doc).
  *
  * Drag reuses the Project Work Items Board card's native HTML5
  * convention: the whole card is `draggable` (grab cursor),
  * `dragstart` carries the Work Item id on `dataTransfer`, and the
- * drag ghost is browser-native (the card itself dims while the drag
- * is active). A native HTML5 drag never dispatches a trailing
- * "click", so click/Enter/Space keep opening the item exactly as
- * before. A pending mutation shows restrained feedback
- * (dimmed + progress cursor) without moving the card optimistically.
+ * drag ghost is browser-native (the card dims to ~0.85 and takes an
+ * accent border while the drag is active). A native HTML5 drag never
+ * dispatches a trailing "click", so click/Enter/Space keep opening
+ * the item exactly as before. A pending mutation shows restrained
+ * feedback (dimmed + progress cursor) without moving the card
+ * optimistically.
  */
 function MyWorkBoardCard({
   item,
@@ -1846,19 +2008,21 @@ function MyWorkBoardCard({
   onDragStart: (itemId: number) => void
   onDragEnd: () => void
 }) {
-  const status =
-    statusGlyphs[item.statusCategory] ??
-    statusGlyphs.todo
+  // Type presentation from the machine-readable kind ONLY — a null
+  // kind stays neutral, whatever the type is named.
+  const typePresentation =
+    item.typeKind != null
+      ? WORK_TYPE_PRESENTATION[item.typeKind]
+      : NEUTRAL_WORK_TYPE_PRESENTATION
 
-  const due = getDueDisplay(
-    item.statusCategory,
-    getWorkItemDueFields(item.dueDate),
-  )
+  const dueState = getCardDueState(item)
 
-  // Show the due value only when meaningful: a completed item or an
-  // item with no due date renders '—' in the List but nothing here.
-  const showDue =
-    due.label != null && due.label !== '—'
+  // The exception footer renders ONLY when at least one
+  // exception-relevant property exists; a normal item keeps its
+  // density (no reserved empty footer).
+  const hasExceptions =
+    item.blockedReason != null ||
+    dueState.kind !== 'none'
 
   return (
     <article
@@ -1887,93 +2051,121 @@ function MyWorkBoardCard({
       }}
       onDragEnd={onDragEnd}
       className={[
-        'rounded-lg border bg-surface px-3 py-2.5 transition hover:bg-work-surface-hover',
-        item.blockedReason
-          ? 'border-work-item-error-border'
-          : 'border-border-structural/50',
+        // Functional card surface, 1px subtle border, no shadow.
+        // Hover = slightly raised surface + stronger border (no
+        // lift/scale animation). Transitions: background/border only,
+        // ~120ms. Keyboard focus gets a real focus outline.
+        'min-h-24 rounded-md border bg-work-card px-3 py-[11px] transition-[background-color,border-color] duration-120',
+        'hover:border-border-default hover:bg-work-card-hover',
+        'focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus',
         dragging
-          ? 'opacity-40'
+          ? 'border-accent opacity-[0.85]'
           : pendingMove
-            ? 'cursor-progress opacity-60'
-            : 'cursor-grab active:cursor-grabbing',
+            ? 'cursor-progress border-border-subtle opacity-60'
+            : 'cursor-grab border-border-subtle active:cursor-grabbing',
       ].join(' ')}
     >
-      <div className="flex items-start gap-2">
+      {/* 1. Type + title — the icon is the semantic type
+          (shape + color), the title dominates. */}
+      <div className="flex items-start gap-1.5">
         <span
-          title={item.typeName}
-          aria-label={item.typeName}
-          className="material-symbols-outlined mt-0.5 shrink-0 text-[15px] text-work-content-muted"
+          aria-hidden="true"
+          className={`material-symbols-outlined shrink-0 text-base ${typePresentation.iconClassName}`}
         >
-          {WORK_ITEM_TYPE_ICON}
+          {typePresentation.icon}
         </span>
 
-        <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-start gap-2">
-            <h3 className="min-w-0 flex-1 text-sm font-semibold leading-5 text-work-content-text">
-              {item.title}
-            </h3>
-
-            {item.blockedReason && (
-              <span
-                title={item.blockedReason}
-                className="mt-0.5 shrink-0 text-[11px] font-semibold text-work-item-error"
-              >
-                · Blocked
-              </span>
-            )}
-          </div>
-
-          <div className="mt-1 truncate text-[11px] text-work-content-muted">
-            {item.typeName}
-          </div>
-        </div>
+        <h3 className="min-w-0 flex-1 truncate text-[13px] font-semibold leading-[18px] text-text">
+          {item.title}
+        </h3>
       </div>
 
+      {/* 2. Type label — the concrete project-local name, indented
+          under the title. Same semantic color as the icon (neutral
+          for a null kind); identifiable by shape + text + color,
+          never color alone. */}
+      <div className={`mt-[3px] truncate pl-[22px] text-[10px] font-medium leading-[14px] ${typePresentation.labelClassName}`}>
+        {item.typeName}
+      </div>
+
+      {/* 3. Provenance breadcrumb: Research Group › Project (group
+          first). One line with truncation; the native tooltip
+          carries the complete string. */}
       <div
-        className={[
-          'mt-2 flex items-center gap-1.5 pl-[23px] text-xs',
-          status.className,
-        ].join(' ')}
+        className="mt-2 flex min-w-0 items-center pl-[22px] text-[11px] leading-4"
+        title={`${item.researchGroupName} › ${item.projectName}`}
       >
-        <span
-          aria-hidden="true"
-          className="inline-flex w-4 shrink-0 justify-center text-[15px] leading-none"
-        >
-          {status.glyph}
-        </span>
-
-        <span className="truncate text-work-content-muted">
-          {item.statusName}
-        </span>
-      </div>
-
-      <div className="mt-1 flex min-w-0 items-center gap-1 pl-[23px] text-[11px] text-text-work-faded-75">
-        <span className="truncate">
-          {item.projectName}
-        </span>
-
-        <span
-          aria-hidden="true"
-          className="shrink-0"
-        >
-          ·
-        </span>
-
-        <span className="truncate">
+        <span className="min-w-0 truncate text-text-tertiary">
           {item.researchGroupName}
         </span>
+
+        <span
+          aria-hidden="true"
+          className="shrink-0 text-text-work-faded-70"
+        >
+          {' › '}
+        </span>
+
+        <span className="min-w-0 truncate font-medium text-text-muted">
+          {item.projectName}
+        </span>
       </div>
 
-      {showDue && (
-        <div
-          className={[
-            'mt-1 pl-[23px] text-[11px]',
-            due.attention
-              ? 'font-semibold text-work-item-error'
-              : 'font-normal text-work-content-muted',
-          ].join(' ')}
-        >
-          {due.label}
+      {/* 4. Exception footer — only when an exception exists.
+          Icon + text (never color alone); blocked and due state may
+          coexist. */}
+      {hasExceptions && (
+        <div className="mt-2 flex min-w-0 flex-wrap items-center gap-3 border-t border-border-subtle pt-2">
+          {item.blockedReason != null && (
+            <span
+              title={item.blockedReason}
+              className="flex items-center gap-1 text-[11px] font-medium leading-4 text-work-exception-warning"
+            >
+              <span
+                aria-hidden="true"
+                className="material-symbols-outlined text-[13px]"
+              >
+                block
+              </span>
+              Blocked
+            </span>
+          )}
+
+          {dueState.kind === 'overdue' && (
+            <span className="flex items-center gap-1 text-[11px] font-medium leading-4 text-work-exception-danger">
+              <span
+                aria-hidden="true"
+                className="material-symbols-outlined text-[13px]"
+              >
+                warning
+              </span>
+              {dueState.label}
+            </span>
+          )}
+
+          {dueState.kind === 'today' && (
+            <span className="flex items-center gap-1 text-[11px] font-medium leading-4 text-work-exception-warning">
+              <span
+                aria-hidden="true"
+                className="material-symbols-outlined text-[13px]"
+              >
+                event
+              </span>
+              Due today
+            </span>
+          )}
+
+          {dueState.kind === 'future' && (
+            <span className="flex items-center gap-1 text-[11px] font-normal leading-4 text-text-muted">
+              <span
+                aria-hidden="true"
+                className="material-symbols-outlined text-[13px]"
+              >
+                event
+              </span>
+              {dueState.label}
+            </span>
+          )}
         </div>
       )}
     </article>

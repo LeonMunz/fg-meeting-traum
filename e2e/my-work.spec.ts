@@ -113,14 +113,18 @@ test('My Work lists assigned Work Items across Projects and Research Groups', as
     }),
   ).toBeVisible()
 
-  // Concrete project-local status name (the fixed semantic
-  // category label must not replace it).
+  // The semantic status is communicated by the COLUMN (icon +
+  // written label) — the card must NOT redundantly render the
+  // concrete statusName.
+  await expect(
+    page.getByRole('heading', { name: 'Todo' }),
+  ).toBeVisible()
   await expect(
     firstDraftRow.getByText('Todo', { exact: true }),
-  ).toBeVisible()
+  ).toHaveCount(0)
   await expect(
     robotRow.getByText('Todo', { exact: true }),
-  ).toBeVisible()
+  ).toHaveCount(0)
 
   // Concrete project-local Work Item type name (display metadata
   // from the payload — different Projects show different type
@@ -191,7 +195,8 @@ test('My Work opens in Kanban with the four global semantic columns', async ({ p
   ).toBeVisible()
 
   // Cards carry Project + Research Group context and the
-  // concrete type + status.
+  // concrete type (the semantic status comes from the column —
+  // the card itself does NOT repeat it).
   const firstDraftCard = page.getByRole('button', {
     name: 'Open First Draft Complete',
   })
@@ -214,8 +219,10 @@ test('My Work opens in Kanban with the four global semantic columns', async ({ p
     }),
   ).toBeVisible()
   await expect(
-    firstDraftCard.getByText('Todo', { exact: true }),
-  ).toBeVisible()
+    firstDraftCard.getByText('Todo', {
+      exact: true,
+    }),
+  ).toHaveCount(0)
   await expect(
     robotCard.getByText('E2E Robot Study', {
       exact: true,
@@ -229,6 +236,9 @@ test('My Work opens in Kanban with the four global semantic columns', async ({ p
   await expect(
     robotCard.getByText('Task', { exact: true }),
   ).toBeVisible()
+  await expect(
+    robotCard.getByText('Todo', { exact: true }),
+  ).toHaveCount(0)
 
   await page.screenshot({
     path: testInfo.outputPath('my-work-kanban.png'),
@@ -278,7 +288,7 @@ test('switching List/Kanban is presentation-only (no refetch of /api/me/work-ite
 
   // Switch back to the Kanban.
   await page
-    .getByRole('button', { name: 'Kanban' })
+    .getByRole('button', { name: 'Board' })
     .click()
   await expect(todoColumn).toBeVisible()
 
@@ -405,7 +415,7 @@ test('opening a My Work card opens the canonical Work Item Drawer in place', asy
     }),
   ).toBeVisible()
   await expect(
-    page.getByRole('button', { name: 'Kanban' }),
+    page.getByRole('button', { name: 'Board' }),
   ).toHaveAttribute('aria-pressed', 'true')
 
   await page.screenshot({
@@ -727,8 +737,9 @@ test('My Work Kanban drag: cross-category drop mutates the canonical status from
 
   // --------------------------------------------------------
   // 2. The card appears in In progress — the authoritative
-  //    refetched payload (not local inference) decided its column,
-  //    and the returned concrete statusName is displayed.
+  //    refetched payload (not local inference) decided its column.
+  //    The concrete statusName is NOT rendered on the card (the
+  //    column communicates the semantic status).
   // --------------------------------------------------------
 
   const movedCard = inProgressColumn.getByRole(
@@ -750,7 +761,7 @@ test('My Work Kanban drag: cross-category drop mutates the canonical status from
     movedCard.getByText(target.statusName, {
       exact: true,
     }),
-  ).toBeVisible()
+  ).toHaveCount(0)
 
   // Project / Research Group context and the Kanban view survive
   // the move (the filter was untouched — it stayed "all").
@@ -761,7 +772,7 @@ test('My Work Kanban drag: cross-category drop mutates the canonical status from
     movedCard.getByText('FG Example', { exact: true }),
   ).toBeVisible()
   await expect(
-    page.getByRole('button', { name: 'Kanban' }),
+    page.getByRole('button', { name: 'Board' }),
   ).toHaveAttribute('aria-pressed', 'true')
 
   // --------------------------------------------------------

@@ -164,6 +164,33 @@
   --color-work-item-error: #ba1a1a;
   --color-work-item-error-bg: #fff2f1;
   --color-work-item-error-border: #e7afaf;
+  /* My Work board card surface + hover. Dark = approved values
+   * (#1E2023 card / #212225 hover); Light keeps the functional card on
+   * white with a restrained raised hover tone. */
+  --color-work-card: #ffffff;
+  --color-work-card-hover: #f2f3f5;
+  /* My Work semantic column-header accents (icon + written status label).
+   * The written label is ALWAYS visible, so the accent is reinforcement —
+   * never color alone. Dark = approved values; Light = legible
+   * counterparts on white. */
+  --color-work-status-todo: #60646c;
+  --color-work-status-in-progress: #4059d6;
+  --color-work-status-review: #7c4fd0;
+  --color-work-status-done: #218358;
+  /* My Work semantic Work Item type accents — keyed ONLY by the
+   * machine-readable `typeKind` (a null kind uses the neutral Work Item
+   * presentation, never these). Dark = approved values; Light = legible
+   * counterparts on white. */
+  --color-work-type-task: #5f6b76;
+  --color-work-type-epic: #4f63d2;
+  --color-work-type-milestone: #8a6519;
+  --color-work-type-deliverable: #177f71;
+  /* My Work exception-footer semantics (blocked / due today = warning,
+   * overdue = danger). Light = the existing warning/danger values; Dark =
+   * the approved readable counterparts (the bare `warning` / `danger`
+   * tokens are not dark-adapted). */
+  --color-work-exception-warning: #ab6400;
+  --color-work-exception-danger: #ce2c31;
   /* Prose text link. Light = legacy `primary` (#3525CD), the exact HEAD
    * `.fg-prose a` foreground; Dark = readable accent text (#9EB1FF).
    * Distinct from `link-hover`, which is the hover role for chrome text. */
@@ -375,6 +402,22 @@ html[data-theme='dark'] {
   --color-work-item-error: #ce2c31;
   --color-work-item-error-bg: #2a1a1c;
   --color-work-item-error-border: #5a2b2e;
+  /* My Work board card surface + hover — approved Dark values. */
+  --color-work-card: #1e2023;
+  --color-work-card-hover: #212225;
+  /* My Work semantic column-header accents — approved Dark values. */
+  --color-work-status-todo: #8b9098;
+  --color-work-status-in-progress: #6e8bfa;
+  --color-work-status-review: #a78bfa;
+  --color-work-status-done: #36a269;
+  /* My Work semantic Work Item type accents — approved Dark values. */
+  --color-work-type-task: #a7adb5;
+  --color-work-type-epic: #8096ff;
+  --color-work-type-milestone: #d6a85f;
+  --color-work-type-deliverable: #48b8a5;
+  /* My Work exception-footer semantics — approved Dark values. */
+  --color-work-exception-warning: #d6a85f;
+  --color-work-exception-danger: #e5484d;
   --color-prose-link: #9eb1ff;
   /* Inspector control bridges (Dark) — see Light @theme block. */
   --color-text-primary: #edeef0;
