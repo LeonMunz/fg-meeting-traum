@@ -18,7 +18,11 @@ from audit_history.models import AuditEvent
 from authorization.capabilities import Capability
 from authorization.service import resolve_project_scope
 from meetings.models import MeetingItemWorkItem
-from projects.models import Project, ProjectMembership
+from projects.models import (
+    Project,
+    ProjectMembership,
+    WorkItemStatusDefinition,
+)
 from research_groups.models import ResearchGroupMembership
 
 from .models import WorkItem, WorkItemAssignee, WorkItemComment
@@ -822,9 +826,35 @@ class PersonalMyWorkView(APIView):
             ).order_by("id"):
                 origins.setdefault(origin.work_item_id, origin)
 
+        # One bulk status-target resolution for every Project
+        # represented by the response (NOT per item and NOT per
+        # Project): for the future global My Work Kanban, each item
+        # carries — per fixed semantic category — the concrete
+        # project-local StatusDefinition a cross-category move would
+        # resolve to. Eligible targets are owned by the item's own
+        # Project, active, and in that category; when several share a
+        # category the first by the Project's configured status order
+        # wins, with a stable status-definition ID tie-break. Display
+        # names never participate in resolution, and a category with
+        # no active definition simply yields no target.
+        status_targets_by_project = {}
+
+        if work_items:
+            for defn in WorkItemStatusDefinition.objects.filter(
+                project_id__in={wi.project_id for wi in work_items},
+                active=True,
+            ).order_by("project_id", "order", "id"):
+                by_category = status_targets_by_project.setdefault(
+                    defn.project_id, {}
+                )
+                # First row per (Project, category) in configured
+                # (order, id) sequence is the target.
+                by_category.setdefault(defn.category, defn)
+
         data = []
 
         for work_item in work_items:
+            targets = status_targets_by_project.get(work_item.project_id, {})
             item = serialize_work_item(
                 work_item,
                 user=request.user,
@@ -857,6 +887,25 @@ class PersonalMyWorkView(APIView):
                 "statusCategory": (
                     work_item.status_definition.category
                 ),
+                # Global Kanban status targets: at most one concrete
+                # project-local definition per fixed semantic category
+                # (bulk-resolved above), in the fixed category order;
+                # a category with no active definition is omitted
+                # entirely — no artificial statuses are invented. The
+                # canonical ``statusDefinitionId`` of the Work Item
+                # itself remains authoritative; these targets are read
+                # metadata for a later, category-driven move.
+                "statusTargets": [
+                    {
+                        "statusCategory": category,
+                        "statusDefinitionId": targets[category].pk,
+                        "statusName": targets[category].name,
+                    }
+                    for category in (
+                        WorkItemStatusDefinition.Category.values
+                    )
+                    if category in targets
+                ],
             })
 
             data.append(item)

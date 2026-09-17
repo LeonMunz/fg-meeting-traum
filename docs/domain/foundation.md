@@ -785,6 +785,33 @@ the Work Item's Project `WorkItemTypeDefinition`) as display
 metadata for that ID. No semantic Task/Epic/Milestone/Deliverable
 `kind` exists, and none is inferred from the name.
 
+Global My Work Kanban columns represent semantic status
+categories. A cross-category move resolves to the first active
+project-local status definition in that category according to that
+Project's configured status order, with a stable ID tie-break. The
+My Work read API carries that resolution per Work Item as
+`statusTargets`: for each fixed semantic category that has at least
+one active `WorkItemStatusDefinition` in the Work Item's own
+Project, the target is the first such definition in the Project's
+configured status order (`order`, stable definition-ID tie-break) —
+at most one target per category, inactive definitions never
+appear, a category without an active definition is omitted
+entirely (no artificial statuses are invented), and status display
+names never participate in resolution. Targets are derived on read
+from the canonical Project `WorkItemStatusDefinition` rows (no
+persisted My Work target table, no cached mapping), so changing a
+Project's status configuration automatically changes future My
+Work target resolution. The current concrete
+`statusDefinitionId` remains authoritative for the Work Item
+itself, and no My Work mutation-by-category semantics exist: a
+move uses the target's `statusDefinitionId` through the existing
+canonical Work Item mutation path.
+
+My Work has no independent persisted card ordering. Project
+`boardPosition` remains project-local and is never used to choose a
+global status target; moving a card within the same global semantic
+category does not persist any My Work ordering.
+
 Possible UI filters:
 
 - All

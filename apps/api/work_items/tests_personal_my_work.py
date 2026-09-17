@@ -722,3 +722,590 @@ class PersonalMyWorkQueryCountTest(APITestCase):
             "and the Meeting origin check must be eager-loaded or "
             "bulk-fetched per request.",
         )
+
+    def _make_project_scope(self, name):
+        """Create one new Research Group + Project + one assigned
+        Work Item so the response represents one more Project."""
+        group = ResearchGroup.objects.create(
+            name=name,
+            created_by=self.alice,
+        )
+        ResearchGroupMembership.objects.create(
+            research_group=group,
+            user=self.alice,
+            role=ResearchGroupMembership.Role.MEMBER,
+        )
+        project = create_project(
+            research_group=group,
+            creator=self.alice,
+            name=name,
+        )
+        create_work_item(
+            project=project,
+            actor=self.alice,
+            type_definition_id=(
+                project.type_definitions.get(name="Task").pk
+            ),
+            title=f"QC work {name}",
+            assignee_ids=[self.alice.pk],
+        )
+        return project
+
+    def test_query_count_does_not_scale_with_project_count(self):
+        # Request 1: 2 Work Items across 2 Projects.
+        self._make("QC work 1")
+        self._make_project_scope("QC Group Two")
+        self._login()
+
+        with CaptureQueriesContext(connection) as two_projects_ctx:
+            response = self.client.get("/api/me/work-items/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.json()), 2)
+
+        # Request 2: 6 Work Items across 6 Projects (3x the Projects
+        # represented, same rows-per-Project shape).
+        for index in range(3, 7):
+            self._make_project_scope(f"QC Group {index}")
+
+        with CaptureQueriesContext(connection) as six_projects_ctx:
+            response = self.client.get("/api/me/work-items/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.json()), 6)
+
+        # Invariant: 3x the represented Projects add ZERO queries —
+        # the per-category status targets (like the Project /
+        # Research Group / definition context and the Meeting origin
+        # check) are bulk-resolved per request, never per Project.
+        self.assertEqual(
+            len(two_projects_ctx.captured_queries),
+            len(six_projects_ctx.captured_queries),
+            "personal My Work query count must not scale with the "
+            "number of represented Projects; status targets and "
+            "every other serialized relation must be eager-loaded or "
+            "bulk-fetched per request.",
+        )
+
+
+# ── Global My Work Kanban status targets (read contract) ──
+
+
+class PersonalMyWorkStatusTargetsTest(APITestCase):
+    """Behavioral coverage for the personal My Work
+    ``statusTargets`` read contract.
+
+    For the future global My Work Kanban, every returned Work Item
+    carries — per fixed semantic category — the concrete
+    project-local StatusDefinition a cross-category move would
+    resolve to: owned by the item's own Project, active, in that
+    category; first by the Project's configured status order with a
+    stable status-definition ID tie-break. Display names never
+    participate in resolution, a category without an active
+    definition yields no target, and ``boardPosition`` (Project-local
+    Board state) never influences target selection.
+    """
+
+    FIXED_CATEGORIES = [
+        WorkItemStatusDefinition.Category.TODO,
+        WorkItemStatusDefinition.Category.IN_PROGRESS,
+        WorkItemStatusDefinition.Category.REVIEW,
+        WorkItemStatusDefinition.Category.DONE,
+    ]
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.chris = User.objects.create_user(
+            username="targets_chris",
+            password="TestPass1!",
+        )
+
+        cls.group_a = ResearchGroup.objects.create(
+            name="Targets FG A",
+            created_by=cls.chris,
+        )
+        cls.group_b = ResearchGroup.objects.create(
+            name="Targets FG B",
+            created_by=cls.chris,
+        )
+
+        ResearchGroupMembership.objects.create(
+            research_group=cls.group_a,
+            user=cls.chris,
+            role=ResearchGroupMembership.Role.MEMBER,
+        )
+        ResearchGroupMembership.objects.create(
+            research_group=cls.group_b,
+            user=cls.chris,
+            role=ResearchGroupMembership.Role.MEMBER,
+        )
+
+        cls.project_a = create_project(
+            research_group=cls.group_a,
+            creator=cls.chris,
+            name="Target Alpha",
+        )
+        cls.project_b = create_project(
+            research_group=cls.group_b,
+            creator=cls.chris,
+            name="Target Beta",
+        )
+
+        cls.work_a = create_work_item(
+            project=cls.project_a,
+            actor=cls.chris,
+            type_definition_id=(
+                cls.project_a.type_definitions.get(name="Task").pk
+            ),
+            title="Target Work A",
+            assignee_ids=[cls.chris.pk],
+        )
+        cls.work_b = create_work_item(
+            project=cls.project_b,
+            actor=cls.chris,
+            type_definition_id=(
+                cls.project_b.type_definitions.get(name="Task").pk
+            ),
+            title="Target Work B",
+            assignee_ids=[cls.chris.pk],
+        )
+
+    def setUp(self):
+        self.client = APIClient()
+
+    def login(self):
+        self.client.get("/api/auth/csrf/")
+        csrf_token = (
+            self.client.cookies.get("csrftoken").value
+        )
+        response = self.client.post(
+            "/api/auth/login/",
+            data={
+                "username": "targets_chris",
+                "password": "TestPass1!",
+            },
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=csrf_token,
+        )
+        self.assertEqual(response.status_code, 200)
+
+    def _fetch_items(self):
+        self.login()
+        response = self.client.get("/api/me/work-items/")
+        self.assertEqual(response.status_code, 200)
+        return {
+            item["title"]: item
+            for item in response.json()
+        }
+
+    def _targets_by_category(self, item):
+        return {
+            entry["statusCategory"]: entry
+            for entry in item["statusTargets"]
+        }
+
+    def test_every_item_exposes_status_targets_in_fixed_order(self):
+        items = self._fetch_items()
+
+        self.assertIn("Target Work A", items)
+        self.assertIn("Target Work B", items)
+
+        for item in items.values():
+            self.assertIsInstance(item["statusTargets"], list)
+            self.assertEqual(
+                [
+                    entry["statusCategory"]
+                    for entry in item["statusTargets"]
+                ],
+                self.FIXED_CATEGORIES,
+            )
+            for entry in item["statusTargets"]:
+                self.assertEqual(
+                    set(entry.keys()),
+                    {
+                        "statusCategory",
+                        "statusDefinitionId",
+                        "statusName",
+                    },
+                )
+
+    def test_targets_use_only_fixed_semantic_categories(self):
+        items = self._fetch_items()
+
+        for item in items.values():
+            categories = [
+                entry["statusCategory"]
+                for entry in item["statusTargets"]
+            ]
+            self.assertTrue(
+                set(categories)
+                <= set(self.FIXED_CATEGORIES),
+            )
+            # At most one target per semantic category.
+            self.assertEqual(
+                len(categories),
+                len(set(categories)),
+            )
+
+    def test_target_carries_concrete_definition_id_and_name(self):
+        items = self._fetch_items()
+        item_a = self._targets_by_category(items["Target Work A"])
+        item_b = self._targets_by_category(items["Target Work B"])
+
+        # The default Project configuration (one active status per
+        # category) resolves to the Project's own definition —
+        # concrete ID and exact configured name, per Project.
+        for category, name in [
+            ("todo", "Todo"),
+            ("in_progress", "In Progress"),
+            ("review", "Review"),
+            ("done", "Done"),
+        ]:
+            definition = (
+                self.project_a
+                .status_definitions.get(
+                    name=name,
+                    category=category,
+                )
+            )
+            self.assertEqual(
+                item_a[category]["statusDefinitionId"],
+                definition.pk,
+            )
+            self.assertEqual(
+                item_a[category]["statusName"],
+                name,
+            )
+
+        # The other Project resolves the SAME semantic category to
+        # its own, different definition row.
+        other_todo = self.project_b.status_definitions.get(
+            category="todo",
+        )
+        self.assertEqual(
+            item_b["todo"]["statusDefinitionId"],
+            other_todo.pk,
+        )
+        self.assertNotEqual(
+            item_b["todo"]["statusDefinitionId"],
+            item_a["todo"]["statusDefinitionId"],
+        )
+
+    def test_targets_never_cross_project_boundaries(self):
+        # Distinctive names so a cross-Project leak is detectable by
+        # both name and ID.
+        todo_b = self.project_b.status_definitions.get(
+            category="todo",
+        )
+        todo_b.name = "Beta Backlog"
+        todo_b.save(update_fields=["name"])
+
+        items = self._fetch_items()
+        item_a = items["Target Work A"]
+        item_b = items["Target Work B"]
+
+        project_a_ids = set(
+            self.project_a
+            .status_definitions.values_list("pk", flat=True)
+        )
+        project_b_ids = set(
+            self.project_b
+            .status_definitions.values_list("pk", flat=True)
+        )
+
+        for entry in item_a["statusTargets"]:
+            self.assertIn(
+                entry["statusDefinitionId"],
+                project_a_ids,
+            )
+        for entry in item_b["statusTargets"]:
+            self.assertIn(
+                entry["statusDefinitionId"],
+                project_b_ids,
+            )
+        self.assertNotIn(
+            "Beta Backlog",
+            str(item_a["statusTargets"]),
+        )
+
+    def test_different_projects_resolve_different_targets_for_same_category(
+        self,
+    ):
+        todo_a = self.project_a.status_definitions.get(
+            category="todo",
+        )
+        todo_a.name = "Alpha Queue"
+        todo_a.save(update_fields=["name"])
+        todo_b = self.project_b.status_definitions.get(
+            category="todo",
+        )
+        todo_b.name = "Beta Queue"
+        todo_b.save(update_fields=["name"])
+
+        items = self._fetch_items()
+        item_a = self._targets_by_category(items["Target Work A"])
+        item_b = self._targets_by_category(items["Target Work B"])
+
+        self.assertEqual(item_a["todo"]["statusName"], "Alpha Queue")
+        self.assertEqual(item_b["todo"]["statusName"], "Beta Queue")
+        self.assertNotEqual(
+            item_a["todo"]["statusDefinitionId"],
+            item_b["todo"]["statusDefinitionId"],
+        )
+
+    def test_first_active_status_by_configured_order_wins(self):
+        # The default "Todo" (order=0) is moved BEHIND two
+        # later-created definitions — the lower configured order
+        # wins even though its definition ID is the highest: order,
+        # not ID or creation time, decides.
+        todo = self.project_a.status_definitions.get(name="Todo")
+        todo.order = 10
+        todo.save(update_fields=["order"])
+        later = WorkItemStatusDefinition.objects.create(
+            project=self.project_a,
+            name="Later Queue",
+            category="todo",
+            order=5,
+        )
+        first = WorkItemStatusDefinition.objects.create(
+            project=self.project_a,
+            name="First Queue",
+            category="todo",
+            order=2,
+        )
+        # "First Queue" was created AFTER "Later Queue" (higher ID)
+        # yet still wins — by configured order, not by ID.
+        self.assertLess(later.pk, first.pk)
+
+        items = self._fetch_items()
+        item_a = self._targets_by_category(items["Target Work A"])
+
+        self.assertEqual(
+            item_a["todo"]["statusDefinitionId"],
+            first.pk,
+        )
+        self.assertEqual(item_a["todo"]["statusName"], "First Queue")
+
+    def test_stable_id_tie_break_when_orders_tie(self):
+        # Move the default "Todo" (order=0) behind the tie so the
+        # equal-order pair decides the target by stable ID.
+        todo = self.project_a.status_definitions.get(name="Todo")
+        todo.order = 20
+        todo.save(update_fields=["order"])
+        tie_first = WorkItemStatusDefinition.objects.create(
+            project=self.project_a,
+            name="Tie First",
+            category="todo",
+            order=9,
+        )
+        tie_second = WorkItemStatusDefinition.objects.create(
+            project=self.project_a,
+            name="Tie Second",
+            category="todo",
+            order=9,
+        )
+        self.assertLess(tie_first.pk, tie_second.pk)
+
+        items = self._fetch_items()
+        item_a = self._targets_by_category(items["Target Work A"])
+        self.assertEqual(
+            item_a["todo"]["statusDefinitionId"],
+            tie_first.pk,
+        )
+
+        # Deterministic on re-read.
+        items = self._fetch_items()
+        item_a = self._targets_by_category(items["Target Work A"])
+        self.assertEqual(
+            item_a["todo"]["statusDefinitionId"],
+            tie_first.pk,
+        )
+
+    def test_inactive_statuses_are_ignored(self):
+        # Active, in configured order: X Queue (1) < Y Queue (2)
+        # < Todo (3). X Queue is inactive, so it must NOT win.
+        x_queue = WorkItemStatusDefinition.objects.create(
+            project=self.project_a,
+            name="X Queue",
+            category="todo",
+            order=1,
+        )
+        y_queue = WorkItemStatusDefinition.objects.create(
+            project=self.project_a,
+            name="Y Queue",
+            category="todo",
+            order=2,
+        )
+        todo = self.project_a.status_definitions.get(
+            name="Todo",
+        )
+        todo.order = 3
+        todo.save(update_fields=["order"])
+
+        x_queue.active = False
+        x_queue.save(update_fields=["active"])
+
+        items = self._fetch_items()
+        item_a = items["Target Work A"]
+
+        # The first ACTIVE status by configured order wins.
+        self.assertEqual(
+            self._targets_by_category(item_a)["todo"][
+                "statusDefinitionId"
+            ],
+            y_queue.pk,
+        )
+        # The inactive definition is never exposed as a target.
+        exposed_ids = {
+            entry["statusDefinitionId"]
+            for item in items.values()
+            for entry in item["statusTargets"]
+        }
+        self.assertNotIn(x_queue.pk, exposed_ids)
+
+    def test_missing_category_yields_no_target(self):
+        # Deactivate Project B's only "review" definition: category
+        # review becomes unavailable — no target is invented.
+        review_b = self.project_b.status_definitions.get(
+            name="Review",
+        )
+        review_b.active = False
+        review_b.save(update_fields=["active"])
+
+        items = self._fetch_items()
+        item_a = self._targets_by_category(items["Target Work A"])
+        item_b = self._targets_by_category(items["Target Work B"])
+
+        self.assertIn("review", item_a)
+        self.assertNotIn("review", item_b)
+        self.assertEqual(
+            set(item_b.keys()),
+            {"todo", "in_progress", "done"},
+        )
+
+    def test_display_names_do_not_affect_category_resolution(self):
+        # Misleading display names: resolution must follow the fixed
+        # semantic category, never the name.
+        in_progress_a = self.project_a.status_definitions.get(
+            name="In Progress",
+        )
+        review_a = self.project_a.status_definitions.get(
+            name="Review",
+        )
+        in_progress_a.name = "Looks Like Done"
+        in_progress_a.save(update_fields=["name"])
+        review_a.name = "Looks Like In Progress"
+        review_a.save(update_fields=["name"])
+
+        items = self._fetch_items()
+        item_a = self._targets_by_category(items["Target Work A"])
+
+        self.assertEqual(
+            item_a["in_progress"]["statusDefinitionId"],
+            in_progress_a.pk,
+        )
+        self.assertEqual(
+            item_a["review"]["statusDefinitionId"],
+            review_a.pk,
+        )
+
+    def test_canonical_fields_unchanged_alongside_targets(self):
+        # A custom project-local status + custom type name: the
+        # canonical Work Item fields stay authoritative and
+        # unchanged while ``statusTargets`` rides along.
+        ready = WorkItemStatusDefinition.objects.create(
+            project=self.project_a,
+            name="Ready for Lab",
+            category="in_progress",
+        )
+        self.work_a.status_definition = ready
+        self.work_a.save()
+        custom_type = WorkItemTypeDefinition.objects.create(
+            project=self.project_a,
+            name="Research Milestone",
+            order=10,
+        )
+        self.work_a.type_definition = custom_type
+        self.work_a.save()
+
+        items = self._fetch_items()
+        item = items["Target Work A"]
+
+        self.assertEqual(item["statusDefinitionId"], ready.pk)
+        self.assertEqual(item["statusName"], "Ready for Lab")
+        self.assertEqual(item["statusCategory"], "in_progress")
+        self.assertEqual(item["typeDefinitionId"], custom_type.pk)
+        self.assertEqual(item["typeName"], "Research Milestone")
+
+        # "Ready for Lab" (order default 0) precedes the default
+        # "In Progress" (order 1) — it becomes the in_progress
+        # target by the same configured-order rule.
+        self.assertEqual(
+            self._targets_by_category(item)["in_progress"][
+                "statusDefinitionId"
+            ],
+            ready.pk,
+        )
+
+    def test_board_position_does_not_influence_status_targets(self):
+        # Two items in the same Project with different Project-local
+        # Board positions: the status targets are identical —
+        # ``boardPosition`` is never a target-selection input.
+        third = create_work_item(
+            project=self.project_a,
+            actor=self.chris,
+            type_definition_id=(
+                self.project_a.type_definitions.get(name="Task").pk
+            ),
+            title="Target Work C",
+            assignee_ids=[self.chris.pk],
+        )
+        self.work_a.board_position = 1
+        self.work_a.save(update_fields=["board_position"])
+        third.board_position = 99
+        third.save(update_fields=["board_position"])
+
+        items = self._fetch_items()
+
+        self.assertEqual(
+            items["Target Work A"]["statusTargets"],
+            items["Target Work C"]["statusTargets"],
+        )
+
+    def test_inaccessible_project_configuration_cannot_leak(self):
+        # A Project in a Research Group the user cannot access must
+        # contribute no status configuration to the response.
+        outsider = User.objects.create_user(
+            username="targets_outsider",
+            password="TestPass1!",
+        )
+        secret_group = ResearchGroup.objects.create(
+            name="Secret FG",
+            created_by=outsider,
+        )
+        ResearchGroupMembership.objects.create(
+            research_group=secret_group,
+            user=outsider,
+            role=ResearchGroupMembership.Role.ADMIN,
+        )
+        secret_project = create_project(
+            research_group=secret_group,
+            creator=outsider,
+            name="Secret Project",
+        )
+        probe = WorkItemStatusDefinition.objects.create(
+            project=secret_project,
+            name="Leak Probe Review",
+            category="review",
+            order=1,
+        )
+
+        items = self._fetch_items()
+        payload = str(list(items.values()))
+
+        self.assertNotIn("Leak Probe Review", payload)
+        self.assertNotIn("Secret Project", payload)
+        exposed_ids = {
+            entry["statusDefinitionId"]
+            for item in items.values()
+            for entry in item["statusTargets"]
+        }
+        self.assertNotIn(probe.pk, exposed_ids)
