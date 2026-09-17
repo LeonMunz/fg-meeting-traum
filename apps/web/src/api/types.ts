@@ -172,6 +172,21 @@ export interface ApiPersonalWorkItem extends ApiWorkItem {
   projectName: string
   researchGroupId: number
   researchGroupName: string
+  // Concrete project-local Work Item type (its Project
+  // WorkItemTypeDefinition display name) — display metadata for the
+  // canonical typeDefinitionId, carried by GET /api/me/work-items/ so
+  // the personal list can show the configured type name without any
+  // per-Project configuration request. It is a display name, NOT a
+  // semantic type discriminator: no Task/Epic/Milestone/Deliverable
+  // kind is inferred from it.
+  typeName: string
+  // Concrete project-local status (its Project StatusDefinition display
+  // name) plus that definition's fixed semantic category — carried by
+  // GET /api/me/work-items/ so the personal list renders both without
+  // any per-Project configuration request. The canonical
+  // statusDefinitionId stays authoritative.
+  statusName: string
+  statusCategory: ApiWorkItemStatus
 }
 
 export interface ApiCreateWorkItemInput {

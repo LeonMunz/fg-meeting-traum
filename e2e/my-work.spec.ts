@@ -13,9 +13,10 @@ import { login } from './helpers'
  * Seed data (seed_dev + seed_e2e_scope) assigns alex exactly two
  * Work Items across two Projects and two Research Groups:
  *  - "First Draft Complete" — Paper XYZ (FG Example), due
- *    2025-12-01 (overdue), concrete status "Todo"
+ *    2025-12-01 (overdue), concrete status "Todo", concrete type
+ *    "Milestone"
  *  - "E2E Analyze robot data" — E2E Robot Study (Robotics Lab),
- *    concrete status "Todo"
+ *    concrete status "Todo", concrete type "Task"
  */
 
 function expectNoHorizontalOverflow(page: Page) {
@@ -102,6 +103,16 @@ test('My Work lists assigned Work Items across Projects and Research Groups', as
   ).toBeVisible()
   await expect(
     robotRow.getByText('Todo', { exact: true }),
+  ).toBeVisible()
+
+  // Concrete project-local Work Item type name (display metadata
+  // from the payload — different Projects show different type
+  // names; never a hardcoded or inferred semantic kind).
+  await expect(
+    firstDraftRow.getByText('Milestone', { exact: true }),
+  ).toBeVisible()
+  await expect(
+    robotRow.getByText('Task', { exact: true }),
   ).toBeVisible()
 
   // The seeded overdue due date renders with the established

@@ -7,60 +7,162 @@ import {
 import { useNavigate } from 'react-router'
 
 import { ApiError } from '../../api/client'
-import {
-  getProjectWorkItemConfiguration,
-} from '../../api/projects'
 import type {
   ApiPersonalWorkItem,
-  ApiProjectWorkItemConfiguration,
   ApiWorkItemStatus,
 } from '../../api/types'
-import {
-  listMyWork,
-  updateWorkItem,
-} from '../../api/work-items'
+import { listMyWork } from '../../api/work-items'
 import { useResearchGroup } from '../research-group/useResearchGroup'
-import {
-  resolveStatusDefinitionIdByCategory,
-  resolveWorkItemStatus,
-} from '../projects/workItemMapping'
-
-const statusLabels: Record<
-  ApiWorkItemStatus,
-  string
-> = {
-  todo: 'To do',
-  in_progress: 'In progress',
-  review: 'Review',
-  done: 'Done',
-}
-
-const typeLabels: Record<string, string> = {
-  epic: 'Epic',
-  milestone: 'Milestone',
-  deliverable: 'Deliverable',
-  task: 'Task',
-}
-
-const typeIcons: Record<string, string> = {
-  epic: 'account_tree',
-  milestone: 'flag',
-  deliverable: 'inventory_2',
-  task: 'check_box_outline_blank',
-}
-
-// Defensive: an item's canonical type key may not be one of the built-ins
-// (the backend returns configurable type definitions). Never crash the
-// lookup.
-function personalTypeIcon(type: string | undefined): string {
-  return type ? typeIcons[type] ?? typeIcons.task : typeIcons.task
-}
-
-function personalTypeLabel(type: string | undefined): string {
-  return type ? typeLabels[type] ?? typeLabels.task : typeLabels.task
-}
 
 type GroupFilter = 'all' | number
+
+/**
+ * Personal cross-project My Work List View.
+ *
+ * The page renders exactly what the canonical personal endpoint
+ * `GET /api/me/work-items/` returns — one request, no per-Project or
+ * per-Research-Group requests. Project / Research Group names and the
+ * concrete project-local status (`statusName`) come from the payload
+ * itself, so no Project configuration is fetched for display.
+ *
+ * The row presentation mirrors the Project Work Items List View
+ * conventions (54px rows, 11px column labels, semantic status glyphs,
+ * due-date labels, hover treatment) expanded to personal
+ * cross-project scope. The Work Item type is shown as the concrete
+ * project-local `typeName` from the payload — a display name, not a
+ * semantic discriminator: no Task/Epic/Milestone/Deliverable kind or
+ * type-specific icon is inferred from it. The neutral canonical Work
+ * Item icon remains (a semantic type icon mapping is future work).
+ *
+ * Opening a row navigates to the item's canonical Project Work Items
+ * surface (the same navigation the cross-project Home rows use); the
+ * drawer and its mutations stay in their owning feature.
+ */
+
+// ── Presentation helpers ────────────────────────────────
+
+// Semantic status styling (glyph + tone) per fixed category — the same
+// mapping the Project Work Items List renders. The visible text is the
+// concrete `statusName`, never the category.
+const statusGlyphs: Record<
+  ApiWorkItemStatus,
+  {
+    glyph: string
+    className: string
+  }
+> = {
+  todo: {
+    glyph: '○',
+    className: 'text-text-muted',
+  },
+  in_progress: {
+    glyph: '◐',
+    className: 'text-interaction-primary',
+  },
+  review: {
+    glyph: '●',
+    className: 'text-text',
+  },
+  done: {
+    glyph: '✓',
+    className: 'text-success-text',
+  },
+}
+
+/** Neutral generic Work Item icon (see page doc). The concrete
+ * `typeName` is rendered as row text; the icon intentionally stays
+ * neutral — no semantic type icon mapping exists yet. */
+const WORK_ITEM_TYPE_ICON = 'assignment'
+
+function getWorkItemDueFields(
+  dueDate: string | null,
+) {
+  if (!dueDate) {
+    return {
+      dueInDays: null,
+      dueLabel: null,
+    }
+  }
+
+  const [year, month, day] =
+    dueDate.split('-').map(Number)
+
+  if (
+    !Number.isInteger(year) ||
+    !Number.isInteger(month) ||
+    !Number.isInteger(day)
+  ) {
+    return {
+      dueInDays: null,
+      dueLabel: null,
+    }
+  }
+
+  const targetDate = new Date(
+    year,
+    month - 1,
+    day,
+  )
+
+  const now = new Date()
+
+  const today = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate(),
+  )
+
+  const dueInDays = Math.round(
+    (targetDate.getTime() -
+      today.getTime()) /
+      86_400_000,
+  )
+
+  const dueLabel =
+    dueInDays === 0
+      ? 'Today'
+      : dueInDays === 1
+        ? 'Tomorrow'
+        : new Intl.DateTimeFormat('en', {
+            month: 'short',
+            day: 'numeric',
+          }).format(targetDate)
+
+  return {
+    dueInDays,
+    dueLabel,
+  }
+}
+
+// Due-cell convention of the Project Work Items List: completed items
+// show '—', overdue items show 'Nd overdue' with attention tone,
+// otherwise the short date label — '—' when absent.
+function getDueDisplay(
+  statusCategory: ApiWorkItemStatus,
+  due: {
+    dueInDays: number | null
+    dueLabel: string | null
+  },
+) {
+  if (statusCategory === 'done') {
+    return {
+      label: '—',
+      attention: false,
+    }
+  }
+
+  if (due.dueInDays != null && due.dueInDays < 0) {
+    return {
+      label: `${Math.abs(due.dueInDays)}d overdue`,
+      attention: true,
+    }
+  }
+
+  return {
+    label: due.dueLabel ?? '—',
+    attention: false,
+  }
+}
 
 function getErrorMessage(
   error: unknown,
@@ -84,68 +186,8 @@ function getErrorMessage(
   return fallback
 }
 
-function formatDueDate(
-  value: string | null,
-) {
-  if (!value) {
-    return 'No due date'
-  }
-
-  const [year, month, day] =
-    value.split('-').map(Number)
-
-  if (
-    !Number.isInteger(year) ||
-    !Number.isInteger(month) ||
-    !Number.isInteger(day)
-  ) {
-    return value
-  }
-
-  const dueDate = new Date(
-    year,
-    month - 1,
-    day,
-  )
-
-  const now = new Date()
-
-  const today = new Date(
-    now.getFullYear(),
-    now.getMonth(),
-    now.getDate(),
-  )
-
-  const diffDays = Math.round(
-    (dueDate.getTime() -
-      today.getTime()) /
-      86_400_000,
-  )
-
-  if (diffDays === 0) {
-    return 'Due today'
-  }
-
-  if (diffDays === 1) {
-    return 'Due tomorrow'
-  }
-
-  if (diffDays === -1) {
-    return 'Due yesterday'
-  }
-
-  const formatted =
-    new Intl.DateTimeFormat('en', {
-      month: 'short',
-      day: 'numeric',
-    }).format(dueDate)
-
-  if (diffDays < 0) {
-    return `Overdue · ${formatted}`
-  }
-
-  return `Due ${formatted}`
-}
+const gridColumns =
+  'xl:grid-cols-[minmax(320px,1fr)_160px_220px_110px]'
 
 export function MyWorkPage() {
   const navigate = useNavigate()
@@ -154,65 +196,27 @@ export function MyWorkPage() {
   const [items, setItems] = useState<
     ApiPersonalWorkItem[]
   >([])
-  const [loading, setLoading] =
-    useState(false)
-  const [error, setError] =
-    useState<string | null>(null)
-  const [
-    updatingItemId,
-    setUpdatingItemId,
-  ] = useState<number | null>(null)
-  const [
-    groupFilter,
-    setGroupFilter,
-  ] = useState<GroupFilter>('all')
-  const [
-    configByProject,
-    setConfigByProject,
-  ] = useState<
-    Record<number, ApiProjectWorkItemConfiguration>
-  >({})
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<
+    string | null
+  >(null)
+  const [groupFilter, setGroupFilter] =
+    useState<GroupFilter>('all')
 
-  const loadMyWork =
-    useCallback(async () => {
+  const loadMyWork = useCallback(
+    async () => {
       setLoading(true)
       setError(null)
 
       try {
-        const nextItems =
-          await listMyWork()
-
-        // Resolve each Project's Work Item configuration so the
-        // status control can read and write the canonical
-        // statusDefinitionId (the API no longer carries a fixed
-        // `status` string).
-        const projectIds = Array.from(
-          new Set(
-            nextItems.map((item) => item.projectId),
-          ),
-        )
-        const configs = await Promise.all(
-          projectIds.map((projectId) =>
-            getProjectWorkItemConfiguration(
-              projectId,
-            ).catch(() => null),
-          ),
-        )
-        const nextConfigByProject: Record<
-          number, ApiProjectWorkItemConfiguration
-        > = {}
-        projectIds.forEach((projectId, index) => {
-          const config = configs[index]
-          if (config) {
-            nextConfigByProject[projectId] = config
-          }
-        })
-
-        setConfigByProject(nextConfigByProject)
-        setItems(nextItems)
+        // One canonical request — the personal projection across
+        // every accessible Project and Research Group. The response
+        // replaces the previous state wholesale; the API result is
+        // authoritative (removed assignments disappear, no local
+        // stale copy is merged or retained).
+        setItems(await listMyWork())
       } catch (loadError) {
         setItems([])
-        setConfigByProject({})
         setError(
           getErrorMessage(
             loadError,
@@ -222,155 +226,60 @@ export function MyWorkPage() {
       } finally {
         setLoading(false)
       }
-    }, [])
+    },
+    [],
+  )
 
   useEffect(() => {
     void loadMyWork()
   }, [loadMyWork])
 
-  const sortedItems = useMemo(() => {
-    return [...items].sort((a, b) => {
-      if (
-        a.status === 'done' &&
-        b.status !== 'done'
-      ) {
-        return 1
-      }
+  // Server ordering (`created_at`, ID tie-break) is authoritative.
+  // The single established presentation rule: completed items render
+  // last — a stable partition, so backend relative order is
+  // preserved within each group.
+  const orderedItems = useMemo(() => {
+    const active = items.filter(
+      (item) => item.statusCategory !== 'done',
+    )
+    const completed = items.filter(
+      (item) => item.statusCategory === 'done',
+    )
 
-      if (
-        a.status !== 'done' &&
-        b.status === 'done'
-      ) {
-        return -1
-      }
-
-      if (a.dueDate && b.dueDate) {
-        return a.dueDate.localeCompare(
-          b.dueDate,
-        )
-      }
-
-      if (a.dueDate) return -1
-      if (b.dueDate) return 1
-
-      return b.updatedAt.localeCompare(
-        a.updatedAt,
-      )
-    })
+    return [...active, ...completed]
   }, [items])
 
   const visibleItems = useMemo(
     () =>
       groupFilter === 'all'
-        ? sortedItems
-        : sortedItems.filter(
+        ? orderedItems
+        : orderedItems.filter(
             (item) =>
               item.researchGroupId ===
               groupFilter,
           ),
-    [groupFilter, sortedItems],
+    [groupFilter, orderedItems],
   )
 
-  function statusCategoryFor(
+  function openItem(
     item: ApiPersonalWorkItem,
-  ): ApiWorkItemStatus {
-    return resolveWorkItemStatus(
-      item.statusDefinitionId,
-      configByProject[item.projectId] ?? null,
+  ) {
+    // The item's canonical Project Work Items surface — the same
+    // canonical interaction the cross-project Home rows use.
+    navigate(
+      `/projects/${item.projectId}/work-items`,
     )
-  }
-
-  const handleStatusChange = async (
-    item: ApiPersonalWorkItem,
-    status: ApiWorkItemStatus,
-  ) => {
-    if (status === statusCategoryFor(item)) {
-      return
-    }
-
-    // Map the chosen status category to this Project's canonical
-    // statusDefinitionId (the API contract). The legacy fixed
-    // `status` string is no longer read or written by the backend.
-    const config =
-      configByProject[item.projectId] ?? null
-    const statusDefinitionId =
-      resolveStatusDefinitionIdByCategory(
-        status,
-        config,
-      )
-
-    if (statusDefinitionId == null) {
-      setError(
-        'No matching status is configured for this Project.',
-      )
-      return
-    }
-
-    const previousStatusDefinitionId =
-      item.statusDefinitionId
-
-    // Apply the change locally first so the controlled select
-    // immediately reflects the new status and is never left in the
-    // stale previous state, then reconcile with the server response.
-    setItems((current) =>
-      current.map((candidate) =>
-        candidate.id === item.id
-          ? {
-              ...candidate,
-              statusDefinitionId,
-            }
-          : candidate,
-      ),
-    )
-    setUpdatingItemId(item.id)
-    setError(null)
-
-    try {
-      const updated =
-        await updateWorkItem(
-          item.id,
-          { statusDefinitionId },
-        )
-
-      setItems((current) =>
-        current.map((candidate) =>
-          candidate.id === updated.id
-            ? {
-                ...candidate,
-                ...updated,
-              }
-            : candidate,
-        ),
-      )
-    } catch (updateError) {
-      // Roll back the optimistic change so the control reflects the
-      // persisted status.
-      setItems((current) =>
-        current.map((candidate) =>
-          candidate.id === item.id
-            ? {
-                ...candidate,
-                statusDefinitionId:
-                  previousStatusDefinitionId,
-              }
-            : candidate,
-        ),
-      )
-      setError(
-        getErrorMessage(
-          updateError,
-          'Work item status could not be updated.',
-        ),
-      )
-    } finally {
-      setUpdatingItemId(null)
-    }
   }
 
   return (
     <div className="w-full px-6 py-8 lg:px-8 lg:py-10 xl:px-10">
-      <header className="flex items-start justify-between gap-6">
-        <div>
+      {/* flex-wrap + a shrinkable select: in the narrow content column
+       * (fixed 240px sidebar margin) the title block and the group
+       * filter must not force the document wider than the viewport —
+       * the filter wraps below the title and shrinks with it. At
+       * desktop widths there is ample space and nothing wraps. */}
+      <header className="flex flex-wrap items-start justify-between gap-6">
+        <div className="min-w-0">
           <h1 className="text-3xl font-semibold tracking-tight text-on-surface">
             My Work
           </h1>
@@ -394,7 +303,7 @@ export function MyWorkPage() {
               )
             }}
             aria-label="Filter by research group"
-            className="h-10 rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15"
+            className="h-10 min-w-0 max-w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15"
           >
             <option value="all">
               All research groups
@@ -467,146 +376,144 @@ export function MyWorkPage() {
           </p>
         </div>
       ) : (
-        <section className="mt-8 overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest">
-          <div className="hidden grid-cols-[minmax(320px,1fr)_210px_150px_160px] border-b border-outline-variant bg-surface-container-low px-6 py-2.5 lg:grid">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-on-surface-variant">
+        <section className="mt-8 overflow-hidden rounded-xl border border-border-structural bg-surface-quiet shadow-sm">
+          <div
+            className={[
+              'hidden h-9 items-center gap-x-4 border-b border-border-structural/40 px-6',
+              gridColumns,
+              'xl:grid',
+            ].join(' ')}
+          >
+            <div className="text-[11px] font-normal text-text-work-faded-75">
               Work item
             </div>
 
-            <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-on-surface-variant">
+            <div className="text-[11px] font-normal text-text-work-faded-75">
+              Status
+            </div>
+
+            <div className="text-[11px] font-normal text-text-work-faded-75">
               Project
             </div>
 
-            <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-on-surface-variant">
+            <div className="text-[11px] font-normal text-text-work-faded-75">
               Due
-            </div>
-
-            <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-on-surface-variant">
-              Status
             </div>
           </div>
 
-          <div className="divide-y divide-outline-variant/60">
-            {visibleItems.map((item) => (
-              <article
-                key={item.id}
-                className="grid gap-4 px-6 py-4 lg:grid-cols-[minmax(320px,1fr)_210px_150px_160px] lg:items-center"
-              >
-                <button
-                  type="button"
+          <div>
+            {visibleItems.map((item, index) => {
+              const status =
+                statusGlyphs[item.statusCategory] ??
+                statusGlyphs.todo
+
+              const due = getDueDisplay(
+                item.statusCategory,
+                getWorkItemDueFields(
+                  item.dueDate,
+                ),
+              )
+
+              return (
+                <div
+                  key={item.id}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Open ${item.title}`}
+                  data-work-item-id={item.id}
                   onClick={() =>
-                    navigate(
-                      `/projects/${item.projectId}/work-items`,
-                    )
+                    openItem(item)
                   }
-                  className="min-w-0 text-left"
+                  onKeyDown={(event) => {
+                    if (
+                      event.key === 'Enter' ||
+                      event.key === ' '
+                    ) {
+                      event.preventDefault()
+                      openItem(item)
+                    }
+                  }}
+                  className={[
+                    'grid cursor-pointer gap-x-4 gap-y-1.5 px-6 py-3.5 transition-colors hover:bg-work-surface-hover',
+                    gridColumns,
+                    'xl:h-[54px] xl:items-center xl:py-0',
+                    index > 0
+                      ? 'border-t border-border-structural/25'
+                      : '',
+                  ].join(' ')}
                 >
-                  <div className="flex items-center gap-2">
-                    <span className="material-symbols-outlined shrink-0 text-[17px] text-on-surface-variant">
-                      {personalTypeIcon(item.type)}
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span
+                      title={item.typeName}
+                      aria-label={item.typeName}
+                      className="material-symbols-outlined shrink-0 text-[15px] text-text-work-faded-80"
+                    >
+                      {WORK_ITEM_TYPE_ICON}
                     </span>
 
-                    <span className="truncate text-sm font-semibold text-on-surface hover:text-primary">
-                      {item.title}
-                    </span>
-                  </div>
+                    <span className="min-w-0">
+                      <span className="block truncate text-sm font-semibold text-work-content-text">
+                        {item.title}
+                      </span>
 
-                  <div className="mt-1 flex items-center gap-2 pl-[25px]">
-                    <span className="text-xs text-on-surface-variant">
-                      {personalTypeLabel(item.type)}
+                      <span className="block truncate text-[11px] text-text-work-faded-75">
+                        {item.typeName}
+                      </span>
                     </span>
 
                     {item.blockedReason && (
-                      <>
-                        <span className="text-outline">
-                          ·
-                        </span>
-
-                        <span
-                          title={
-                            item.blockedReason
-                          }
-                          className="inline-flex items-center gap-1 text-xs font-medium text-error"
-                        >
-                          <span className="material-symbols-outlined text-[14px]">
-                            block
-                          </span>
-                          Blocked
-                        </span>
-                      </>
+                      <span
+                        title={
+                          item.blockedReason
+                        }
+                        className="shrink-0 text-[11px] font-medium text-work-item-error"
+                      >
+                        · Blocked
+                      </span>
                     )}
                   </div>
-                </button>
 
-                <button
-                  type="button"
-                  onClick={() =>
-                    navigate(
-                      `/projects/${item.projectId}/work-items`,
-                    )
-                  }
-                  className="min-w-0 text-left"
-                >
-                  <div className="truncate text-xs font-medium text-on-surface-variant transition hover:text-primary">
-                    {item.projectName}
+                  <div
+                    className={[
+                      'flex min-w-0 items-center gap-2 text-xs font-normal',
+                      status.className,
+                    ].join(' ')}
+                  >
+                    <span
+                      aria-hidden="true"
+                      className="inline-flex w-4 shrink-0 justify-center text-[15px] leading-none"
+                    >
+                      {status.glyph}
+                    </span>
+
+                    <span className="truncate text-work-content-muted">
+                      {item.statusName}
+                    </span>
                   </div>
 
-                  {groups.length > 1 && (
-                    <div className="mt-0.5 truncate text-[11px] text-on-surface-variant/70">
+                  <div className="min-w-0">
+                    <div className="truncate text-xs font-medium text-work-content-muted">
+                      {item.projectName}
+                    </div>
+
+                    <div className="truncate text-[11px] text-text-work-faded-75">
                       {item.researchGroupName}
                     </div>
-                  )}
-                </button>
+                  </div>
 
-                <div
-                  className={[
-                    'text-xs',
-                    item.dueDate &&
-                    formatDueDate(
-                      item.dueDate,
-                    ).startsWith(
-                      'Overdue',
-                    )
-                      ? 'font-medium text-error'
-                      : 'text-on-surface-variant',
-                  ].join(' ')}
-                >
-                  {formatDueDate(
-                    item.dueDate,
-                  )}
+                  <div
+                    className={[
+                      'text-xs',
+                      due.attention
+                        ? 'font-medium text-work-item-error'
+                        : 'font-normal text-work-content-muted',
+                    ].join(' ')}
+                  >
+                    {due.label}
+                  </div>
                 </div>
-
-                <select
-                  value={statusCategoryFor(item)}
-                  disabled={
-                    updatingItemId ===
-                    item.id
-                  }
-                  onChange={(event) =>
-                    void handleStatusChange(
-                      item,
-                      event.target
-                        .value as ApiWorkItemStatus,
-                    )
-                  }
-                  aria-label={`Status for ${item.title}`}
-                  className="h-9 rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm font-medium text-on-surface outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15 disabled:cursor-wait disabled:opacity-50"
-                >
-                  {Object.entries(
-                    statusLabels,
-                  ).map(
-                    ([value, label]) => (
-                      <option
-                        key={value}
-                        value={value}
-                      >
-                        {label}
-                      </option>
-                    ),
-                  )}
-                </select>
-              </article>
-            ))}
+              )
+            })}
           </div>
         </section>
       )}
