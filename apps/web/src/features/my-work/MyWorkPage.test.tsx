@@ -5,10 +5,12 @@ import {
   cleanup,
   fireEvent,
   render,
+  within,
   waitFor,
 } from '@testing-library/react'
 import {
   afterEach,
+  beforeEach,
   describe,
   expect,
   it,
@@ -34,7 +36,12 @@ import {
   transitionWorkItemStatus,
   updateWorkItem,
 } from '../../api/work-items'
+import {
+  fetchMyWorkPreferences,
+  updateMyWorkPreferences,
+} from '../../api/my-work-preferences'
 import type {
+  ApiMyWorkPreferences,
   ApiPersonalWorkItem,
   ApiProject,
   ApiProjectMembership,
@@ -58,6 +65,15 @@ vi.mock('../../api/work-items', () => ({
   createWorkItem: vi.fn(),
   deleteWorkItem: vi.fn(),
   listProjectWorkItems: vi.fn(),
+}))
+
+// The persisted personal My Work preference snapshot. The page must
+// load it (in parallel with the items) before rendering the final
+// view and must PATCH the COMPLETE snapshot on a view-mode change.
+// Mocked at the module boundary so any call is observable.
+vi.mock('../../api/my-work-preferences', () => ({
+  fetchMyWorkPreferences: vi.fn(),
+  updateMyWorkPreferences: vi.fn(),
 }))
 
 vi.mock('../../api/projects', () => ({
@@ -146,6 +162,31 @@ const PROJECT_A = 7
 const PROJECT_B = 12
 const GROUP_A = 1
 const GROUP_B = 2
+
+/** The default server snapshot for a user with no preference row:
+ *  Board mode + three empty (unrestricted) filter arrays. */
+const DEFAULT_PREFERENCES: ApiMyWorkPreferences = {
+  viewMode: 'board',
+  researchGroupIds: [],
+  projectIds: [],
+  workItemTypes: [],
+}
+
+function makePreferences(
+  overrides: Partial<ApiMyWorkPreferences> = {},
+): ApiMyWorkPreferences {
+  return {
+    ...DEFAULT_PREFERENCES,
+    researchGroupIds: [
+      ...DEFAULT_PREFERENCES.researchGroupIds,
+    ],
+    projectIds: [...DEFAULT_PREFERENCES.projectIds],
+    workItemTypes: [
+      ...DEFAULT_PREFERENCES.workItemTypes,
+    ],
+    ...overrides,
+  }
+}
 
 function makeItem(
   overrides: Partial<ApiPersonalWorkItem> = {},
@@ -407,6 +448,21 @@ function columnHeadingLabels(
   )
 }
 
+// Every test starts from the server's DEFAULT snapshot (Board +
+// empty filter arrays) unless it opts into a specific persisted
+// preference. `updateMyWorkPreferences` echoes the COMPLETE
+// snapshot it is given (the normalized server response), so tests
+// can assert on the exact payload that was sent.
+beforeEach(() => {
+  vi.mocked(fetchMyWorkPreferences).mockResolvedValue(
+    makePreferences(),
+  )
+  vi.mocked(updateMyWorkPreferences).mockImplementation(
+    async (snapshot: ApiMyWorkPreferences) =>
+      snapshot,
+  )
+})
+
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
@@ -549,7 +605,18 @@ describe('My Work List View — status and type presentation', () => {
       }),
     ])
 
-    const { getByText, getByRole } = renderPage()
+    const { getByText, getByRole, container } =
+      renderPage()
+
+    // The persisted view (the default Board) resolves first; the
+    // switch to List happens on the loaded page.
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          '[data-board-column]',
+        ),
+      ).not.toBeNull()
+    })
 
     // The concrete statusName is the List View's status column (the
     // Kanban card deliberately does NOT render it — the column
@@ -575,8 +642,18 @@ describe('My Work List View — status and type presentation', () => {
       }),
     ])
 
-    const { queryByText, getByRole } =
+    const { queryByText, getByRole, container } =
       renderPage()
+
+    // The persisted view (the default Board) resolves first; the
+    // switch to List happens on the loaded page.
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          '[data-board-column]',
+        ),
+      ).not.toBeNull()
+    })
 
     await switchView({ getByRole }, 'List')
 
@@ -741,8 +818,18 @@ describe('My Work List View — due date', () => {
       }),
     ])
 
-    const { getByText, getByRole } =
+    const { getByText, getByRole, container } =
       renderPage()
+
+    // The persisted view (the default Board) resolves first; the
+    // switch to List happens on the loaded page.
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          '[data-board-column]',
+        ),
+      ).not.toBeNull()
+    })
 
     await switchView({ getByRole }, 'List')
 
@@ -922,6 +1009,16 @@ describe('My Work List View — row interaction', () => {
     ])
 
     const { getByRole, container } = renderPage()
+
+    // The persisted view (the default Board) resolves first; the
+    // switch to List happens on the loaded page.
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          '[data-board-column]',
+        ),
+      ).not.toBeNull()
+    })
 
     // The List row (the Kanban card carries the same accessible
     // name — switch views first so this is genuinely the row).
@@ -4133,5 +4230,702 @@ describe('My Work Kanban — cross-category drag and drop', () => {
       row.hasAttribute('draggable'),
     ).toBe(false)
     expect(row.getAttribute('draggable')).toBeNull()
+  })
+})
+
+describe('My Work preferences — hydration and view mode persistence', () => {
+  it('issues the preferences GET on the initial My Work load', async () => {
+    vi.mocked(listMyWork).mockResolvedValue([
+      makeItem(),
+    ])
+
+    renderPage()
+
+    // One canonical items request + the personal preference
+    // snapshot, loaded together on mount.
+    await waitFor(() => {
+      expect(
+        fetchMyWorkPreferences,
+      ).toHaveBeenCalledTimes(1)
+    })
+    await waitFor(() => {
+      expect(listMyWork).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  it('renders the List as the FIRST final state for a persisted viewMode "list"', async () => {
+    vi.mocked(listMyWork).mockResolvedValue([
+      makeItem(),
+    ])
+    let resolvePrefs:
+      | ((p: ApiMyWorkPreferences) => void)
+      | undefined
+    vi.mocked(fetchMyWorkPreferences).mockReturnValue(
+      new Promise<ApiMyWorkPreferences>(
+        (resolve) => {
+          resolvePrefs = resolve
+        },
+      ),
+    )
+
+    const { container, getByRole } =
+      renderPage()
+
+    // Let the items load settle while the preference
+    // snapshot is still unknown.
+    await act(async () => {
+      await Promise.resolve()
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    // The final view is still unknown: the skeleton — NO
+    // Board, NO List, and no button claims a pressed view.
+    expect(
+      container.querySelector(
+        '[data-my-work-board-skeleton]',
+      ),
+    ).not.toBeNull()
+    expect(
+      container.querySelector(
+        '[data-board-column]',
+      ),
+    ).toBeNull()
+    expect(
+      getByRole('button', { name: 'Board' }),
+    ).toHaveAttribute('aria-pressed', 'false')
+    expect(
+      getByRole('button', { name: 'List' }),
+    ).toHaveAttribute('aria-pressed', 'false')
+
+    // The persisted List preference arrives: the first
+    // (and only) final state is the List.
+    await act(async () => {
+      resolvePrefs!(
+        makePreferences({ viewMode: 'list' }),
+      )
+    })
+
+    await waitFor(() => {
+      expect(
+        getByRole('button', { name: 'List' }),
+      ).toHaveAttribute('aria-pressed', 'true')
+    })
+    expect(
+      container.querySelector(
+        '[data-board-column]',
+      ),
+    ).toBeNull()
+  })
+
+  it('renders the Board for a persisted viewMode "board"', async () => {
+    vi.mocked(listMyWork).mockResolvedValue([
+      makeItem({
+        statusCategory: 'in_progress',
+      }),
+    ])
+
+    const { container, getByRole } =
+      renderPage()
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          '[data-board-column="in_progress"]',
+        ),
+      ).not.toBeNull()
+    })
+
+    expect(
+      getByRole('button', { name: 'Board' }),
+    ).toHaveAttribute('aria-pressed', 'true')
+    expect(
+      getByRole('button', { name: 'List' }),
+    ).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it('shows no final Board flash before a persisted List preference is known', async () => {
+    let resolveItems:
+      | ((items: ApiPersonalWorkItem[]) => void)
+      | undefined
+    let resolvePrefs:
+      | ((p: ApiMyWorkPreferences) => void)
+      | undefined
+    vi.mocked(listMyWork).mockReturnValue(
+      new Promise<ApiPersonalWorkItem[]>(
+        (resolve) => {
+          resolveItems = resolve
+        },
+      ),
+    )
+    vi.mocked(fetchMyWorkPreferences).mockReturnValue(
+      new Promise<ApiMyWorkPreferences>(
+        (resolve) => {
+          resolvePrefs = resolve
+        },
+      ),
+    )
+
+    const { container } = renderPage()
+
+    // Neither load has resolved: skeleton only.
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(
+      container.querySelector(
+        '[data-my-work-board-skeleton]',
+      ),
+    ).not.toBeNull()
+
+    // The ITEMS have loaded, but the persisted view is
+    // still unknown: the page must NOT render the default
+    // Board (or any final view) — still the skeleton.
+    await act(async () => {
+      resolveItems!([makeItem()])
+    })
+    expect(
+      container.querySelector(
+        '[data-my-work-board-skeleton]',
+      ),
+    ).not.toBeNull()
+    expect(
+      container.querySelector(
+        '[data-board-column]',
+      ),
+    ).toBeNull()
+
+    // The preference arrives as a persisted List: the first
+    // final view is the List — the Board never flashed.
+    await act(async () => {
+      resolvePrefs!(
+        makePreferences({ viewMode: 'list' }),
+      )
+    })
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          '[data-my-work-board-skeleton]',
+        ),
+      ).toBeNull()
+    })
+    expect(
+      container.querySelector(
+        '[data-board-column]',
+      ),
+    ).toBeNull()
+  })
+
+  it('updates the UI immediately on Board → List (no save round-trip first)', async () => {
+    vi.mocked(listMyWork).mockResolvedValue([
+      makeItem(),
+    ])
+
+    const { container, getByRole, getByText } =
+      renderPage()
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          '[data-board-column]',
+        ),
+      ).not.toBeNull()
+    })
+
+    // The switch is a local snapshot update: the List is
+    // rendered synchronously — no debounce wait, no PATCH
+    // round-trip, no items refetch.
+    await switchView({ getByRole }, 'List')
+
+    expect(
+      getByText('Work item'),
+    ).toBeInTheDocument()
+    expect(
+      container.querySelector(
+        '[data-board-column]',
+      ),
+    ).toBeNull()
+    expect(
+      getByRole('button', { name: 'List' }),
+    ).toHaveAttribute('aria-pressed', 'true')
+    expect(
+      updateMyWorkPreferences,
+    ).not.toHaveBeenCalled()
+  })
+
+  it('does not refetch /api/me/work-items/ when switching and persisting the view mode', async () => {
+    vi.mocked(listMyWork).mockResolvedValue([
+      makeItem(),
+    ])
+
+    const { container, getByRole } =
+      renderPage()
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          '[data-board-column]',
+        ),
+      ).not.toBeNull()
+    })
+
+    vi.useFakeTimers()
+    try {
+      await switchView({ getByRole }, 'List')
+      await act(async () => {
+        vi.advanceTimersByTime(300)
+      })
+      await switchView({ getByRole }, 'Board')
+      await act(async () => {
+        vi.advanceTimersByTime(300)
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+
+    // Two switches + two persisted saves: still exactly ONE
+    // canonical personal items request for the whole mount.
+    expect(
+      listMyWork,
+    ).toHaveBeenCalledTimes(1)
+  })
+
+  it('PATCHes the COMPLETE preference snapshot when the view mode changes', async () => {
+    const loaded = makePreferences({
+      researchGroupIds: [GROUP_A],
+      projectIds: [PROJECT_A],
+      workItemTypes: ['milestone'],
+    })
+    vi.mocked(listMyWork).mockResolvedValue([
+      makeItem(),
+    ])
+    vi.mocked(fetchMyWorkPreferences).mockResolvedValue(loaded)
+
+    const { container, getByRole } =
+      renderPage()
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          '[data-board-column]',
+        ),
+      ).not.toBeNull()
+    })
+
+    vi.useFakeTimers()
+    try {
+      await switchView({ getByRole }, 'List')
+
+      // Nothing is sent before the debounce window elapses.
+      expect(
+        updateMyWorkPreferences,
+      ).not.toHaveBeenCalled()
+
+      await act(async () => {
+        vi.advanceTimersByTime(300)
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+
+    // Exactly one PATCH — the COMPLETE current snapshot with
+    // ONLY viewMode changed (not an incremental action).
+    expect(
+      updateMyWorkPreferences,
+    ).toHaveBeenCalledTimes(1)
+    expect(
+      vi.mocked(updateMyWorkPreferences).mock
+        .calls[0][0],
+    ).toEqual({
+      viewMode: 'list',
+      researchGroupIds: [GROUP_A],
+      projectIds: [PROJECT_A],
+      workItemTypes: ['milestone'],
+    })
+  })
+
+  it('keeps the loaded researchGroupIds / projectIds / workItemTypes unchanged across view-mode saves', async () => {
+    const loaded = makePreferences({
+      researchGroupIds: [GROUP_A],
+      projectIds: [
+        PROJECT_A,
+        PROJECT_B,
+      ],
+      workItemTypes: [
+        'task',
+        'epic',
+      ],
+    })
+    vi.mocked(listMyWork).mockResolvedValue([
+      makeItem(),
+    ])
+    vi.mocked(fetchMyWorkPreferences).mockResolvedValue(loaded)
+
+    const { container, getByRole } =
+      renderPage()
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          '[data-board-column]',
+        ),
+      ).not.toBeNull()
+    })
+
+    vi.useFakeTimers()
+    try {
+      // Board → List (save), then List → Board (save).
+      await switchView({ getByRole }, 'List')
+      await act(async () => {
+        vi.advanceTimersByTime(300)
+      })
+      await switchView({ getByRole }, 'Board')
+      await act(async () => {
+        vi.advanceTimersByTime(300)
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+
+    // Both saves carry the LOADED filter arrays unchanged —
+    // a view-mode change never zeros or rewrites them.
+    const calls = vi.mocked(
+      updateMyWorkPreferences,
+    ).mock.calls
+    expect(calls).toHaveLength(2)
+    expect(calls[0][0]).toEqual({
+      viewMode: 'list',
+      researchGroupIds: [GROUP_A],
+      projectIds: [PROJECT_A, PROJECT_B],
+      workItemTypes: ['task', 'epic'],
+    })
+    expect(calls[1][0]).toEqual({
+      viewMode: 'board',
+      researchGroupIds: [GROUP_A],
+      projectIds: [PROJECT_A, PROJECT_B],
+      workItemTypes: ['task', 'epic'],
+    })
+  })
+
+  it('coalesces rapid view-mode changes into a single latest-snapshot save', async () => {
+    vi.mocked(listMyWork).mockResolvedValue([
+      makeItem(),
+    ])
+
+    const { container, getByRole } =
+      renderPage()
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          '[data-board-column]',
+        ),
+      ).not.toBeNull()
+    })
+
+    vi.useFakeTimers()
+    try {
+      // Three toggles inside one debounce window.
+      await switchView({ getByRole }, 'List')
+      await switchView({ getByRole }, 'Board')
+      await switchView({ getByRole }, 'List')
+
+      // No overlapping / stale saves: nothing is sent while
+      // the window is open.
+      expect(
+        updateMyWorkPreferences,
+      ).not.toHaveBeenCalled()
+
+      await act(async () => {
+        vi.advanceTimersByTime(300)
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+
+    // Exactly one PATCH — the LATEST complete snapshot.
+    expect(
+      updateMyWorkPreferences,
+    ).toHaveBeenCalledTimes(1)
+    expect(
+      vi.mocked(updateMyWorkPreferences).mock
+        .calls[0][0].viewMode,
+    ).toBe('list')
+  })
+
+  it('treats the successful PATCH response as the authoritative local preference', async () => {
+    vi.mocked(listMyWork).mockResolvedValue([
+      makeItem(),
+    ])
+    // The server will sanitize this snapshot on the next
+    // write: research group 99 is no longer accessible.
+    vi.mocked(
+      fetchMyWorkPreferences,
+    ).mockResolvedValue(
+      makePreferences({
+        researchGroupIds: [
+          GROUP_A,
+          99,
+        ],
+        projectIds: [PROJECT_A],
+        workItemTypes: ['task'],
+      }),
+    )
+    vi.mocked(
+      updateMyWorkPreferences,
+    ).mockImplementation(
+      async (snapshot: ApiMyWorkPreferences) =>
+        ({
+          ...snapshot,
+          researchGroupIds: snapshot.researchGroupIds.filter(
+            (id) => id === GROUP_A,
+          ),
+        }),
+    )
+
+    const { container, getByRole } =
+      renderPage()
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          '[data-board-column]',
+        ),
+      ).not.toBeNull()
+    })
+
+    vi.useFakeTimers()
+    try {
+      // Save #1: the response comes back SANITIZED (99
+      // dropped) — it must replace the local snapshot.
+      await switchView({ getByRole }, 'List')
+      await act(async () => {
+        vi.advanceTimersByTime(300)
+      })
+      // Save #2: the NEXT payload proves which snapshot the
+      // client is holding.
+      await switchView({ getByRole }, 'Board')
+      await act(async () => {
+        vi.advanceTimersByTime(300)
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+
+    const calls = vi.mocked(
+      updateMyWorkPreferences,
+    ).mock.calls
+    expect(calls).toHaveLength(2)
+    expect(calls[0][0]).toMatchObject({
+      viewMode: 'list',
+      researchGroupIds: [GROUP_A, 99],
+    })
+    // The local state was reconciled to the normalized
+    // server response — the second save carries the
+    // sanitized IDs, not the pre-sanitization draft.
+    expect(calls[1][0]).toEqual({
+      viewMode: 'board',
+      researchGroupIds: [GROUP_A],
+      projectIds: [PROJECT_A],
+      workItemTypes: ['task'],
+    })
+  })
+
+  it('keeps the locally selected view mode when the save fails', async () => {
+    vi.mocked(listMyWork).mockResolvedValue([
+      makeItem(),
+    ])
+
+    const { container, getByRole, getByText } =
+      renderPage()
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          '[data-board-column]',
+        ),
+      ).not.toBeNull()
+    })
+
+    vi.mocked(updateMyWorkPreferences).mockRejectedValue(
+      new ApiError(500, null),
+    )
+
+    vi.useFakeTimers()
+    try {
+      await switchView({ getByRole }, 'List')
+      await act(async () => {
+        vi.advanceTimersByTime(300)
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+
+    // The locally chosen List is KEPT — no revert to the
+    // previously persisted Board, and the content (now the
+    // List) remains rendered.
+    expect(
+      getByRole('button', { name: 'List' }),
+    ).toHaveAttribute('aria-pressed', 'true')
+    expect(
+      getByRole('button', { name: 'Board' }),
+    ).toHaveAttribute('aria-pressed', 'false')
+    expect(
+      container.querySelector(
+        '[data-board-column]',
+      ),
+    ).toBeNull()
+    expect(
+      getByText('Prepare samples'),
+    ).toBeInTheDocument()
+  })
+
+  it('shows the standard non-fatal save error notification when the save fails', async () => {
+    vi.mocked(listMyWork).mockResolvedValue([
+      makeItem(),
+    ])
+
+    const { container, getByRole, getByText, queryByRole } =
+      renderPage()
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          '[data-board-column]',
+        ),
+      ).not.toBeNull()
+    })
+
+    vi.mocked(updateMyWorkPreferences).mockRejectedValue(
+      new Error('network down'),
+    )
+
+    vi.useFakeTimers()
+    try {
+      await switchView({ getByRole }, 'List')
+      await act(async () => {
+        vi.advanceTimersByTime(300)
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+
+    // The standard small non-fatal notification — page-local,
+    // dismissible, NOT a modal / page-level fatal error.
+    const alert = getByRole('alert')
+    expect(
+      alert.textContent,
+    ).toContain(
+      "Couldn't save your My Work preferences.",
+    )
+    expect(
+      getByText('Prepare samples'),
+    ).toBeInTheDocument()
+
+    // Dismiss clears it.
+    await act(async () => {
+      fireEvent.click(
+        within(alert).getByRole('button', {
+          name: 'Dismiss',
+        }),
+      )
+    })
+    expect(
+      queryByRole('alert'),
+    ).toBeNull()
+  })
+
+  it('follows the page initial-load error/retry behavior when the preference GET fails', async () => {
+    vi.mocked(listMyWork).mockResolvedValue([
+      makeItem(),
+    ])
+    vi.mocked(fetchMyWorkPreferences)
+      .mockRejectedValueOnce(new Error('pref boom'))
+      .mockResolvedValue(makePreferences())
+
+    const { getByRole, getByText, container } =
+      renderPage()
+
+    // A failed initial preference load is the page's
+    // initial-load error — NOT a silently assumed default
+    // view, and NOT the non-fatal save notice.
+    await waitFor(() => {
+      expect(
+        getByRole('alert'),
+      ).toBeInTheDocument()
+    })
+    expect(
+      getByRole('alert').textContent,
+    ).toContain("My Work couldn't be loaded")
+    expect(
+      container.querySelector(
+        '[data-board-column]',
+      ),
+    ).toBeNull()
+    expect(
+      container.querySelector(
+        '[data-my-work-board-skeleton]',
+      ),
+    ).toBeNull()
+
+    // Retry re-issues BOTH initial loads.
+    await act(async () => {
+      fireEvent.click(
+        getByRole('button', {
+          name: /Try again/,
+        }),
+      )
+    })
+
+    await waitFor(() => {
+      expect(
+        getByText('Prepare samples'),
+      ).toBeInTheDocument()
+    })
+    expect(
+      listMyWork,
+    ).toHaveBeenCalledTimes(2)
+    expect(
+      fetchMyWorkPreferences,
+    ).toHaveBeenCalledTimes(2)
+  })
+
+  it('re-loads preferences on a fresh mount instead of reusing the previous mount\'s in-memory snapshot', async () => {
+    vi.mocked(listMyWork).mockResolvedValue([
+      makeItem(),
+    ])
+    vi.mocked(fetchMyWorkPreferences)
+      .mockResolvedValueOnce(
+        makePreferences({ viewMode: 'board' }),
+      )
+
+    const first = renderPage()
+    await waitFor(() => {
+      expect(
+        first.container.querySelector(
+          '[data-board-column]',
+        ),
+      ).not.toBeNull()
+    })
+    first.unmount()
+
+    // A fresh authenticated mount (e.g. a different user after
+    // logout/login) must load the server preference again.
+    vi.mocked(fetchMyWorkPreferences)
+      .mockResolvedValueOnce(
+        makePreferences({ viewMode: 'list' }),
+      )
+
+    const second = renderPage()
+    await waitFor(() => {
+      expect(
+        second.getByText('Work item'),
+      ).toBeInTheDocument()
+    })
+
+    expect(
+      second.container.querySelector(
+        '[data-board-column]',
+      ),
+    ).toBeNull()
+    expect(
+      fetchMyWorkPreferences,
+    ).toHaveBeenCalledTimes(2)
+    expect(
+      listMyWork,
+    ).toHaveBeenCalledTimes(2)
   })
 })

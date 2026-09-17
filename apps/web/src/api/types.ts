@@ -224,6 +224,34 @@ export interface ApiPersonalWorkItem extends ApiWorkItem {
   statusTargets: ApiWorkItemStatusTarget[]
 }
 
+/**
+ * Personal My Work view mode persisted server-side (Board vs List).
+ * Exactly 'board' or 'list' — anything else is rejected by the
+ * preference API.
+ */
+export type ApiMyWorkViewMode = 'board' | 'list'
+
+/**
+ * The user's persisted personal My Work view state
+ * (GET/PATCH /api/me/preferences/my-work/).
+ *
+ * The client contract is a COMPLETE current snapshot, not
+ * incremental toggle actions: a PATCH persists the complete
+ * normalized state atomically and returns it. The returned
+ * normalized snapshot is authoritative (inaccessible/stale IDs are
+ * dropped server-side — never assumed to echo back unchanged).
+ *
+ * Empty filter arrays mean "no restriction" within the user's
+ * current access. `workItemTypes` holds ONLY canonical semantic
+ * Work Item type kinds (never type display names).
+ */
+export interface ApiMyWorkPreferences {
+  viewMode: ApiMyWorkViewMode
+  researchGroupIds: number[]
+  projectIds: number[]
+  workItemTypes: ApiWorkItemTypeKind[]
+}
+
 export interface ApiCreateWorkItemInput {
   typeDefinitionId: number
   title: string

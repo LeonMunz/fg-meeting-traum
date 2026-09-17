@@ -11,6 +11,8 @@ import { useNavigate } from 'react-router'
 
 import { ApiError } from '../../api/client'
 import type {
+  ApiMyWorkPreferences,
+  ApiMyWorkViewMode,
   ApiPersonalWorkItem,
   ApiProject,
   ApiProjectWorkItemConfiguration,
@@ -27,6 +29,10 @@ import {
   transitionWorkItemStatus,
   updateWorkItem,
 } from '../../api/work-items'
+import {
+  fetchMyWorkPreferences,
+  updateMyWorkPreferences,
+} from '../../api/my-work-preferences'
 import {
   getProject,
   getProjectWorkItemConfiguration,
@@ -59,7 +65,7 @@ type GroupFilter = 'all' | number
  * due-date labels, hover treatment) expanded to personal
  * cross-project scope.
  *
- * Kanban (default): four fixed semantic columns (Todo / In progress /
+ * Kanban (Board view): four fixed semantic columns (Todo / In progress /
  * Review / Done) grouped SOLELY by `statusCategory`, preserving the
  * canonical API order within each column. Cross-category drag/drop
  * moves a card to the concrete project-local status resolved by that
@@ -98,6 +104,22 @@ type GroupFilter = 'all' | number
  * semantics (ordinary PATCH / create / delete, never the drag
  * status transition) and every successful mutation triggers one
  * authoritative GET /api/me/work-items/ refresh.
+ *
+ * Persisted view mode (My Work preferences): the authenticated
+ * user's preference snapshot (GET /api/me/preferences/my-work/) is
+ * loaded IN PARALLEL with the Work Items and the final interactive
+ * view renders only once BOTH have resolved — the persisted
+ * viewMode decides Board vs List, so a persisted List preference
+ * can never flash through a default Board first. Changing
+ * Board/List updates the complete preference snapshot locally
+ * (the not-yet-applied filter arrays are retained untouched) and
+ * persists the COMPLETE snapshot after a short debounce; the
+ * normalized server response is authoritative and replaces the
+ * local snapshot. A failed save keeps the locally chosen mode and
+ * shows a page-local non-fatal notice (no revert, no reset to
+ * defaults). There is no localStorage / module-level cache: a
+ * fresh authenticated mount always loads the active user's server
+ * preference.
  */
 
 // Lazy: WorkItemDrawer pulls in RichMarkdownEditor -> Tiptap/ProseMirror,
@@ -482,10 +504,34 @@ function getErrorMessage(
 const gridColumns =
   'xl:grid-cols-[minmax(320px,1fr)_160px_220px_110px]'
 
-// Presentation-only personal view. No persistence (no localStorage /
-// URL query / backend preference) — a reload returns to the default
-// Kanban. Both views render the SAME canonical payload.
-type MyWorkView = 'kanban' | 'list'
+// Debounce window for persisting a changed My Work preference
+// snapshot (the repository's established 300ms user-preference
+// debounce). Rapid Board/List toggles coalesce into a single PATCH
+// carrying the LATEST complete snapshot.
+const MY_WORK_PREFERENCES_DEBOUNCE_MS = 300
+
+// Structural equality for two complete preference snapshots — the
+// dirty check that decides whether a debounced save is owed. The
+// server returns sorted ID lists and the client never reorders
+// them, so element-wise comparison is exact.
+function sameMyWorkPreferences(
+  a: ApiMyWorkPreferences,
+  b: ApiMyWorkPreferences,
+): boolean {
+  const sameIdList = (x: number[], y: number[]) =>
+    x.length === y.length &&
+    x.every((id, index) => id === y[index])
+
+  return (
+    a.viewMode === b.viewMode &&
+    sameIdList(a.researchGroupIds, b.researchGroupIds) &&
+    sameIdList(a.projectIds, b.projectIds) &&
+    a.workItemTypes.length === b.workItemTypes.length &&
+    a.workItemTypes.every(
+      (kind, index) => kind === b.workItemTypes[index],
+    )
+  )
+}
 
 // Fixed global semantic columns for the personal Kanban. Grouping is
 // by the Work Item's `statusCategory` only (a fixed domain attribute
@@ -509,18 +555,51 @@ export function MyWorkPage() {
   const [items, setItems] = useState<
     ApiPersonalWorkItem[]
   >([])
-  const [loading, setLoading] = useState(false)
+  // Starts `true`: the FIRST paint is the loading skeleton (the
+  // final view — Board or List — is unknown until the persisted
+  // preference snapshot has resolved, so nothing final may render
+  // before the initial load starts).
+  const [loading, setLoading] = useState(true)
   const [error, setError] = useState<
     string | null
   >(null)
   const [groupFilter, setGroupFilter] =
     useState<GroupFilter>('all')
 
-  // Presentation-only view switch — see MyWorkView. Switching between
-  // List and Kanban is purely presentational: it never refetches
+  // The COMPLETE persisted My Work preference snapshot (the server
+  // is the source of truth). `null` until the initial GET has
+  // resolved — the final view is unknown until then, so the page
+  // stays in its loading skeleton: a persisted List preference can
+  // never flash through a default Board first. The viewMode is the
+  // only field actively consumed in this slice; the three filter
+  // arrays are retained in the snapshot (not yet applied to
+  // filtering) and must survive every view-mode save untouched.
+  const [preferences, setPreferences] = useState<
+    ApiMyWorkPreferences | null
+  >(null)
+
+  // The last snapshot known to be persisted server-side (the initial
+  // GET result or the latest successful PATCH response — always the
+  // normalized server snapshot, never a local draft). The diff
+  // against `preferences` is what a debounced save owes.
+  const [savedPreferences, setSavedPreferences] =
+    useState<ApiMyWorkPreferences | null>(null)
+
+  // Page-local, dismissible notice for a failed preference save —
+  // the established non-fatal error treatment of this page (the same
+  // as the Kanban drop error). A failed save never reverts the
+  // locally chosen view mode and never resets the preferences.
+  const [preferenceSaveError, setPreferenceSaveError] =
+    useState<string | null>(null)
+
+  // The final view mode — consumed from the persisted preference
+  // snapshot. `null` while the snapshot is unknown (initial load /
+  // failed load): the page then shows its loading or error
+  // treatment, never a guessed view. Switching Board/List is purely
+  // presentational for the Work Item data — it never refetches
   // /api/me/work-items/, fetches Project configuration, or fetches
   // Projects / Research Groups individually.
-  const [view, setView] = useState<MyWorkView>('kanban')
+  const view = preferences?.viewMode ?? null
 
   // Kanban drag state (native HTML5 drag-and-drop — the same
   // mechanism the Project Work Items Board uses). Only the Kanban is
@@ -548,16 +627,39 @@ export function MyWorkPage() {
     async () => {
       setLoading(true)
       setError(null)
+      setPreferenceSaveError(null)
 
       try {
         // One canonical request — the personal projection across
-        // every accessible Project and Research Group. The response
-        // replaces the previous state wholesale; the API result is
+        // every accessible Project and Research Group — plus the
+        // authenticated user's persisted My Work preference
+        // snapshot, loaded IN PARALLEL (independent GETs; neither
+        // depends on the other). The final interactive view renders
+        // only once BOTH have resolved: the persisted viewMode
+        // decides Board vs List, so no default view can flash
+        // before the preference is known. Each response replaces
+        // the previous state wholesale; the API results are
         // authoritative (removed assignments disappear, no local
         // stale copy is merged or retained).
-        setItems(await listMyWork())
+        const [
+          loadedItems,
+          loadedPreferences,
+        ] = await Promise.all([
+          listMyWork(),
+          fetchMyWorkPreferences(),
+        ])
+
+        setItems(loadedItems)
+        setPreferences(loadedPreferences)
+        // The GET snapshot is what the server currently persists —
+        // the baseline a changed local snapshot is diffed against
+        // (a fresh authenticated mount always re-loads it; nothing
+        // preference-related is cached across users or mounts).
+        setSavedPreferences(loadedPreferences)
       } catch (loadError) {
         setItems([])
+        setPreferences(null)
+        setSavedPreferences(null)
         setError(
           getErrorMessage(
             loadError,
@@ -590,6 +692,99 @@ export function MyWorkPage() {
       // false is rendered) — the next load reconciles.
     }
   }, [])
+
+  // Board/List switch: update the COMPLETE preference snapshot
+  // locally — only `viewMode` changes, the three not-yet-applied
+  // filter arrays are retained untouched — and owe a debounced save
+  // of the complete snapshot (the effect below). Purely
+  // presentational for the Work Item data: no /api/me/work-items/
+  // refetch, no Project configuration, no Project / Research Group
+  // fetch.
+  const handleViewModeChange = useCallback(
+    (nextMode: ApiMyWorkViewMode) => {
+      if (
+        preferences == null ||
+        preferences.viewMode === nextMode
+      ) {
+        return
+      }
+
+      setPreferences({
+        ...preferences,
+        viewMode: nextMode,
+      })
+    },
+    [preferences],
+  )
+
+  // Debounced persistence of the preference snapshot. Fires only
+  // when the local snapshot differs from the last known-persisted
+  // one — so the initial load is never "saved back", and rapid
+  // Board/List toggles coalesce into a single PATCH carrying the
+  // LATEST complete snapshot (the timer is reset on every change).
+  // The monotonic sequence guard keeps a superseded in-flight save
+  // from clobbering a newer local selection: its normalized
+  // response still updates the persisted baseline, and the resulting
+  // diff schedules whatever remains unsaved. On failure the locally
+  // chosen mode is kept and the standard non-fatal notice is shown
+  // (no revert, no reset to defaults, no retry storm — the next
+  // user change schedules a fresh complete-snapshot save).
+  const preferencesSaveSeqRef = useRef(0)
+
+  useEffect(() => {
+    if (
+      preferences == null ||
+      savedPreferences == null
+    ) {
+      return
+    }
+
+    if (
+      sameMyWorkPreferences(
+        savedPreferences,
+        preferences,
+      )
+    ) {
+      return
+    }
+
+    const seq = ++preferencesSaveSeqRef.current
+    const timer = setTimeout(() => {
+      void (async () => {
+        try {
+          const normalized =
+            await updateMyWorkPreferences(preferences)
+
+          // The returned normalized snapshot is authoritative for
+          // what is now persisted — the baseline either way (the
+          // server may have dropped stale IDs; it is never assumed
+          // to echo the request back unchanged).
+          setSavedPreferences(normalized)
+
+          if (seq !== preferencesSaveSeqRef.current) {
+            // A newer local change superseded this save: the UI
+            // keeps the newer selection.
+            return
+          }
+
+          setPreferences(normalized)
+          setPreferenceSaveError(null)
+        } catch {
+          if (seq !== preferencesSaveSeqRef.current) {
+            return
+          }
+
+          // Keep the locally chosen view mode; surface the standard
+          // non-fatal save notice.
+          setPreferenceSaveError(
+            "Couldn't save your My Work preferences.",
+          )
+        }
+      })()
+    }, MY_WORK_PREFERENCES_DEBOUNCE_MS)
+
+    return () => clearTimeout(timer)
+  }, [preferences, savedPreferences])
 
   // ── Canonical Work Item drawer (opened in place from Kanban
   // cards) ────────────────────────────────────────────────
@@ -1168,6 +1363,65 @@ export function MyWorkPage() {
     )
   }
 
+  // Themed board skeleton: the final board's OWN geometry — the
+  // same transparent canvas region (no outer panel), the same
+  // four-column grid, the same column min-height, and card-shaped
+  // pulse bars at the card min-height — with restrained pulse bars
+  // (the app's established skeleton convention). It occupies the
+  // final content region from the first paint, so the load never
+  // exposes a raw white/default panel and the board resolves in
+  // place with no layout shift. It is the ONLY thing rendered
+  // while the Work Items and the persisted preference snapshot
+  // resolve: the final view is unknown until the preference is
+  // known, so no Board (or List) can flash before hydration.
+  const boardSkeleton = (
+    <section
+      aria-busy="true"
+      data-my-work-board-skeleton="true"
+      className="mt-6"
+    >
+      <span className="sr-only">
+        Loading your work…
+      </span>
+
+      <div className="overflow-x-auto">
+        <div
+          className="grid min-w-max items-start gap-3"
+          style={{
+            gridTemplateColumns: `repeat(${GLOBAL_STATUS_COLUMNS.length}, minmax(260px, 1fr))`,
+          }}
+        >
+          {GLOBAL_STATUS_COLUMNS.map(
+            (column) => (
+              <div
+                key={column.value}
+                data-my-work-skeleton-column="true"
+                className="flex min-h-[max(520px,calc(100vh-245px))] flex-col rounded-md bg-work-lane-surface px-2 pb-4"
+              >
+                <div className="mb-1 flex h-10 items-center border-b border-work-lane-divider px-1">
+                  <span
+                    aria-hidden="true"
+                    className={`material-symbols-outlined shrink-0 text-[14px] opacity-60 ${COLUMN_PRESENTATION[column.value].iconClassName}`}
+                  >
+                    {COLUMN_PRESENTATION[column.value].icon}
+                  </span>
+
+                  <div className="ml-1.5 h-3 w-20 animate-pulse rounded bg-surface-hover" />
+                </div>
+
+                <div className="flex flex-col gap-2">
+                  <div className="h-[88px] animate-pulse rounded-md bg-surface-hover" />
+
+                  <div className="h-[88px] animate-pulse rounded-md bg-surface-hover" />
+                </div>
+              </div>
+            ),
+          )}
+        </div>
+      </div>
+    </section>
+  )
+
   return (
     <div className="w-full px-6 py-8 lg:px-8 lg:py-10 xl:px-10">
       {/* Content max width ~1440px, centered: at wide viewports the
@@ -1227,9 +1481,12 @@ export function MyWorkPage() {
             )}
 
             {/* Board/List switch — same segmented control pattern as the
-             *  Project Work Items view switch. Presentation-only: it does
-             *  not refetch, fetch Project configuration, or persist. Each
-             *  button exposes its name and pressed state. */}
+             *  Project Work Items view switch. Presentation-only for the
+             *  Work Item data (no refetch, no Project configuration);
+             *  the chosen mode is persisted as part of the complete
+             *  personal preference snapshot (debounced). The pressed
+             *  state reflects the persisted preference. Each button
+             *  exposes its name and pressed state. */}
             <div
               role="group"
               aria-label="My Work view"
@@ -1237,12 +1494,14 @@ export function MyWorkPage() {
             >
               <button
                 type="button"
-                aria-pressed={view === 'kanban'}
+                aria-pressed={view === 'board'}
                 data-work-item-inspector-keep-open="true"
-                onClick={() => setView('kanban')}
+                onClick={() =>
+                  handleViewModeChange('board')
+                }
                 className={[
                   'inline-flex h-[26px] items-center gap-1.5 rounded px-[9px] text-xs font-medium transition',
-                  view === 'kanban'
+                  view === 'board'
                     ? 'bg-segmented-selected text-segmented-selected-text'
                     : 'text-work-content-muted hover:text-work-content-text',
                 ].join(' ')}
@@ -1260,7 +1519,9 @@ export function MyWorkPage() {
                 type="button"
                 aria-pressed={view === 'list'}
                 data-work-item-inspector-keep-open="true"
-                onClick={() => setView('list')}
+                onClick={() =>
+                  handleViewModeChange('list')
+                }
                 className={[
                   'inline-flex h-[26px] items-center gap-1.5 rounded px-[9px] text-xs font-medium transition',
                   view === 'list'
@@ -1281,62 +1542,40 @@ export function MyWorkPage() {
 
         </header>
 
-      {loading ? (
-        // Themed board skeleton: the final board's OWN geometry —
-        // the same transparent canvas region (no outer panel), the
-        // same four-column grid, the same column min-height, and
-        // card-shaped pulse bars at the card min-height — with
-        // restrained pulse bars (the app's established skeleton
-        // convention). It occupies the final content region from
-        // the first paint, so the load never exposes a raw
-        // white/default panel and the board resolves in place with
-        // no layout shift.
-        <section
-          aria-busy="true"
-          data-my-work-board-skeleton="true"
-          className="mt-6"
+      {/* Non-fatal preference save failure: the established
+       * page-local dismissible error treatment (the same as the
+       * Kanban drop error). The locally chosen view mode is KEPT —
+       * no revert, no reset to defaults, no page-level fatal
+       * error. */}
+      {preferenceSaveError !== null && (
+        <div
+          role="alert"
+          className="mt-4 flex items-start gap-2.5 rounded-md border border-work-item-error-border bg-work-item-error-bg px-4 py-3 text-sm text-work-item-error"
         >
-          <span className="sr-only">
-            Loading your work…
+          <span
+            aria-hidden="true"
+            className="material-symbols-outlined mt-0.5 text-[18px]"
+          >
+            error
           </span>
 
-          <div className="overflow-x-auto">
-            <div
-              className="grid min-w-max items-start gap-3"
-              style={{
-                gridTemplateColumns: `repeat(${GLOBAL_STATUS_COLUMNS.length}, minmax(260px, 1fr))`,
-              }}
-            >
-              {GLOBAL_STATUS_COLUMNS.map(
-                (column) => (
-                  <div
-                    key={column.value}
-                    data-my-work-skeleton-column="true"
-                    className="flex min-h-[max(520px,calc(100vh-245px))] flex-col rounded-md bg-work-lane-surface px-2 pb-4"
-                  >
-                    <div className="mb-1 flex h-10 items-center border-b border-work-lane-divider px-1">
-                      <span
-                        aria-hidden="true"
-                        className={`material-symbols-outlined shrink-0 text-[14px] opacity-60 ${COLUMN_PRESENTATION[column.value].iconClassName}`}
-                      >
-                        {COLUMN_PRESENTATION[column.value].icon}
-                      </span>
+          <p className="flex-1">
+            {preferenceSaveError}
+          </p>
 
-                      <div className="ml-1.5 h-3 w-20 animate-pulse rounded bg-surface-hover" />
-                    </div>
+          <button
+            type="button"
+            onClick={() =>
+              setPreferenceSaveError(null)
+            }
+            className="shrink-0 text-xs font-semibold text-work-item-error underline-offset-2 hover:underline"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
-                    <div className="flex flex-col gap-2">
-                      <div className="h-[88px] animate-pulse rounded-md bg-surface-hover" />
-
-                      <div className="h-[88px] animate-pulse rounded-md bg-surface-hover" />
-                    </div>
-                  </div>
-                ),
-              )}
-            </div>
-          </div>
-        </section>
-      ) : error ? (
+      {loading ? boardSkeleton : error ? (
         <div
           role="alert"
           className="mt-8 flex min-h-64 flex-col items-center justify-center rounded-xl border border-outline-variant bg-surface-container-lowest px-6 py-10 text-center"
@@ -1366,6 +1605,12 @@ export function MyWorkPage() {
             Try again
           </button>
         </div>
+      ) : view == null ? (
+        // Defensive only: the final view is unknown until the
+        // preference snapshot resolves — keep the loading
+        // treatment. Unreachable in practice: the snapshot and
+        // the loading flag resolve in one batched update.
+        boardSkeleton
       ) : visibleItems.length === 0 ? (
         <div className="mt-8 flex min-h-64 flex-col items-center justify-center rounded-xl border border-dashed border-outline-variant bg-surface-container-lowest px-6 py-12 text-center">
           <span className="material-symbols-outlined text-[28px] text-on-surface-variant">
@@ -1380,7 +1625,7 @@ export function MyWorkPage() {
             Assigned project work will appear here.
           </p>
         </div>
-      ) : view === 'kanban' ? (
+      ) : view === 'board' ? (
         <MyWorkBoard
           columns={kanbanColumns}
           onOpen={openWorkItemCard}
