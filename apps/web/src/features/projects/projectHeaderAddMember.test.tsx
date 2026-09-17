@@ -36,6 +36,7 @@ import { listProjectWorkItems } from '../../api/work-items'
 import type {
   ApiProject,
   ApiProjectMembership,
+  ApiProjectRole,
   ApiProjectWorkItemConfiguration,
   ApiResearchGroupMember,
 } from '../../api/types'
@@ -177,8 +178,12 @@ const GROUP_MEMBERS: ApiResearchGroupMember[] = [
 
 function mockProjectData(
   memberships: ApiProjectMembership[],
+  currentUserRole: ApiProjectRole = 'owner',
 ) {
-  vi.mocked(getProject).mockResolvedValue(PROJECT)
+  vi.mocked(getProject).mockResolvedValue({
+    ...PROJECT,
+    currentUserRole,
+  })
   vi.mocked(getProjectWorkItemConfiguration).mockResolvedValue(
     CONFIGURATION,
   )
@@ -246,9 +251,19 @@ async function openAddMemberDialogFromHeader() {
     }),
   )
 
-  return screen.getByRole('dialog', {
+  const dialog = screen.getByRole('dialog', {
     name: 'Add project member',
   })
+
+  // The candidate pool (Research Group members minus current
+  // Project members) arrives in a second fetch after the project
+  // metadata; until it commits the dialog renders its
+  // no-candidates variant, which has no "Select person" control.
+  await within(dialog).findByLabelText(
+    'Select person',
+  )
+
+  return dialog
 }
 
 afterEach(() => {
@@ -274,12 +289,16 @@ describe('Project Header add-member shortcut', () => {
   })
 
   it('does not show the action for an unauthorized Project member', async () => {
-    mockProjectData([ALEX_MEMBER])
+    // The project response and the membership list must state the
+    // same effective role for the current user, as the API
+    // guarantees; here that role is a plain member.
+    mockProjectData([ALEX_MEMBER], 'member')
 
     renderPage()
 
-    // Wait until the member list has actually loaded so the
-    // absence below is meaningful, not a pre-load snapshot.
+    // Reach the rendered header (the role pill reads 'Member') so
+    // the absence below is evaluated on a loaded page, not a
+    // pre-load snapshot.
     await screen.findByText('Member', { exact: true })
 
     expect(
@@ -534,6 +553,12 @@ describe('Project Members tab', () => {
       }),
     ).toBeInTheDocument()
 
+    // Wait until the memberships have actually loaded so the
+    // count below is meaningful, not a pre-load snapshot.
+    await screen.findByText('@alex', {
+      exact: true,
+    })
+
     // Count badge reflects the current membership count.
     expect(screen.getByText('2', { exact: true })).toBeInTheDocument()
 
@@ -776,13 +801,17 @@ describe('Project Members tab', () => {
   })
 
   it('gives a non-owner Project member no membership controls', async () => {
-    mockProjectData([ALEX_MEMBER, CHRIS_OWNER])
+    // The project response and the membership list must state the
+    // same effective role for the current user, as the API
+    // guarantees; here that role is a plain member.
+    mockProjectData([ALEX_MEMBER, CHRIS_OWNER], 'member')
 
     renderPage('/projects/7/members')
 
-    // Wait until the member list has actually loaded so the
-    // absence below is meaningful, not a pre-load snapshot.
-    await screen.findByText('Owner', { exact: true })
+    // Wait until the member rows have loaded: the last assertion
+    // counts Alex' row label, which only exists once the
+    // membership list has rendered.
+    await screen.findByText('@alex', { exact: true })
 
     expect(
       screen.queryByRole('button', {
