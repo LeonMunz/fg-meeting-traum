@@ -4,6 +4,15 @@ import {
   test,
 } from '@playwright/test'
 import { login } from './helpers'
+import {
+  expectMyWorkPreferenceSave,
+  expectMyWorkReady,
+  getMyWorkPreferences,
+  getResearchGroupId,
+  MY_WORK_PREFERENCES_BASELINE,
+  sameMyWorkPreferences,
+  setMyWorkPreferences,
+} from './my-work-helpers'
 
 /**
  * Focused acceptance spec for the cross-project My Work
@@ -33,6 +42,13 @@ import { login } from './helpers'
  * concrete target `statusDefinitionId` (no boardPosition, no
  * status-changing PATCH, no reorder), followed by exactly one
  * authoritative `GET /api/me/work-items/` refetch.
+ *
+ * My Work preferences are server-persistent, so the two preference
+ * scenarios (the rendering scenario and the Research Groups
+ * filter/persist scenario) establish the canonical server-side
+ * baseline through the shared harness (`./my-work-helpers.ts`)
+ * before rendering and wait for the debounced save event-based —
+ * each scenario can run standalone, independent of test order.
  */
 
 function expectNoHorizontalOverflow(page: Page) {
@@ -45,23 +61,6 @@ function expectNoHorizontalOverflow(page: Page) {
     .then((overflow) => {
       expect(overflow).toBeLessThanOrEqual(0)
     })
-}
-
-/**
- * Resolves once the debounced My Work preference snapshot save
- * (PATCH /api/me/preferences/my-work/) reaches the server.
- * Preferences are server-persistent, so a test that reloads must
- * first wait for the save to flush — otherwise the reload restores
- * the pre-change snapshot.
- */
-function expectPreferenceSave(page: Page) {
-  return page.waitForResponse(
-    (response) =>
-      response
-        .url()
-        .includes('/api/me/preferences/my-work/') &&
-      response.request().method() === 'PATCH',
-  )
 }
 
 test('My Work lists assigned Work Items across Projects and Research Groups', async ({ page }, testInfo) => {
@@ -89,7 +88,35 @@ test('My Work lists assigned Work Items across Projects and Research Groups', as
   })
 
   await login(page, 'alex')
+
+  // Canonical server-side baseline (the real backend contract:
+  // Board view, no active filters) persisted BEFORE the first load,
+  // so the page renders from a known persisted state and the test
+  // never depends on a previous test's leftover preferences or the
+  // execution order.
+  const persisted = await setMyWorkPreferences(
+    page,
+    MY_WORK_PREFERENCES_BASELINE,
+  )
+  expect(
+    sameMyWorkPreferences(
+      persisted,
+      MY_WORK_PREFERENCES_BASELINE,
+    ),
+  ).toBe(true)
+
   await page.goto('/my-work')
+
+  // Functionally ready (web-first): the persisted preference is
+  // loaded and APPLIED (Board active, no filter row) and both
+  // Work Items are fully rendered — before any assertion below.
+  await expectMyWorkReady(page, {
+    viewMode: 'board',
+    visibleTitles: [
+      'First Draft Complete',
+      'E2E Analyze robot data',
+    ],
+  })
 
   const firstDraftRow = page.getByRole(
     'button',
@@ -635,7 +662,40 @@ test('My Work Research Groups multiselect filters, persists, and restores', asyn
   })
 
   await login(page, 'alex')
+
+  // Canonical server-side baseline BEFORE the UI change: the test
+  // starts from a known persisted state (Board view, no filter)
+  // regardless of earlier tests or their leftover in-flight saves.
+  const persisted = await setMyWorkPreferences(
+    page,
+    MY_WORK_PREFERENCES_BASELINE,
+  )
+  expect(
+    sameMyWorkPreferences(
+      persisted,
+      MY_WORK_PREFERENCES_BASELINE,
+    ),
+  ).toBe(true)
+
+  // The complete-snapshot PATCH carries relational IDs — resolve
+  // the seeded group's ID from the canonical list endpoint.
+  const fgExampleId = await getResearchGroupId(
+    page,
+    'FG Example',
+  )
+
   await page.goto('/my-work')
+
+  // Functionally ready: the baseline preference is applied (Board
+  // active, no filter) and both seeded Work Items are fully
+  // rendered — before any assertion below.
+  await expectMyWorkReady(page, {
+    viewMode: 'board',
+    visibleTitles: [
+      'First Draft Complete',
+      'E2E Analyze robot data',
+    ],
+  })
 
   const firstDraftCard = page.getByRole('button', {
     name: 'Open First Draft Complete',
@@ -644,11 +704,8 @@ test('My Work Research Groups multiselect filters, persists, and restores', asyn
     name: 'Open E2E Analyze robot data',
   })
 
-  // Both seeded items are visible by default (no active filter).
-  await expect(firstDraftCard).toBeVisible()
-  await expect(robotCard).toBeVisible()
-
-  // The Research Groups multiselect toggle is visible in the toolbar.
+  // The Research Groups multiselect toggle is visible in the toolbar
+  // (no active filter in the baseline).
   const toggle = page.getByRole('button', {
     name: 'Research groups, none selected',
   })
@@ -672,11 +729,15 @@ test('My Work Research Groups multiselect filters, persists, and restores', asyn
   })
   await expect(groupCheckbox).toBeVisible()
 
-  // The complete-snapshot save is debounced (300ms); await its
-  // server-side flush so the later reload restores what was really
-  // persisted (not the pre-change snapshot).
-  const preferenceSaveFlushed =
-    expectPreferenceSave(page)
+  // Event-based persistence: the wait for the debounced
+  // complete-snapshot save is registered BEFORE the UI action. It
+  // must target the preference endpoint (method + pathname),
+  // succeed, and carry exactly the intended snapshot (baseline +
+  // the one selected Research Group).
+  const preferenceSaveFlushed = expectMyWorkPreferenceSave(page, {
+    ...MY_WORK_PREFERENCES_BASELINE,
+    researchGroupIds: [fgExampleId],
+  })
 
   await groupCheckbox.check()
 
@@ -702,25 +763,19 @@ test('My Work Research Groups multiselect filters, persists, and restores', asyn
   ).toBeVisible()
 
   // The applied filter survives a full reload (server-side
-  // preference restore) — the debounced save must have flushed
-  // first.
+  // preference restore) — the verified save must have landed first.
   await preferenceSaveFlushed
   await page.reload()
+  await expectMyWorkReady(page, {
+    viewMode: 'board',
+    visibleTitles: ['First Draft Complete'],
+    hiddenTitles: ['E2E Analyze robot data'],
+  })
   await expect(
     page.getByRole('button', {
       name: 'Research groups, 1 selected',
     }),
   ).toBeVisible()
-  await expect(
-    page.getByRole('button', {
-      name: 'Open First Draft Complete',
-    }),
-  ).toBeVisible()
-  await expect(
-    page.getByRole('button', {
-      name: 'Open E2E Analyze robot data',
-    }),
-  ).toBeHidden()
 
   // Board -> List keeps the same active filter (one row only).
   await page
@@ -735,13 +790,21 @@ test('My Work Research Groups multiselect filters, persists, and restores', asyn
     page.getByRole('button', {
       name: 'Open E2E Analyze robot data',
     }),
-  ).toBeHidden()
+  ).toHaveCount(0)
 
   // Back to Board, then remove the single applied chip: both items
-  // return (and the filter is left clean for the later specs).
+  // return. The clearing save is waited on the same event-based way
+  // (registered before the action, payload verified) and the server
+  // state is re-read afterwards: the persisted state is the
+  // canonical baseline again, so the later specs start clean without
+  // depending on this test's execution order or an in-flight save.
   await page
     .getByRole('button', { name: 'Board' })
     .click()
+  const clearedSave = expectMyWorkPreferenceSave(
+    page,
+    MY_WORK_PREFERENCES_BASELINE,
+  )
   await page
     .getByRole('button', {
       name: 'Remove Research Group filter FG Example',
@@ -752,41 +815,17 @@ test('My Work Research Groups multiselect filters, persists, and restores', asyn
       name: 'Research groups, none selected',
     }),
   ).toBeVisible()
-  await expect(
-    page.getByRole('button', {
-      name: 'Open First Draft Complete',
-    }),
-  ).toBeVisible()
-  await expect(
-    page.getByRole('button', {
-      name: 'Open E2E Analyze robot data',
-    }),
-  ).toBeVisible()
+  await expect(firstDraftCard).toBeVisible()
+  await expect(robotCard).toBeVisible()
 
-  // Preferences are server-persistent across the test run: wait
-  // until the clearing save has actually landed (it is debounced
-  // 300ms) so the later specs start from a known clean baseline
-  // (Board view, no active Research Group filter) and never depend
-  // on this test's execution order or an in-flight save.
-  await expect
-    .poll(async () => {
-      const response = await page.request.get(
-        '/api/me/preferences/my-work/',
-      )
-      const snapshot = (await response.json()) as {
-        viewMode: string
-        researchGroupIds: number[]
-      }
-      return {
-        viewMode: snapshot.viewMode,
-        researchGroupIds:
-          snapshot.researchGroupIds,
-      }
-    })
-    .toEqual({
-      viewMode: 'board',
-      researchGroupIds: [],
-    })
+  await clearedSave
+  const serverState = await getMyWorkPreferences(page)
+  expect(
+    sameMyWorkPreferences(
+      serverState,
+      MY_WORK_PREFERENCES_BASELINE,
+    ),
+  ).toBe(true)
 
   await page.screenshot({
     path: testInfo.outputPath(
