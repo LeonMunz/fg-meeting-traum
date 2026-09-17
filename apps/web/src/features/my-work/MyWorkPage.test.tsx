@@ -752,7 +752,7 @@ describe('My Work List View — due date', () => {
 })
 
 describe('My Work List View — loading / empty / error', () => {
-  it('renders a loading state while the personal endpoint is in flight', async () => {
+  it('renders a stable themed board skeleton while the personal endpoint is in flight', async () => {
     let resolveList:
       | ((items: ApiPersonalWorkItem[]) => void)
       | undefined
@@ -765,29 +765,61 @@ describe('My Work List View — loading / empty / error', () => {
       ),
     )
 
-    const { getByText, queryByText } =
+    const { getByText, queryByText, container } =
       renderPage()
 
     await act(async () => {
       await Promise.resolve()
     })
 
+    // The loading state occupies the final content region as a
+    // board-shaped skeleton (status text kept for assistive tech),
+    // with one placeholder column per semantic column and NO real
+    // board rendered yet.
     expect(
       getByText('Loading your work…'),
     ).toBeInTheDocument()
+    expect(
+      container.querySelector(
+        '[data-my-work-board-skeleton]',
+      ),
+    ).not.toBeNull()
+    expect(
+      container.querySelectorAll(
+        '[data-my-work-skeleton-column]',
+      ).length,
+    ).toBe(4)
+    expect(
+      container.querySelectorAll(
+        '[data-board-column]',
+      ).length,
+    ).toBe(0)
     expect(
       queryByText('Prepare samples'),
     ).toBeNull()
 
     await act(async () => {
-      resolveList!([])
+      resolveList!([makeItem()])
     })
 
+    // The skeleton is replaced in place by the real board.
     await waitFor(() => {
       expect(
-        queryByText('Loading your work…'),
+        container.querySelector(
+          '[data-my-work-board-skeleton]',
+        ),
       ).toBeNull()
     })
+    await waitFor(() => {
+      expect(
+        container.querySelectorAll(
+          '[data-board-column]',
+        ).length,
+      ).toBe(4)
+    })
+    expect(
+      queryByText('Loading your work…'),
+    ).toBeNull()
   })
 
   it('renders the personal empty state for an empty response', async () => {
@@ -2248,6 +2280,110 @@ describe('My Work Kanban — lazy Project drawer context', () => {
     })
 
     expect(getProject).toHaveBeenCalledTimes(2)
+  })
+
+  it('shows the drawer shell while the lazy context resolves, then the drawer replaces it and closes normally', async () => {
+    // The Project read resolves last: the shell is visible for a
+    // real (bounded) window before the context is ready.
+    let resolveProject:
+      | ((project: ApiProject) => void)
+      | undefined
+
+    vi.mocked(getProject).mockReturnValue(
+      new Promise<ApiProject>((resolve) => {
+        resolveProject = resolve
+      }),
+    )
+    vi.mocked(
+      getProjectWorkItemConfiguration,
+    ).mockResolvedValue(makeConfiguration())
+    vi.mocked(listProjectMemberships).mockResolvedValue(
+      makeMemberships(),
+    )
+    vi.mocked(listProjectWorkItems).mockResolvedValue(
+      makeProjectWorkItems(),
+    )
+
+    vi.mocked(listMyWork).mockResolvedValue([
+      makeItem({
+        id: 100,
+        projectId: PROJECT_A,
+      }),
+    ])
+
+    const { getByRole, container } = renderPage()
+
+    const card = () =>
+      getByRole('button', {
+        name: 'Open Prepare samples',
+      })
+
+    await waitFor(() => {
+      expect(card()).toBeInTheDocument()
+    })
+
+    // The shell renders immediately after the card open.
+    await act(async () => {
+      fireEvent.click(card())
+    })
+
+    const shell = () =>
+      container.querySelector(
+        '[data-my-work-drawer-shell]',
+      )
+
+    await waitFor(() => {
+      expect(shell()).not.toBeNull()
+    })
+
+    // No drawer yet, no navigation, board still underneath.
+    expect(
+      container.querySelector(
+        '[data-testid="work-item-drawer"]',
+      ),
+    ).toBeNull()
+    expect(
+      container.querySelector(
+        '[data-testid="work-items-target"]',
+      ),
+    ).toBeNull()
+    expect(card()).toBeInTheDocument()
+
+    // The context resolves: the drawer replaces the shell in
+    // place, and the shell is gone.
+    await act(async () => {
+      resolveProject!(makeProject(PROJECT_A))
+    })
+
+    const drawer = () =>
+      container.querySelector(
+        '[data-testid="work-item-drawer"]',
+      ) as HTMLElement
+
+    await waitFor(() => {
+      expect(drawer()).not.toBeNull()
+    })
+    expect(shell()).toBeNull()
+
+    // The fallback did not interfere with close: closing the
+    // drawer returns to the board without navigation.
+    await act(async () => {
+      fireEvent.click(
+        drawer().querySelector(
+          'button',
+        ) as HTMLElement,
+      )
+    })
+
+    await waitFor(() => {
+      expect(drawer()).toBeNull()
+    })
+    expect(
+      container.querySelector(
+        '[data-testid="work-items-target"]',
+      ),
+    ).toBeNull()
+    expect(card()).toBeInTheDocument()
   })
 })
 

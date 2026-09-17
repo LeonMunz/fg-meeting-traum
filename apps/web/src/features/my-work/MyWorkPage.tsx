@@ -142,16 +142,45 @@ type MyWorkDrawerState =
 
 // Quiet placeholder for the brief window while the selected card's
 // lazy Project drawer context (and, on first open, the drawer chunk
-// itself) loads. Mirrors the Project Work Items page's established
-// drawer loading treatment (same fixed-rail footprint + the
-// data-work-item-inspector-boundary marker) so opening a card never
-// blanks the My Work page underneath.
+// itself) loads. Renders the final inspector's OWN chrome — the
+// same fixed-rail dimensions, surface, border, and shadow — with
+// restrained pulse bars in the header and field positions, so a
+// card open reads as "the drawer shell appears, then the content
+// resolves inside it" and never exposes a raw white/default panel
+// (the legacy surface-container-lowest token is not dark-adapted —
+// it renders pure white in BOTH themes). My Work stays visible
+// underneath; the data-work-item-inspector-boundary marker keeps
+// the outside-click-close effect from misreading a click on the
+// shell as an outside click.
 function DrawerLoadingShell() {
   return (
     <div
       data-work-item-inspector-boundary="true"
-      className="fixed inset-y-0 right-0 z-40 w-full border-l border-outline-variant bg-surface-container-lowest shadow-2xl sm:w-[520px]"
-    />
+      data-my-work-drawer-shell="true"
+      className="fixed inset-y-0 right-0 z-40 w-full sm:w-[520px]"
+    >
+      <div className="flex h-full w-full flex-col border-l border-border-structural bg-surface shadow-2xl shadow-color">
+        <div className="flex shrink-0 items-start justify-between gap-6 border-b border-border-structural px-7 py-5">
+          <div className="min-w-0 flex-1">
+            <div className="h-6 w-28 animate-pulse rounded bg-surface-hover" />
+
+            <div className="mt-2 h-4 w-40 animate-pulse rounded bg-surface-hover" />
+          </div>
+
+          <div className="h-9 w-9 shrink-0 animate-pulse rounded-lg bg-surface-hover" />
+        </div>
+
+        <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-hidden px-7 py-7">
+          <div className="h-3 w-24 animate-pulse rounded bg-surface-hover" />
+
+          <div className="h-8 w-3/4 animate-pulse rounded bg-surface-hover" />
+
+          <div className="h-24 w-full animate-pulse rounded-lg bg-surface-hover" />
+
+          <div className="h-8 w-1/2 animate-pulse rounded bg-surface-hover" />
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -1126,15 +1155,50 @@ export function MyWorkPage() {
       </header>
 
       {loading ? (
-        <div className="mt-8 flex min-h-64 items-center justify-center rounded-xl border border-outline-variant bg-surface-container-lowest">
-          <span className="material-symbols-outlined mr-2 animate-spin text-[20px] text-on-surface-variant">
-            refresh
-          </span>
-
-          <span className="text-sm text-on-surface-variant">
+        // Themed board skeleton: the final Kanban's OWN chrome
+        // (surface-quiet section, workspace region, board-column
+        // columns at the final min-height, identical 4-column grid)
+        // with restrained pulse bars — the app's established
+        // skeleton convention (see the Project page skeleton). It
+        // occupies the final content region from the first paint,
+        // so the load never exposes a raw white/default panel
+        // (the legacy surface-container-lowest token is not
+        // dark-adapted) and the board resolves in place with no
+        // layout shift.
+        <section
+          aria-busy="true"
+          data-my-work-board-skeleton="true"
+          className="mt-8 overflow-hidden rounded-xl border border-border-structural bg-surface-quiet shadow-sm"
+        >
+          <span className="sr-only">
             Loading your work…
           </span>
-        </div>
+
+          <div className="overflow-x-auto bg-workspace">
+            <div
+              className="grid min-w-max gap-3 p-4"
+              style={{
+                gridTemplateColumns: `repeat(${GLOBAL_STATUS_COLUMNS.length}, minmax(260px, 1fr))`,
+              }}
+            >
+              {GLOBAL_STATUS_COLUMNS.map(
+                (column) => (
+                  <div
+                    key={column.value}
+                    data-my-work-skeleton-column="true"
+                    className="flex min-h-[26rem] flex-col gap-2 rounded-lg bg-board-column p-2"
+                  >
+                    <div className="h-4 w-24 animate-pulse rounded bg-surface-hover" />
+
+                    <div className="mt-1 h-16 animate-pulse rounded-md bg-surface-hover" />
+
+                    <div className="h-16 animate-pulse rounded-md bg-surface-hover" />
+                  </div>
+                ),
+              )}
+            </div>
+          </div>
+        </section>
       ) : error ? (
         <div
           role="alert"
