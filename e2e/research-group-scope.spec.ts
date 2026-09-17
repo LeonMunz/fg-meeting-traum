@@ -75,11 +75,15 @@ test(
       /\/my-work$/,
     )
 
+    // Neutral / global baseline of the current My Work contract: the
+    // Research Group filter (the multiselect toggle that replaced the
+    // legacy single-select "Filter by research group" = "all") has no
+    // group selected, so My Work is not scoped by the filter.
     await expect(
-      page.getByLabel(
-        'Filter by research group',
-      ),
-    ).toHaveValue('all')
+      page.getByRole('button', {
+        name: 'Research groups, none selected',
+      }),
+    ).toBeVisible()
 
     await expect(
       page.getByText(
