@@ -133,6 +133,17 @@ const tokens: Record<string, string> = {
   'color-text-work-faded-60': '#908f99',
   'color-work-surface-note': '#f7faff',
   'color-work-surface-row-hover': '#eff4ff',
+  // My Work Kanban lanes + card rest border + lane drag treatment +
+  // the semantic column-header status accents.
+  'color-work-lane-surface': '#f2f3f5',
+  'color-work-lane-divider': '#e0e1e6',
+  'color-work-card-border': '#e0e1e6',
+  'color-work-lane-drag-tint': '#e7eaf4',
+  'color-work-lane-drag-ring': 'rgba(62, 99, 221, 0.45)',
+  'color-work-status-todo': '#60646c',
+  'color-work-status-in-progress': '#4059d6',
+  'color-work-status-review': '#7c4fd0',
+  'color-work-status-done': '#218358',
   // Inspector control bridges — Light values are the EXACT HEAD composites
   // (on-surface-variant #464555; /80 = #5c5b6a; /40 = #575666;
   // primary/40 = #5c5d6b; primary/15 = #1d2746; error-container/40 = #f8d0ce;
@@ -246,6 +257,17 @@ const darkTokens: Record<string, string> = {
   'color-text-work-faded-60': '#70757c',
   'color-work-surface-note': '#1e2023',
   'color-work-surface-row-hover': '#272a2d',
+  // My Work Kanban lanes + card rest border + lane drag treatment +
+  // the semantic column-header status accents (damped Dark values).
+  'color-work-lane-surface': '#1a1b1e',
+  'color-work-lane-divider': '#2d3034',
+  'color-work-card-border': '#303338',
+  'color-work-lane-drag-tint': '#1c1f29',
+  'color-work-lane-drag-ring': 'rgba(91, 124, 250, 0.45)',
+  'color-work-status-todo': '#8b9098',
+  'color-work-status-in-progress': '#6f85e8',
+  'color-work-status-review': '#9a7bd8',
+  'color-work-status-done': '#3a9b6a',
   // Inspector control bridges (Dark) — approved FG Dark hierarchy.
   'color-text-primary': '#edeef0',
   'color-text-secondary': '#afb3ba',

@@ -169,6 +169,28 @@
    * white with a restrained raised hover tone. */
   --color-work-card: #ffffff;
   --color-work-card-hover: #f2f3f5;
+  /* My Work Kanban lane surface — the subtle per-status column
+   * surface over the open canvas (no lane border, no vertical
+   * divider between lanes). Dark = the approved #1A1B1E over the
+   * #18191B canvas; Light = a restrained neutral lane tone over the
+   * #FCFCFD canvas. */
+  --color-work-lane-surface: #f2f3f5;
+  /* My Work lane divider — the horizontal column-header bottom
+   * divider inside a lane and the card exception-footer divider.
+   * Dark = the approved #2D3034; Light = the canonical subtle
+   * structural border. */
+  --color-work-lane-divider: #e0e1e6;
+  /* My Work card rest border (the hover border stays the canonical
+   * `border-default`). Dark = the approved #303338; Light = the
+   * canonical subtle border. */
+  --color-work-card-border: #e0e1e6;
+  /* My Work lane drag treatment — the lane surface tinted with the
+   * accent (pre-composited lane + 6% accent, so no raw rgba is
+   * needed in JSX) plus the 1px inset ring. Dark = the approved
+   * tint over #1A1B1E with a #5B7CFA/45% ring; Light = the
+   * accent-tinted counterpart over #F2F3F5. */
+  --color-work-lane-drag-tint: #e7eaf4;
+  --color-work-lane-drag-ring: rgba(62, 99, 221, 0.45);
   /* My Work semantic column-header accents (icon + written status label).
    * The written label is ALWAYS visible, so the accent is reinforcement —
    * never color alone. Dark = approved values; Light = legible
@@ -405,11 +427,24 @@ html[data-theme='dark'] {
   /* My Work board card surface + hover — approved Dark values. */
   --color-work-card: #1e2023;
   --color-work-card-hover: #212225;
-  /* My Work semantic column-header accents — approved Dark values. */
+  /* My Work Kanban lane surface — approved Dark value over the
+   * #18191B canvas. */
+  --color-work-lane-surface: #1a1b1e;
+  /* My Work lane divider — approved Dark value. */
+  --color-work-lane-divider: #2d3034;
+  /* My Work card rest border — approved Dark value (hover stays the
+   * canonical `border-default` #43484E). */
+  --color-work-card-border: #303338;
+  /* My Work lane drag treatment — approved Dark tint (lane + 6%
+   * accent) and #5B7CFA/45% inset ring. */
+  --color-work-lane-drag-tint: #1c1f29;
+  --color-work-lane-drag-ring: rgba(91, 124, 250, 0.45);
+  /* My Work semantic column-header accents — the approved damped
+   * Dark values (they supersede the brighter 20B values). */
   --color-work-status-todo: #8b9098;
-  --color-work-status-in-progress: #6e8bfa;
-  --color-work-status-review: #a78bfa;
-  --color-work-status-done: #36a269;
+  --color-work-status-in-progress: #6f85e8;
+  --color-work-status-review: #9a7bd8;
+  --color-work-status-done: #3a9b6a;
   /* My Work semantic Work Item type accents — approved Dark values. */
   --color-work-type-task: #a7adb5;
   --color-work-type-epic: #8096ff;

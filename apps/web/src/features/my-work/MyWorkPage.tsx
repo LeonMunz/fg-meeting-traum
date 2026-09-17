@@ -1185,7 +1185,7 @@ export function MyWorkPage() {
               My Work
             </h1>
 
-            <p className="mt-1 text-[13px] font-normal leading-5 text-text-muted">
+            <p className="mt-1 text-[12px] font-normal leading-[18px] text-text-muted">
               Everything currently assigned to you.
             </p>
           </div>
@@ -1209,7 +1209,7 @@ export function MyWorkPage() {
                   )
                 }}
                 aria-label="Filter by research group"
-                className="h-8 w-[180px] min-w-0 max-w-full cursor-pointer rounded border border-border-subtle bg-surface-quiet pl-2.5 pr-[30px] text-[13px] font-medium text-text outline-none transition focus:border-focus focus:ring-2 focus:ring-focus/20"
+                className="h-8 w-[196px] min-w-0 max-w-full cursor-pointer rounded border border-border-subtle bg-surface-quiet pl-2.5 pr-[30px] text-[13px] font-medium text-text outline-none transition focus:border-focus focus:ring-2 focus:ring-focus/20"
               >
                 <option value="all">
                   All research groups
@@ -1302,7 +1302,7 @@ export function MyWorkPage() {
 
           <div className="overflow-x-auto">
             <div
-              className="grid min-w-max items-start gap-4"
+              className="grid min-w-max items-start gap-3"
               style={{
                 gridTemplateColumns: `repeat(${GLOBAL_STATUS_COLUMNS.length}, minmax(260px, 1fr))`,
               }}
@@ -1312,9 +1312,9 @@ export function MyWorkPage() {
                   <div
                     key={column.value}
                     data-my-work-skeleton-column="true"
-                    className="flex min-h-[26rem] flex-col rounded-lg bg-board-column"
+                    className="flex min-h-[max(520px,calc(100vh-245px))] flex-col rounded-md bg-work-lane-surface px-2 pb-4"
                   >
-                    <div className="flex h-8 items-center gap-1.5 px-3">
+                    <div className="mb-1 flex h-10 items-center border-b border-work-lane-divider px-1">
                       <span
                         aria-hidden="true"
                         className={`material-symbols-outlined shrink-0 text-[14px] opacity-60 ${COLUMN_PRESENTATION[column.value].iconClassName}`}
@@ -1322,13 +1322,13 @@ export function MyWorkPage() {
                         {COLUMN_PRESENTATION[column.value].icon}
                       </span>
 
-                      <div className="h-3 w-20 animate-pulse rounded bg-surface-hover" />
+                      <div className="ml-1.5 h-3 w-20 animate-pulse rounded bg-surface-hover" />
                     </div>
 
-                    <div className="flex flex-1 flex-col gap-2 p-2">
-                      <div className="h-24 animate-pulse rounded-md bg-surface-hover" />
+                    <div className="flex flex-col gap-2">
+                      <div className="h-[88px] animate-pulse rounded-md bg-surface-hover" />
 
-                      <div className="h-24 animate-pulse rounded-md bg-surface-hover" />
+                      <div className="h-[88px] animate-pulse rounded-md bg-surface-hover" />
                     </div>
                   </div>
                 ),
@@ -1686,16 +1686,16 @@ export function MyWorkPage() {
  * id). While a drag is active, each column presents its DROP
  * AVAILABILITY for that specific dragged item: a different category
  * that the item's `statusTargets` resolves to a concrete
- * project-local definition for is a valid target (quiet ring,
- * emphasized on hover — the Project Board's drop-target language);
- * the item's own category and categories without a target are
- * unavailable (quiet dim, and the browser drop is refused because
- * `dragover` is not accepted). No decoration exists when no drag is
- * active. Dropping issues exactly one canonical status mutation and
- * one authoritative My Work refetch — no global card ordering, no
- * within-column reordering, no `boardPosition`. At narrow widths the
- * board scrolls horizontally inside its own region — the document
- * itself never overflows.
+ * project-local definition for is a valid target — the lane itself
+ * takes a subtle accent tint plus a 1px inset ring (no standalone
+ * dropzone); the item's own category and categories without a
+ * target are unavailable (quiet dim, and the browser drop is
+ * refused because `dragover` is not accepted). No decoration exists
+ * when no drag is active. Dropping issues exactly one canonical
+ * status mutation and one authoritative My Work refetch — no global
+ * card ordering, no within-column reordering, no `boardPosition`.
+ * At narrow widths the board scrolls horizontally inside its own
+ * region — the document itself never overflows.
  */
 function MyWorkBoard({
   columns,
@@ -1748,12 +1748,6 @@ function MyWorkBoard({
     )
   }, [columns, draggedItemId, pendingItemIds])
 
-  // The column currently hovered by a valid drag (pure UI state,
-  // cleared on drop/drag-end).
-  const [dragOverColumn, setDragOverColumn] = useState<
-    ApiWorkItemStatus | null
-  >(null)
-
   return (
     // The board renders directly on the page canvas: NO outer
     // panel (no shared background, border, radius, or shadow) — the
@@ -1787,7 +1781,7 @@ function MyWorkBoard({
 
       <div className="overflow-x-auto">
         <div
-          className="grid min-w-max items-start gap-4"
+          className="grid min-w-max items-start gap-3"
           style={{
             gridTemplateColumns: `repeat(${columns.length}, minmax(260px, 1fr))`,
           }}
@@ -1811,9 +1805,6 @@ function MyWorkBoard({
               draggedItem != null &&
               !isSameCategory &&
               hasStatusTarget
-            const isDragOver =
-              isValidDropTarget &&
-              dragOverColumn === column.value
             const isUnavailable =
               draggedItem != null &&
               !isValidDropTarget
@@ -1830,30 +1821,6 @@ function MyWorkBoard({
 
               event.preventDefault()
               event.dataTransfer.dropEffect = 'move'
-
-              if (dragOverColumn !== column.value) {
-                setDragOverColumn(column.value)
-              }
-            }
-
-            const handleColumnDragLeave = (
-              event: React.DragEvent,
-            ) => {
-              if (
-                event.currentTarget.contains(
-                  event.relatedTarget as
-                    | Node
-                    | null,
-                )
-              ) {
-                return
-              }
-
-              setDragOverColumn((current) =>
-                current === column.value
-                  ? null
-                  : current,
-              )
             }
 
             const handleColumnDrop = (
@@ -1865,7 +1832,6 @@ function MyWorkBoard({
                 event.dataTransfer.getData(
                   'text/plain',
                 )
-              setDragOverColumn(null)
 
               const numericId = Number(droppedId)
 
@@ -1893,24 +1859,23 @@ function MyWorkBoard({
                       : 'unavailable'
                 }
                 onDragOver={handleColumnDragOver}
-                onDragLeave={handleColumnDragLeave}
                 onDrop={handleColumnDrop}
                 className={[
-                  'flex min-h-[26rem] min-w-0 flex-col rounded-lg transition-colors',
-                  isDragOver
-                    ? 'bg-drag-target-bg ring-1 ring-inset ring-drag-target-ring'
-                    : isValidDropTarget
-                      ? 'bg-board-column ring-1 ring-inset ring-drag-target-ring/30'
-                      : isUnavailable
-                        ? 'bg-board-column opacity-60'
-                        : 'bg-board-column',
+                  'flex min-h-[max(520px,calc(100vh-245px))] min-w-0 flex-col rounded-md px-2 pb-4 transition-colors',
+                  isValidDropTarget
+                    ? 'bg-work-lane-drag-tint ring-1 ring-inset ring-work-lane-drag-ring'
+                    : 'bg-work-lane-surface',
+                  isUnavailable ? 'opacity-60' : '',
                 ].join(' ')}
               >
               {/* Column header: icon + WRITTEN status + count. The
                  written label is always visible, so the semantic
                  icon/accent is reinforcement — never color alone.
-                 The count is quiet plain text (no pill). */}
-              <div className="flex h-8 items-center gap-1.5 px-3">
+                 The count is quiet plain text (no pill). The header
+                 sits inside the lane on the lane surface with a
+                 horizontal bottom divider — no header background,
+                 no lane border. */}
+              <div className="mb-1 flex h-10 shrink-0 items-center border-b border-work-lane-divider px-1">
                 <span
                   aria-hidden="true"
                   className={`material-symbols-outlined shrink-0 text-[14px] ${COLUMN_PRESENTATION[column.value].iconClassName}`}
@@ -1918,18 +1883,19 @@ function MyWorkBoard({
                   {COLUMN_PRESENTATION[column.value].icon}
                 </span>
 
-                <h2 className="text-[13px] font-semibold leading-[18px] text-text">
+                <h2 className="ml-1.5 text-[12px] font-semibold leading-[18px] text-text">
                   {column.label}
                 </h2>
 
-                <span className="text-[10px] leading-4 text-text-work-faded-70">
+                <span className="ml-[5px] text-[10px] font-medium leading-[14px] text-control-disabled-foreground">
                   {column.items.length}
                 </span>
               </div>
 
               {/* Empty columns stay visible (header + count) with no
-                  decorative placeholder. */}
-              <div className="flex flex-1 flex-col gap-2 p-2">
+                  decorative placeholder; the lane surface extends
+                  below the last card. */}
+              <div className="flex flex-col gap-2">
                 {column.items.length === 0 ? null : (
                   column.items.map((item) => (
                     <MyWorkBoardCard
@@ -1945,10 +1911,7 @@ function MyWorkBoard({
                         )
                       }
                       onDragStart={onDragStart}
-                      onDragEnd={() => {
-                        setDragOverColumn(null)
-                        onDragEnd()
-                      }}
+                      onDragEnd={onDragEnd}
                     />
                   ))
                 )}
@@ -2055,22 +2018,22 @@ function MyWorkBoardCard({
         // Hover = slightly raised surface + stronger border (no
         // lift/scale animation). Transitions: background/border only,
         // ~120ms. Keyboard focus gets a real focus outline.
-        'min-h-24 rounded-md border bg-work-card px-3 py-[11px] transition-[background-color,border-color] duration-120',
+        'min-h-[88px] rounded-md border bg-work-card px-3 py-2.5 transition-[background-color,border-color] duration-120',
         'hover:border-border-default hover:bg-work-card-hover',
         'focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus',
         dragging
           ? 'border-accent opacity-[0.85]'
           : pendingMove
-            ? 'cursor-progress border-border-subtle opacity-60'
-            : 'cursor-grab border-border-subtle active:cursor-grabbing',
+            ? 'cursor-progress border-work-card-border opacity-60'
+            : 'cursor-grab border-work-card-border active:cursor-grabbing',
       ].join(' ')}
     >
       {/* 1. Type + title — the icon is the semantic type
           (shape + color), the title dominates. */}
-      <div className="flex items-start gap-1.5">
+      <div className="flex items-start gap-2">
         <span
           aria-hidden="true"
-          className={`material-symbols-outlined shrink-0 text-base ${typePresentation.iconClassName}`}
+          className={`material-symbols-outlined w-4 shrink-0 text-[16px] ${typePresentation.iconClassName}`}
         >
           {typePresentation.icon}
         </span>
@@ -2084,7 +2047,7 @@ function MyWorkBoardCard({
           under the title. Same semantic color as the icon (neutral
           for a null kind); identifiable by shape + text + color,
           never color alone. */}
-      <div className={`mt-[3px] truncate pl-[22px] text-[10px] font-medium leading-[14px] ${typePresentation.labelClassName}`}>
+      <div className={`mt-[3px] truncate pl-6 text-[10px] font-medium leading-[14px] ${typePresentation.labelClassName}`}>
         {item.typeName}
       </div>
 
@@ -2092,7 +2055,7 @@ function MyWorkBoardCard({
           first). One line with truncation; the native tooltip
           carries the complete string. */}
       <div
-        className="mt-2 flex min-w-0 items-center pl-[22px] text-[11px] leading-4"
+        className="mt-2 flex min-w-0 items-center pl-6 text-[10px] leading-[15px]"
         title={`${item.researchGroupName} › ${item.projectName}`}
       >
         <span className="min-w-0 truncate text-text-tertiary">
@@ -2101,7 +2064,7 @@ function MyWorkBoardCard({
 
         <span
           aria-hidden="true"
-          className="shrink-0 text-text-work-faded-70"
+          className="shrink-0 text-control-disabled-foreground"
         >
           {' › '}
         </span>
@@ -2115,11 +2078,11 @@ function MyWorkBoardCard({
           Icon + text (never color alone); blocked and due state may
           coexist. */}
       {hasExceptions && (
-        <div className="mt-2 flex min-w-0 flex-wrap items-center gap-3 border-t border-border-subtle pt-2">
+        <div className="mt-2 flex min-w-0 flex-wrap items-center gap-3 border-t border-work-lane-divider pt-[7px]">
           {item.blockedReason != null && (
             <span
               title={item.blockedReason}
-              className="flex items-center gap-1 text-[11px] font-medium leading-4 text-work-exception-warning"
+              className="flex items-center gap-1 text-[10px] font-medium leading-[15px] text-work-exception-warning"
             >
               <span
                 aria-hidden="true"
@@ -2132,7 +2095,7 @@ function MyWorkBoardCard({
           )}
 
           {dueState.kind === 'overdue' && (
-            <span className="flex items-center gap-1 text-[11px] font-medium leading-4 text-work-exception-danger">
+            <span className="flex items-center gap-1 text-[10px] font-medium leading-[15px] text-work-exception-danger">
               <span
                 aria-hidden="true"
                 className="material-symbols-outlined text-[13px]"
@@ -2144,7 +2107,7 @@ function MyWorkBoardCard({
           )}
 
           {dueState.kind === 'today' && (
-            <span className="flex items-center gap-1 text-[11px] font-medium leading-4 text-work-exception-warning">
+            <span className="flex items-center gap-1 text-[10px] font-medium leading-[15px] text-work-exception-warning">
               <span
                 aria-hidden="true"
                 className="material-symbols-outlined text-[13px]"
@@ -2156,7 +2119,7 @@ function MyWorkBoardCard({
           )}
 
           {dueState.kind === 'future' && (
-            <span className="flex items-center gap-1 text-[11px] font-normal leading-4 text-text-muted">
+            <span className="flex items-center gap-1 text-[10px] font-medium leading-[15px] text-text-muted">
               <span
                 aria-hidden="true"
                 className="material-symbols-outlined text-[13px]"

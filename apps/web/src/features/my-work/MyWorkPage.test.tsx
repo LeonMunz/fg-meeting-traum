@@ -1441,6 +1441,72 @@ describe('My Work Kanban — visual contract', () => {
     ) as HTMLElement
   }
 
+  it('renders a lane container for all four semantic categories', async () => {
+    vi.mocked(listMyWork).mockResolvedValue([
+      todoItem(),
+    ])
+
+    const { container } = renderPage()
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          '[data-work-item-id="100"]',
+        ),
+      ).not.toBeNull()
+    })
+
+    // All four lanes render in fixed order even though only one
+    // holds a card.
+    expect(
+      Array.from(
+        container.querySelectorAll(
+          '[data-board-column]'
+        )
+      ).map(
+        (lane) =>
+          (lane as HTMLElement).dataset
+            .boardColumn,
+      ),
+    ).toEqual([
+      'todo',
+      'in_progress',
+      'review',
+      'done',
+    ])
+  })
+
+  it('displays the complete "All research groups" filter label', async () => {
+    mockGroups = [
+      { id: GROUP_A, name: 'Research Group A' },
+      { id: GROUP_B, name: 'Research Group B' },
+    ]
+
+    vi.mocked(listMyWork).mockResolvedValue([
+      todoItem(),
+    ])
+
+    const { container } = renderPage()
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          'select[aria-label="Filter by research group"]',
+        ),
+      ).not.toBeNull()
+    })
+
+    const select = container.querySelector(
+      'select[aria-label="Filter by research group"]',
+    ) as HTMLSelectElement
+
+    // The default option keeps its full, untruncated label.
+    expect(
+      select.querySelector('option[value="all"]')
+        ?.textContent,
+    ).toBe('All research groups')
+  })
+
   it('labels the view switch Board (not Kanban)', async () => {
     vi.mocked(listMyWork).mockResolvedValue([
       todoItem(),
