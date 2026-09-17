@@ -24,15 +24,22 @@ import {
 import {
   getProjectWorkItemConfiguration,
   getProject,
+  listProjectMemberships,
 } from '../../api/projects'
 import { ApiError } from '../../api/client'
 import {
+  deleteWorkItem,
   listMyWork,
+  listProjectWorkItems,
   transitionWorkItemStatus,
   updateWorkItem,
 } from '../../api/work-items'
 import type {
   ApiPersonalWorkItem,
+  ApiProject,
+  ApiProjectMembership,
+  ApiProjectWorkItemConfiguration,
+  ApiWorkItem,
 } from '../../api/types'
 
 import { MyWorkPage } from './MyWorkPage'
@@ -48,6 +55,9 @@ vi.mock('../../api/work-items', () => ({
   listMyWork: vi.fn(),
   transitionWorkItemStatus: vi.fn(),
   updateWorkItem: vi.fn(),
+  createWorkItem: vi.fn(),
+  deleteWorkItem: vi.fn(),
+  listProjectWorkItems: vi.fn(),
 }))
 
 vi.mock('../../api/projects', () => ({
@@ -55,6 +65,72 @@ vi.mock('../../api/projects', () => ({
   getProject: vi.fn(),
   listProjectMemberships: vi.fn(),
   listResearchGroupMembers: vi.fn(),
+}))
+
+vi.mock('../../api/useSession', () => ({
+  useSession: () => ({
+    user: {
+      id: 1,
+      username: 'alex',
+      name: 'Alex',
+    },
+  }),
+}))
+
+// The REAL canonical drawer is covered by its own unit suites and the
+// E2E spec (it pulls the RichMarkdownEditor/Tiptap graph). The page
+// under test here must mount the canonical module (this mock stands
+// in for it at the module boundary) and pass it the clicked item —
+// the stub renders exactly the props it receives, which is what the
+// drawer-contract assertions below read back.
+vi.mock('../projects/WorkItemDrawer', () => ({
+  WorkItemDrawer: (props: Record<string, any>) => (
+    <div
+      data-testid="work-item-drawer"
+      data-project-name={props.projectName}
+      data-read-only={String(Boolean(props.readOnly))}
+      data-work-item-inspector-boundary="true"
+    >
+      {props.item ? (
+        <h2 data-testid="work-item-drawer-title">
+          {props.item.title}
+        </h2>
+      ) : null}
+
+      <button
+        type="button"
+        onClick={() => props.onClose()}
+      >
+        Close work item drawer
+      </button>
+
+      {props.item ? (
+        <button
+          type="button"
+          data-testid="drawer-apply-patch"
+          onClick={() => {
+            void props.onPatch(props.item.id, {
+              title: 'Patched title',
+            })
+          }}
+        >
+          Apply canonical patch
+        </button>
+      ) : null}
+
+      {props.item ? (
+        <button
+          type="button"
+          data-testid="drawer-request-delete"
+          onClick={() =>
+            props.onRequestDelete?.(props.item.id)
+          }
+        >
+          Request delete
+        </button>
+      ) : null}
+    </div>
+  ),
 }))
 
 // Configurable Research Group list so the page-local group filter
@@ -105,6 +181,133 @@ function makeItem(
     statusTargets: [],
     ...overrides,
   } as ApiPersonalWorkItem
+}
+
+// ── Lazy drawer-context fixtures ─────────────────────────
+
+// The owning Project as the canonical endpoint returns it. The name
+// deliberately DIFFERS from the item's payload `projectName` so a
+// test can prove the drawer receives the fetched Project context
+// (not the display metadata from the My Work payload).
+function makeProject(
+  projectId: number,
+  overrides: Partial<ApiProject> = {},
+): ApiProject {
+  return {
+    id: projectId,
+    researchGroupId: GROUP_A,
+    name: `Drawer Project ${projectId}`,
+    description: '',
+    status: 'active',
+    archivedAt: null,
+    currentUserRole: 'owner',
+    createdAt: '2026-09-01T00:00:00Z',
+    updatedAt: '2026-09-01T00:00:00Z',
+    ...overrides,
+  }
+}
+
+function makeConfiguration(): ApiProjectWorkItemConfiguration {
+  return {
+    types: [
+      {
+        id: 4,
+        name: 'Sample Batch',
+        order: 0,
+        active: true,
+      },
+    ],
+    statuses: [
+      {
+        id: 11,
+        name: 'Ready for Lab',
+        category: 'in_progress',
+        order: 0,
+        active: true,
+        isDefault: false,
+      },
+    ],
+    labels: [],
+  }
+}
+
+function makeMemberships(): ApiProjectMembership[] {
+  return [
+    {
+      id: 1,
+      role: 'owner',
+      addedAt: null,
+      user: {
+        id: 1,
+        username: 'alex',
+        firstName: 'Alex',
+        lastName: 'Lange',
+      },
+    },
+    {
+      id: 2,
+      role: 'member',
+      addedAt: null,
+      user: {
+        id: 2,
+        username: 'bee',
+        firstName: 'Bee',
+        lastName: 'Bo',
+      },
+    },
+    {
+      id: 3,
+      role: 'viewer',
+      addedAt: null,
+      user: {
+        id: 3,
+        username: 'vee',
+        firstName: 'Vee',
+        lastName: 'Viewer',
+      },
+    },
+  ]
+}
+
+function makeProjectWorkItems(): ApiWorkItem[] {
+  return [
+    {
+      id: 900,
+      projectId: PROJECT_A,
+      title: 'Parent sample item',
+      description: '',
+      typeDefinitionId: 4,
+      statusDefinitionId: 11,
+      boardPosition: null,
+      labelDefinitionIds: [],
+      assigneeIds: [],
+      parentId: null,
+      dueDate: null,
+      blockedReason: null,
+      completedAt: null,
+      createdAt: '2026-09-01T00:00:00Z',
+      updatedAt: '2026-09-01T00:00:00Z',
+      createdById: 1,
+      meetingOrigin: null,
+    },
+  ]
+}
+
+// Wire the four lazy drawer-context reads to canonical-looking
+// responses for the item's owning Project.
+function mockDrawerContext() {
+  vi.mocked(getProject).mockImplementation(
+    async (projectId) => makeProject(projectId),
+  )
+  vi.mocked(
+    getProjectWorkItemConfiguration,
+  ).mockResolvedValue(makeConfiguration())
+  vi.mocked(listProjectMemberships).mockResolvedValue(
+    makeMemberships(),
+  )
+  vi.mocked(listProjectWorkItems).mockResolvedValue(
+    makeProjectWorkItems(),
+  )
 }
 
 function isoDaysFromNow(days: number) {
@@ -670,7 +873,7 @@ describe('My Work List View — loading / empty / error', () => {
 })
 
 describe('My Work List View — row interaction', () => {
-  it('opens an item via the canonical Project Work Items interaction', async () => {
+  it('opens an item via the canonical Project Work Items interaction (rows keep navigating)', async () => {
     vi.mocked(listMyWork).mockResolvedValue([
       makeItem({
         id: 100,
@@ -678,7 +881,11 @@ describe('My Work List View — row interaction', () => {
       }),
     ])
 
-    const { getByRole } = renderPage()
+    const { getByRole, container } = renderPage()
+
+    // The List row (the Kanban card carries the same accessible
+    // name — switch views first so this is genuinely the row).
+    await switchView({ getByRole }, 'List')
 
     const row = () =>
       getByRole('button', {
@@ -705,6 +912,13 @@ describe('My Work List View — row interaction', () => {
         String(PROJECT_A),
       )
     })
+
+    // And no drawer was mounted by the row click.
+    expect(
+      container.querySelector(
+        '[data-testid="work-item-drawer"]',
+      ),
+    ).toBeNull()
   })
 })
 
@@ -1241,7 +1455,9 @@ describe('My Work Kanban — card content', () => {
 })
 
 describe('My Work Kanban — interaction, filter, and contract', () => {
-  it('opens a card via the canonical Project Work Items interaction', async () => {
+  it('opens the canonical WorkItemDrawer in place on card click (no navigation)', async () => {
+    mockDrawerContext()
+
     vi.mocked(listMyWork).mockResolvedValue([
       makeItem({
         id: 100,
@@ -1249,7 +1465,7 @@ describe('My Work Kanban — interaction, filter, and contract', () => {
       }),
     ])
 
-    const { getByRole } = renderPage()
+    const { getByRole, container } = renderPage()
 
     const card = () =>
       getByRole('button', {
@@ -1264,19 +1480,45 @@ describe('My Work Kanban — interaction, filter, and contract', () => {
       fireEvent.click(card())
     })
 
+    // The canonical drawer (mocked at the module boundary) is
+    // mounted over My Work with the CLICKED item and the fetched
+    // owning-Project context (the fetched project name — not the
+    // payload's display name — proves the lazy context is used).
+    const drawer = () =>
+      container.querySelector(
+        '[data-testid="work-item-drawer"]',
+      ) as HTMLElement
+
     await waitFor(() => {
-      expect(
-        document.querySelector(
-          '[data-testid="work-items-target"]',
-        ),
-      ).toHaveAttribute(
-        'data-project-id',
-        String(PROJECT_A),
-      )
+      expect(drawer()).not.toBeNull()
     })
+
+    expect(drawer().textContent).toContain(
+      'Prepare samples',
+    )
+    expect(drawer()).toHaveAttribute(
+      'data-project-name',
+      `Drawer Project ${PROJECT_A}`,
+    )
+    expect(drawer()).toHaveAttribute(
+      'data-read-only',
+      'false',
+    )
+
+    // The pathname stays on /my-work: the canonical Project Work
+    // Items target is never rendered, and the My Work board is
+    // still rendered underneath.
+    expect(
+      container.querySelector(
+        '[data-testid="work-items-target"]',
+      ),
+    ).toBeNull()
+    expect(card()).toBeInTheDocument()
   })
 
   it('opens a card with the keyboard (Enter)', async () => {
+    mockDrawerContext()
+
     vi.mocked(listMyWork).mockResolvedValue([
       makeItem({
         id: 100,
@@ -1284,7 +1526,7 @@ describe('My Work Kanban — interaction, filter, and contract', () => {
       }),
     ])
 
-    const { getByRole } = renderPage()
+    const { getByRole, container } = renderPage()
 
     const card = () =>
       getByRole('button', {
@@ -1301,14 +1543,126 @@ describe('My Work Kanban — interaction, filter, and contract', () => {
 
     await waitFor(() => {
       expect(
-        document.querySelector(
-          '[data-testid="work-items-target"]',
+        container.querySelector(
+          '[data-testid="work-item-drawer"]',
         ),
-      ).toHaveAttribute(
-        'data-project-id',
-        String(PROJECT_A),
+      ).not.toBeNull()
+    })
+  })
+
+  it('opens a card with the keyboard (Space)', async () => {
+    mockDrawerContext()
+
+    vi.mocked(listMyWork).mockResolvedValue([
+      makeItem({
+        id: 100,
+        projectId: PROJECT_A,
+      }),
+    ])
+
+    const { getByRole, container } = renderPage()
+
+    const card = () =>
+      getByRole('button', {
+        name: 'Open Prepare samples',
+      })
+
+    await waitFor(() => {
+      expect(card()).toBeInTheDocument()
+    })
+
+    await act(async () => {
+      fireEvent.keyDown(card(), { key: ' ' })
+    })
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          '[data-testid="work-item-drawer"]',
+        ),
+      ).not.toBeNull()
+    })
+  })
+
+  it('closing the drawer returns to the board without navigation, keeping the group filter and the Kanban view', async () => {
+    mockGroups = [
+      { id: GROUP_A, name: 'Research Group A' },
+      { id: GROUP_B, name: 'Research Group B' },
+    ]
+
+    mockDrawerContext()
+
+    vi.mocked(listMyWork).mockResolvedValue([
+      makeItem({
+        id: 100,
+        projectId: PROJECT_A,
+        researchGroupId: GROUP_A,
+        statusCategory: 'todo',
+      }),
+    ])
+
+    const { getByRole, container } = renderPage()
+
+    const card = () =>
+      getByRole('button', {
+        name: 'Open Prepare samples',
+      })
+
+    await waitFor(() => {
+      expect(card()).toBeInTheDocument()
+    })
+
+    // Select the Research Group filter.
+    const select = container.querySelector(
+      'select[aria-label="Filter by research group"]',
+    ) as HTMLSelectElement
+    await act(async () => {
+      select.value = String(GROUP_A)
+      fireEvent.change(select)
+    })
+
+    // Open the card, then close the drawer.
+    await act(async () => {
+      fireEvent.click(card())
+    })
+
+    const drawer = () =>
+      container.querySelector(
+        '[data-testid="work-item-drawer"]',
+      ) as HTMLElement
+
+    await waitFor(() => {
+      expect(drawer()).not.toBeNull()
+    })
+
+    await act(async () => {
+      fireEvent.click(
+        drawer().querySelector(
+          'button',
+        ) as HTMLElement,
       )
     })
+
+    // Drawer is gone, the board is exactly as before, no
+    // navigation happened, and the view + filter selections
+    // survived.
+    await waitFor(() => {
+      expect(drawer()).toBeNull()
+    })
+
+    expect(
+      container.querySelector(
+        '[data-testid="work-items-target"]',
+      ),
+    ).toBeNull()
+    expect(card()).toBeInTheDocument()
+    expect(select.value).toBe(String(GROUP_A))
+    expect(
+      getByRole('button', { name: 'Kanban' }),
+    ).toHaveAttribute('aria-pressed', 'true')
+    expect(
+      getByRole('button', { name: 'List' }),
+    ).toHaveAttribute('aria-pressed', 'false')
   })
 
   it('applies the Research Group filter to the Kanban', async () => {
@@ -1477,6 +1831,786 @@ describe('My Work Kanban — interaction, filter, and contract', () => {
       getProjectWorkItemConfiguration,
     ).not.toHaveBeenCalled()
     expect(getProject).not.toHaveBeenCalled()
+  })
+})
+
+describe('My Work Kanban — lazy Project drawer context', () => {
+  it('fetches no Project drawer context during normal initial rendering', async () => {
+    vi.mocked(listMyWork).mockResolvedValue([
+      makeItem({
+        id: 1,
+        title: 'Alpha item',
+        projectId: PROJECT_A,
+      }),
+      makeItem({
+        id: 2,
+        title: 'Beta item',
+        projectId: PROJECT_B,
+      }),
+    ])
+
+    const { container, getByRole } = renderPage()
+
+    await waitFor(() => {
+      expect(
+        container.querySelectorAll(
+          '[data-work-item-id]',
+        ).length,
+      ).toBe(2)
+    })
+
+    // Repeated renders (view switching) without opening a card
+    // must never create a per-Project configuration fan-out.
+    await switchView({ getByRole }, 'List')
+    await waitFor(() => {
+      expect(
+        getByRole('button', {
+          name: 'Open Alpha item',
+        }),
+      ).toBeInTheDocument()
+    })
+
+    await switchView({ getByRole }, 'Kanban')
+    await waitFor(() => {
+      expect(
+        container.querySelectorAll(
+          '[data-board-column]',
+        ).length,
+      ).toBe(4)
+    })
+
+    expect(
+      getProjectWorkItemConfiguration,
+    ).not.toHaveBeenCalled()
+    expect(getProject).not.toHaveBeenCalled()
+    expect(listProjectMemberships).not.toHaveBeenCalled()
+    expect(listProjectWorkItems).not.toHaveBeenCalled()
+  })
+
+  it('fetches only the owning Project context when a card opens', async () => {
+    mockDrawerContext()
+
+    vi.mocked(listMyWork).mockResolvedValue([
+      makeItem({
+        id: 1,
+        title: 'Alpha item',
+        projectId: PROJECT_A,
+      }),
+      makeItem({
+        id: 2,
+        title: 'Beta item',
+        projectId: PROJECT_B,
+      }),
+    ])
+
+    const { getByRole, container } = renderPage()
+
+    await waitFor(() => {
+      expect(
+        getByRole('button', {
+          name: 'Open Alpha item',
+        }),
+      ).toBeInTheDocument()
+    })
+
+    await act(async () => {
+      fireEvent.click(
+        getByRole('button', {
+          name: 'Open Alpha item',
+        }),
+      )
+    })
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          '[data-testid="work-item-drawer"]',
+        ),
+      ).not.toBeNull()
+    })
+
+    // Exactly the drawer-contract reads, once each, for the
+    // OWNING Project only.
+    expect(getProject).toHaveBeenCalledTimes(1)
+    expect(getProject).toHaveBeenCalledWith(PROJECT_A)
+    expect(
+      getProjectWorkItemConfiguration,
+    ).toHaveBeenCalledTimes(1)
+    expect(
+      getProjectWorkItemConfiguration,
+    ).toHaveBeenCalledWith(PROJECT_A)
+    expect(listProjectMemberships).toHaveBeenCalledTimes(1)
+    expect(
+      listProjectMemberships,
+    ).toHaveBeenCalledWith(PROJECT_A)
+    expect(listProjectWorkItems).toHaveBeenCalledTimes(1)
+    expect(listProjectWorkItems).toHaveBeenCalledWith(
+      PROJECT_A,
+    )
+
+    // The My Work payload stays the one canonical read.
+    expect(listMyWork).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not fetch drawer context for unrelated Projects', async () => {
+    mockDrawerContext()
+
+    vi.mocked(listMyWork).mockResolvedValue([
+      makeItem({
+        id: 1,
+        title: 'Alpha item',
+        projectId: PROJECT_A,
+      }),
+      makeItem({
+        id: 2,
+        title: 'Beta item',
+        projectId: PROJECT_B,
+      }),
+    ])
+
+    const { getByRole, container } = renderPage()
+
+    await waitFor(() => {
+      expect(
+        getByRole('button', {
+          name: 'Open Alpha item',
+        }),
+      ).toBeInTheDocument()
+    })
+
+    await act(async () => {
+      fireEvent.click(
+        getByRole('button', {
+          name: 'Open Alpha item',
+        }),
+      )
+    })
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          '[data-testid="work-item-drawer"]',
+        ),
+      ).not.toBeNull()
+    })
+
+    expect(
+      getProject,
+    ).not.toHaveBeenCalledWith(PROJECT_B)
+    expect(
+      getProjectWorkItemConfiguration,
+    ).not.toHaveBeenCalledWith(PROJECT_B)
+    expect(
+      listProjectMemberships,
+    ).not.toHaveBeenCalledWith(PROJECT_B)
+    expect(
+      listProjectWorkItems,
+    ).not.toHaveBeenCalledWith(PROJECT_B)
+  })
+
+  it('re-opens a card of the same Project without duplicate context requests', async () => {
+    mockDrawerContext()
+
+    vi.mocked(listMyWork).mockResolvedValue([
+      makeItem({
+        id: 100,
+        projectId: PROJECT_A,
+      }),
+    ])
+
+    const { getByRole, container } = renderPage()
+
+    const card = () =>
+      getByRole('button', {
+        name: 'Open Prepare samples',
+      })
+
+    await waitFor(() => {
+      expect(card()).toBeInTheDocument()
+    })
+
+    await act(async () => {
+      fireEvent.click(card())
+    })
+
+    const drawer = () =>
+      container.querySelector(
+        '[data-testid="work-item-drawer"]',
+      ) as HTMLElement
+
+    await waitFor(() => {
+      expect(drawer()).not.toBeNull()
+    })
+
+    // Close, then re-open the same card.
+    await act(async () => {
+      fireEvent.click(
+        drawer().querySelector(
+          'button',
+        ) as HTMLElement,
+      )
+    })
+
+    await waitFor(() => {
+      expect(drawer()).toBeNull()
+    })
+
+    await act(async () => {
+      fireEvent.click(card())
+    })
+
+    await waitFor(() => {
+      expect(drawer()).not.toBeNull()
+    })
+
+    // One set of context reads for the whole session — the
+    // second open hit the session cache.
+    expect(getProject).toHaveBeenCalledTimes(1)
+    expect(
+      getProjectWorkItemConfiguration,
+    ).toHaveBeenCalledTimes(1)
+    expect(listProjectMemberships).toHaveBeenCalledTimes(1)
+    expect(listProjectWorkItems).toHaveBeenCalledTimes(1)
+  })
+
+  it('passes the clicked Work Item — not merely the first of the Project — to the drawer', async () => {
+    mockDrawerContext()
+
+    vi.mocked(listMyWork).mockResolvedValue([
+      makeItem({
+        id: 1,
+        title: 'First project item',
+        projectId: PROJECT_A,
+      }),
+      makeItem({
+        id: 2,
+        title: 'Second project item',
+        projectId: PROJECT_A,
+        statusCategory: 'todo',
+      }),
+    ])
+
+    const { getByRole, container } = renderPage()
+
+    await waitFor(() => {
+      expect(
+        getByRole('button', {
+          name: 'Open Second project item',
+        }),
+      ).toBeInTheDocument()
+    })
+
+    await act(async () => {
+      fireEvent.click(
+        getByRole('button', {
+          name: 'Open Second project item',
+        }),
+      )
+    })
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          '[data-testid="work-item-drawer"]',
+        ),
+      ).not.toBeNull()
+    })
+
+    // The drawer carries the clicked item's identity, and ONLY one
+    // drawer is mounted.
+    const drawer = container.querySelector(
+      '[data-testid="work-item-drawer"]',
+    ) as HTMLElement
+    expect(
+      container.querySelectorAll(
+        '[data-testid="work-item-drawer"]',
+      ).length,
+    ).toBe(1)
+    expect(
+      drawer.querySelector(
+        '[data-testid="work-item-drawer-title"]',
+      )?.textContent,
+    ).toBe('Second project item')
+  })
+
+  it('keeps the drawer open across a List/Kanban view switch (same selected item)', async () => {
+    mockDrawerContext()
+
+    vi.mocked(listMyWork).mockResolvedValue([
+      makeItem({
+        id: 100,
+        projectId: PROJECT_A,
+      }),
+    ])
+
+    const { getByRole, container } = renderPage()
+
+    await waitFor(() => {
+      expect(
+        getByRole('button', {
+          name: 'Open Prepare samples',
+        }),
+      ).toBeInTheDocument()
+    })
+
+    await act(async () => {
+      fireEvent.click(
+        getByRole('button', {
+          name: 'Open Prepare samples',
+        }),
+      )
+    })
+
+    const drawer = () =>
+      container.querySelector(
+        '[data-testid="work-item-drawer"]',
+      ) as HTMLElement
+
+    await waitFor(() => {
+      expect(drawer()).not.toBeNull()
+    })
+
+    // Switching views must not close the drawer (keep-open
+    // boundary marker) and must not re-fetch.
+    await switchView({ getByRole }, 'List')
+
+    expect(drawer()).not.toBeNull()
+    expect(drawer().textContent).toContain(
+      'Prepare samples',
+    )
+    expect(getProject).toHaveBeenCalledTimes(1)
+
+    await switchView({ getByRole }, 'Kanban')
+
+    expect(drawer()).not.toBeNull()
+  })
+
+  it('renders a failed drawer-context load in place with retry, without navigating', async () => {
+    vi.mocked(getProject).mockRejectedValue(
+      new Error('boom'),
+    )
+
+    vi.mocked(listMyWork).mockResolvedValue([
+      makeItem({
+        id: 100,
+        projectId: PROJECT_A,
+      }),
+    ])
+
+    const { getByRole, container } = renderPage()
+
+    const card = () =>
+      getByRole('button', {
+        name: 'Open Prepare samples',
+      })
+
+    await waitFor(() => {
+      expect(card()).toBeInTheDocument()
+    })
+
+    await act(async () => {
+      fireEvent.click(card())
+    })
+
+    // The failure is exposed in place (role=alert) — no
+    // navigation, the board underneath is intact.
+    const alert = () =>
+      container.querySelector('[role="alert"]')
+
+    await waitFor(() => {
+      expect(alert()).not.toBeNull()
+    })
+
+    expect(
+      container.querySelector(
+        '[data-testid="work-items-target"]',
+      ),
+    ).toBeNull()
+    expect(card()).toBeInTheDocument()
+
+    // Retry re-issues the context reads and the drawer opens.
+    vi.mocked(getProject).mockImplementation(
+      async (projectId) => makeProject(projectId),
+    )
+
+    await act(async () => {
+      fireEvent.click(
+        getByRole('button', { name: 'Retry' }),
+      )
+    })
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          '[data-testid="work-item-drawer"]',
+        ),
+      ).not.toBeNull()
+    })
+
+    expect(getProject).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('My Work Kanban — canonical drawer mutations', () => {
+  it('uses the ordinary canonical PATCH and triggers one authoritative My Work refresh', async () => {
+    mockDrawerContext()
+
+    const updated = makeItem({
+      id: 100,
+      projectId: PROJECT_A,
+      title: 'Patched title',
+    })
+
+    vi.mocked(listMyWork)
+      .mockResolvedValueOnce([
+        makeItem({
+          id: 100,
+          projectId: PROJECT_A,
+        }),
+      ])
+      .mockResolvedValueOnce([updated])
+    vi.mocked(updateWorkItem).mockResolvedValue(updated)
+
+    const { getByRole, container } = renderPage()
+
+    const card = () =>
+      getByRole('button', {
+        name: 'Open Prepare samples',
+      })
+
+    await waitFor(() => {
+      expect(card()).toBeInTheDocument()
+    })
+
+    await act(async () => {
+      fireEvent.click(card())
+    })
+
+    const drawer = () =>
+      container.querySelector(
+        '[data-testid="work-item-drawer"]',
+      ) as HTMLElement
+
+    await waitFor(() => {
+      expect(drawer()).not.toBeNull()
+    })
+
+    await act(async () => {
+      fireEvent.click(
+        drawer().querySelector(
+          '[data-testid="drawer-apply-patch"]',
+        ) as HTMLElement,
+      )
+    })
+
+    // Canonical drawer semantics: the ordinary PATCH (never the
+    // drag transition-status operation).
+    expect(updateWorkItem).toHaveBeenCalledTimes(1)
+    expect(updateWorkItem).toHaveBeenCalledWith(
+      100,
+      expect.objectContaining({
+        title: 'Patched title',
+      }),
+    )
+    expect(
+      transitionWorkItemStatus,
+    ).not.toHaveBeenCalled()
+
+    // Exactly one authoritative My Work refresh after the
+    // successful mutation.
+    await waitFor(() => {
+      expect(listMyWork).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  it('reflects the refetched Work Item data in the card', async () => {
+    mockDrawerContext()
+
+    const before = makeItem({
+      id: 100,
+      projectId: PROJECT_A,
+    })
+    const after = makeItem({
+      id: 100,
+      projectId: PROJECT_A,
+      title: 'Patched title',
+    })
+
+    vi.mocked(listMyWork)
+      .mockResolvedValueOnce([before])
+      .mockResolvedValueOnce([after])
+    vi.mocked(updateWorkItem).mockResolvedValue(after)
+
+    const { getByRole, container } = renderPage()
+
+    await waitFor(() => {
+      expect(
+        getByRole('button', {
+          name: 'Open Prepare samples',
+        }),
+      ).toBeInTheDocument()
+    })
+
+    await act(async () => {
+      fireEvent.click(
+        getByRole('button', {
+          name: 'Open Prepare samples',
+        }),
+      )
+    })
+
+    const drawer = () =>
+      container.querySelector(
+        '[data-testid="work-item-drawer"]',
+      ) as HTMLElement
+
+    await waitFor(() => {
+      expect(drawer()).not.toBeNull()
+    })
+
+    await act(async () => {
+      fireEvent.click(
+        drawer().querySelector(
+          '[data-testid="drawer-apply-patch"]',
+        ) as HTMLElement,
+      )
+    })
+
+    // The refetched payload (not the mutation response, not a
+    // local copy) renders: the card now carries the new title.
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          '[data-work-item-id="100"]',
+        )?.textContent,
+      ).toContain('Patched title')
+    })
+  })
+
+  it('unmounts the drawer and drops the card when the authoritative refetch no longer returns the item', async () => {
+    mockDrawerContext()
+
+    const item = makeItem({
+      id: 100,
+      projectId: PROJECT_A,
+    })
+
+    vi.mocked(listMyWork)
+      .mockResolvedValueOnce([item])
+      .mockResolvedValueOnce([])
+    vi.mocked(updateWorkItem).mockResolvedValue(item)
+
+    const { getByRole, container } = renderPage()
+
+    await waitFor(() => {
+      expect(
+        getByRole('button', {
+          name: 'Open Prepare samples',
+        }),
+      ).toBeInTheDocument()
+    })
+
+    await act(async () => {
+      fireEvent.click(
+        getByRole('button', {
+          name: 'Open Prepare samples',
+        }),
+      )
+    })
+
+    const drawer = () =>
+      container.querySelector(
+        '[data-testid="work-item-drawer"]',
+      )
+
+    await waitFor(() => {
+      expect(drawer()).not.toBeNull()
+    })
+
+    await act(async () => {
+      fireEvent.click(
+        (container.querySelector(
+          '[data-testid="work-item-drawer"]',
+        ) as HTMLElement).querySelector(
+          '[data-testid="drawer-apply-patch"]',
+        ) as HTMLElement,
+      )
+    })
+
+    // The item is gone from the authoritative payload: the card
+    // disappears AND the drawer unmounts on its own (no stale
+    // second copy).
+    await waitFor(() => {
+      expect(drawer()).toBeNull()
+    })
+    expect(
+      container.querySelector(
+        '[data-work-item-id="100"]',
+      ),
+    ).toBeNull()
+  })
+
+  it('deletes the Work Item through the shared confirmation and refreshes My Work authoritatively', async () => {
+    mockDrawerContext()
+
+    const item = makeItem({
+      id: 100,
+      projectId: PROJECT_A,
+    })
+
+    vi.mocked(listMyWork)
+      .mockResolvedValueOnce([item])
+      .mockResolvedValueOnce([])
+    vi.mocked(deleteWorkItem).mockResolvedValue(undefined)
+
+    const { getByRole, container } = renderPage()
+
+    await waitFor(() => {
+      expect(
+        getByRole('button', {
+          name: 'Open Prepare samples',
+        }),
+      ).toBeInTheDocument()
+    })
+
+    await act(async () => {
+      fireEvent.click(
+        getByRole('button', {
+          name: 'Open Prepare samples',
+        }),
+      )
+    })
+
+    const drawer = () =>
+      container.querySelector(
+        '[data-testid="work-item-drawer"]',
+      ) as HTMLElement
+
+    await waitFor(() => {
+      expect(drawer()).not.toBeNull()
+    })
+
+    // The shared page-level confirmation dialog opens.
+    await act(async () => {
+      fireEvent.click(
+        drawer().querySelector(
+          '[data-testid="drawer-request-delete"]',
+        ) as HTMLElement,
+      )
+    })
+
+    const confirm = () =>
+      container.querySelector(
+        '[role="dialog"] button',
+      ) as HTMLElement
+
+    const deleteConfirm = () =>
+      Array.from(
+        container.querySelectorAll(
+          '[role="dialog"] button',
+        ),
+      ).find(
+        (button) =>
+          button.textContent ===
+          'Delete work item',
+      ) as HTMLElement
+
+    await waitFor(() => {
+      expect(deleteConfirm()).toBeDefined()
+    })
+
+    await act(async () => {
+      fireEvent.click(deleteConfirm())
+    })
+
+    // Canonical delete + one authoritative refresh; the item
+    // disappears from the board and the drawer unmounts.
+    expect(deleteWorkItem).toHaveBeenCalledTimes(1)
+    expect(deleteWorkItem).toHaveBeenCalledWith(100)
+    expect(
+      updateWorkItem,
+    ).not.toHaveBeenCalled()
+
+    await waitFor(() => {
+      expect(listMyWork).toHaveBeenCalledTimes(2)
+    })
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          '[data-work-item-id="100"]',
+        ),
+      ).toBeNull()
+    })
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          '[data-testid="work-item-drawer"]',
+        ),
+      ).toBeNull()
+    })
+    expect(confirm()).toBeNull()
+  })
+
+  it('does not open the drawer for a successful drag/drop, and a normal click still opens it after drag functionality exists', async () => {
+    const item = todoItem()
+    const moved = {
+      ...item,
+      statusDefinitionId: 22,
+      statusName: 'In Progress',
+      statusCategory: 'in_progress' as const,
+    }
+
+    vi.mocked(listMyWork)
+      .mockResolvedValueOnce([item])
+      .mockResolvedValueOnce([moved])
+    vi.mocked(transitionWorkItemStatus).mockResolvedValue(moved)
+    mockDrawerContext()
+
+    const { container } = renderPage()
+
+    const card = await waitForCard(
+      container,
+      100,
+    )
+
+    // Successful drag → status transition only, no drawer.
+    await dragCardToColumn(
+      container,
+      card,
+      'in_progress',
+    )
+
+    await waitFor(() => {
+      expect(
+        columnCardIds(
+          container,
+          'in_progress',
+        ),
+      ).toContain('100')
+    })
+
+    expect(
+      container.querySelector(
+        '[data-testid="work-item-drawer"]',
+      ),
+    ).toBeNull()
+
+    // A normal click on the (moved) card still opens the drawer.
+    const movedCard = container.querySelector(
+      '[data-work-item-id="100"]',
+    ) as HTMLElement
+
+    await act(async () => {
+      fireEvent.click(movedCard)
+    })
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          '[data-testid="work-item-drawer"]',
+        ),
+      ).not.toBeNull()
+    })
   })
 })
 
@@ -1676,6 +2810,13 @@ describe('My Work Kanban — cross-category drag and drop', () => {
     expect(
       container.querySelector(
         '[data-testid="work-items-target"]',
+      ),
+    ).toBeNull()
+
+    // And no accidental drawer open from the drag gesture.
+    expect(
+      container.querySelector(
+        '[data-testid="work-item-drawer"]',
       ),
     ).toBeNull()
 
@@ -2264,7 +3405,9 @@ describe('My Work Kanban — cross-category drag and drop', () => {
     ).not.toContain('100')
   })
 
-  it('keeps normal card clicks opening the canonical Project Work Items surface while draggable', async () => {
+  it('keeps normal card clicks opening the canonical drawer while draggable', async () => {
+    mockDrawerContext()
+
     const item = todoItem()
 
     vi.mocked(listMyWork).mockResolvedValue([item])
@@ -2289,7 +3432,8 @@ describe('My Work Kanban — cross-category drag and drop', () => {
       'true',
     )
 
-    // …but a plain click (no drag) still opens the item.
+    // …but a plain click (no drag) still opens the item — now via
+    // the canonical drawer in place, never via navigation.
     await act(async () => {
       fireEvent.click(card)
     })
@@ -2297,10 +3441,16 @@ describe('My Work Kanban — cross-category drag and drop', () => {
     await waitFor(() => {
       expect(
         container.querySelector(
-          '[data-testid="work-items-target"]',
+          '[data-testid="work-item-drawer"]',
         ),
       ).not.toBeNull()
     })
+
+    expect(
+      container.querySelector(
+        '[data-testid="work-items-target"]',
+      ),
+    ).toBeNull()
 
     // And no mutation was triggered by the click.
     expect(transitionWorkItemStatus).not.toHaveBeenCalled()

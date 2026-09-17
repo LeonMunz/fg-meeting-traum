@@ -290,7 +290,31 @@ test('switching List/Kanban is presentation-only (no refetch of /api/me/work-ite
   expect(projectConfigRequestUrls).toEqual([])
 })
 
-test('opening a My Work card reaches the canonical Project Work Items surface', async ({ page }) => {
+test('opening a My Work card opens the canonical Work Item Drawer in place', async ({ page }, testInfo) => {
+  // Record the lazy drawer-context contract: before the click the
+  // page must not fetch any per-Project drawer context, and after
+  // the click the owning Project's context reads are acceptable
+  // (and are what make the canonical drawer work).
+  const myWorkRequestUrls: string[] = []
+  const projectContextRequestUrls: string[] = []
+  page.on('request', (request) => {
+    const url = request.url()
+
+    if (url.includes('/api/me/work-items/')) {
+      myWorkRequestUrls.push(url)
+    }
+
+    const pathname = new URL(url).pathname
+
+    if (
+      request.method() === 'GET' &&
+      (pathname.startsWith('/api/projects/') ||
+        pathname.includes('/work-item-configuration/'))
+    ) {
+      projectContextRequestUrls.push(url)
+    }
+  })
+
   await login(page, 'alex')
   await page.goto('/my-work')
 
@@ -300,18 +324,114 @@ test('opening a My Work card reaches the canonical Project Work Items surface', 
   )
   await expect(robotCard).toBeVisible()
 
+  // 1. Normal rendering: no per-Project drawer context yet.
+  await page.waitForTimeout(500)
+  expect(projectContextRequestUrls).toEqual([])
+
+  // 2. Click the card — the URL must stay on /my-work.
   await robotCard.click()
+  await expect(page).toHaveURL(/\/my-work$/)
 
-  // The card acts on the real canonical Work Item: it lands on
-  // the item's Project Work Items surface, which renders the
-  // same item.
-  await expect(page).toHaveURL(
-    /\/projects\/\d+\/work-items$/,
-  )
+  // 3. The canonical Work Item Drawer (the Project board's
+  // non-modal edit inspector) becomes visible in place.
+  const drawer = page.getByRole('region', {
+    name: 'Work item',
+  })
+  await expect(drawer).toBeVisible()
 
+  // 4. The drawer carries the CLICKED Work Item: its title (the
+  // editable title control) and its canonical identity row
+  // (type label + #id).
+  await expect(
+    drawer.getByRole('button', {
+      name: 'E2E Analyze robot data',
+    }),
+  ).toBeVisible()
+  await expect(
+    drawer.getByText(/#\d+/),
+  ).toBeVisible()
+
+  // 5. Recognizable canonical fields/actions from the Project
+  // drawer: the Project context line, the Work item actions
+  // (delete) menu, and the close control.
+  await expect(
+    drawer.getByText('E2E Robot Study', {
+      exact: true,
+    }),
+  ).toBeVisible()
+  await expect(
+    drawer.getByRole('button', {
+      name: 'Work item actions',
+    }),
+  ).toBeVisible()
+  await expect(
+    drawer.getByRole('button', {
+      name: 'Close work item',
+    }),
+  ).toBeVisible()
+
+  // 6. The owning-Project drawer context was lazy-loaded AFTER
+  // the click (Project + configuration + memberships + Work
+  // Items), and no navigation to the Project board occurred.
+  await expect
+    .poll(() => projectContextRequestUrls.length)
+    .toBeGreaterThanOrEqual(1)
+  await expect(page).toHaveURL(/\/my-work$/)
+
+  // The My Work board is still rendered underneath (scoped to the
+  // board column — the drawer also contains the item title).
+  await expect(
+    page
+      .locator('[data-board-column="todo"]')
+      .getByRole('button', {
+        name: 'Open E2E Analyze robot data',
+      }),
+  ).toBeVisible()
+
+  // 7. Close the drawer — My Work is back, still on /my-work.
+  await drawer
+    .getByRole('button', { name: 'Close work item' })
+    .click()
+
+  await expect(drawer).toBeHidden()
+  await expect(page).toHaveURL(/\/my-work$/)
+  await expect(robotCard).toBeVisible()
+
+  // The closed-drawer board is exactly the pre-open My Work state:
+  // the other seeded card is untouched and the Kanban is active.
   await expect(
     page.getByRole('button', {
-      name: 'Open E2E Analyze robot data',
+      name: 'Open First Draft Complete',
+    }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole('button', { name: 'Kanban' }),
+  ).toHaveAttribute('aria-pressed', 'true')
+
+  await page.screenshot({
+    path: testInfo.outputPath(
+      'my-work-drawer-closed.png',
+    ),
+  })
+})
+
+test('opening a My Work card does not navigate to the Project Work Items board', async ({ page }) => {
+  await login(page, 'alex')
+  await page.goto('/my-work')
+
+  const firstDraftCard = page.getByRole(
+    'button',
+    { name: 'Open First Draft Complete' },
+  )
+  await expect(firstDraftCard).toBeVisible()
+
+  await firstDraftCard.click()
+
+  // In-place drawer, never the Project board route.
+  await expect(page).toHaveURL(/\/my-work$/)
+  await expect(
+    page.getByRole('region', {
+      name: 'Work item',
     }),
   ).toBeVisible()
 })
@@ -618,6 +738,14 @@ test('My Work Kanban drag: cross-category drop mutates the canonical status from
   await expect(movedCard).toBeVisible()
   await expect(card).toHaveCount(0)
 
+  // A completed drag/drop never opens the Work Item drawer
+  // (click and drag are distinguishable).
+  await expect(
+    page.getByRole('region', {
+      name: 'Work item',
+    }),
+  ).toBeHidden()
+
   await expect(
     movedCard.getByText(target.statusName, {
       exact: true,
@@ -722,4 +850,11 @@ test('My Work Kanban drag: cross-category drop mutates the canonical status from
     myWorkRequestsAfterLoad + 1,
   )
   await expect(movedCard).toBeVisible()
+
+  // The no-op drag also never opens the drawer.
+  await expect(
+    page.getByRole('region', {
+      name: 'Work item',
+    }),
+  ).toBeHidden()
 })

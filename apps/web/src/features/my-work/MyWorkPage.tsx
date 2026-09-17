@@ -1,7 +1,10 @@
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react'
 import { useNavigate } from 'react-router'
@@ -9,13 +12,33 @@ import { useNavigate } from 'react-router'
 import { ApiError } from '../../api/client'
 import type {
   ApiPersonalWorkItem,
+  ApiProject,
+  ApiProjectWorkItemConfiguration,
+  ApiUpdateWorkItemInput,
   ApiWorkItemStatus,
+  ApiWorkItemType,
 } from '../../api/types'
 import {
+  createWorkItem,
+  deleteWorkItem,
   listMyWork,
+  listProjectWorkItems,
   transitionWorkItemStatus,
+  updateWorkItem,
 } from '../../api/work-items'
+import {
+  getProject,
+  getProjectWorkItemConfiguration,
+  listProjectMemberships,
+} from '../../api/projects'
+import { useSession } from '../../api/useSession'
 import { useResearchGroup } from '../research-group/useResearchGroup'
+import type { WorkItemFormInput } from '../projects/WorkItemDrawer'
+import { WorkItemDeleteDialog } from '../projects/workItemDelete'
+import {
+  buildCreateWorkItemInput,
+  resolveWorkItemType,
+} from '../projects/workItemMapping'
 
 type GroupFilter = 'all' | number
 
@@ -54,10 +77,108 @@ type GroupFilter = 'all' | number
  * inferred from it. The neutral canonical Work Item icon remains (a
  * semantic type icon mapping is future work).
  *
- * Opening a row / card navigates to the item's canonical Project Work
- * Items surface (the same navigation the cross-project Home rows use);
- * the drawer and its mutations stay in their owning feature.
+ * List rows navigate to the item's canonical Project Work Items
+ * surface (the same navigation the cross-project Home rows use) —
+ * unchanged. Kanban CARDS open the SAME canonical WorkItemDrawer the
+ * Project Work Items board mounts, in place over My Work: the URL
+ * stays on /my-work and no Project board is visited. Only the
+ * selected card's OWNING Project drawer context is lazy-loaded on
+ * open (Project, Work Item configuration, Project memberships,
+ * Project Work Items — exactly the reads the drawer contract
+ * requires) — never on page load and never for other Projects; the
+ * selected Work Item itself already comes from the canonical My
+ * Work payload. Drawer mutations keep the canonical Project-board
+ * semantics (ordinary PATCH / create / delete, never the drag
+ * status transition) and every successful mutation triggers one
+ * authoritative GET /api/me/work-items/ refresh.
  */
+
+// Lazy: WorkItemDrawer pulls in RichMarkdownEditor -> Tiptap/ProseMirror,
+// by far the heaviest dependency graph in the app. Nothing on My Work
+// needs it until a card is actually opened, so it stays out of the
+// initial page bundle and is fetched on first use (the same lazy
+// treatment the Project Work Items page applies).
+const WorkItemDrawer = lazy(() =>
+  import('../projects/WorkItemDrawer').then(
+    (module) => ({
+      default: module.WorkItemDrawer,
+    }),
+  ),
+)
+
+// The exact option shapes the canonical WorkItemDrawer contract
+// consumes (mirroring the Project board's mappings).
+type DrawerAssigneeOption = {
+  id: string
+  name: string
+  initials: string
+}
+
+type DrawerParentOption = {
+  id: string
+  title: string
+  type: ApiWorkItemType
+}
+
+// Lazy per-Project drawer context: loaded ONLY when a card of that
+// Project is opened (never on page load, never for cards of other
+// Projects).
+type MyWorkDrawerContext = {
+  project: ApiProject
+  configuration: ApiProjectWorkItemConfiguration | null
+  assignees: DrawerAssigneeOption[]
+  parentItems: DrawerParentOption[]
+}
+
+type MyWorkDrawerState =
+  | { status: 'idle' }
+  | { status: 'loading'; projectId: number }
+  | { status: 'error'; projectId: number; message: string }
+  | {
+      status: 'ready'
+      projectId: number
+      context: MyWorkDrawerContext
+    }
+
+// Quiet placeholder for the brief window while the selected card's
+// lazy Project drawer context (and, on first open, the drawer chunk
+// itself) loads. Mirrors the Project Work Items page's established
+// drawer loading treatment (same fixed-rail footprint + the
+// data-work-item-inspector-boundary marker) so opening a card never
+// blanks the My Work page underneath.
+function DrawerLoadingShell() {
+  return (
+    <div
+      data-work-item-inspector-boundary="true"
+      className="fixed inset-y-0 right-0 z-40 w-full border-l border-outline-variant bg-surface-container-lowest shadow-2xl sm:w-[520px]"
+    />
+  )
+}
+
+// Person name/initials mapping — identical to the Project board's,
+// so the drawer's assignee options read the same in both places.
+function getPersonName(
+  firstName: string,
+  lastName: string,
+  username: string,
+) {
+  const fullName = `${firstName} ${lastName}`.trim()
+  return fullName || username
+}
+
+function getPersonInitials(
+  firstName: string,
+  lastName: string,
+  username: string,
+) {
+  const initials = [firstName, lastName]
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .map((value) => value[0]?.toUpperCase())
+    .join('')
+
+  return initials || username.slice(0, 2).toUpperCase()
+}
 
 // ── Presentation helpers ────────────────────────────────
 
@@ -231,6 +352,7 @@ const GLOBAL_STATUS_COLUMNS: Array<{
 export function MyWorkPage() {
   const navigate = useNavigate()
   const { groups } = useResearchGroup()
+  const { user } = useSession()
 
   const [items, setItems] = useState<
     ApiPersonalWorkItem[]
@@ -316,6 +438,436 @@ export function MyWorkPage() {
       // false is rendered) — the next load reconciles.
     }
   }, [])
+
+  // ── Canonical Work Item drawer (opened in place from Kanban
+  // cards) ────────────────────────────────────────────────
+  // A Kanban card is a Work Item surface, not a navigation
+  // shortcut: opening it selects the item and lazily resolves the
+  // drawer context of its OWNING Project only, then mounts the SAME
+  // canonical WorkItemDrawer the Project Work Items board uses. The
+  // URL never changes and the My Work board stays rendered
+  // underneath.
+  const [openWorkItemId, setOpenWorkItemId] = useState<
+    number | null
+  >(null)
+  const [drawerState, setDrawerState] = useState<MyWorkDrawerState>(
+    () => ({ status: 'idle' }),
+  )
+
+  // Session cache: a Project's drawer context is loaded at most once
+  // per page session (re-opening another card of the same Project is
+  // instant — no duplicate requests). A failed load is never cached:
+  // re-opening or Retry re-issues the reads.
+  const drawerContextCacheRef = useRef<
+    Record<number, MyWorkDrawerContext>
+  >({})
+
+  // Monotonic guard: only the most recent open action may resolve
+  // into state (a fast card switch must never let a stale in-flight
+  // load clobber the newer one).
+  const drawerLoadSeqRef = useRef(0)
+
+  // The selected drawer item, re-resolved against the AUTHORITATIVE
+  // My Work payload after every refresh — exactly how the Project
+  // board derives its selected item from its Work Item collection:
+  // an item no longer returned by the endpoint (assignment removed,
+  // access lost, deleted) makes the drawer unmount on its own.
+  const selectedDrawerItem = useMemo(
+    () =>
+      openWorkItemId == null
+        ? null
+        : items.find((item) => item.id === openWorkItemId) ??
+          null,
+    [items, openWorkItemId],
+  )
+
+  const drawerContext =
+    drawerState.status === 'ready'
+      ? drawerState.context
+      : null
+
+  // Canonical Project-board rule: a viewer or an archived Project
+  // renders the drawer read-only. (Assignees are always owner/member,
+  // so in practice the archived state is the live case.)
+  const drawerReadOnly =
+    drawerContext != null &&
+    (drawerContext.project.archivedAt !== null ||
+      drawerContext.project.currentUserRole === 'viewer')
+
+  const drawerReadOnlyMessage =
+    drawerContext?.project.archivedAt != null
+      ? 'Archived Projects are read-only. Restore the Project first.'
+      : 'A viewer cannot edit Work Items.'
+
+  const closeDrawer = useCallback(() => {
+    setOpenWorkItemId(null)
+    setDrawerState({ status: 'idle' })
+  }, [])
+
+  // Lazy drawer-context load for ONE selected Project: exactly the
+  // Project-specific reads the canonical drawer contract requires
+  // (the same four reads the Project Work Items page issues),
+  // scoped to the selected card's owning Project. The selected
+  // Work Item itself is NOT fetched — the canonical My Work payload
+  // already carries the full ApiWorkItem shape (ApiPersonalWorkItem
+  // extends it).
+  const loadDrawerContext = useCallback(
+    (projectId: number) => {
+      const seq = ++drawerLoadSeqRef.current
+
+      setDrawerState({ status: 'loading', projectId })
+
+      void (async () => {
+        try {
+          const [
+            project,
+            configuration,
+            memberships,
+            projectItems,
+          ] = await Promise.all([
+            getProject(projectId),
+            // A failed/missing configuration degrades the drawer
+            // exactly the way the Project page does (null →
+            // canonical fallbacks) — it never blocks opening.
+            getProjectWorkItemConfiguration(
+              projectId,
+            ).catch(() => null),
+            listProjectMemberships(projectId),
+            listProjectWorkItems(projectId),
+          ])
+
+          if (seq !== drawerLoadSeqRef.current) {
+            return
+          }
+
+          const context: MyWorkDrawerContext = {
+            project,
+            configuration,
+            // The Project board's assignee rule: owners first,
+            // then name order, viewers excluded.
+            assignees: memberships
+              .filter((member) => member.role !== 'viewer')
+              .map((member) => ({
+                id: String(member.user.id),
+                name: getPersonName(
+                  member.user.firstName,
+                  member.user.lastName,
+                  member.user.username,
+                ),
+                initials: getPersonInitials(
+                  member.user.firstName,
+                  member.user.lastName,
+                  member.user.username,
+                ),
+              }))
+              .sort((a, b) => {
+                const aIsOwner =
+                  memberships.find(
+                    (m) =>
+                      String(m.user.id) === a.id,
+                  )?.role === 'owner'
+                const bIsOwner =
+                  memberships.find(
+                    (m) =>
+                      String(m.user.id) === b.id,
+                  )?.role === 'owner'
+
+                if (aIsOwner !== bIsOwner) {
+                  return aIsOwner ? -1 : 1
+                }
+
+                return a.name.localeCompare(b.name)
+              }),
+            parentItems: projectItems.map(
+              (item) => ({
+                id: String(item.id),
+                title: item.title,
+                type: resolveWorkItemType(
+                  item.typeDefinitionId,
+                  configuration,
+                ),
+              }),
+            ),
+          }
+
+          drawerContextCacheRef.current[projectId] =
+            context
+          setDrawerState({
+            status: 'ready',
+            projectId,
+            context,
+          })
+        } catch (error) {
+          if (seq !== drawerLoadSeqRef.current) {
+            return
+          }
+
+          // Failure stays page-local: no navigation, the board
+          // underneath is untouched, and Retry / re-open
+          // re-issues the reads.
+          setDrawerState({
+            status: 'error',
+            projectId,
+            message: getErrorMessage(
+              error,
+              'The Work Item context could not be loaded.',
+            ),
+          })
+        }
+      })()
+    },
+    [],
+  )
+
+  // Normal card click / Enter / Space: select the item, lazily
+  // resolve its owning Project context (unless already cached this
+  // session), and open the drawer. Never navigates.
+  const openWorkItemCard = useCallback(
+    (item: ApiPersonalWorkItem) => {
+      setOpenWorkItemId(item.id)
+
+      const cached =
+        drawerContextCacheRef.current[item.projectId]
+
+      if (cached) {
+        setDrawerState({
+          status: 'ready',
+          projectId: item.projectId,
+          context: cached,
+        })
+        return
+      }
+
+      loadDrawerContext(item.projectId)
+    },
+    [loadDrawerContext],
+  )
+
+  // Contextual-selection close: while the drawer is open over My
+  // Work, any click landing outside both the drawer itself and every
+  // canonical Work Item target (Kanban cards / List rows — all
+  // marked data-work-item-id) closes it. The List/Kanban switch
+  // carries data-work-item-inspector-keep-open so switching views
+  // keeps the drawer open on the SAME selected Work Item — the
+  // identical boundary semantics the Project Work Items page
+  // applies. Capture phase (see the Project page's equivalent
+  // effect) so the boundary check always sees the DOM as actually
+  // clicked. Native HTML5 drag never dispatches a trailing click, so
+  // drag/drop can neither open nor close the drawer.
+  useEffect(() => {
+    if (
+      selectedDrawerItem == null ||
+      drawerState.status !== 'ready'
+    ) {
+      return
+    }
+
+    function handleDocumentClickCapture(
+      event: MouseEvent,
+    ) {
+      const target = event.target
+
+      if (!(target instanceof Element)) {
+        return
+      }
+
+      if (
+        target.closest(
+          '[data-work-item-inspector-boundary]',
+        )
+      ) {
+        return
+      }
+
+      if (target.closest('[data-work-item-id]')) {
+        return
+      }
+
+      if (
+        target.closest(
+          '[data-work-item-inspector-keep-open]',
+        )
+      ) {
+        return
+      }
+
+      setOpenWorkItemId(null)
+      setDrawerState({ status: 'idle' })
+    }
+
+    document.addEventListener(
+      'click',
+      handleDocumentClickCapture,
+      true,
+    )
+
+    return () => {
+      document.removeEventListener(
+        'click',
+        handleDocumentClickCapture,
+        true,
+      )
+    }
+  }, [selectedDrawerItem, drawerState.status])
+
+  // ── Drawer mutations: canonical Project-board semantics ──
+  // The drawer edits through the ordinary Work Item API (PATCH /
+  // create / delete) — the drag-specific transition-status
+  // operation is NEVER substituted for ordinary drawer editing.
+  // My Work itself is reconciled by ONE authoritative, silent
+  // refetch after each successful mutation (the same mechanism the
+  // Kanban drop uses): the refetched payload decides the card's new
+  // title / due / status / presence — no manually synchronized
+  // second copy.
+
+  // Single, page-level Work Item deletion confirmation — the same
+  // shared dialog + flow the Project board uses.
+  const [workItemDeleteTarget, setWorkItemDeleteTarget] =
+    useState<number | null>(null)
+  const [isDeletingWorkItem, setIsDeletingWorkItem] =
+    useState(false)
+  const [deleteWorkItemError, setDeleteWorkItemError] =
+    useState<string | null>(null)
+
+  const handleDrawerCreateWorkItem = useCallback(
+    async (input: WorkItemFormInput) => {
+      if (drawerReadOnly) {
+        throw new Error(drawerReadOnlyMessage)
+      }
+
+      const projectId = drawerContext?.project.id
+
+      if (projectId == null || !Number.isInteger(projectId)) {
+        throw new Error('Invalid Project ID.')
+      }
+
+      await createWorkItem(
+        projectId,
+        buildCreateWorkItemInput(input),
+      )
+
+      await refreshMyWork()
+    },
+    [
+      drawerContext,
+      drawerReadOnly,
+      drawerReadOnlyMessage,
+      refreshMyWork,
+    ],
+  )
+
+  const handleDrawerPatchWorkItem = useCallback(
+    async (
+      workItemId: number,
+      patch: ApiUpdateWorkItemInput,
+    ) => {
+      if (drawerReadOnly) {
+        throw new Error(drawerReadOnlyMessage)
+      }
+
+      if (
+        !Number.isInteger(workItemId) ||
+        patch.assigneeIds?.some(
+          (id) => !Number.isInteger(id),
+        )
+      ) {
+        throw new Error('Invalid Work Item or assignee ID.')
+      }
+
+      if (
+        patch.parentId != null &&
+        !Number.isInteger(patch.parentId)
+      ) {
+        throw new Error('Invalid parent Work Item ID.')
+      }
+
+      // Ordinary canonical PATCH (Project-board semantics,
+      // including the server-side reposition-to-end behavior).
+      await updateWorkItem(workItemId, patch)
+
+      // Authoritative My Work refresh: the refetched payload — not
+      // the mutation response — updates the card underneath.
+      await refreshMyWork()
+    },
+    [
+      drawerReadOnly,
+      drawerReadOnlyMessage,
+      refreshMyWork,
+    ],
+  )
+
+  const handleDrawerDeleteWorkItem = useCallback(
+    async (workItemId: number) => {
+      if (drawerReadOnly) {
+        throw new Error(drawerReadOnlyMessage)
+      }
+
+      if (!Number.isInteger(workItemId)) {
+        throw new Error('Invalid Work Item ID.')
+      }
+
+      setIsDeletingWorkItem(true)
+      setDeleteWorkItemError(null)
+
+      try {
+        await deleteWorkItem(workItemId)
+      } catch (error) {
+        // Failure: keep the item visible and surface the error in
+        // the shared confirmation dialog (the drawer stays open).
+        const message = getErrorMessage(
+          error,
+          'Work item could not be deleted.',
+        )
+
+        setDeleteWorkItemError(message)
+        throw new Error(message)
+      }
+
+      await refreshMyWork()
+      setWorkItemDeleteTarget(null)
+    },
+    [
+      drawerReadOnly,
+      drawerReadOnlyMessage,
+      refreshMyWork,
+    ],
+  )
+
+  const requestWorkItemDelete = useCallback(
+    (workItemId: number) => {
+      setDeleteWorkItemError(null)
+      setWorkItemDeleteTarget(workItemId)
+    },
+    [],
+  )
+
+  const cancelWorkItemDelete = useCallback(() => {
+    if (isDeletingWorkItem) {
+      return
+    }
+
+    setWorkItemDeleteTarget(null)
+  }, [isDeletingWorkItem])
+
+  const confirmWorkItemDelete = useCallback(async () => {
+    if (isDeletingWorkItem || workItemDeleteTarget == null) {
+      return
+    }
+
+    const targetId = workItemDeleteTarget
+
+    try {
+      await handleDrawerDeleteWorkItem(targetId)
+    } catch {
+      // Already surfaced via setDeleteWorkItemError.
+    } finally {
+      setIsDeletingWorkItem(false)
+    }
+  }, [
+    isDeletingWorkItem,
+    workItemDeleteTarget,
+    handleDrawerDeleteWorkItem,
+  ])
 
   // Cross-category Kanban drop: mutates the SAME canonical Work
   // Item through the canonical status-only transition
@@ -530,6 +1082,7 @@ export function MyWorkPage() {
             <button
               type="button"
               aria-pressed={view === 'kanban'}
+              data-work-item-inspector-keep-open="true"
               onClick={() => setView('kanban')}
               className={[
                 'inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-sm font-medium transition',
@@ -550,6 +1103,7 @@ export function MyWorkPage() {
             <button
               type="button"
               aria-pressed={view === 'list'}
+              data-work-item-inspector-keep-open="true"
               onClick={() => setView('list')}
               className={[
                 'inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-sm font-medium transition',
@@ -628,7 +1182,7 @@ export function MyWorkPage() {
       ) : view === 'kanban' ? (
         <MyWorkBoard
           columns={kanbanColumns}
-          onOpen={openItem}
+          onOpen={openWorkItemCard}
           draggedItemId={draggedItemId}
           pendingItemIds={pendingMoveItemIds}
           statusDropError={statusDropError}
@@ -789,6 +1343,127 @@ export function MyWorkPage() {
             })}
           </div>
         </section>
+      )}
+
+      {/* The SAME canonical WorkItemDrawer the Project Work Items
+       * board mounts — opened in place over My Work. The URL stays
+       * on /my-work; only the selected card's owning Project
+       * context was lazy-loaded. */}
+      {selectedDrawerItem != null &&
+        drawerState.status === 'ready' &&
+        drawerContext != null && (
+          <Suspense fallback={<DrawerLoadingShell />}>
+            <WorkItemDrawer
+              open={true}
+              mode="edit"
+              projectName={
+                drawerContext.project.name
+              }
+              item={selectedDrawerItem}
+              readOnly={drawerReadOnly}
+              currentUserId={
+                user ? user.id : null
+              }
+              workItemConfiguration={
+                drawerContext.configuration
+              }
+              assignees={
+                drawerContext.assignees
+              }
+              parentItems={
+                drawerContext.parentItems
+              }
+              onClose={closeDrawer}
+              onCreate={
+                handleDrawerCreateWorkItem
+              }
+              onPatch={
+                handleDrawerPatchWorkItem
+              }
+              onDelete={
+                handleDrawerDeleteWorkItem
+              }
+              onRequestDelete={
+                requestWorkItemDelete
+              }
+            />
+          </Suspense>
+        )}
+
+      {/* Lazy drawer-context still resolving: the established
+       * drawer loading treatment — My Work stays rendered
+       * underneath and the page never navigates. */}
+      {selectedDrawerItem != null &&
+        drawerState.status === 'loading' &&
+        <DrawerLoadingShell />}
+
+      {/* Lazy drawer-context failure: stays on /my-work with the
+       * established page-local error pattern — Retry re-issues the
+       * reads, Dismiss returns to the board. Never navigates. */}
+      {selectedDrawerItem != null &&
+        drawerState.status === 'error' && (
+          <div
+            role="alert"
+            className="fixed inset-y-0 right-0 z-40 flex w-full flex-col items-start gap-3 overflow-y-auto border-l border-outline-variant bg-surface-container-lowest p-6 shadow-2xl sm:w-[520px]"
+          >
+            <span
+              aria-hidden="true"
+              className="material-symbols-outlined text-[26px] text-error"
+            >
+              cloud_off
+            </span>
+
+            <h2 className="text-base font-semibold text-on-surface">
+              Work item context couldn't be
+              loaded
+            </h2>
+
+            <p className="text-sm text-on-surface-variant">
+              {drawerState.message}
+            </p>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() =>
+                  loadDrawerContext(
+                    drawerState.projectId,
+                  )
+                }
+                className="inline-flex h-9 items-center gap-2 rounded-lg border border-outline-variant bg-surface px-4 text-sm font-semibold text-on-surface transition hover:bg-surface-container-low"
+              >
+                <span
+                  aria-hidden="true"
+                  className="material-symbols-outlined text-[18px]"
+                >
+                  refresh
+                </span>
+                Retry
+              </button>
+
+              <button
+                type="button"
+                onClick={closeDrawer}
+                className="inline-flex h-9 items-center rounded-lg px-4 text-sm font-semibold text-on-surface-variant transition hover:bg-surface-container-low"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
+
+      {/* Single, page-level deletion confirmation — the same
+       * shared dialog the Project board uses. */}
+      {workItemDeleteTarget !== null && (
+        <WorkItemDeleteDialog
+          open={true}
+          deleting={isDeletingWorkItem}
+          error={deleteWorkItemError}
+          onCancel={cancelWorkItemDelete}
+          onConfirm={() =>
+            void confirmWorkItemDelete()
+          }
+        />
       )}
     </div>
   )
@@ -1078,8 +1753,10 @@ function MyWorkBoard({
  * (the column already communicates the broad state, so the concrete
  * status stays visible as detail), Project + Research Group, and the
  * due / blocked state. The neutral canonical Work Item icon is used —
- * no semantic type icon mapping. Opening uses the same canonical
- * navigation as the List (the item's Project Work Items surface).
+ * no semantic type icon mapping. Opening (click / Enter / Space)
+ * calls `onOpen`, which opens the canonical WorkItemDrawer IN PLACE
+ * over My Work (the List rows keep their navigation behavior — see
+ * the page doc).
  *
  * Drag reuses the Project Work Items Board card's native HTML5
  * convention: the whole card is `draggable` (grab cursor),
