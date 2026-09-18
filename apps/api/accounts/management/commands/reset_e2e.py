@@ -19,6 +19,16 @@ class Command(BaseCommand):
                 "DJANGO_SETTINGS_MODULE=config.settings_e2e"
             )
 
+        if os.environ.get("FG_ALLOW_E2E_RESET") != "1":
+            raise CommandError(
+                "reset_e2e REFUSED: the destructive E2E schema reset would "
+                "drop and rebuild the isolated fg_e2e schema "
+                "(DROP SCHEMA fg_e2e CASCADE + migrations + seeds). "
+                "It only runs with explicit consent: set "
+                "FG_ALLOW_E2E_RESET=1 exactly, e.g. "
+                "FG_ALLOW_E2E_RESET=1 python manage.py reset_e2e"
+            )
+
         self.stdout.write("Resetting fg_e2e schema...")
 
         with connection.cursor() as cursor:

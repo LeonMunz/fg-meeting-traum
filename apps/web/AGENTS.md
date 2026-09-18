@@ -27,6 +27,11 @@ Verify in this order, widening only as far as the task requires:
    repository root, `npx playwright test <spec>` for the relevant spec.
    Requires a browser-capable environment and `FG_ALLOW_E2E_RESET=1` consent
    to the `fg_e2e` schema reset performed by the Playwright startup.
+   The consent is enforced inside the `reset_e2e` management command itself,
+   so `npm run test:e2e`, `npx playwright test`, and direct
+   management-command invocations all refuse the reset (nonzero exit, before
+   any database mutation) without exactly `FG_ALLOW_E2E_RESET=1`.
+   `npx playwright test --list` starts no web server and performs no reset.
 5. **Full/broad E2E** (`./scripts/agent-verify.sh e2e`) only when justified by
    task scope and in a browser-capable environment with the same consent.
 

@@ -70,6 +70,15 @@ PRECHECK
   only with explicit consent to the destructive reset:
   `FG_ALLOW_E2E_RESET=1 ./scripts/agent-verify.sh e2e` (the configured
   Playwright startup resets the `fg_e2e` schema).
+- Consent to the destructive reset is enforced at the choke point, not only
+  in `agent-verify.sh`: the `reset_e2e` management command itself refuses
+  (clear error, nonzero exit) unless BOTH `DJANGO_SETTINGS_MODULE=
+  config.settings_e2e` and exactly `FG_ALLOW_E2E_RESET=1` are set. The
+  refusal happens before any schema drop, migration, or seed, so every
+  invocation path is protected: `agent-verify`, `npm run test:e2e`,
+  `npx playwright test`, and direct management-command calls. Playwright
+  `--list` invocations start no web server and perform no reset, and are
+  therefore unaffected. Behavior tests: `apps/api/accounts/test_reset_e2e.py`.
 - `./scripts/agent-verify.sh full` is the genuinely complete gate
   (`core` + `e2e`) and the eventual CI/release gate; it cannot pass without
   actually running E2E.

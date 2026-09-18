@@ -20,6 +20,21 @@ This file adds backend-specific execution and verification guidance.
 - No client-only authorization semantics; the UI never grants access.
 - CSRF is enforced by DRF session authentication for authenticated unsafe requests.
 
+## E2E reset consent (`reset_e2e`)
+
+The destructive `reset_e2e` management command (started by the Playwright
+webServer during E2E runs) requires BOTH conditions, enforced inside the
+command before any schema drop, migration, or seed:
+
+- `DJANGO_SETTINGS_MODULE=config.settings_e2e` (isolated E2E settings), and
+- exactly `FG_ALLOW_E2E_RESET=1` (explicit consent). Missing, empty, or any
+  other value is refused with a clear error and a nonzero exit.
+
+The guard protects every invocation path equally: `agent-verify`,
+`npm run test:e2e`, `npx playwright test`, and direct management-command
+calls. Playwright `--list` invocations start no web server and perform no
+reset, and are unaffected. Behavior tests: `accounts/test_reset_e2e.py`.
+
 ## Backend verification ladder
 
 Run from `apps/api/`, widening only as far as the task requires:
