@@ -1,4 +1,4 @@
-w# fg-meeting-traum
+# fg-meeting-traum
 
 ## Lokale Entwicklung
 
@@ -7,9 +7,10 @@ w# fg-meeting-traum
 Benötigt werden:
 
 - Docker
-- Node.js + npm
-- Python
+- Node.js 24 + npm (`.nvmrc`: `24`, `engines`: `>=24`)
+- Python >= 3.12 (`apps/api/pyproject.toml`: `requires-python = ">=3.12"`)
 - `uv`
+- PostgreSQL 16 (lokale Referenzversion, konsistent mit CI: `postgres:16`)
 
 Die lokale Anwendung besteht aus:
 
@@ -23,11 +24,12 @@ Die lokale Anwendung besteht aus:
 
 ### Frontend-Abhängigkeiten installieren
 
-Im Repository-Root:
+Node-Version gemäß `.nvmrc` verwenden, dann im Repository-Root:
 
 ```bash
 cd ~/PycharmProjects/fg-meeting-traum
 
+nvm use   # setzt Node 24 gemäß .nvmrc (ohne nvm: direkt Node 24 installieren)
 npm ci
 ```
 
@@ -51,7 +53,7 @@ docker run -d \
   -e POSTGRES_PASSWORD=fg_workspace \
   -p 5432:5432 \
   -v fg-postgres-data:/var/lib/postgresql/data \
-  postgres:17
+  postgres:16
 ```
 
 Die Datenbankdaten bleiben im Docker-Volume `fg-postgres-data` erhalten.
@@ -64,45 +66,67 @@ cd ~/PycharmProjects/fg-meeting-traum/apps/api
 uv run python manage.py migrate
 ```
 
+Optional – Playwright-Chromium für lokale E2E-Nutzung installieren:
+
+```bash
+cd ~/PycharmProjects/fg-meeting-traum
+
+npx playwright install chromium
+```
+
 ---
 
-## 2. Development-User anlegen
+## 2. Development-Seed anlegen
 
-Bei einer neuen/leeren Datenbank existiert der lokale Benutzer noch nicht automatisch.
+Der kanonische Dev-Seed ist der idempotente Management-Command `seed_dev`
+(`apps/api/accounts/management/commands/seed_dev.py`):
 
 ```bash
 cd ~/PycharmProjects/fg-meeting-traum/apps/api
 
-uv run python manage.py shell -c "
-from django.contrib.auth import get_user_model
-User = get_user_model()
-user, created = User.objects.get_or_create(
-    username='alex',
-    defaults={'email': 'alex@example.com'}
-)
-user.set_password('DevPass1!')
-user.is_active = True
-user.save()
-print('created:', created)
-print('username:', user.username)
-"
+uv run python manage.py migrate
+uv run python manage.py seed_dev
 ```
 
-Login:
+`seed_dev` legt diese Daten an (alle Werte aus `seed_dev.py` abgeleitet):
+
+- Benutzer `alex`, `chris`, `maria`, `laura` (E-Mail `<benutzer>@example.com`)
+- Research Group `FG Example`: `alex` = admin, `chris`/`maria`/`laura` = member
+- Projekt `Paper XYZ`: `alex` = owner, `chris` = member, `laura` = viewer,
+  `maria` = keine Mitgliedschaft
+- Projekt `Maria Private Project`: `maria` = owner, alle anderen ohne
+  Mitgliedschaft
+- Work Items in `Paper XYZ`: Epic `Literature Review`, Task `Rewrite
+  Introduction` (Assignee `chris`), Milestone `First Draft Complete`
+  (Assignee `alex`)
+
+### Seed-Passwort
+
+Standardmäßig haben alle neu angelegten Seed-Benutzer das Passwort
+`DevPass1!` (Default der Environment-Variable `SEED_PASSWORD` in
+`seed_dev.py`). Das Passwort kann vor dem Command überschrieben werden:
+
+```bash
+cd ~/PycharmProjects/fg-meeting-traum/apps/api
+
+SEED_PASSWORD="MeinSaferesPasswort1" uv run python manage.py seed_dev
+```
+
+Wichtig: `seed_dev` setzt das Passwort nur für **neu angelegte** Benutzer;
+existierende Benutzer behalten ihr bestehendes Passwort.
+
+### Idempotenz
+
+Erneute Ausführung ist sicher: `seed_dev` verwendet durchgängig
+`get_or_create`, erzeugt keine Duplikate und stellt damit reproduzierbar
+den kanonischen Seed-Zustand her (belegt u. a. durch
+`apps/api/accounts/test_seed_dev.py`).
+
+Login (frisch seedete Datenbank; alle Seed-Benutzer mit dem Seed-Passwort):
 
 ```text
 Username: alex
 Password: DevPass1!
-```
-
-Optional prüfen:
-
-```bash
-uv run python manage.py shell -c "
-from django.contrib.auth import authenticate
-u = authenticate(username='alex', password='DevPass1!')
-print('LOGIN OK' if u else 'LOGIN FAILED')
-"
 ```
 
 ---
@@ -157,6 +181,18 @@ Das Frontend läuft anschließend unter:
 http://localhost:5173
 ```
 
+Der Vite-Dev-Server leitet `/api` an das Backend weiter (Proxy-Ziel,
+Standard: `http://127.0.0.1:8000`; siehe `apps/web/vite.config.ts`).
+Läuft das Backend auf einer anderen Adresse, kann das Ziel über
+`FG_API_PROXY_TARGET` in einem lokalen, git-ignorierten Env-File
+überschrieben werden (Referenz: `apps/web/.env.example`, z. B.
+`apps/web/.env.local`):
+
+```bash
+# apps/web/.env.local (git-ignoriert, nicht committen)
+FG_API_PROXY_TARGET=http://127.0.0.1:8001
+```
+
 Login:
 
 ```text
@@ -192,10 +228,10 @@ Logs anzeigen:
 docker logs fg-postgres --tail 50
 ```
 
-Prüfen, ob PostgreSQL auf Port 5432 erreichbar ist:
+Prüfen, ob PostgreSQL auf Port 5432 erreichbar ist (macOS):
 
 ```bash
-ss -ltnp | grep 5432
+lsof -nP -iTCP:5432 -sTCP:LISTEN
 ```
 
 Wichtig:
@@ -253,6 +289,20 @@ npm run build
 npm run lint
 ```
 
+## Frontend-Zieltests (Vitest)
+
+```bash
+# Eine Testdatei
+npm run test:unit --workspace=web -- src/<pfad-zur-testdatei>
+
+# Einzelner Testfall in einer Testdatei
+npm run test:unit --workspace=web -- src/<pfad-zur-testdatei> -t "<testname>"
+```
+
+Achtung: `npm run test:unit` ohne `--workspace=web` ist am Repository-Root
+kein gültiger Aufruf (dort existiert kein solches Script); die
+Workspace-Qualifizierung gehört zum kanonischen Befehl.
+
 ## Backend
 
 ```bash
@@ -261,6 +311,88 @@ cd ~/PycharmProjects/fg-meeting-traum/apps/api
 uv run python manage.py check
 uv run python manage.py makemigrations --check
 uv run python manage.py test
+```
+
+## Backend-Zieltests (Django)
+
+`uv run python manage.py test <app-oder-testpfad>` akzeptiert App-,
+Modul-, Klassen- oder Methodenpfade:
+
+```bash
+cd ~/PycharmProjects/fg-meeting-traum/apps/api
+
+# App
+uv run python manage.py test accounts
+
+# Testmodul
+uv run python manage.py test accounts.test_seed_dev
+
+# Einzelne Testmethode
+uv run python manage.py test accounts.test_seed_dev.SeedDevIdempotencyTest.test_seed_dev_runs_twice_without_duplicates
+```
+
+## E2E (Playwright)
+
+Kanonischer Agentenpfad (mit explizitem Consent für den destruktiven Reset
+des isolierten `fg_e2e`-Schemas):
+
+```bash
+FG_ALLOW_E2E_RESET=1 ./scripts/agent-verify.sh e2e [optionale playwright-argumente]
+```
+
+Beispiele (Playwright-Argumente werden an `playwright test` durchgereicht):
+
+```bash
+# Komplette E2E-Suite
+FG_ALLOW_E2E_RESET=1 ./scripts/agent-verify.sh e2e
+
+# Einzelne Spec
+FG_ALLOW_E2E_RESET=1 ./scripts/agent-verify.sh e2e e2e/login.spec.ts
+
+# Einzelner Test über -g (Namensmuster)
+FG_ALLOW_E2E_RESET=1 ./scripts/agent-verify.sh e2e e2e/login.spec.ts -g "logs in and keeps the session across a reload"
+
+# Headed (Browser sichtbar)
+FG_ALLOW_E2E_RESET=1 ./scripts/agent-verify.sh e2e --headed
+
+# Playwright-UI-Modus
+FG_ALLOW_E2E_RESET=1 ./scripts/agent-verify.sh e2e --ui
+```
+
+Alternativ über die Root-npm-Scripts (ebenfalls mit Consent):
+
+```bash
+FG_ALLOW_E2E_RESET=1 npm run test:e2e -- e2e/login.spec.ts
+FG_ALLOW_E2E_RESET=1 npm run test:e2e:headed
+FG_ALLOW_E2E_RESET=1 npm run test:e2e:ui
+```
+
+### Consent-Vertrag
+
+Jeder echte E2E-Lauf muss `FG_ALLOW_E2E_RESET=1` sichtbar setzen. Der
+Consent wird an zwei Stellen technisch geprüft:
+
+1. im kanonischen Entrypoint `scripts/agent-verify.sh` (Profile `e2e`/`full`),
+2. im destruktiven Management-Command `reset_e2e` selbst (zusätzlich mit
+   `DJANGO_SETTINGS_MODULE=config.settings_e2e`).
+
+Weil der Guard im `reset_e2e`-Command liegt, sind auch direkte
+`npm run test:e2e`-, `npx playwright test`- und Management-Command-Aufrufe
+geschützt. Der Reset betrifft ausschließlich das isolierte `fg_e2e`-Schema
+der E2E-Konfiguration. Reine `--list`-Aufrufe starten keinen Webserver und
+führen keinen Reset aus; sie benötigen daher keinen Consent.
+
+## Harness-Vertragstests
+
+Statische Vertragstests für den Verifikations-Harness und die CI-Workflows
+(ohne Browser, ohne echte Profile, ohne CI-Ausführung; nicht Teil der
+`agent-verify`-Profile und nicht von den CI-Workflows aufgerufen):
+
+```bash
+bash scripts/tests/agent-doctor.test.sh
+bash scripts/tests/agent-verify.test.sh
+bash scripts/tests/core-workflow.test.sh
+bash scripts/tests/e2e-workflow.test.sh
 ```
 
 ---
@@ -291,9 +423,13 @@ docker start fg-postgres
 
 ## Login gibt 401 zurück
 
-Wenn `/api/auth/login/` mit `401` antwortet, stimmen Benutzername/Passwort nicht oder der Dev-User existiert in der aktuellen Datenbank noch nicht.
+Wenn `/api/auth/login/` mit `401` antwortet, stimmen Benutzername/Passwort
+nicht oder die Seed-Benutzer existieren in der aktuellen Datenbank noch
+nicht.
 
-Dev-User erneut anlegen bzw. Passwort zurücksetzen:
+Fehlende Benutzer: `seed_dev` (siehe oben) erneut ausführen. Hinweis:
+`seed_dev` setzt das Passwort nur für neu angelegte Benutzer; ein
+bestehendes, abweichendes Passwort für `alex` wird so zurückgesetzt:
 
 ```bash
 cd ~/PycharmProjects/fg-meeting-traum/apps/api
@@ -325,30 +461,15 @@ Typischer Fehler:
 Origin checking failed - http://localhost:5173 does not match any trusted origins
 ```
 
-Für die lokale Entwicklung kann der Vite-Proxy in
-`apps/web/vite.config.ts` den Backend-Origin mitsenden:
+Diese Meldung bedeutet, dass der Request-Origin nicht in
+`CSRF_TRUSTED_ORIGINS` (`apps/api/config/settings.py`) enthalten ist. Die
+kanonischen Vite-Dev-Origine `http://localhost:5173` und
+`http://127.0.0.1:5173` sind dort bereits vertraut, und der Vite-Proxy
+sendet keinen ersetzten Origin — ein manueller `vite.config.ts`-Workaround
+ist daher nicht erforderlich.
 
-```ts
-server: {
-  proxy: {
-    '/api': {
-      target: 'http://127.0.0.1:8000',
-      changeOrigin: true,
-      headers: {
-        Origin: 'http://127.0.0.1:8000',
-      },
-    },
-  },
-},
-```
-
-Nach einer Änderung an `vite.config.ts` Vite neu starten:
-
-```bash
-npm run dev
-```
-
-Lokale, maschinenspezifische Änderungen an `vite.config.ts` nicht versehentlich mit anderen Feature-Änderungen committen.
+Prüfen: läuft das Frontend tatsächlich auf dem kanonischen Port 5173
+(Vite weicht bei Portbelegung auf einen anderen Port aus)?
 
 ---
 

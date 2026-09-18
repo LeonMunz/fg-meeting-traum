@@ -18,15 +18,21 @@ Verify in this order, widening only as far as the task requires:
 
 1. **After structural TS/TSX edits:** run typecheck immediately — `npm run typecheck`
    (delegates to `tsc -b --pretty false`). Do not continue on a file that does not typecheck.
-2. **After behavior changes:** run the smallest relevant unit test —
-   `npm run test:unit --workspace=web` (optionally narrowed to the affected spec).
+2. **After behavior changes:** run the smallest relevant unit test:
+   - one spec file: `npm run test:unit --workspace=web -- <pfad-zur-testdatei>`
+   - one test case: `npm run test:unit --workspace=web -- <pfad-zur-testdatei> -t "<testname>"`
+   (`npm run test:unit` without `--workspace=web` is not a canonical root
+   invocation — the root has no such script.)
 3. **At task completion (non-browser):** run `./scripts/agent-verify.sh frontend`
    from the repository root (typecheck + lint + complete unit suite +
    design-token contract suite + production build).
-4. **Targeted E2E** when the change touches a covered flow — from the
-   repository root, `npx playwright test <spec>` for the relevant spec.
-   Requires a browser-capable environment and `FG_ALLOW_E2E_RESET=1` consent
-   to the `fg_e2e` schema reset performed by the Playwright startup.
+4. **Targeted E2E** when the change touches a covered flow — canonical form
+   from the repository root: `FG_ALLOW_E2E_RESET=1 ./scripts/agent-verify.sh
+   e2e <spec>` (Playwright arguments pass through, e.g. `e2e/login.spec.ts`,
+   `-g "<testname>"`, `--headed`, `--ui`; a direct `npx playwright test <spec>`
+   needs the same consent). Requires a browser-capable environment and
+   `FG_ALLOW_E2E_RESET=1` consent to the `fg_e2e` schema reset performed by
+   the Playwright startup.
    The consent is enforced inside the `reset_e2e` management command itself,
    so `npm run test:e2e`, `npx playwright test`, and direct
    management-command invocations all refuse the reset (nonzero exit, before

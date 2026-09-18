@@ -162,6 +162,48 @@ contract above. A cancelled run is never presented as successful evidence.
 Static contract tests for the workflows:
 `scripts/tests/core-workflow.test.sh` and `scripts/tests/e2e-workflow.test.sh`.
 
+## Branch workflow
+
+- `main` is the last fully integrated and verified state.
+- Every task that changes files starts on its own short-lived slice branch.
+- Read-only audits may run on clean `main`.
+- A slice is verified locally and targeted, and committed, before it is
+  integrated into `main`.
+- After integration into `main`, the core and E2E CI gates provide the
+  independent remote evidence.
+- The slice branch is deleted only after that remote verification passed.
+- Branch protection is deliberately disabled in the current solo/early
+  phase.
+- No mandatory pull requests: the current solo workflow integrates a
+  passing slice into `main` by a local fast-forward merge after the commit
+  gate.
+
+## Harness contract tests
+
+Four static tests cover the verification harness and the CI workflow
+contracts:
+
+```bash
+bash scripts/tests/agent-doctor.test.sh
+bash scripts/tests/agent-verify.test.sh
+bash scripts/tests/core-workflow.test.sh
+bash scripts/tests/e2e-workflow.test.sh
+```
+
+- `agent-doctor.test.sh` — doctor output formats, exit codes, non-mutation,
+  simulated blockers.
+- `agent-verify.test.sh` — usage, plan mode, and the `--summary-json`
+  contract (deterministic PATH shims; no real profile executes).
+- `core-workflow.test.sh` — the security- and contract-critical invariants
+  of `.github/workflows/core.yml` (triggers, permissions, pinned
+  references, PostgreSQL 16, single canonical `core` invocation).
+- `e2e-workflow.test.sh` — the same for `.github/workflows/e2e.yml`, plus:
+  `FG_ALLOW_E2E_RESET` appears exactly once, on the canonical gate line.
+
+They test the harness/workflow contract only: they are not executed by any
+`agent-verify` profile and are not invoked by the CI workflows. Run them
+directly when touching the harness or the workflows.
+
 ## Diagnostic labels
 
 Every diagnostic finding is labeled so evidence and speculation stay separate:

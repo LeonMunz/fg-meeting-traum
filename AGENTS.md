@@ -29,9 +29,12 @@ Do not change these choices without an explicit architecture decision.
 - `apps/api/` — Django backend
 - `docs/` — durable product, domain, architecture, and Living-Lab documentation
 - `docs/stitch_examples/` — visual reference exports only
-- `scripts/agent-verify.sh` — repository verification helper (frontend / backend / full)
+- `scripts/agent-verify.sh` — repository verification helper (profiles: `quick`, `frontend`, `backend`, `core`, `e2e`, `full`)
 - `scripts/agent-doctor.sh` — read-only environment capability doctor (human + JSON)
 - `scripts/tests/agent-doctor.test.sh` — doctor tests (formats, exit codes, simulated blockers)
+- `scripts/tests/agent-verify.test.sh` — agent-verify harness tests (usage, plan mode, `--summary-json` contract)
+- `scripts/tests/core-workflow.test.sh` — CI core workflow contract tests
+- `scripts/tests/e2e-workflow.test.sh` — CI E2E workflow contract tests
 
 ## Documentation usage
 

@@ -41,12 +41,17 @@ Run from `apps/api/`, widening only as far as the task requires:
 
 1. **Django system check** — `uv run python manage.py check`.
 2. **Migration integrity** — `uv run python manage.py makemigrations --check --dry-run`.
-3. **Smallest relevant app/test subset** — `uv run python manage.py test <app>` (or a
-   specific test method) for the changed area.
+3. **Smallest relevant app/test subset** —
+   `uv run python manage.py test <app-oder-testpfad>` for the changed area;
+   the label may be an app, a module, a class, or a single method, e.g.
+   `test accounts`, `test accounts.test_seed_dev`, or
+   `test accounts.test_seed_dev.SeedDevIdempotencyTest.test_seed_dev_runs_twice_without_duplicates`.
 4. **Full backend suite** only when justified by scope.
 
 Repository-wide passes are available from the repository root via
-`./scripts/agent-verify.sh`:
+`./scripts/agent-verify.sh` (profiles: `quick`, `frontend`, `backend`,
+`core`, `e2e`, `full`; see the root `AGENTS.md` and
+`./scripts/agent-verify.sh --help` for the full definitions):
 
 - `quick` — fast static pass (repo hygiene, frontend typecheck/lint, Django
   system check, migration-drift check); safe in the agent sandbox.
