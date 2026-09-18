@@ -411,12 +411,45 @@ test(
       })
       .click()
 
-    const invitedMeetingRow = page
-      .getByRole('button')
-      .filter({ hasText: MEETING_TITLE })
+    // The sidebar link performs an SPA navigation: the URL switches
+    // before React re-renders the Meetings list. Wait for the list
+    // page itself before addressing the row, so the locator can
+    // never resolve against the previous page — the Home Activity
+    // rail names the same Meeting inside its event sentences and is
+    // the source of the strict-mode ambiguity.
+    await expect(page).toHaveURL(
+      /\/meetings\?group=\d+$/,
+    )
 
-    await expect(invitedMeetingRow).toBeVisible()
+    await expect(
+      page.getByRole('heading', {
+        name: 'Meetings',
+        exact: true,
+      }),
+    ).toBeVisible()
+
+    // The list row's accessible name starts with the Meeting title
+    // (then "Meeting #id", date, status, participant count). Activity
+    // event rows name the actor first, so an anchored title match can
+    // only ever select the Meeting row itself.
+    const invitedMeetingRow = page
+      .getByRole('button', {
+        name: new RegExp(
+          `^${MEETING_TITLE}`,
+        ),
+      })
+
+    // Exactly one Meeting entry for this title exists on the list —
+    // no Activity row or other button qualifies.
+    await expect(
+      invitedMeetingRow,
+    ).toHaveCount(1)
+
     await invitedMeetingRow.click()
+
+    await expect(page).toHaveURL(
+      /\/meetings\/\d+$/,
+    )
 
     await expect(
       page.getByRole('heading', {
