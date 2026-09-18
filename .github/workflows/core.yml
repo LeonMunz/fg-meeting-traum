@@ -1,0 +1,123 @@
+# Canonical Core verification gate for FG Workspace (single job, no matrix).
+#
+# Runs the `core` profile of scripts/agent-verify.sh (repo hygiene + complete
+# frontend + complete backend; no browser) against an isolated,
+# health-checked PostgreSQL 16 service container, which the backend test
+# suite needs to create and drop its own test database. No Playwright
+# browser is installed in this workflow.
+#
+# Artifacts (access-protected, repository readers only; uploading an
+# artifact never proves gate success — see docs/agent/WORKFLOW.md):
+#   * core-summary-<run_id>-<run_attempt> — agent-verify JSON run summary,
+#     kept on success AND failure (never on cancellation), 14 days.
+name: Core verification
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Cancel superseded runs of the same PR branch only. Pushes to main are
+# queued and never cancelled, so completed main evidence is preserved.
+concurrency:
+  group: core-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  core:
+    name: Core verification
+    runs-on: ubuntu-24.04
+    # The core profile runs the complete frontend and backend suites
+    # (no browser, no E2E reset); 20 minutes covers setup (checkout,
+    # npm ci, uv sync) and bounds hanging jobs, consistent with the E2E
+    # workflow.
+    timeout-minutes: 20
+
+    # CI-only, non-secret PostgreSQL contract for config.settings:
+    # Django connects to database "fg_workspace" as user "fg_ci" and the
+    # backend test suite creates and drops its own test database. No
+    # production credentials and no GitHub secrets.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: fg_ci
+          POSTGRES_PASSWORD: fg-ci-only
+          POSTGRES_DB: fg_workspace
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U fg_ci -d fg_workspace"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # Only the environment variables config.settings actually requires.
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: fg_workspace
+      POSTGRES_USER: fg_ci
+      POSTGRES_PASSWORD: fg-ci-only
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: "Set up Node.js (repo contract: .nvmrc = 24, engines >= 24)"
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install JavaScript dependencies (lockfile only)
+        run: npm ci
+
+      - name: "Set up uv (repo contract: requires-python >= 3.12)"
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: 0.12.16
+          python-version: "3.12"
+          # Caches uv dependency downloads only (never virtual environment
+          # state); the cache key derives from the repository lockfiles.
+          enable-cache: true
+
+      - name: Install backend dependencies (lockfile only, no lock update)
+        working-directory: apps/api
+        run: uv sync --frozen
+
+      # The core profile is non-browser: no Playwright browser install.
+
+      - name: Prepare core summary target directory
+        run: mkdir -p "$RUNNER_TEMP/fg-core"
+
+      # The ONLY core invocation in this workflow: the canonical gate.
+      # The real exit code of agent-verify.sh is preserved (no retries,
+      # no wrapping that could hide a failed phase).
+      - name: Run canonical core verification gate
+        run: |
+          ./scripts/agent-verify.sh \
+            --summary-json "$RUNNER_TEMP/fg-core/core-summary.json" \
+            core
+
+      # Runs on success AND on regular failure; skipped on cancellation so
+      # a potentially incomplete summary is never uploaded. A cancelled run
+      # is never presented as success evidence. Upload errors remain visible
+      # but do not replace the original core failure (a missing summary
+      # cannot mask it either).
+      - name: Upload core run summary
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: core-summary-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/fg-core/core-summary.json
+          retention-days: 14
+          if-no-files-found: warn

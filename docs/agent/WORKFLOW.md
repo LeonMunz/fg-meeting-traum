@@ -87,14 +87,47 @@ PRECHECK
 - For a bug, report the resolved FACT, the hypothesis that held, the deciding
   test, and the error classification from the Evidence contract.
 
-## CI E2E gate (GitHub Actions)
+## CI gates (GitHub Actions)
 
-The repository carries exactly one CI workflow: `E2E` in
-`.github/workflows/e2e.yml`. It runs on `pull_request` against `main`, on
-`push` to `main`, and on manual `workflow_dispatch`. A single job on a pinned
-Ubuntu runner executes the canonical E2E gate against an isolated,
-health-checked PostgreSQL 16 service container (CI-only, non-secret
-credentials; the E2E reset still touches only the `fg_e2e` schema).
+The repository carries two CI workflows, both in `.github/workflows/`, and
+both run on `pull_request` against `main`, on `push` to `main`, and on manual
+`workflow_dispatch`. Each is a single job on a pinned Ubuntu runner that
+executes its canonical gate against an isolated, health-checked PostgreSQL 16
+service container (CI-only, non-secret credentials). The repository does not
+configure branch protection; these gates are advisory checks on the branch
+and pull requests.
+
+### Core verification gate (`core.yml`)
+
+`Core verification` runs the canonical non-browser `core` profile (repo
+hygiene + complete frontend + complete backend; no Playwright browser). Its
+evidence is static and non-browser: typecheck, lint, unit tests, token
+contract, production build, Django system check, migration-drift check, and
+the Django test suite. A passing core gate proves nothing about browser
+behavior; browser E2E evidence comes only from the E2E gate below.
+
+Canonical CI core command (the only gate invocation in the workflow):
+
+```bash
+./scripts/agent-verify.sh \
+  --summary-json "$RUNNER_TEMP/fg-core/core-summary.json" \
+  core
+```
+
+Artifacts (access-protected: repository readers only; retention 14 days):
+
+- `core-summary-<run_id>-<run_attempt>` — the `schemaVersion`-1 JSON run
+  summary, kept on success AND failure (never on cancellation: a cancelled
+  run must not upload a potentially incomplete summary).
+
+Static contract tests for the workflow:
+`scripts/tests/core-workflow.test.sh`.
+
+### E2E gate (`e2e.yml`)
+
+`E2E` in `.github/workflows/e2e.yml` executes the canonical E2E gate against
+the same kind of isolated, health-checked PostgreSQL 16 service container
+(the E2E reset still touches only the `fg_e2e` schema).
 
 Canonical CI E2E command (the only test invocation in the workflow):
 
@@ -113,11 +146,12 @@ Artifacts (access-protected: repository readers only; retention 14 days):
   `test-results/` with directory structure, on E2E failure only (a cancelled
   run never uploads failure evidence).
 
-An uploaded artifact is never gate success, and the JSON summary is execution
-evidence only: it never confers an automatic RUNTIME_VERIFIED status under
-the Evidence contract above. A cancelled run is never presented as successful
-evidence. Static contract tests for the workflow:
-`scripts/tests/e2e-workflow.test.sh`.
+An uploaded artifact is never gate success — artifact upload does not itself
+prove a passing gate — and the JSON summary is execution evidence only: it
+never confers an automatic RUNTIME_VERIFIED status under the Evidence
+contract above. A cancelled run is never presented as successful evidence.
+Static contract tests for the workflows:
+`scripts/tests/core-workflow.test.sh` and `scripts/tests/e2e-workflow.test.sh`.
 
 ## Diagnostic labels
 
