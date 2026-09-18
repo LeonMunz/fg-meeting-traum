@@ -87,6 +87,38 @@ PRECHECK
 - For a bug, report the resolved FACT, the hypothesis that held, the deciding
   test, and the error classification from the Evidence contract.
 
+## CI E2E gate (GitHub Actions)
+
+The repository carries exactly one CI workflow: `E2E` in
+`.github/workflows/e2e.yml`. It runs on `pull_request` against `main`, on
+`push` to `main`, and on manual `workflow_dispatch`. A single job on a pinned
+Ubuntu runner executes the canonical E2E gate against an isolated,
+health-checked PostgreSQL 16 service container (CI-only, non-secret
+credentials; the E2E reset still touches only the `fg_e2e` schema).
+
+Canonical CI E2E command (the only test invocation in the workflow):
+
+```bash
+FG_ALLOW_E2E_RESET=1 ./scripts/agent-verify.sh \
+  --summary-json "$RUNNER_TEMP/fg-e2e/e2e-summary.json" \
+  e2e
+```
+
+Artifacts (access-protected: repository readers only; retention 14 days):
+
+- `e2e-summary-<run_id>-<run_attempt>` — the `schemaVersion`-1 JSON run
+  summary, kept on success AND failure (never on cancellation: a cancelled
+  run must not upload a potentially incomplete summary).
+- `e2e-failure-<run_id>-<run_attempt>` — `playwright-report/` +
+  `test-results/` with directory structure, on E2E failure only (a cancelled
+  run never uploads failure evidence).
+
+An uploaded artifact is never gate success, and the JSON summary is execution
+evidence only: it never confers an automatic RUNTIME_VERIFIED status under
+the Evidence contract above. A cancelled run is never presented as successful
+evidence. Static contract tests for the workflow:
+`scripts/tests/e2e-workflow.test.sh`.
+
 ## Diagnostic labels
 
 Every diagnostic finding is labeled so evidence and speculation stay separate:
