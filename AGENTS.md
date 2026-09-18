@@ -160,6 +160,17 @@ executable verification interface. Profiles:
 
 Use `./scripts/agent-verify.sh plan <profile>` to inspect a profile's exact
 commands, environment requirements, and mutation flags without executing.
+
+Optional machine-readable run summary:
+`./scripts/agent-verify.sh --summary-json <path> <profile>` additionally
+writes exactly one versioned JSON file (`schemaVersion` 1) to the explicit
+target path after a run-mode profile, on pass and on fail-fast (the failed
+phase is recorded with its real exit code; all later phases as `not_run`).
+The target directory must already exist; relative paths resolve against the
+caller's working directory. Human-readable output and exit codes are
+unchanged; without the flag no file is created; `plan` rejects the flag.
+The summary is execution evidence only and never upgrades an Evidence
+Contract status.
 Targeted validation during development stays available (see `apps/web/AGENTS.md`
 and `apps/api/AGENTS.md`), e.g. `npm run typecheck`, `npm run test:unit
 --workspace=web`, or `uv run python manage.py test <app>` from `apps/api/`.
