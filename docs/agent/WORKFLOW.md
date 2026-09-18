@@ -482,6 +482,8 @@ contract and are not reinterpreted by it.
   the current work.
 - Start a **NEW** session for a new feature/domain/root cause, or after substantial
   debugging has polluted the working context.
+- The canonical agent runtime contract and the mandatory per-run runtime/eval
+  metadata are defined in `docs/agent/RUNTIME.md`.
 
 ## Verification boundary
 

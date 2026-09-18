@@ -49,6 +49,7 @@ Read only the documentation relevant to the requested change:
 - Work Item definitions, Board semantics, Board ordering → `docs/domain/foundation.md` (Sections 3a, 7, 15)
 - Current implemented vs. not-yet-implemented checkpoint → `docs/CURRENT_STATE.md`
 - Tests, seed/reset, deployment, privacy, Living Lab → `docs/living-lab.md`
+- Agent runtime contract, per-run runtime/eval metadata → `docs/agent/RUNTIME.md`
 - Unsure where to look → `docs/README.md`
 
 For UI implementation, inspect only the relevant Stitch screen. Do not scan all Stitch exports.

@@ -21,6 +21,7 @@ The documentation is intentionally split by concern so humans and coding agents 
 | Current implemented vs. not-yet-implemented checkpoint | `CURRENT_STATE.md` |
 | Testing, seed/reset, Living Lab, deployment, privacy | `living-lab.md` |
 | Canonical agent execution flow, debugging budget, evidence contract, verification boundary | `agent/WORKFLOW.md` |
+| Canonical agent runtime contract (canonical harness, runtime layers, per-run eval metadata) | `agent/RUNTIME.md` |
 | UI appearance | relevant file under `stitch_examples/` |
 | Color tokens, palette, design tokens | `design/tokens.md` |
 
@@ -40,6 +41,7 @@ Each kind of truth has one canonical owner:
 - **Current implementation checkpoint** → `CURRENT_STATE.md`
 - **Living-Lab and validation process** → `living-lab.md`
 - **Agent evidence contract (verification claims, blocker classification, completion reports)** → `agent/WORKFLOW.md`
+- **Agent runtime contract (canonical harness, runtime layers, per-run eval metadata, secret boundaries)** → `agent/RUNTIME.md`
 - **Implemented persistence** → Django models + migrations
 - **Implemented API contract** → DRF serializers/endpoints
 - **Frontend contract representation** → TypeScript API/domain types
