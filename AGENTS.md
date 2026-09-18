@@ -112,14 +112,12 @@ Task discipline:
 
 Bug discipline:
 - Reproduce before changing production code.
-- Label every diagnostic finding explicitly as:
-  - **FACT** — directly observed evidence.
-  - **HYPOTHESIS** — a possible explanation, not a conclusion.
-  - **NEXT TEST** — one test that can falsify or materially distinguish the hypothesis.
-- Maximum 3 failed diagnostic experiments for one blocker.
-- Maximum 2 materially different root-cause hypotheses.
-- If that budget is exhausted without materially new evidence: STOP and report **BLOCKED** with the FACTs, hypotheses, and what was tried.
-- Do not escalate an application bug into framework/runtime speculation without direct evidence.
+- Diagnostic labels (FACT / HYPOTHESIS / NEXT TEST), the debugging budget,
+  the four error classifications, the five verification statuses, the
+  environment budget, and the mandatory completion format are canonical in
+  `docs/agent/WORKFLOW.md` (Evidence contract). Every diagnostic finding,
+  verification claim, blocker report, and completion report follows that
+  contract.
 
 Structural validity:
 - If your own edit introduces a parser, syntax, type, import, or server-boot failure, restore structural validity immediately before continuing diagnosis.
@@ -169,8 +167,14 @@ and `apps/api/AGENTS.md`), e.g. `npm run typecheck`, `npm run test:unit
 `./scripts/agent-doctor.sh` (read-only; `--json` for machine-readable output)
 diagnoses which verification capabilities are available or blocked in the
 current environment. It is not part of any verification profile. Status
-values, exit codes, and the post-blocker environment budget are documented in
-`docs/living-lab.md` (Environment doctor).
+values and exit codes are documented in `docs/living-lab.md` (Environment
+doctor); the post-blocker environment budget is part of the canonical
+evidence contract in `docs/agent/WORKFLOW.md`.
+
+Verification claims, blocker classification, and completion reports follow
+that same evidence contract (`docs/agent/WORKFLOW.md`, Evidence contract):
+five verification statuses, four error classes, one environment budget, one
+mandatory completion format.
 
 Do not invent a new testing framework merely to complete a task.
 

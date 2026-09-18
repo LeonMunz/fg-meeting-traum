@@ -1,6 +1,8 @@
 # Agent Execution Workflow
 
-This document defines the canonical flow every agent follows for a task. It is
+This document defines the canonical flow every agent follows for a task and the
+canonical evidence contract: the verification statuses agents may claim, the
+blocker classifications, and the mandatory completion-report content. It is
 execution policy only; it does not duplicate product, domain, or architecture
 documentation. For domain invariants read the relevant `docs/domain/*` file; for the
 current implementation checkpoint read `docs/CURRENT_STATE.md`.
@@ -77,8 +79,13 @@ PRECHECK
 ### REPORT
 
 - Report changed files, behavior, checks run and their results, and limitations.
+- Verification claims follow the Evidence contract below: every gate or checked
+  path carries exactly one of the five verification statuses, and the report
+  contains the mandatory completion table (exact command, observed result,
+  product-path-executed flag, real artifact paths).
 - For UI/UX work, name the screens/states that need manual visual verification.
-- For a bug, report the resolved FACT, the hypothesis that held, and the deciding test.
+- For a bug, report the resolved FACT, the hypothesis that held, the deciding
+  test, and the error classification from the Evidence contract.
 
 ## Diagnostic labels
 
@@ -97,6 +104,222 @@ Every diagnostic finding is labeled so evidence and speculation stay separate:
   FACTs, the hypotheses tried, and the tests run.
 - Do not escalate an application bug into framework/runtime speculation without direct
   evidence.
+
+## Evidence contract
+
+This section is the single canonical contract for verification claims, blocker
+classification, and completion-report content. No other document defines or
+redefines these terms; `AGENTS.md` and the documentation map point here.
+
+### Verification statuses
+
+Every gate or product path an agent reports on carries exactly one of these
+five statuses. A status is always relative to the specific gate or behavior
+that is claimed: executing a command does not make its result RUNTIME_VERIFIED
+by itself — the kind of behavior the command actually proves decides.
+
+**IMPLEMENTED**
+
+- Meaning: the code for the change was written (files changed, new code in the
+  tree). Nothing more.
+- Required evidence: the change itself — the concrete changed file paths (e.g.
+  from `git diff --stat` or `git status --short`).
+- Does NOT follow: no claim of static correctness, no claim of working
+  behavior, no claim that any check passed. IMPLEMENTED alone never justifies
+  "verified", "green", or equivalent.
+
+**STATICALLY_VERIFIED**
+
+- Meaning: checks that were actually executed and passed, limited to static
+  validation: repository searches and documentation inspection, diff and
+  whitespace checks, typecheck, lint, parse/syntax check, Django system check,
+  migration-drift check, build.
+- Required evidence: the exact executed command(s) and their observed result
+  (exit code 0 or PASS output).
+- Does NOT follow: no runtime behavior is verified. That a static check was
+  actually executed does not make it RUNTIME_VERIFIED — running a command
+  proves only the kind of behavior it checks.
+
+**RUNTIME_VERIFIED**
+
+- Meaning: the specific runtime behavior that is claimed was actually executed
+  and observed to succeed. The claim's scope is exactly the path that was
+  executed: unit/integration tests exercising the changed behavior, browser
+  E2E for a UI flow, or a real API/browser call exercising the path.
+- Required evidence: the exact executed command, its exit code, and the
+  executed behavior path identified (spec file + test names, or endpoint +
+  flow).
+- Does NOT follow: it may never be derived from static checks. Each runtime
+  level proves only the level that was executed:
+  - An API rehearsal is RUNTIME_VERIFIED for exactly the API path executed;
+    it proves no browser or end-to-end interaction.
+  - A doctor preflight is RUNTIME_VERIFIED for exactly the capability tested
+    (e.g. the Chromium launch); it proves no product path that later uses
+    that capability.
+  - A blocked browser can never yield RUNTIME_VERIFIED for a browser path.
+
+**NOT_VERIFIED_ENVIRONMENT_BLOCKED**
+
+- Meaning: the relevant verification could not run because a concrete
+  environment blocker was reproduced (browser launch blocked, database
+  unreachable, missing runtime, sandbox policy).
+- Required evidence: the reproduced, concrete blocker (the
+  `agent-doctor.sh --json` capability output or the exact error) AND the exact
+  external verification command to run where the blocker does not apply (e.g.
+  `FG_ALLOW_E2E_RESET=1 ./scripts/agent-verify.sh e2e` on a browser-capable
+  machine).
+- Does NOT follow: nothing about the path's behavior. It must never be
+  phrased as verified, green, or equivalent.
+
+**NOT_RUN_OUT_OF_SCOPE**
+
+- Meaning: a gate was deliberately not run because it is not required for this
+  slice.
+- Required evidence: the explicitly named omitted gate(s) and why they are out
+  of scope for the slice.
+- Does NOT follow: nothing about the gate's current state. "Out of scope" must
+  not mask a regression: when the slice's scope changes, the gate becomes
+  required and must be run.
+
+### "All green" rule
+
+"All green" (or equivalent: "everything passes", "fully verified") is allowed
+only when every gate required for the slice was actually executed and passed.
+The report must list which gates those were. If any required gate carries
+NOT_VERIFIED_ENVIRONMENT_BLOCKED or NOT_RUN_OUT_OF_SCOPE, the summary states
+that explicitly.
+
+### Error classification
+
+Every failed or suspicious verification result is classified before any next
+action. A classification states exactly one class, the concrete evidence,
+whether the product path was actually reached, and the allowed next action.
+
+**PRODUCT_REGRESSION**
+
+- When: an executed product or test path failed because of product behavior —
+  an assertion on documented behavior or a previously green expectation fails
+  in the product itself.
+- Required evidence: the failing command and its output identifying the
+  failing product assertion or step, and the documented invariant or
+  expectation it contradicts.
+- Product path reached: yes.
+- Allowed next action: stop and report the regression. Repair only through a
+  dedicated bug task or an explicitly authorized repair in the current task.
+  Never weaken the test or change product copy to make it pass.
+
+**STALE_TEST**
+
+- When: the executed path failed because the test or harness no longer matches
+  the currently documented, intended product behavior (stale selector, outdated
+  fixture), while product behavior remains as documented.
+- Required evidence: a FACT that product behavior matches the documented
+  invariant, plus the exact stale assertion or selector.
+- Product path reached: yes, up to the point where the test diverges from the
+  documented behavior.
+- Allowed next action: update the stale selector or assertion (product
+  behavior unchanged, per the verification boundary), re-run, and report the
+  update.
+
+**ENVIRONMENT_OR_HARNESS**
+
+- When: the failure originates in the environment or the test harness (browser
+  launch failure, database unreachable, missing dependency, sandbox policy,
+  harness crash), not in product behavior.
+- Required evidence: the doctor or preflight output identifying the blocked
+  capability, plus why the product path is not the cause (e.g. the failure
+  occurs before any product page or product assertion).
+- Product path reached: no — state explicitly how far the run got.
+- Allowed next action: apply the environment budget, then report the gate as
+  NOT_VERIFIED_ENVIRONMENT_BLOCKED with the exact external verification
+  command. No installation, retry, or escalation loops. An environment blocker
+  is a classified gate status, not a debugging-budget **BLOCKED** state.
+
+**SCOPE_DISCOVERY**
+
+- When: verification reveals a gap, regression, or behavior that is not part
+  of the task's Definition of Done.
+- Required evidence: the concrete observation (command + output) proving the
+  finding, plus why it is outside the current slice's scope.
+- Product path reached: state yes or no explicitly.
+- Allowed next action: report the discovery (with its own error classification
+  if a failure occurred) and propose a dedicated task. Do not fix it
+  opportunistically unless explicitly authorized.
+
+### Environment budget
+
+After a blocker is detected (by the doctor or any preflight) or on any
+environmental failure during verification:
+
+1. One normal attempt at the blocked verification.
+2. At most one retry, only after an immediately plausible, non-mutating
+   diagnosis (e.g. `agent-doctor.sh --json` output) that names a specific
+   cause.
+3. Then classify the blocker as ENVIRONMENT_OR_HARNESS, report the gate as
+   NOT_VERIFIED_ENVIRONMENT_BLOCKED with the exact external verification
+   command, and stop working on that gate.
+
+No dependency installation, no repeated install or launch attempts, no
+escalation loops. The doctor never installs, and an agent does not start
+installing to unblock a gate.
+
+### Mandatory completion format
+
+A completion report contains one table row per gate or checked path:
+
+| Column | Content |
+|---|---|
+| Gate or checked path | Profile (e.g. `quick`, `core`, `e2e`) or the concrete product/test path |
+| Exact command | The command as executed, including environment variables and flags |
+| Status | Exactly one of the five verification statuses |
+| Result or exit code | The observed result (PASS/FAIL, pass count, exit code) or `not executed` plus the reason |
+| Product path executed | `yes` or `no` |
+| Evidence or artifact path | Real, existing artifacts (see artifact rules), or `-` when none exist |
+
+Rules:
+
+- Every gate required for the slice has exactly one row.
+- Deliberately omitted gates still get a row, with NOT_RUN_OUT_OF_SCOPE and
+  the reason.
+- A row with product path executed `no` must not carry RUNTIME_VERIFIED; a
+  claimed product runtime verification requires `yes` and the executed
+  behavior path named in the command column.
+- The summary around the table must never upgrade a row's status (see the
+  narrative rule below).
+
+Illustrative example (values must be the observed ones in a real report):
+
+| Gate or checked path | Exact command | Status | Result or exit code | Product path executed | Evidence or artifact path |
+|---|---|---|---|---|---|
+| quick profile | `./scripts/agent-verify.sh quick` | STATICALLY_VERIFIED | PASS, exit 0 | no | `-` |
+| contract search | `rg -n "STATICALLY_VERIFIED" docs/agent/WORKFLOW.md` | STATICALLY_VERIFIED | matches found, exit 0 | no | `-` |
+| My Work E2E | `FG_ALLOW_E2E_RESET=1 npm run test:e2e -- my-work` | RUNTIME_VERIFIED | 12/12 passed, exit 0 | yes | `test-results/my-work/trace.zip` |
+| e2e profile (browser) | `FG_ALLOW_E2E_RESET=1 ./scripts/agent-verify.sh e2e` | NOT_VERIFIED_ENVIRONMENT_BLOCKED | not executed — `e2e_gate: blocked` (Chromium launch) | no | blocker: doctor output; run externally: `FG_ALLOW_E2E_RESET=1 ./scripts/agent-verify.sh e2e` |
+
+### Artifact rules
+
+- Only artifacts that actually exist may be named; no guessed or free-form
+  paths.
+- A trace, screenshot, DOM snapshot, or log is attributed to the specific
+  failed test (spec file + test/step) it belongs to.
+- Generated artifacts (`playwright-report/`, `test-results/`, `dist/`, tsc
+  build info, test databases) are never committed unless they are explicitly
+  versioned fixtures or baselines.
+
+### Narrative vs. runtime evidence
+
+Runtime evidence outranks the agent's narrative: logs, exit codes, traces, DOM
+snapshots, API responses, and git state take precedence over the agent's
+summary. If the two diverge, the claim is corrected to match the evidence —
+never the other way around. A summary may describe; it may never upgrade a
+status (e.g. calling a blocked gate "verified").
+
+### Relationship to `CURRENT_STATE.md`
+
+The checkpoint markers in `docs/CURRENT_STATE.md` (`IMPLEMENTED`, `PARTIAL`,
+`NOT IMPLEMENTED`, `KNOWN ISSUE`) are product-state markers about the
+repository's implemented state. They are not verification statuses of this
+contract and are not reinterpreted by it.
 
 ## Session guidance
 

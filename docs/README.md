@@ -20,7 +20,7 @@ The documentation is intentionally split by concern so humans and coding agents 
 | Home (personal workspace surface, Needs attention read model) | `domain/home.md` |
 | Current implemented vs. not-yet-implemented checkpoint | `CURRENT_STATE.md` |
 | Testing, seed/reset, Living Lab, deployment, privacy | `living-lab.md` |
-| Canonical agent execution flow, debugging budget, verification boundary | `agent/WORKFLOW.md` |
+| Canonical agent execution flow, debugging budget, evidence contract, verification boundary | `agent/WORKFLOW.md` |
 | UI appearance | relevant file under `stitch_examples/` |
 | Color tokens, palette, design tokens | `design/tokens.md` |
 
@@ -39,6 +39,7 @@ Each kind of truth has one canonical owner:
 - **Invite-only account registration (atomic account + invitation transition)** → `domain/account-registration.md`
 - **Current implementation checkpoint** → `CURRENT_STATE.md`
 - **Living-Lab and validation process** → `living-lab.md`
+- **Agent evidence contract (verification claims, blocker classification, completion reports)** → `agent/WORKFLOW.md`
 - **Implemented persistence** → Django models + migrations
 - **Implemented API contract** → DRF serializers/endpoints
 - **Frontend contract representation** → TypeScript API/domain types

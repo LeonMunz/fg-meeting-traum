@@ -235,10 +235,11 @@ reported as blocked, not as verified.
 
 ### Environment budget after a detected blocker
 
-After the doctor (or any preflight) detects a browser/environment blocker: one
-normal attempt plus at most one retry after an immediately plausible,
-non-mutating diagnosis. Then classify the blocker and stop — no repeated
-install or launch attempts.
+The post-blocker environment budget (one normal attempt, at most one retry
+after an immediately plausible, non-mutating diagnosis, then classify the
+blocker and stop) is defined once in the canonical evidence contract:
+`docs/agent/WORKFLOW.md` (Environment budget). No repeated install or launch
+attempts.
 
 ### Doctor tests
 
