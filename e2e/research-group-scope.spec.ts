@@ -2,7 +2,7 @@ import {
   expect,
   test,
   type Page,
-} from '@playwright/test'
+} from './diagnostics/failure-diagnostics'
 
 import { login } from './helpers'
 

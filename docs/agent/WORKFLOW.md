@@ -306,6 +306,44 @@ Illustrative example (values must be the observed ones in a real report):
   build info, test databases) are never committed unless they are explicitly
   versioned fixtures or baselines.
 
+### Failure diagnostics artifact
+
+Playwright's built-in artifacts (trace `retain-on-failure`, failure
+screenshot, HTML report) remain the canonical failure evidence and are
+never duplicated or replaced by custom artifacts.
+
+On top of that, an *unexpectedly* failed E2E test (`testInfo.status !==
+testInfo.expectedStatus`) may carry a bounded, secret-poor JSON summary:
+
+- Canonical file name: `failure-diagnostics.json`, written exclusively via
+  `testInfo.outputPath('failure-diagnostics.json')` and bound to exactly
+  that test report via `testInfo.attach('failure-diagnostics', ...)`.
+  No free-form or global artifact paths.
+- `schemaVersion: 1`. Content: test identity (title, file, project,
+  retry), observed vs. expected status, sanitized last page URL, bounded
+  `pageErrors`, `consoleErrors` (level `error`), `requestFailures`,
+  `httpErrors` (status >= 400), and an optional compact ARIA snapshot
+  when the page is still available.
+- Excluded by contract: request/response bodies, headers, cookies,
+  local/session storage, environment variables, auth tokens. URL query
+  and fragment are stripped; unparseable URLs never leak the raw string.
+- Bounds: 20 entries per category, 500 characters per string,
+  8,000 characters for the ARIA snapshot, 64 KiB total. Truncated
+  categories/strings are flagged `truncated`; total-budget drops are
+  flagged `totalTruncated`.
+- Passing or otherwise expected tests never produce the artifact. No
+  custom screenshot, trace, or video recording is performed; the JSON
+  may reference built-in artifacts only if their existence was actually
+  detected at write time. Diagnostics collection or write errors are
+  reported on stderr only and never mask the original test failure.
+- Fixture: `e2e/diagnostics/failure-diagnostics.ts` (builds on
+  `@playwright/test`, re-exports `test` and `expect`; specs switch import
+  source only). Listeners are removed after every test. Currently active
+  for `e2e/research-group-scope.spec.ts` only; migrating further specs is
+  a per-spec decision.
+- Browser-free logic and lifecycle tests: `e2e/diagnostics/unit/`, run
+  via `npx playwright test -c playwright.diagnostics.config.ts`.
+
 ### Narrative vs. runtime evidence
 
 Runtime evidence outranks the agent's narrative: logs, exit codes, traces, DOM

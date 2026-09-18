@@ -6,6 +6,10 @@ import {
 export default defineConfig({
   testDir: './e2e',
 
+  // Browser-free diagnostics unit tests run under
+  // playwright.diagnostics.config.ts and must not be picked up here.
+  testIgnore: ['**/diagnostics/unit/**'],
+
   timeout: 45_000,
 
   expect: {
