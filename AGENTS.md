@@ -29,6 +29,7 @@ Do not change these choices without an explicit architecture decision.
 - `apps/api/` — Django backend
 - `docs/` — durable product, domain, architecture, and Living-Lab documentation
 - `docs/stitch_examples/` — visual reference exports only
+- `evals/` — historical-state eval case packages (pilot: `cases/activity-feed-query-cost`); see `evals/README.md`
 - `scripts/agent-verify.sh` — repository verification helper (profiles: `quick`, `frontend`, `backend`, `core`, `e2e`, `full`)
 - `scripts/agent-doctor.sh` — read-only environment capability doctor (human + JSON)
 - `scripts/tests/agent-doctor.test.sh` — doctor tests (formats, exit codes, simulated blockers)
