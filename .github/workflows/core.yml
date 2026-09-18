@@ -33,10 +33,10 @@ jobs:
     name: Core verification
     runs-on: ubuntu-24.04
     # The core profile runs the complete frontend and backend suites
-    # (no browser, no E2E reset); 20 minutes covers setup (checkout,
-    # npm ci, uv sync) and bounds hanging jobs, consistent with the E2E
-    # workflow.
-    timeout-minutes: 20
+    # (no browser, no E2E reset); 30 minutes covers setup (checkout,
+    # npm ci, uv sync) and the complete suites with margin over the
+    # observed first run of ~19m31s, and bounds hanging jobs.
+    timeout-minutes: 30
 
     # CI-only, non-secret PostgreSQL contract for config.settings:
     # Django connects to database "fg_workspace" as user "fg_ci" and the
