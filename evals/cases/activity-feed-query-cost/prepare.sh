@@ -45,12 +45,24 @@ git -C "$REPO_ROOT" cat-file -e "${START_COMMIT}^{commit}" 2>/dev/null \
 # --- target selection ------------------------------------------------------
 CREATED_BY_US=0
 TARGET=""
-if [[ $# -eq 1 && $# -gt 0 ]]; then
+if [[ $# -eq 1 ]]; then
   TARGET="$1"
-  if [[ -e "$TARGET" ]]; then
+  if [[ -z "$TARGET" ]]; then
+    die "TARGET_DIR must not be empty."
+  fi
+  # Refuse a pre-existing target in ANY form — file, directory, or
+  # symlink (including broken ones) — before touching it.
+  if [[ -e "$TARGET" || -L "$TARGET" ]]; then
     die "target already exists: $TARGET (refusing to overwrite)."
   fi
   mkdir -p -- "$(dirname -- "$TARGET")"
+  # Create the target itself for this run: mkdir without -p fails if
+  # anything (re)appears at the path before this point, so the script
+  # never writes into a target it did not create itself.
+  if ! mkdir -- "$TARGET"; then
+    die "target already exists: $TARGET (refusing to overwrite)."
+  fi
+  CREATED_BY_US=1
 elif [[ $# -gt 0 ]]; then
   die "usage: bash prepare.sh [TARGET_DIR]"
 else
@@ -58,8 +70,10 @@ else
   CREATED_BY_US=1
 fi
 
-# Remove our own mktemp target only when this script FAILS; on success
-# the snapshot is the product and is kept.
+# Remove a target created BY THIS RUN (mktemp or explicit TARGET_DIR)
+# only when this script FAILS; on success the snapshot is the product
+# and is kept. A target that pre-existed the run is refused above and
+# never touched at all.
 cleanup_on_failure() {
   local rc=$?
   if [[ $rc -ne 0 && $CREATED_BY_US -eq 1 && -n "$TARGET" && -d "$TARGET" ]]; then
