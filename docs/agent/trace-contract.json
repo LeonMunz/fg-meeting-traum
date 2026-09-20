@@ -1,7 +1,7 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "name": "fg-agent-observability-trace-contract",
-  "description": "Versioned contract for the local sanitized Codex OTel trace store. Later Harness analysis (Run Ledger, normalized metrics) must depend only on the keys named here. Raw OTLP field names outside this contract are implementation detail.",
+  "description": "Versioned contract for the local sanitized Codex OTel trace store. Later Harness analysis (Run Ledger, normalized metrics) must depend only on the keys named here. Raw OTLP field names outside this contract are implementation detail. The Run Ledger (docs/agent/ledger-contract.json) is the normalized output for later Harness analysis.",
   "sourceVersions": {
     "codex": "0.148.x",
     "codexAcp": "1.7.0",
@@ -23,8 +23,15 @@
     "apiAttempt": "attempt attribute on codex.api_request events"
   },
   "resourceAttributes": {
-    "retained": ["service.name", "service.version"],
-    "dropped": ["host.name", "host.id", "host.arch"]
+    "retained": [
+      "service.name",
+      "service.version"
+    ],
+    "dropped": [
+      "host.name",
+      "host.id",
+      "host.arch"
+    ]
   },
   "events": {
     "commonAttributesRetained": [
@@ -40,38 +47,128 @@
     ],
     "byName": {
       "codex.conversation_starts": {
-        "retained": ["provider_name", "reasoning_effort", "reasoning_summary", "context_window", "auto_compact_token_limit", "approval_policy", "sandbox_policy", "mcp_server_count", "auth.env_openai_api_key_present", "auth.env_codex_api_key_present", "auth.env_codex_api_key_enabled", "auth.env_provider_key_present", "auth.env_refresh_token_url_override_present"]
+        "retained": [
+          "provider_name",
+          "reasoning_effort",
+          "reasoning_summary",
+          "context_window",
+          "auto_compact_token_limit",
+          "approval_policy",
+          "sandbox_policy",
+          "mcp_server_count",
+          "auth.env_openai_api_key_present",
+          "auth.env_codex_api_key_present",
+          "auth.env_codex_api_key_enabled",
+          "auth.env_provider_key_present",
+          "auth.env_refresh_token_url_override_present"
+        ]
       },
       "codex.user_prompt": {
-        "retained": ["prompt_length", "text_input_count", "image_input_count", "local_image_input_count"],
+        "retained": [
+          "prompt_length",
+          "text_input_count",
+          "image_input_count",
+          "local_image_input_count"
+        ],
         "note": "prompt text is '[REDACTED]' at source (log_user_prompt=false) and the key is dropped by the collector regardless"
       },
       "codex.tool_decision": {
-        "retained": ["tool_name", "call_id", "decision", "source"]
+        "retained": [
+          "tool_name",
+          "call_id",
+          "decision",
+          "source"
+        ]
       },
       "codex.tool_result": {
-        "retained": ["tool_name", "call_id", "duration_ms", "success", "arguments_length", "output_length", "output_line_count", "tool_origin", "mcp_tool"],
+        "retained": [
+          "tool_name",
+          "call_id",
+          "duration_ms",
+          "success",
+          "arguments_length",
+          "output_length",
+          "output_line_count",
+          "tool_origin",
+          "mcp_tool"
+        ],
         "note": "full arguments/output text is dropped by the collector; only bounded counts are retained"
       },
       "codex.sandbox_outcome": {
-        "retained": ["tool_name", "call_id", "outcome", "initial_duration_ms", "escalated_duration_ms"]
+        "retained": [
+          "tool_name",
+          "call_id",
+          "outcome",
+          "initial_duration_ms",
+          "escalated_duration_ms"
+        ]
       },
       "codex.api_request": {
-        "retained": ["duration_ms", "http.response.status_code", "attempt", "auth.header_attached", "auth.retry_after_unauthorized", "auth.recovery_mode", "auth.recovery_phase"]
+        "retained": [
+          "duration_ms",
+          "http.response.status_code",
+          "attempt",
+          "auth.header_attached",
+          "auth.retry_after_unauthorized",
+          "auth.recovery_mode",
+          "auth.recovery_phase"
+        ]
       },
-      "codex.turn_ttft": { "retained": ["duration_ms"] },
-      "codex.sse_event": { "retained": ["kind", "duration_ms"] },
-      "codex.startup_phase": { "retained": ["phase", "duration_ms"] },
-      "codex.websocket_connect": { "retained": ["duration_ms"] },
-      "codex.websocket_request": { "retained": ["duration_ms"] },
-      "codex.auth_recovery": { "retained": ["phase"] },
-      "codex.plugin_install_elicitation_sent": { "retained": [] },
-      "codex.plugin_install_suggestion": { "retained": [] }
+      "codex.turn_ttft": {
+        "retained": [
+          "duration_ms"
+        ]
+      },
+      "codex.sse_event": {
+        "retained": [
+          "kind",
+          "duration_ms",
+          "event.kind",
+          "input_token_count",
+          "output_token_count",
+          "cached_token_count",
+          "cache_write_token_count",
+          "reasoning_token_count"
+        ],
+        "note": "event.kind and the token counters on response.completed events are the documented fallback source for the ledger token_usage metric when no metrics.jsonl is persisted (short sessions may not flush the periodic metrics export)"
+      },
+      "codex.startup_phase": {
+        "retained": [
+          "phase",
+          "duration_ms"
+        ]
+      },
+      "codex.websocket_connect": {
+        "retained": [
+          "duration_ms"
+        ]
+      },
+      "codex.websocket_request": {
+        "retained": [
+          "duration_ms"
+        ]
+      },
+      "codex.auth_recovery": {
+        "retained": [
+          "phase"
+        ]
+      },
+      "codex.plugin_install_elicitation_sent": {
+        "retained": []
+      },
+      "codex.plugin_install_suggestion": {
+        "retained": []
+      }
     }
   },
   "spans": {
     "note": "span names are implementation detail; span events carry the same event.name/attribute contract as logs. Retained span attributes follow the event contract above.",
-    "observedExamples": ["app_server.request", "session_loop", "thread_spawn", "shell_snapshot"]
+    "observedExamples": [
+      "app_server.request",
+      "session_loop",
+      "thread_spawn",
+      "shell_snapshot"
+    ]
   },
   "metrics": {
     "note": "retained as OTLP metric data points; tags are low-cardinality",
@@ -110,7 +207,9 @@
     "host.arch"
   ],
   "redactionBackstop": {
-    "appliesTo": ["originator"],
+    "appliesTo": [
+      "originator"
+    ],
     "patterns": "sk-*, ghp_*, gho_*, xox[baprs]-*, AKIA*, AIza*, JWT-shaped (eyJ*) tokens"
   },
   "reasoningContent": "not persisted: Codex 0.148.x emits no hidden-reasoning text in OTel events; reasoning is observable only via token counts (metrics) and the reasoning_effort/reasoning_summary metadata on codex.conversation_starts",
@@ -118,15 +217,54 @@
     "file": "capture-manifest.json",
     "schemaVersion": 1,
     "fields": [
-      "schema_version", "run_id", "kind", "start_ts", "end_ts", "stop_status",
-      "repo_root", "branch", "starting_head", "starting_tree",
-      "codex_version", "codex_acp_version", "collector_version",
-      "otel_endpoint", "privacy_mode",
-      "retention_days", "max_file_mb", "max_backups",
-      "raw_trace_files", "conversation_ids", "event_counts",
-      "app_versions", "models", "originators", "span_counts", "metric_names",
-      "log_record_count", "span_count", "metric_series_count"
+      "schema_version",
+      "run_id",
+      "kind",
+      "start_ts",
+      "end_ts",
+      "stop_status",
+      "repo_root",
+      "branch",
+      "starting_head",
+      "starting_tree",
+      "codex_version",
+      "codex_acp_version",
+      "collector_version",
+      "otel_endpoint",
+      "privacy_mode",
+      "retention_days",
+      "max_file_mb",
+      "max_backups",
+      "raw_trace_files",
+      "conversation_ids",
+      "event_counts",
+      "app_versions",
+      "models",
+      "originators",
+      "span_counts",
+      "metric_names",
+      "log_record_count",
+      "span_count",
+      "metric_series_count",
+      "ending_head",
+      "ending_tree",
+      "changed_file_count",
+      "changed_files",
+      "changed_files_truncated",
+      "lines_added",
+      "lines_deleted",
+      "commit_created"
     ],
-    "outOfScope": ["task success", "root cause", "human corrections", "verification outcome"]
+    "outOfScope": [
+      "task success",
+      "root cause",
+      "verification outcome"
+    ],
+    "note": "human corrections are captured out-of-band by the Run Ledger via explicit annotations (./scripts/agent-observability annotate), never inferred from telemetry. ending_* / changed_* / lines_* / commit_created are recorded once at capture finalize so later normalization stays reproducible."
+  },
+  "runLedger": {
+    "file": "docs/agent/ledger-contract.json",
+    "schemaVersion": 1,
+    "note": "versioned normalized Run Ledger record; later analytics must consume it, not raw OTel"
   }
 }

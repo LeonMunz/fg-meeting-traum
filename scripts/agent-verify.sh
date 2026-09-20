@@ -66,6 +66,7 @@ VERIFY_STARTED_AT=$SECONDS
 
 # Optional --summary-json state.
 SUMMARY_JSON=""          # absolute target path ("" = summary disabled)
+AGENT_RUN_ID=""          # explicit run correlation id from FG_AGENT_RUN_ID
 SUMMARY_ARMED=0          # 1 once the target path has been validated
 SUMMARY_WRITTEN=0        # 1 once the summary file is in place
 SUMMARY_TMP=""           # in-flight temporary file (cleaned on exit/signal)
@@ -184,6 +185,8 @@ plan <profile>
       "schemaVersion": 1,
       "profile": "<profile>",
       "mode": "run",
+      "agentRunId": "<run-id>" | null,   # set from FG_AGENT_RUN_ID when the
+                                          # summary belongs to a captured run
       "result": "pass" | "fail",
       "exitCode": <number>,
       "startedAt": "<ISO-8601 UTC>",
@@ -205,6 +208,12 @@ profiles; all other profiles reject extra arguments.
 Environment variables:
   FG_ALLOW_E2E_RESET=1   Required to run the e2e/full profiles (consent to
                          the destructive fg_e2e schema reset).
+  FG_AGENT_RUN_ID=<id>   Optional explicit correlation id for the JSON
+                         summary (letters/digits/._- , max 128 chars).
+                         Record it in the summary as "agentRunId" so the
+                         Run Ledger (./scripts/agent-observability ledger)
+                         can attribute this verification evidence to a
+                         specific captured run. Never guessed by timestamp.
   POSTGRES_HOST / POSTGRES_PORT / POSTGRES_DB / POSTGRES_USER /
   POSTGRES_PASSWORD      Django database configuration overrides
                          (defaults match the local development database).
@@ -510,6 +519,11 @@ build_summary_json() {
   printf '  "schemaVersion": 1,\n'
   printf '  "profile": "%s",\n' "$(json_escape "$PROFILE")"
   printf '  "mode": "run",\n'
+  if [ -n "$AGENT_RUN_ID" ]; then
+    printf '  "agentRunId": "%s",\n' "$(json_escape "$AGENT_RUN_ID")"
+  else
+    printf '  "agentRunId": null,\n'
+  fi
   printf '  "result": "%s",\n' "$result"
   printf '  "exitCode": %s,\n' "$code"
   printf '  "startedAt": "%s",\n' "$started_at"
@@ -638,6 +652,18 @@ main() {
       /*) SUMMARY_JSON="$summary_path" ;;
       *)  SUMMARY_JSON="$CALLER_CWD/$summary_path" ;;
     esac
+    # Validate the explicit run correlation id before arming the summary
+    # target: a rejected id must not leave a summary behind.
+    if [ -n "${FG_AGENT_RUN_ID:-}" ]; then
+      case "${FG_AGENT_RUN_ID}" in
+        *[!A-Za-z0-9._-]*)
+          fail "FG_AGENT_RUN_ID contains invalid characters (allowed: letters, digits, '.', '_', '-')." ;;
+      esac
+      if [ "${#FG_AGENT_RUN_ID}" -gt 128 ]; then
+        fail "FG_AGENT_RUN_ID exceeds the 128 character bound."
+      fi
+      AGENT_RUN_ID="$FG_AGENT_RUN_ID"
+    fi
     summary_validate_target
     SUMMARY_START_MS="$(now_ms)"
     SUMMARY_STARTED_AT="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"

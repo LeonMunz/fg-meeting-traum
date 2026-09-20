@@ -28,6 +28,8 @@
 #   * relative paths resolve against the caller's working directory
 #   * no leftover temporary files
 #   * no secrets or environment values in the summary
+#   * FG_AGENT_RUN_ID correlation: agentRunId recorded when set, null
+#     otherwise, invalid values rejected before any phase runs
 #   * profile matrix (simulated success): every executable profile (quick,
 #     frontend, backend, core, e2e, full) produces a valid schemaVersion-1
 #     summary whose phases match the script's own read-only plan output
@@ -162,7 +164,7 @@ validate_matrix() {
     const pairs = fs.readFileSync(planFile, "utf8").split("\n").filter((l) => l.length > 0)
       .map((l) => { const i = l.indexOf("\u001f"); return [l.slice(0, i), l.slice(i + 1)]; });
     if (pairs.length === 0) { console.log("plan pairs file is empty"); process.exit(1); }
-    eq(Object.keys(d).join("|"), "schemaVersion|profile|mode|result|exitCode|startedAt|finishedAt|durationMs|phases", "top-level key order");
+    eq(Object.keys(d).join("|"), "schemaVersion|profile|mode|agentRunId|result|exitCode|startedAt|finishedAt|durationMs|phases", "top-level key order");
     eq(d.schemaVersion, 1, "schemaVersion");
     eq(d.profile, profile, "profile");
     eq(d.mode, "run", "mode");
@@ -233,7 +235,7 @@ validate_summary() {
     let d;
     try { d = JSON.parse(fs.readFileSync(f, "utf8")); }
     catch (e) { console.log("invalid JSON: " + e.message); process.exit(1); }
-    eq(Object.keys(d).join("|"), "schemaVersion|profile|mode|result|exitCode|startedAt|finishedAt|durationMs|phases", "top-level key order");
+    eq(Object.keys(d).join("|"), "schemaVersion|profile|mode|agentRunId|result|exitCode|startedAt|finishedAt|durationMs|phases", "top-level key order");
     eq(d.schemaVersion, 1, "schemaVersion");
     eq(d.profile, "quick", "profile");
     eq(d.mode, "run", "mode");
@@ -310,6 +312,7 @@ expect_contains "t01d --help documents not_run" "$out" "not_run"
 expect_contains "t01e --help documents exit code 75" "$out" "75"
 expect_contains "t01f --help documents no directory creation" "$out" "never creates directories"
 expect_contains "t01g --help documents evidence-only boundary" "$out" "never claims RUNTIME_VERIFIED"
+expect_contains "t01h --help documents FG_AGENT_RUN_ID correlation" "$out" "FG_AGENT_RUN_ID"
 
 # ------------------------------------------------------- t02 usage errors --
 run_cmd "$BASH_BIN" "$VERIFY" --summary-json
@@ -329,6 +332,19 @@ expect_rc "t03c pass summary schema valid (all passed)" 0 "$vrc"
 expect_not_contains "t03d no secret value in summary" "$(cat "$SUMDIR/ok.json")" "supersecretpassword123"
 expect_not_contains "t03e no env var names in summary" "$(cat "$SUMDIR/ok.json")" "MY_FAKE_SECRET"
 expect_not_contains "t03f no RUNTIME_VERIFIED claim in summary" "$(cat "$SUMDIR/ok.json")" "RUNTIME_VERIFIED"
+# FG_AGENT_RUN_ID: unset -> explicit null (no timestamp guessing anywhere)
+node -e 'const d=require(process.argv[1]); process.exit(d.agentRunId===null?0:1)' "$SUMDIR/ok.json" \
+  && ok "t03g agentRunId is null when FG_AGENT_RUN_ID is unset" \
+  || bad "t03g agentRunId is null when FG_AGENT_RUN_ID is unset"
+mkdir -p "$SUMDIR/runid"
+run_cmd env PATH="$FAKE_BIN_OK" FG_AGENT_RUN_ID="run-test-123" "$BASH_BIN" "$VERIFY" --summary-json "$SUMDIR/runid/run.json" quick
+expect_rc "t03h summary with FG_AGENT_RUN_ID exits 0" 0 "$RC"
+node -e 'const d=require(process.argv[1]); process.exit(d.agentRunId==="run-test-123"?0:1)' "$SUMDIR/runid/run.json" \
+  && ok "t03i explicit run id recorded as agentRunId" \
+  || bad "t03i explicit run id recorded as agentRunId"
+run_cmd env PATH="$FAKE_BIN_OK" FG_AGENT_RUN_ID="bad id!" "$BASH_BIN" "$VERIFY" --summary-json "$SUMDIR/runid/bad.json" quick
+expect_rc "t03j invalid FG_AGENT_RUN_ID rejected before phases (exit 2)" 2 "$RC"
+expect_no_file "t03k no summary created for invalid FG_AGENT_RUN_ID" "$SUMDIR/runid/bad.json"
 
 # --------------------------------------- t04 no file without the flag ------
 run_cmd env PATH="$FAKE_BIN_OK" "$BASH_BIN" "$VERIFY" quick
@@ -354,7 +370,7 @@ expect_rc "t06d fail summary schema valid (one failed, later not_run)" 0 "$vrc"
 leftover="$(find "$SUMDIR" -name '.agent-verify-summary-*' | wc -l | tr -d ' ')"
 expect_eq "t07a no leftover temporary files" "0" "$leftover"
 json_count="$(find "$SUMDIR" -type f -name '*.json' | wc -l | tr -d ' ')"
-expect_eq "t07b exactly the three expected summaries" "3" "$json_count"
+expect_eq "t07b exactly the four expected summaries (incl. runid fixture)" "4" "$json_count"
 
 # -------------------------------------- t08 invalid target directories -----
 run_cmd env PATH="$FAKE_BIN_OK" "$BASH_BIN" "$VERIFY" --summary-json "$SUMDIR/no/such/dir/x.json" quick

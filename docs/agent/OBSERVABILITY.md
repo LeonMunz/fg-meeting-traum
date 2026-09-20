@@ -10,7 +10,9 @@ anecdotes.
 
 This is a **local capture facility only**:
 
-- No dashboards, no aggregate analytics (next slice: Run Ledger).
+- No dashboards, no aggregate analytics. The **Run Ledger** (below) is the
+  normalized, versioned per-run record above this capture layer; cross-run
+  analytics are a later stage that will consume ledger records only.
 - No cloud observability vendor, no external telemetry backend — the only
   OTLP destination is a loopback collector on this machine.
 - No monkey-patching of Codex/codex-acp; the repository owns only the
@@ -145,6 +147,11 @@ Notes:
   by design, user Codex configuration changes stay manual.)
 - `install` — explicitly downloads the pinned collector release, verifies
   the SHA-256, installs into the git-ignored repo-local location.
+- `ledger [run-id] [--json]` — normalizes one captured run into the
+  versioned **Run Ledger** record (deterministic, idempotent; see below).
+- `annotate <run-id> --correction yes|no [--category <c>] [--note <s>]
+  [--classification <K>] [--for-failure <ref>]` — appends one explicit
+  post-hoc human annotation (raw telemetry is never rewritten).
 - `native-probe` — the acceptance/diagnostic probe: runs one harmless
   prompt (a single shell `echo`) through the **same ACP adapter and Codex
   binary** used by normal product sessions (with the temporary overlay
@@ -232,11 +239,61 @@ turn timing (`codex.turn_ttft`, spans), and bounded diagnostic counts
 
 ## Trace contract
 
-`docs/agent/trace-contract.json` (`schemaVersion: 1`) is the versioned
+`docs/agent/trace-contract.json` (`schemaVersion: 2`) is the versioned
 contract for the data later Harness analysis may depend on: stable event
 names, the retained attribute keys per event, resource attributes, metric
 names, the dropped set, and the manifest schema. Raw OTLP field names
 outside that contract are implementation detail and may change.
+
+## Run Ledger
+
+The Run Ledger is the **normalization boundary** above the capture layer:
+
+```text
+raw sanitized OTel (logs/traces/metrics)  — only trace-contract fields
++ capture-manifest.json                    — session + end-of-run Git evidence
++ verification evidence JSON in run dir    — agent-verify/agent-doctor output
++ annotations.json                         — explicit human annotations
+  ↓
+.artifacts/agent-runs/<run-id>/run-ledger.json   (versioned record, schema
+                                                    docs/agent/ledger-contract.json)
+```
+
+- `./scripts/agent-observability ledger [run-id] [--json]` normalizes one
+  run (default: latest). Deterministic and idempotent: the record is a pure
+  function of the stored evidence — no wall clock, no live git state — so
+  re-running on unchanged evidence yields identical bytes.
+- Missing optional evidence (metrics file, verification JSON, end-of-run
+  git state on old captures, annotations) yields `null`/empty values plus a
+  stable code in `evidence_gaps`; nothing is guessed. Malformed required
+  data (missing/mismatched capture manifest, foreign verification
+  attribution) fails with a nonzero exit code.
+- **Verification correlation is explicit, never timestamp-guessed:**
+  `FG_AGENT_RUN_ID=<run-id> ./scripts/agent-verify.sh --summary-json
+  .artifacts/agent-runs/<run-id>/verify-<profile>.json quick` records the
+  run id in the summary (`agentRunId`); the ledger rejects a summary whose
+  `agentRunId` does not equal the run id (exit 8). Doctor evidence:
+  redirect `./scripts/agent-doctor.sh --json` (or
+  `./scripts/agent-observability doctor --json`) into the run directory.
+- **Human intervention is never inferred.** `annotate` records, after the
+  fact: whether a human correction occurred (`--correction yes|no`), a
+  bounded category (required with `yes`), an optional note (≤ 280 chars),
+  and — only when explicitly given — one of the four repository failure
+  classifications attached to a named failure via `--for-failure`. An exit
+  code or `success=false` never invents a semantic class.
+- **Privacy:** the ledger copies only contract-named, already-sanitized,
+  bounded fields (counts, statuses, durations, ids, file paths). It never
+  contains prompt text, hidden reasoning, auth/token values, shell
+  stdout/stderr, source diffs, environment dumps, or raw tool arguments.
+  Raw tool names appear only as bounded failure identifiers; the by-type
+  activity map uses broad categories (shell/file/search/web/plan/
+  interaction/other).
+- The end-of-run Git evidence (`ending_head`, `ending_tree`, changed files,
+  line totals, `commit_created`) is recorded once by the manifest at
+  capture finalize, so later normalization stays reproducible.
+- Unsupported by design (documented, never guessed): repeated-command
+  count (command text is sanitized away), human intervention from
+  telemetry, and any raw content.
 
 ## How to inspect one trace
 

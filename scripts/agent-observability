@@ -9,6 +9,12 @@
 #   ./scripts/agent-observability config            print the Codex user-level [otel] config
 #   ./scripts/agent-observability install           explicitly fetch the pinned collector
 #   ./scripts/agent-observability native-probe      acceptance probe through the real ACP path
+#   ./scripts/agent-observability ledger [run-id] [--json]
+#                                               normalize a run into the
+#                                               versioned Run Ledger record
+#   ./scripts/agent-observability annotate <run-id> --correction yes|no
+#                                               explicit post-hoc human
+#                                               annotation (see --help)
 #   ./scripts/agent-observability help              usage
 #
 # Privacy and safety contract:
@@ -33,8 +39,9 @@ TEMPLATE="$OBS_LIB/otelcol-local.yaml"
 PINS="$OBS_LIB/pins.json"
 MANIFEST_PY="$OBS_LIB/manifest.py"
 PROBE_CLIENT="$OBS_LIB/acp-probe-client.mjs"
+LEDGER_PY="$OBS_LIB/ledger.py"
 OBS_DIR="$REPO_ROOT/.artifacts/agent-observability"
-RUNS_DIR="$REPO_ROOT/.artifacts/agent-runs"
+RUNS_DIR="${FG_OBS_RUNS_DIR:-$REPO_ROOT/.artifacts/agent-runs}"
 
 PORT="${FG_OBS_PORT:-4318}"
 RETENTION_DAYS="${FG_OBS_RETENTION_DAYS:-14}"
@@ -196,6 +203,75 @@ latest_run_dir() {
   done
   printf '%s' "$best"
   return 0
+}
+
+resolve_run_dir() { # resolve_run_dir <run-id-or-empty> — prints run dir
+  local rid="${1:-}"
+  if [ -z "$rid" ] || [ "$rid" = "latest" ]; then
+    latest="$(readlink "$RUNS_DIR/latest" 2>/dev/null || true)"
+    if [ -n "$latest" ] && [ -d "$RUNS_DIR/$latest" ]; then
+      printf '%s' "$RUNS_DIR/$latest"
+      return 0
+    fi
+    # fall back to newest run-* / probe-* directory (same rule as latest_run_dir)
+    local best="" d
+    for d in "$RUNS_DIR"/run-* "$RUNS_DIR"/probe-*; do
+      [ -d "$d" ] || continue
+      best="$d"
+    done
+    [ -n "$best" ] || return 1
+    printf '%s' "$best"
+    return 0
+  fi
+  case "$rid" in
+    *[!A-Za-z0-9._-]*) die "invalid run id (allowed: letters, digits, '.', '_', '-') : $rid" 2 ;;
+  esac
+  local d="$RUNS_DIR/$rid"
+  [ -d "$d" ] || die "run not found: $rid (available under $RUNS_DIR)" 6
+  printf '%s' "$d"
+  return 0
+}
+
+ledger_python() {
+  local py
+  py="$(probe_python)"
+  [ -n "$py" ] || die "python3 not found (needed for the ledger normalizer)" 1
+  printf '%s' "$py"
+}
+
+# --------------------------------------------------------------- ledger -----
+
+cmd_ledger() {
+  local run_id="" as_json="" a
+  for a in "$@"; do
+    case "$a" in
+      --json) as_json=1 ;;
+      -*) die "unknown option for ledger: $a (usage: agent-observability ledger [run-id] [--json])" 2 ;;
+      *) [ -z "$run_id" ] || die "usage: agent-observability ledger [run-id] [--json]" 2
+         run_id="$a" ;;
+    esac
+  done
+  local run_dir py rc=0
+  run_dir="$(resolve_run_dir "$run_id")" || rc=$?
+  [ -n "$run_dir" ] || return "$rc"
+  py="$(ledger_python)"
+  "$py" "$LEDGER_PY" show "$run_dir" ${as_json:+--json}
+}
+
+# --------------------------------------------------------------- annotate ---
+
+cmd_annotate() {
+  local run_id="${1:-}"
+  shift || true
+  case "$run_id" in
+    ""|latest) die "annotate requires an explicit <run-id> (usage: agent-observability annotate <run-id> --correction yes|no ...)" 2 ;;
+    -*) die "annotate requires an explicit <run-id> first" 2 ;;
+  esac
+  local run_dir py rc=0
+  run_dir="$(resolve_run_dir "$run_id")" || rc=$?
+  [ -n "$run_dir" ] || return "$rc"
+  py="$(ledger_python)"
+  "$py" "$LEDGER_PY" annotate "$run_dir" "$@"
 }
 
 render_config() { # render_config <run_dir> <out_file>
@@ -1013,16 +1089,41 @@ Usage:
   ./scripts/agent-observability config
   ./scripts/agent-observability install
   ./scripts/agent-observability native-probe
+  ./scripts/agent-observability ledger [run-id] [--json]
+  ./scripts/agent-observability annotate <run-id> --correction yes|no
+                          [--category <c>] [--note <s>]
+                          [--classification <K>] [--for-failure <ref>]
   ./scripts/agent-observability help
 
 Local, privacy-conscious trace capture for normal Codex/ACP agent sessions.
 All runtime artifacts (traces, state, pinned collector) stay in git-ignored
 .artifacts/ and are never committed. See docs/agent/OBSERVABILITY.md for the
-architecture, privacy model and the trace contract.
+architecture, privacy model, the trace contract and the Run Ledger.
+
+Run Ledger (normalized, versioned run records):
+  ledger [run-id] [--json]
+      Normalize the stored evidence of one run (raw sanitized OTel +
+      capture manifest + verification evidence JSON in the run directory +
+      explicit annotations) into <run-dir>/run-ledger.json. Deterministic
+      and idempotent; re-running on unchanged evidence yields identical
+      bytes. run-id defaults to the latest run.
+  annotate <run-id> --correction yes|no [--category <c>] [--note <s>]
+      Append one explicit human annotation (post-hoc; raw telemetry is
+      never rewritten). --category (required with --correction yes) is one
+      of: wrong_approach, wrong_scope, missing_context,
+      incorrect_assumption, env_or_tooling, test_update,
+      spec_clarification, other. --note is bounded (280 chars).
+      --classification <PRODUCT_REGRESSION|STALE_TEST|
+      ENVIRONMENT_OR_HARNESS|SCOPE_DISCOVERY> --for-failure <identifier-or-ref>
+      explicitly attaches a failure classification (never inferred).
+      Correlate verification evidence by running agent-verify with
+      FG_AGENT_RUN_ID=<run-id> and --summary-json inside the run directory.
+      Ledger schema: docs/agent/ledger-contract.json.
 
 Environment overrides:
   FG_OBS_PORT (default 4318), FG_OBS_RETENTION_DAYS (14),
   FG_OBS_MAX_MB (32), FG_OBS_MAX_BACKUPS (10),
+  FG_OBS_RUNS_DIR (runs root; default .artifacts/agent-runs — testability),
   FG_OTELCOL (explicit collector binary), CODEX_ACP_ADAPTER (adapter path),
   FG_OBS_PROBE_TIMEOUT (ms, native-probe).
   CODEX_HOME / CODEX_PATH are optional: when unset they are resolved
@@ -1036,6 +1137,9 @@ Exit codes:
   3  collector binary missing
   4  port conflict
   5  probe prerequisites missing
+  6  run directory not found (ledger/annotate)
+  7  required capture manifest or annotations file malformed
+  8  verification evidence attribution mismatch (ledger)
 EOF
 }
 
@@ -1050,6 +1154,8 @@ main() {
     config) [ $# -eq 0 ] || { usage >&2; exit 2; }; cmd_config ;;
     install) [ $# -eq 0 ] || { usage >&2; exit 2; }; cmd_install ;;
     native-probe) [ $# -eq 0 ] || { usage >&2; exit 2; }; cmd_native_probe ;;
+    ledger) cmd_ledger "$@" ;;
+    annotate) cmd_annotate "$@" ;;
     help|--help|-h) usage ;;
     *) usage >&2; exit 2 ;;
   esac

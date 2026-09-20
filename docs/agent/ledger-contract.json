@@ -1,0 +1,125 @@
+{
+  "schemaVersion": 1,
+  "name": "fg-agent-run-ledger-record",
+  "description": "Versioned schema of the normalized Agent Run Ledger record. The ledger is the normalization boundary between captured evidence and later Harness analysis: analytics must consume ledger records, not raw Codex OTel field names.",
+  "boundary": {
+    "inputs": [
+      "raw sanitized OTel (raw/logs*.jsonl, raw/traces*.jsonl, raw/metrics*.jsonl) \u2014 only trace-contract-named attributes are read (docs/agent/trace-contract.json)",
+      "capture-manifest.json (capture session metadata incl. end-of-run Git evidence)",
+      "verification evidence JSON stored in the run directory (agent-verify --summary-json output, agent-doctor.sh --json output, agent-observability doctor --json output)",
+      "annotations.json (explicit post-hoc human annotations)"
+    ],
+    "output": ".artifacts/agent-runs/<run-id>/run-ledger.json (git-ignored)",
+    "commands": [
+      "./scripts/agent-observability ledger [run-id] [--json]",
+      "./scripts/agent-observability annotate <run-id> --correction yes|no [--category <c>] [--note <s>] [--classification <K>] [--for-failure <ref>]"
+    ],
+    "determinism": "the record is a pure function of the stored evidence: no wall clock, no live git state, no environment values. Re-running normalization on unchanged evidence produces byte-identical output (idempotent).",
+    "missingEvidence": "unavailable optional evidence yields null/empty values plus a stable code in evidence_gaps; nothing is guessed. Malformed required data (missing capture manifest, manifest/run-id mismatch, verification evidence with a foreign agentRunId) fails with a nonzero exit code."
+  },
+  "correlation": {
+    "runId": "the run directory name under .artifacts/agent-runs/ (run-<ts> or probe-native-<ts>)",
+    "verification": "agent-verify.sh records FG_AGENT_RUN_ID=<run-id> as agentRunId in its --summary-json output; a summary whose agentRunId does not equal the run id is rejected by the ledger (exit 8). Placing a summary without agentRunId inside the run directory is explicit placement attribution.",
+    "never": "no timestamp-nearest correlation is performed anywhere"
+  },
+  "record": {
+    "schema_version": "integer, currently 1",
+    "record_name": "\"fg-agent-run-ledger\"",
+    "run_id": "string \u2014 the captured run id",
+    "identity": {
+      "conversation_ids": "string[] \u2014 native Codex conversation/session ids observed in the capture (empty when none)",
+      "capture_kind": "\"capture\" | \"probe-native\" | null",
+      "repo_root": "string | null",
+      "branch": "string | null",
+      "starting_head": "string (git commit id) | null",
+      "ending_head": "string (git commit id) | null \u2014 recorded at capture finalize; null for captures finalized before this field existed",
+      "start_ts": "ISO-8601 UTC string (capture session start)",
+      "end_ts": "ISO-8601 UTC string | null (capture session end)",
+      "duration_s": "integer seconds | null \u2014 capture session duration",
+      "stop_status": "\"graceful\" | \"interrupted\" | \"collector_forced\" | \"running\" | null"
+    },
+    "runtime": {
+      "codex_version": "string | null",
+      "codex_acp_version": "string | null",
+      "models": "string[] \u2014 model identifiers observed in telemetry",
+      "collector_version": "string | null",
+      "originators": "string[] \u2014 sanitized originator strings",
+      "privacy_mode": "string | null",
+      "app_versions": "string[] \u2014 app.version values observed in telemetry"
+    },
+    "git_wip": {
+      "starting_tree": "\"clean\" | \"dirty\" | null",
+      "ending_tree": "\"clean\" | \"dirty\" | null",
+      "changed_file_count": "integer | null \u2014 repository-relative paths only, never diff content",
+      "changed_files": "string[] \u2014 bounded (max 500, sorted); empty when unavailable",
+      "changed_files_truncated": "boolean \u2014 true when the bound was applied",
+      "lines_added": "integer | null \u2014 tracked-file numstat vs starting_head at finalize",
+      "lines_deleted": "integer | null",
+      "commit_created": "boolean | null \u2014 ending_head != starting_head",
+      "starting_head": "string (git commit id) | null",
+      "ending_head": "string (git commit id) | null"
+    },
+    "activity": {
+      "tool_call_count": "integer | null \u2014 distinct tool invocations (call_id) with a result",
+      "tool_calls_by_type": "object \u2014 broad category -> count (shell|file|search|web|plan|interaction|other); raw tool names are not exposed here",
+      "successful_tool_calls": "integer | null",
+      "failed_tool_calls": "integer | null",
+      "shell_command_count": "integer | null \u2014 broad type shell",
+      "failed_shell_commands": "integer | null",
+      "file_activity_count": "integer | null \u2014 broad type file",
+      "api_request_count": "integer | null \u2014 model API requests observed",
+      "failed_api_requests": "integer | null \u2014 success=false or HTTP status >= 400",
+      "token_usage": {
+        "input": "integer | null",
+        "output": "integer | null",
+        "cached": "integer | null",
+        "cache_write": "integer | null",
+        "reasoning": "integer | null",
+        "total": "integer | null",
+        "source": "\"metrics\" (codex.turn.token_usage datapoints) | \"sse-events\" (response.completed token counters) | null"
+      },
+      "turn_count": "integer | null \u2014 user prompts observed",
+      "time_to_first_tool_action_ms": "integer | null \u2014 first tool result minus first prompt (or conversation start)",
+      "time_to_first_failure_ms": "integer | null \u2014 first failed tool call / API request minus the same baseline; null when no failure",
+      "time_to_final_response_ms": "integer | null \u2014 last response completion (or last API request) minus the baseline"
+    },
+    "verification": {
+      "doctor": "{ status, capabilities: [{name,status}], source } | null \u2014 from an agent-doctor.sh --json file in the run directory",
+      "observability_doctor": "{ status, source } | null \u2014 from an agent-observability doctor --json file",
+      "profiles": "[{ profile, result, exit_code, started_at, finished_at, duration_ms, agent_run_id, source, phases: [{name,outcome,exit_code}] }] \u2014 one entry per agent-verify --summary-json file in the run directory",
+      "final_gate": "{ profile, result, source } | null \u2014 the most recently started correlated verify summary (deterministic ordering by started_at, then file name); never claims RUNTIME_VERIFIED"
+    },
+    "failures": [
+      {
+        "kind": "\"tool_call\" | \"api_request\" | \"verification_phase\"",
+        "identifier": "tool name for tool_call, \"model_api_request\" for api_request, phase name for verification_phase \u2014 bounded identifiers, no command text",
+        "ref": "string | null \u2014 call_id / attempt / profile (bounded identifier)",
+        "timestamp": "ISO-8601 UTC string | null",
+        "result": "\"success=false\" | \"http_status=<code>\" | \"exit_code=<n>\" | \"failed\"",
+        "classification": "PRODUCT_REGRESSION | STALE_TEST | ENVIRONMENT_OR_HARNESS | SCOPE_DISCOVERY | null \u2014 set only by an explicit annotation (--classification --for-failure); never inferred from exit codes or success flags"
+      }
+    ],
+    "human": {
+      "correction_occurred": "\"yes\" | \"no\" | null \u2014 null means no annotation exists (unknown, not inferred)",
+      "categories": "string[] \u2014 sorted unique annotation categories",
+      "annotations": "[{ ts, correction: yes|no, category, note (max 280 chars) | null, classification | null, applies_to | null }]"
+    },
+    "evidence_gaps": "string[] \u2014 stable codes for missing optional evidence, sorted: no_telemetry, no_metrics_file, token_usage_unavailable, no_end_git_evidence, no_verification_evidence, no_doctor_evidence, no_annotations"
+  },
+  "annotationCategories": [
+    "wrong_approach",
+    "wrong_scope",
+    "missing_context",
+    "incorrect_assumption",
+    "env_or_tooling",
+    "test_update",
+    "spec_clarification",
+    "other"
+  ],
+  "unsupportedMetrics": {
+    "repeated_command_count": "command text is sanitized away (arguments dropped by the collector); repeated commands cannot be identified without it \u2014 recorded as unavailable, never guessed",
+    "human_intervention_from_telemetry": "native OTel carries no reliable human-correction signal; only explicit annotations count",
+    "raw_command_or_diff_content": "deliberately excluded (privacy); counts, bounded identifiers and statuses only"
+  },
+  "privacy": "the ledger copies only contract-named, already-sanitized, bounded fields (counts, statuses, durations, ids, file paths). It never contains raw prompt text, hidden reasoning, auth/token contents, shell stdout/stderr, source diffs, environment dumps, or raw tool arguments."
+}

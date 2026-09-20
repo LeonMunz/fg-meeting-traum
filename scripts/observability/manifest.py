@@ -12,6 +12,7 @@ Later Harness analysis must consume manifest + the documented trace contract
 """
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -36,11 +37,101 @@ def git_field(repo_root, *args):
             capture_output=True, text=True, timeout=10,
         )
         if out.returncode == 0:
-            return out.stdout.strip()
+            # rstrip only: porcelain status lines keep line format intact
+            return out.stdout.rstrip(chr(10))
     except Exception:
         pass
     return ""
 
+
+
+def porcelain_paths(repo_root, limit=500):
+    """Changed file paths from git status --porcelain (bounded, sorted).
+
+    Returns (count, paths, truncated). Paths are repository-relative file
+    names only (no diff content).
+    """
+    out = git_field(repo_root, "status", "--porcelain")
+    if not out:
+        return 0, [], False
+    paths = set()
+    for line in out.splitlines():
+        if len(line) < 4:
+            continue
+        path = line[3:]
+        arrow = " -> "
+        if arrow in path:
+            path = path.split(arrow, 1)[1]
+        if path:
+            paths.add(path)
+    paths = sorted(paths)
+    truncated = len(paths) > limit
+    return len(paths), paths[:limit], truncated
+
+
+def numstat_totals(repo_root, starting_head):
+    """Added/deleted line totals vs the starting commit (tracked files).
+
+    Returns (added, deleted) or (None, None) when not safely available.
+    """
+    if not starting_head or not re.fullmatch(r"[0-9a-f]{7,64}", starting_head):
+        return None, None
+    try:
+        out = subprocess.run(
+            ["git", "-C", repo_root, "diff", "--numstat", starting_head],
+            capture_output=True, text=True, timeout=30,
+        )
+        if out.returncode != 0:
+            return None, None
+    except Exception:
+        return None, None
+    added = deleted = 0
+    for line in out.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 3:
+            continue
+        a, d = parts[0], parts[1]
+        if a.isdigit():
+            added += int(a)
+        if d.isdigit():
+            deleted += int(d)
+    return added, deleted
+
+
+def git_end_evidence(repo_root, starting_head):
+    """End-of-run Git/WIP evidence, recorded once at finalize time.
+
+    Deterministic stored evidence: the ledger (later normalization) must
+    never read live git state, which would make re-normalization
+    non-reproducible.
+    """
+    evidence = {
+        "ending_head": None,
+        "ending_tree": None,
+        "changed_file_count": None,
+        "changed_files": [],
+        "changed_files_truncated": False,
+        "lines_added": None,
+        "lines_deleted": None,
+        "commit_created": None,
+    }
+    if not repo_root or not os.path.isdir(repo_root):
+        return evidence
+    ending_head = git_field(repo_root, "rev-parse", "HEAD") or None
+    evidence["ending_head"] = ending_head
+    if ending_head and starting_head:
+        evidence["commit_created"] = ending_head != starting_head
+    porcelain = git_field(repo_root, "status", "--porcelain")
+    evidence["ending_tree"] = "clean" if not porcelain else "dirty"
+    if porcelain is not None:
+        count, paths, truncated = porcelain_paths(repo_root)
+        evidence["changed_file_count"] = count
+        evidence["changed_files"] = paths
+        evidence["changed_files_truncated"] = truncated
+        added, deleted = numstat_totals(repo_root, starting_head)
+        evidence["lines_added"] = added
+        evidence["lines_deleted"] = deleted
+    return evidence
 
 def load_json(path):
     try:
@@ -204,6 +295,14 @@ def base_manifest(run_id, kind, run_dir):
             if not git_field(repo_root, "status", "--porcelain")
             else "dirty"
         ),
+        "ending_head": None,
+        "ending_tree": None,
+        "changed_file_count": None,
+        "changed_files": [],
+        "changed_files_truncated": False,
+        "lines_added": None,
+        "lines_deleted": None,
+        "commit_created": None,
         "codex_version": env_str("FG_OBS_CODEX_VERSION"),
         "codex_acp_version": env_str("FG_OBS_CODEX_ACP_VERSION"),
         "collector_version": env_str("FG_OBS_COLLECTOR_VERSION"),
@@ -257,6 +356,11 @@ def cmd_finalize(argv):
         )
     scan = scan_raw(run_dir) or {}
     manifest.update(scan)
+    manifest.update(
+        git_end_evidence(
+            manifest.get("repo_root"), manifest.get("starting_head")
+        )
+    )
     manifest["raw_trace_files"] = raw_files(run_dir)
     manifest["end_ts"] = now_iso()
     manifest["stop_status"] = stop_status
