@@ -195,6 +195,37 @@ mandatory completion format.
 
 Do not invent a new testing framework merely to complete a task.
 
+## Structured run context (optional)
+
+Observability remains optional to product development: if it is unavailable
+or no capture is active, product work proceeds normally. When exactly one
+local product capture is active, attach the task's already-given **Task
+type** and **Session** to that run exactly once, using the canonical
+command (details and the full command surface in
+`docs/agent/OBSERVABILITY.md`):
+
+```bash
+./scripts/agent-observability context current \
+  --task-type "<Task type>" --session "<Session>"
+```
+
+- Do not invent a `task_key` or `harness_variant`; pass them only when the
+  task explicitly supplies one.
+- The context fields are bounded and validated; no prompt/chat text is
+  stored, and nothing is inferred from task content.
+- That command run from a product-agent session also records the product
+  runtime identity (`product-runtime register`) idempotently, so the
+  controller shell can later resolve the product `CODEX_HOME` — do it once
+  per session, not per tool call; observability stays optional.
+- To correlate verification evidence to that capture, resolve the run id
+  with `./scripts/agent-observability current-run` and pass it as an
+  explicit `FG_AGENT_RUN_ID` (always wins; the reliable path across the
+  controller/agent identity boundary). `agent-verify --summary-json` with
+  `FG_AGENT_RUN_ID` unset best-effort auto-correlates to a single
+  same-identity active capture (refusing ambiguity) but does not detect a
+  controller-owned capture the agent cannot signal, so prefer the explicit
+  id.
+
 ## Scope control
 
 Do not introduce without explicit approval:

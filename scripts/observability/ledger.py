@@ -17,7 +17,10 @@ Normalization boundary:
   + capture-manifest.json
   + verification evidence JSON stored in the run directory
   + explicit human annotations
-  -> versioned normalized Run Ledger record (docs/agent/ledger-contract.json)
++ run-context.json (structured, bounded run context)
+  -> versioned normalized Run Ledger record (docs/agent/ledger-contract.json,
+     schema v2: adds context, native run-config runtime fields and the
+     comparability section)
 
 Rules:
   * deterministic: the record is a pure function of the stored evidence
@@ -44,11 +47,18 @@ import sys
 import time
 from datetime import datetime, timezone
 
-LEDGER_SCHEMA_VERSION = 1
+try:
+    import runcontext  # shared bounded-field contract for run-context.json
+except ImportError:  # pragma: no cover - same-directory import fallback
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import runcontext
+
+LEDGER_SCHEMA_VERSION = 2
 RECORD_NAME = "fg-agent-run-ledger"
 LEDGER_FILE = "run-ledger.json"
 ANNOTATIONS_FILE = "annotations.json"
 ANNOTATIONS_SCHEMA_VERSION = 1
+RUN_CONTEXT_FILE = "run-context.json"
 
 FAILURE_CLASSIFICATIONS = (
     "PRODUCT_REGRESSION",
@@ -119,6 +129,7 @@ VERIFY_IGNORED_FILES = {
     "capture-manifest.json",
     LEDGER_FILE,
     ANNOTATIONS_FILE,
+    RUN_CONTEXT_FILE,
     "probe-summary.json",
 }
 
@@ -146,6 +157,27 @@ def atomic_write(path, data):
         json.dump(data, fh, indent=2, sort_keys=True)
         fh.write("\n")
     os.replace(tmp, path)
+
+
+# --------------------------------------------------------------- context ----
+
+def load_run_context(run_dir):
+    """Read <run_dir>/run-context.json.
+
+    Returns the validated field dict, or None when the file is absent.
+    Malformed content (invalid enum / prompt-like stored value) fails
+    closed (exit 7) via the shared runcontext contract.
+    """
+    return runcontext.load_context(run_dir)
+
+
+def empty_context():
+    return {
+        "task_type": None,
+        "session_mode": None,
+        "task_key": None,
+        "harness_variant": None,
+    }
 
 
 # ------------------------------------------------------------- value utils --
@@ -320,6 +352,39 @@ def _event_from_attrs(attrs):
     }
 
 
+def conversation_config(events):
+    """Run-level runtime configuration from native telemetry.
+
+    Source: the FIRST codex.conversation_starts event (earliest timestamp;
+    tie-break by conversation id — deterministic). Only values that are
+    actually present on that event are returned; absent attributes stay
+    None and surface as explicit comparability gaps. Never inferred.
+    """
+    starts = [e for e in events if e["name"] == "codex.conversation_starts"]
+    if not starts:
+        return {"reasoning_effort": None, "sandbox_mode": None,
+                "approval_policy": None}
+
+    def sort_key(e):
+        return (
+            e["ts"] is None,
+            e["ts"] or datetime.min.replace(tzinfo=timezone.utc),
+            e["conv"] or "",
+        )
+
+    first = min(starts, key=sort_key)
+
+    def str_attr(attr):
+        v = first["attrs"].get(attr)
+        return v if isinstance(v, str) and v else None
+
+    return {
+        "reasoning_effort": str_attr("reasoning_effort"),
+        "sandbox_mode": str_attr("sandbox_policy"),
+        "approval_policy": str_attr("approval_policy"),
+    }
+
+
 def token_usage_from_metrics(run_dir):
     """Sum codex.turn.token_usage datapoints; None when unavailable."""
     total = 0
@@ -425,8 +490,16 @@ def verification_evidence(run_dir, run_id):
                         "name": cap["name"],
                         "status": cap.get("status") if isinstance(cap.get("status"), str) else None,
                     })
+            # Status sources, in order: the explicit "result" field
+            # (historical shape) or the real agent-doctor.sh --json
+            # "summary.overall" field. Neither is invented.
+            status = data.get("result")
+            if not isinstance(status, str):
+                summary = data.get("summary")
+                overall = summary.get("overall") if isinstance(summary, dict) else None
+                status = overall if isinstance(overall, str) else None
             doctor = {
-                "status": data.get("result") if isinstance(data.get("result"), str) else None,
+                "status": status,
                 "capabilities": caps,
                 "source": name,
             }
@@ -436,6 +509,32 @@ def verification_evidence(run_dir, run_id):
                 "source": name,
             }
     return profiles, doctor, obs_doctor
+
+
+def comparability_section(identity, runtime, ctx, profiles, doctor,
+                          obs_doctor):
+    """Deterministic per-run evidence-presence map.
+
+    Answers only whether each comparability dimension has evidence in this
+    run. It is not a quality score and never ranks runs: missing dimensions
+    are represented explicitly (False + listed in "missing").
+    """
+    dims = {
+        "model": bool(runtime.get("models")),
+        "reasoning_effort": runtime.get("reasoning_effort") is not None,
+        "codex_version": runtime.get("codex_version") is not None,
+        "codex_acp_version": runtime.get("codex_acp_version") is not None,
+        "sandbox_mode": runtime.get("sandbox_mode") is not None,
+        "approval_policy": runtime.get("approval_policy") is not None,
+        "task_type": ctx.get("task_type") is not None,
+        "session_mode": ctx.get("session_mode") is not None,
+        "git_starting_revision": identity.get("starting_head") is not None,
+        "verification_evidence": bool(profiles),
+        "doctor_evidence": doctor is not None or obs_doctor is not None,
+        "harness_variant": ctx.get("harness_variant") is not None,
+    }
+    return {"dimensions": dict(sorted(dims.items())),
+            "missing": sorted(k for k, v in dims.items() if not v)}
 
 
 def final_gate(profiles):
@@ -691,10 +790,12 @@ def load_manifest(run_dir, run_id):
 
 
 def list_gaps(manifest, events, profiles, doctor, obs_doctor, annotations,
-              token):
+              token, has_run_context):
     gaps = []
     if not any(e["name"].startswith("codex.") for e in events):
         gaps.append("no_telemetry")
+    if not has_run_context:
+        gaps.append("no_run_context")
     if not raw_jsonl_files(os.environ.get("LEDGER_RUN_DIR", ""), "metrics"):
         gaps.append("no_metrics_file")
     if token["source"] is None:
@@ -717,6 +818,7 @@ def build_record(run_dir):
     events = collect_events(run_dir)
     profiles, doctor, obs_doctor = verification_evidence(run_dir, run_id)
     annotations = load_annotations(run_dir)
+    run_context = load_run_context(run_dir)
 
     start_ts = manifest.get("start_ts") if isinstance(manifest.get("start_ts"), str) else None
     end_ts = manifest.get("end_ts") if isinstance(manifest.get("end_ts"), str) else None
@@ -735,32 +837,48 @@ def build_record(run_dir):
     activity = activity_section(events, run_dir)
     failures = failures_section(events, profiles)
     attach_classifications(failures, annotations)
+    conv_cfg = conversation_config(events)
+
+    identity = {
+        "conversation_ids": slist("conversation_ids"),
+        "capture_kind": manifest.get("kind") if isinstance(manifest.get("kind"), str) else None,
+        "repo_root": manifest.get("repo_root") if isinstance(manifest.get("repo_root"), str) else None,
+        "branch": manifest.get("branch") if isinstance(manifest.get("branch"), str) else None,
+        "starting_head": manifest.get("starting_head") if isinstance(manifest.get("starting_head"), str) else None,
+        "ending_head": manifest.get("ending_head") if isinstance(manifest.get("ending_head"), str) else None,
+        "start_ts": start_ts,
+        "end_ts": end_ts,
+        "duration_s": duration,
+        "stop_status": manifest.get("stop_status") if isinstance(manifest.get("stop_status"), str) else None,
+    }
+    runtime = {
+        "codex_version": manifest.get("codex_version") if isinstance(manifest.get("codex_version"), str) else None,
+        "codex_acp_version": manifest.get("codex_acp_version") if isinstance(manifest.get("codex_acp_version"), str) else None,
+        "models": slist("models"),
+        "collector_version": manifest.get("collector_version") if isinstance(manifest.get("collector_version"), str) else None,
+        "originators": slist("originators"),
+        "privacy_mode": manifest.get("privacy_mode") if isinstance(manifest.get("privacy_mode"), str) else None,
+        "app_versions": slist("app_versions"),
+        # Native run-level configuration (codex.conversation_starts, first
+        # event). Absent on 0.148.0 events or on historical captures ->
+        # null + explicit comparability gap, never inferred.
+        "reasoning_effort": conv_cfg["reasoning_effort"],
+        "sandbox_mode": conv_cfg["sandbox_mode"],
+        "approval_policy": conv_cfg["approval_policy"],
+    }
+    ctx = empty_context()
+    if run_context is not None:
+        for f in ("task_type", "session_mode", "task_key", "harness_variant"):
+            v = run_context.get(f)
+            ctx[f] = v if isinstance(v, str) else None
 
     record = {
         "schema_version": LEDGER_SCHEMA_VERSION,
         "record_name": RECORD_NAME,
         "run_id": run_id,
-        "identity": {
-            "conversation_ids": slist("conversation_ids"),
-            "capture_kind": manifest.get("kind") if isinstance(manifest.get("kind"), str) else None,
-            "repo_root": manifest.get("repo_root") if isinstance(manifest.get("repo_root"), str) else None,
-            "branch": manifest.get("branch") if isinstance(manifest.get("branch"), str) else None,
-            "starting_head": manifest.get("starting_head") if isinstance(manifest.get("starting_head"), str) else None,
-            "ending_head": manifest.get("ending_head") if isinstance(manifest.get("ending_head"), str) else None,
-            "start_ts": start_ts,
-            "end_ts": end_ts,
-            "duration_s": duration,
-            "stop_status": manifest.get("stop_status") if isinstance(manifest.get("stop_status"), str) else None,
-        },
-        "runtime": {
-            "codex_version": manifest.get("codex_version") if isinstance(manifest.get("codex_version"), str) else None,
-            "codex_acp_version": manifest.get("codex_acp_version") if isinstance(manifest.get("codex_acp_version"), str) else None,
-            "models": slist("models"),
-            "collector_version": manifest.get("collector_version") if isinstance(manifest.get("collector_version"), str) else None,
-            "originators": slist("originators"),
-            "privacy_mode": manifest.get("privacy_mode") if isinstance(manifest.get("privacy_mode"), str) else None,
-            "app_versions": slist("app_versions"),
-        },
+        "identity": identity,
+        "runtime": runtime,
+        "context": ctx,
         "git_wip": git_wip,
         "activity": activity,
         "verification": {
@@ -771,9 +889,12 @@ def build_record(run_dir):
         },
         "failures": failures,
         "human": human_section(annotations),
+        "comparability": comparability_section(identity, runtime, ctx,
+                                               profiles, doctor, obs_doctor),
         "evidence_gaps": list_gaps(manifest, events, profiles or [], doctor,
                                    obs_doctor, annotations,
-                                   activity["token_usage"]),
+                                   activity["token_usage"],
+                                   run_context is not None),
     }
     return record
 
@@ -856,6 +977,10 @@ def print_human(r):
         na(g["changed_file_count"]), na(g["lines_added"]), na(g["lines_deleted"])))
     print("  runtime:    codex=%s codex-acp=%s collector=%s" % (
         rt["codex_version"], rt["codex_acp_version"], rt["collector_version"]))
+    print("  run config: effort=%s sandbox=%s approval=%s" % (
+        rt.get("reasoning_effort") or "n/a",
+        rt.get("sandbox_mode") or "n/a",
+        rt.get("approval_policy") or "n/a"))
     print("  model(s):   %s" % (", ".join(rt["models"]) or "n/a"))
     print("  activity:   turns=%s tools=%s api_requests=%s" % (
         a["turn_count"], a["tool_call_count"], a["api_request_count"]))
@@ -898,6 +1023,14 @@ def print_human(r):
     print("  human:      correction=%s categories=%s" % (
         h["correction_occurred"] or "unknown",
         ", ".join(h["categories"]) or "-"))
+    c = r.get("context") or {}
+    print("  context:    type=%s session=%s task_key=%s harness=%s" % (
+        c.get("task_type") or "n/a", c.get("session_mode") or "n/a",
+        c.get("task_key") or "n/a", c.get("harness_variant") or "n/a"))
+    comp = r.get("comparability") or {}
+    miss = comp.get("missing") or []
+    print("  comparable: %s" % ("all dimensions evidenced" if not miss
+                                else "missing: " + ", ".join(miss)))
     print("  missing:    %s" % (", ".join(r["evidence_gaps"]) or "none"))
 
 

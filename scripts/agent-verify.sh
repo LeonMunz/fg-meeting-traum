@@ -208,12 +208,27 @@ profiles; all other profiles reject extra arguments.
 Environment variables:
   FG_ALLOW_E2E_RESET=1   Required to run the e2e/full profiles (consent to
                          the destructive fg_e2e schema reset).
-  FG_AGENT_RUN_ID=<id>   Optional explicit correlation id for the JSON
-                         summary (letters/digits/._- , max 128 chars).
-                         Record it in the summary as "agentRunId" so the
-                         Run Ledger (./scripts/agent-observability ledger)
-                         can attribute this verification evidence to a
-                         specific captured run. Never guessed by timestamp.
+  FG_AGENT_RUN_ID=<id>   Authoritative explicit correlation id for the
+                         JSON summary (letters/digits/._- , max 128
+                         chars). Recorded as "agentRunId" so the Run
+                         Ledger (./scripts/agent-observability ledger) can
+                         attribute this verification evidence to a specific
+                         captured run. Always correct, and the reliable path
+                         across the controller/agent identity boundary.
+                         Never guessed by timestamp.
+                         When unset, a summary best-effort auto-correlates
+                         to the single active local product capture via a
+                         builtins-only `kill -0` liveness probe (zero
+                         captures -> null; multiple -> refused). That probe
+                         cannot signal a controller-owned collector (EPERM),
+                         so auto-correlation is same-identity only and must
+                         not be relied on across the identity boundary.
+                         To correlate reliably, resolve the run id with
+                         `./scripts/agent-observability current-run` and set
+                         this variable. Always overrides auto-correlation.
+  FG_OBS_RUNS_DIR=<dir>  Runs root for the auto-correlation discovery
+                         (default <repo>/.artifacts/agent-runs; same
+                         override the agent-observability scripts use).
   POSTGRES_HOST / POSTGRES_PORT / POSTGRES_DB / POSTGRES_USER /
   POSTGRES_PASSWORD      Django database configuration overrides
                          (defaults match the local development database).
@@ -598,6 +613,65 @@ trap 'on_signal TERM' TERM
 
 # --- Dispatch -------------------------------------------------------------
 
+# --- Optional run auto-correlation (only with --summary-json) ----------
+#
+# When FG_AGENT_RUN_ID is unset and a JSON summary is requested, discover
+# the single active local product capture: a run-* directory under the
+# runs dir whose manifest kind is "capture" and whose collector pidfile
+# names a live process. No timestamp-nearest guessing is performed
+# anywhere; zero candidates keep the historical behavior (agentRunId null)
+# and multiple candidates are ambiguous and fail closed.
+#
+# Deliberately DECOUPLED from the agent-observability liveness helper:
+# this discovery uses a builtins-only `kill -0` probe so agent-verify never
+# depends on Python or on observability being installed or enabled (it must
+# keep working under the restricted PATH of the test suite; a missing runs
+# directory simply yields no candidates). The cost of that decoupling: a
+# shell `kill -0` returns the same nonzero status for "no such process"
+# (ESRCH) and "permission denied" (EPERM), so a controller-owned
+# collector that the agent cannot signal is treated as absent here. Auto-
+# correlation is therefore a same-identity best-effort convenience, NOT the
+# reliable path across the controller/agent identity boundary. For
+# reliable cross-identity correlation, resolve the run id with
+# `./scripts/agent-observability current-run` (canonical EPERM->alive
+# liveness) and set FG_AGENT_RUN_ID explicitly.
+auto_correlate_agent_run() {
+  local runs_dir
+  runs_dir="${FG_OBS_RUNS_DIR:-$REPO_ROOT/.artifacts/agent-runs}"
+  [ -d "$runs_dir" ] || return 0
+  local d name pidfile pid manifest content
+  local candidates=()
+  # Builtins only (read, kill, case): this discovery must work under any
+  # PATH, including the restricted PATH of the verify test suite.
+  for d in "$runs_dir"/run-*/; do
+    [ -d "$d" ] || continue
+    name="${d%/}"; name="${name##*/}"
+    pidfile="$d/collector.pid"
+    [ -f "$pidfile" ] || continue
+    # NOTE: `read` exits nonzero on EOF-without-newline (the normal pidfile
+    # shape) while still setting the variable — do not treat that as failure.
+    pid=""
+    IFS= read -r pid < "$pidfile" 2>/dev/null || true
+    pid="${pid//[!0-9]/}"
+    [ -n "$pid" ] || continue
+    kill -0 "$pid" 2>/dev/null || continue
+    manifest="$d/capture-manifest.json"
+    [ -f "$manifest" ] || continue
+    content="$(<"$manifest")" || continue
+    case "$content" in
+      *'"kind": "capture"'*) candidates+=("$name") ;;
+    esac
+  done
+  if [ "${#candidates[@]}" -eq 1 ]; then
+    AGENT_RUN_ID="${candidates[0]}"
+    printf 'agent-verify: no FG_AGENT_RUN_ID set; auto-correlating the summary to the single active local product capture %s (set FG_AGENT_RUN_ID to override)\n' \
+      "$AGENT_RUN_ID" >&2
+  elif [ "${#candidates[@]}" -gt 1 ]; then
+    fail "multiple active local product captures (${candidates[*]}): set FG_AGENT_RUN_ID=<run-id> explicitly"
+  fi
+  return 0
+}
+
 main() {
   local summary_path=""
   if [ "$#" -gt 0 ] && [ "$1" = "--summary-json" ]; then
@@ -663,6 +737,8 @@ main() {
         fail "FG_AGENT_RUN_ID exceeds the 128 character bound."
       fi
       AGENT_RUN_ID="$FG_AGENT_RUN_ID"
+    else
+      auto_correlate_agent_run
     fi
     summary_validate_target
     SUMMARY_START_MS="$(now_ms)"

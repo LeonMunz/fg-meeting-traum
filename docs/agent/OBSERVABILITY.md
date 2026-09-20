@@ -56,19 +56,90 @@ Native vs repository-generated data:
   must consume the manifest + `docs/agent/trace-contract.json`, not
   ad-hoc raw OTel field names.
 
-## Why the Codex config is user-level
+## Why the Codex config is user-level (and where the product home is)
 
 Codex reads the `[otel]` section only from the **user-level** Codex
-configuration (`$CODEX_HOME/config.toml` — in this deployment
-`$CODEX_HOME` is normally `~/.codex-lucid`). Repository-local
-`.codex/config.toml` cannot enable OTel. Therefore:
+configuration (`$CODEX_HOME/config.toml`). **Repository-local
+`.codex/config.toml` cannot enable OTel and is never presented as a valid
+solution by any command in this repository.**
+
+The product-agent `CODEX_HOME` is **host-managed** and may differ from the
+controller shell's default home — do **not** assume `~/.codex`. Because the
+controller shell does not inherit the host-managed product `CODEX_HOME`, this
+repository keeps two strictly separate concepts:
+
+- the **product-agent Codex home** — the home the normal product agent
+  actually runs in (e.g. `$HOME/.codex-lucid` here); the only home that
+  matters for product telemetry; and
+- a **generic / standalone Codex home** — what `$HOME/.codex*` directory
+  discovery finds (the controller shell's standalone Codex, e.g.
+  `$HOME/.codex`). This is a *different* thing and is **never** used to tell
+  the user where to configure product telemetry.
+
+The **product** home is established **only from evidence**, in this
+precedence (never from generic discovery):
+
+1. `FG_PRODUCT_CODEX_HOME` — an explicit product-specific override;
+2. `CODEX_HOME` — the live product-agent environment (the host exports
+   `CODEX_HOME` to the product process); an explicitly set `CODEX_HOME` is
+   authoritative and validated;
+3. the persisted **product-runtime registration**
+   (`.artifacts/agent-observability/product-runtime.json`, git-ignored),
+   written by `./scripts/agent-observability product-runtime register` from
+   inside a real product-agent session;
+4. otherwise `not_registered` (or `corrupt`) — fail closed.
+
+The standalone `.codex` is still surfaced by `status` as the clearly-labeled
+*controller* home (informational only), and `native-probe` still uses generic
+discovery when it needs a standalone authenticated home. A home that is
+merely **unreadable in the current environment** (e.g. inside the agent
+sandbox) is reported as `not_checked` rather than silently re-guessed.
+
+Therefore:
 
 - the repository owns collector, config template, schema, scripts, docs;
 - enabling telemetry is an **explicit, auditable user action**
-  (`./scripts/agent-observability config` prints the exact block; the user
-  adds it to their own Codex config);
+  (`./scripts/agent-observability config` prints the exact block **targeted
+  at the resolved product `CODEX_HOME`**; the user adds it to their own
+  Codex config in the controller shell);
 - repository tooling **never edits** `$CODEX_HOME/config.toml` or any
-  Codex authentication configuration.
+  Codex authentication configuration (there is deliberately no
+  `config --apply`: lossless TOML rewrite with comment preservation cannot
+  be guaranteed without a heavyweight dependency, so configuration stays
+  manual).
+
+### Product runtime identity (registration)
+
+Because an ordinary controller terminal cannot see the host-managed product
+`CODEX_HOME`, the bridge is a small, local, privacy-safe **registration**
+that a normal product-agent session writes once:
+
+```bash
+# run FROM INSIDE a normal product-agent session (where CODEX_HOME is set):
+./scripts/agent-observability product-runtime register
+```
+
+- Writes only `.artifacts/agent-observability/product-runtime.json`
+  (git-ignored) with exactly the bounded, non-secret identity:
+  `schema_version`, `codex_home`, `codex_path`, `codex_acp_version`. It never
+  stores environment dumps, auth contents, tokens, or prompt content.
+- `CODEX_HOME` must be present in the registering environment, else it fails
+  closed (exit 5). It **never infers** the product home.
+- Idempotent for an unchanged runtime (byte-identical); an explicit
+  re-registration deliberately replaces stale identity. There are no
+  timestamps and no directory-name heuristics deciding which home is current.
+- `./scripts/agent-observability product-runtime show` prints the registration
+  (or `null` when absent).
+
+The `context` command also records the registration idempotently as a
+best-effort side-effect when run from a product-agent session, so the
+structured-context adoption step doubles as the registration step.
+
+Once registered, an ordinary controller shell reports
+`product codex home: registered — <home>` and `config` targets exactly
+`<home>/config.toml`. Before registration (or on a corrupt registration) it
+reports `not registered` / `corrupt` and `config` refuses to print an
+actionable destination.
 
 ## Exact Codex configuration
 
@@ -125,26 +196,77 @@ Notes:
 ./scripts/agent-observability config
 ./scripts/agent-observability install
 ./scripts/agent-observability native-probe
+./scripts/agent-observability ledger [run-id] [--json]
+./scripts/agent-observability annotate <run-id> --correction yes|no ...
+./scripts/agent-observability context current|<run-id> --task-type T --session M
+                     [--task-key K] [--harness-variant H]
+./scripts/agent-observability current-run
+./scripts/agent-observability product-runtime register|show
 ```
 
-- `status` — read-only: collector availability/version, running/stopped,
-  endpoint, output directory, resolved Codex home (explicit/discovered/
-  not-found/ambiguous/invalid), Codex `[otel]` config state, Codex/
-  codex-acp/collector versions.
-- `start` — starts only the local collector. Idempotent; refuses a
-  conflicting listener on the OTLP port; records PID/state; never touches
+- `status` — read-only: collector availability/version (distinct from
+  running/stopped — a controller-owned collector this shell cannot
+  signal (EPERM) still counts as running; only a nonexistent PID
+  (ESRCH) is stopped), endpoint + port state, output directory, the resolved
+  **product** Codex home (`override` / `product_session` / `registered` /
+  `not_registered` / `corrupt` / `invalid`), the product `[otel]` config
+  state **with a loopback/privacy judgment** (`configured` = all exporters
+  local on the expected port and `log_user_prompt` not true;
+  `misconfigured` = `log_user_prompt = true` or a non-local/port-mismatched
+  endpoint — only `scheme://host:port` is echoed, never other config values;
+  `absent` / `not_checked`), a separately-labeled **controller**
+  (generic/standalone) Codex home that is informational only and never used
+  for product telemetry, whether the calling shell is itself a product-agent
+  session (`CODEX_SESSION_ID`), and Codex/codex-acp/collector versions.
+- `start` — starts only the local collector for a **product run**
+  (`run-<UTC ts>`, kind `capture`). Idempotent; refuses a conflicting
+  listener on the OTLP port; records PID/state; captures the initial Git
+  state; collects a read-only `agent-doctor.sh --json` snapshot into the
+  run directory (a DEGRADED result is stored as evidence, a failed doctor
+  leaves no file — capture never aborts on the doctor); never touches
   product services.
-- `stop` — graceful (SIGTERM, drain/flush, manifest finalization), handles
-  already-stopped state, cleans transient PID files, never deletes trace
-  history.
+- `stop` — graceful (SIGTERM, drain/flush, manifest finalization,
+  end-of-run Git evidence), handles already-stopped state, cleans
+  transient PID files, never deletes trace history — and then
+  **automatically normalizes the run into `run-ledger.json`**, reporting
+  the ledger path and the evidence gaps. A ledger normalization failure
+  is reported distinctly (exit 9) and never loses the raw capture.
 - `doctor` — end-to-end local OTLP capability: starts an ephemeral
   collector in a temp dir, injects a synthetic OTLP payload containing
   **fake secrets**, and verifies the payload is persisted **without** the
   secrets. Statuses: `AVAILABLE` / `NOT_CONFIGURED` / `BLOCKED` /
   `BROKEN`. `--json` for machine-readable output.
-- `config` — prints the exact user-level Codex configuration and why it
-  cannot live in the repository. It never edits anything. (No `--apply`:
-  by design, user Codex configuration changes stay manual.)
+- `config` — read-only diagnosis + the exact user-level configuration,
+  **targeted at the resolved product `CODEX_HOME`**, plus the current
+  config state. When the product identity is unknown or corrupt it
+  **refuses to print an actionable destination** and instead explains how to
+  register the product runtime. It never edits anything, never prints auth
+  contents, and never presents repository-local `.codex/config.toml` or the
+  controller's standalone `.codex` as the product destination. (No
+  `--apply`: by design, user Codex configuration changes stay manual.)
+- `context current|<run-id> --task-type T --session M [--task-key K]
+  [--harness-variant H]` — attaches the bounded structured run context
+  (see Structured run context) to a product capture. `current` resolves
+  the single **live** product capture (collector PID **alive** per the
+  canonical liveness semantic — an existing process counts as alive whether
+  it is signalable or merely permission-denied (EPERM, e.g. a controller-
+  owned collector); only a nonexistent PID (ESRCH) is dead — plus manifest
+  kind `capture`; probes never count) and fails closed with exit 10
+  (zero) or exit 11 (multiple) — no timestamp-nearest guessing.
+  Idempotent; existing fields are preserved. When run from a product-agent
+  session it also records the product-runtime registration idempotently.
+- `current-run` — read-only, deterministic resolver for the single **live**
+  product capture (the same canonical liveness as `status` and `context
+  current`). Prints just the run id; exits 10 (zero) / 11 (multiple). Use
+  it to feed a reliable explicit `FG_AGENT_RUN_ID` to `agent-verify`
+  across the controller/agent identity boundary.
+- `product-runtime register|show` — record/show the bounded product-agent
+  runtime identity (the product `CODEX_HOME`) that `status`/`config`/`start`
+  use when no live `CODEX_HOME` is in scope. `register` must run FROM INSIDE
+  a product-agent session, requires `CODEX_HOME`, writes the git-ignored
+  `.artifacts/agent-observability/product-runtime.json` (only the bounded
+  fields), never infers the home and never touches user config/auth.
+  `show` prints the registration (or `null`), exiting 7 when corrupt.
 - `install` — explicitly downloads the pinned collector release, verifies
   the SHA-256, installs into the git-ignored repo-local location.
 - `ledger [run-id] [--json]` — normalizes one captured run into the
@@ -172,8 +294,37 @@ Notes:
     (it does *not* fall back to `codex` on `PATH`; a `codex` on `PATH` may
     be a different Codex version than the bundled one, which would break
     trace-contract version alignment).
-  The resolved home/path are reported in the evidence summary and in
-  `status` (`codex_home` in `--json`).
+  The resolved home/path are reported in the probe evidence summary and in
+  `status` (`controller_codex_home` in `--json`, the generic/standalone
+  resolution).
+
+### Canonical liveness semantic (EPERM vs ESRCH)
+
+A liveness probe has three semantic outcomes, and the first two are
+**alive**:
+
+```text
+signalable   process exists and we may signal it
+denied       process exists but signaling is denied (EPERM) — e.g. a
+             controller-owned collector started by a different identity
+dead         process does not exist (ESRCH) or the pid is invalid
+```
+
+The controller shell starts the collector; a product-agent session is a
+*different identity* and may not be able to signal it. Such a process is
+alive, not dead — so `EPERM` and `ESRCH` must never be collapsed into one
+boolean failure. The canonical helper `scripts/observability/liveness.py`
+(`classify` / `is_alive`) is the single implementation of this semantic and
+is shared by `status`, active-run discovery, `context current`, and
+`current-run`. Python is the only portable *structured* mechanism here: on
+macOS there is no `/proc`, and a shell `kill -0` returns the same nonzero
+status for both EPERM and ESRCH (the difference is only in the localized
+error text, which the repository never parses).
+
+`agent-verify.sh` is deliberately decoupled from this helper (see the
+verification-correlation note below): its auto-correlation stays
+builtins-only so it never depends on Python or on observability being
+installed.
 
 ## Privacy model
 
@@ -220,9 +371,16 @@ turn timing (`codex.turn_ttft`, spans), and bounded diagnostic counts
 ## Storage location, retention, correlation
 
 - Storage: `.artifacts/agent-runs/<run-id>/` (`run-id` =
-  `run-<UTC timestamp>` for captures, `probe-native-<UTC timestamp>` for
-  probes); `.artifacts/agent-observability/` holds the pinned collector
-  binary. `.artifacts/` is git-ignored.
+  `run-<UTC timestamp>` for product captures, `probe-native-<UTC timestamp>`
+  for probes). Each run may contain: `capture-manifest.json`,
+  `raw/*.jsonl` (sanitized OTLP), `collector.log`,
+  `agent-doctor-start.json` (read-only doctor snapshot from `start`),
+  `run-context.json` (bounded structured context, when attached),
+  verification-evidence JSON files (agent-verify `--summary-json` output,
+  doctor JSON), `annotations.json` (explicit human annotations) and
+  `run-ledger.json` (normalized record, generated by `stop` or `ledger`).
+  `.artifacts/agent-observability/` holds the pinned collector binary.
+  `.artifacts/` is git-ignored.
 - Retention: per-file rotation in the collector (`max_megabytes`,
   `max_days`, `max_backups`, defaults 32 MiB / 14 days / 10 backups) plus
   whole-run pruning by `start` (runs older than
@@ -253,28 +411,68 @@ The Run Ledger is the **normalization boundary** above the capture layer:
 raw sanitized OTel (logs/traces/metrics)  — only trace-contract fields
 + capture-manifest.json                    — session + end-of-run Git evidence
 + verification evidence JSON in run dir    — agent-verify/agent-doctor output
++ run-context.json                         — bounded structured run context
 + annotations.json                         — explicit human annotations
   ↓
 .artifacts/agent-runs/<run-id>/run-ledger.json   (versioned record, schema
-                                                    docs/agent/ledger-contract.json)
+  docs/agent/ledger-contract.json — currently schemaVersion 2)
 ```
 
 - `./scripts/agent-observability ledger [run-id] [--json]` normalizes one
   run (default: latest). Deterministic and idempotent: the record is a pure
   function of the stored evidence — no wall clock, no live git state — so
-  re-running on unchanged evidence yields identical bytes.
+  re-running on unchanged evidence yields identical bytes. `stop` runs
+  this normalization automatically after finalizing a run.
 - Missing optional evidence (metrics file, verification JSON, end-of-run
-  git state on old captures, annotations) yields `null`/empty values plus a
-  stable code in `evidence_gaps`; nothing is guessed. Malformed required
-  data (missing/mismatched capture manifest, foreign verification
-  attribution) fails with a nonzero exit code.
-- **Verification correlation is explicit, never timestamp-guessed:**
-  `FG_AGENT_RUN_ID=<run-id> ./scripts/agent-verify.sh --summary-json
-  .artifacts/agent-runs/<run-id>/verify-<profile>.json quick` records the
-  run id in the summary (`agentRunId`); the ledger rejects a summary whose
-  `agentRunId` does not equal the run id (exit 8). Doctor evidence:
-  redirect `./scripts/agent-doctor.sh --json` (or
+  git state on old captures, annotations, run context) yields `null`/empty
+  values plus a stable code in `evidence_gaps` (e.g. `no_run_context`);
+  nothing is guessed. Malformed required data (missing/mismatched capture
+  manifest, foreign verification attribution, malformed run-context) fails
+  with a nonzero exit code.
+- **Verification correlation is explicit, never timestamp-guessed.**
+  Explicit: `FG_AGENT_RUN_ID=<run-id> ./scripts/agent-verify.sh
+  --summary-json .artifacts/agent-runs/<run-id>/verify-<profile>.json
+  quick` records the run id in the summary (`agentRunId`); the ledger
+  rejects a summary whose `agentRunId` does not equal the run id (exit 8).
+  Automatic (deterministic, **best-effort**, only with `--summary-json`
+  and `FG_AGENT_RUN_ID` unset): agent-verify discovers the **single
+  active local product capture** (run dir whose collector pidfile names a
+  live process and whose manifest kind is `capture`; probes never count)
+  via a builtins-only `kill -0` probe and records it as `agentRunId`. Zero
+  active captures keep `agentRunId: null` (historical behavior); multiple
+  active captures are refused (exit 2, no summary). The runs root for this
+  discovery honors `FG_OBS_RUNS_DIR` (default
+  `<repo>/.artifacts/agent-runs`); a missing directory simply yields no
+  candidates — agent-verify never depends on observability being installed
+  or enabled. Because that probe is builtins-only (no Python; it must work
+  under the restricted test PATH), a shell `kill -0` cannot distinguish
+  EPERM (exists, another identity) from ESRCH (absent): a **controller-
+  owned** capture the agent cannot signal is treated as absent, so
+  auto-correlation is **same-identity only** and is not the reliable path
+  across the identity boundary. For reliable correlation, resolve the run
+  id with `./scripts/agent-observability current-run` (canonical EPERM->
+  alive liveness) and set `FG_AGENT_RUN_ID` explicitly. Doctor evidence: the read-only snapshot
+  stored by `start` (`agent-doctor-start.json`), or redirect
+  `./scripts/agent-doctor.sh --json` (or
   `./scripts/agent-observability doctor --json`) into the run directory.
+  The doctor status is read from the explicit `result` field or the real
+  `agent-doctor.sh` `summary.overall` field — never invented.
+- **Comparability dimensions (schema v2).** `runtime` additionally carries
+  `reasoning_effort`, `sandbox_mode` (from the native `sandbox_policy`)
+  and `approval_policy` — taken from the **first**
+  `codex.conversation_starts` event, only when the native event actually
+  carries the attribute (0.148.0 emits `reasoning_effort` only when an
+  effort is set). Absent values stay `null` and are represented
+  explicitly by the `comparability` section: 12 fixed boolean dimensions
+  (model, reasoning effort, Codex version, codex-acp version, sandbox
+  mode, approval policy, task type, session mode, Git starting revision,
+  verification evidence, doctor/environment evidence, explicit harness
+  variant) plus a sorted `missing` list. The section answers only whether
+  evidence exists — it is not a quality score and never ranks runs.
+- **Historical captures.** v1 ledger records remain valid v1 documents and
+  are never rewritten in place by any tooling. Captures made before v2
+  normalize to v2 with null context/runtime values plus explicit
+  evidence/comparability gaps; nothing is back-filled.
 - **Human intervention is never inferred.** `annotate` records, after the
   fact: whether a human correction occurred (`--correction yes|no`), a
   bounded category (required with `yes`), an optional note (≤ 280 chars),
@@ -287,13 +485,115 @@ raw sanitized OTel (logs/traces/metrics)  — only trace-contract fields
   stdout/stderr, source diffs, environment dumps, or raw tool arguments.
   Raw tool names appear only as bounded failure identifiers; the by-type
   activity map uses broad categories (shell/file/search/web/plan/
-  interaction/other).
+  interaction/other). The run context is bounded by construction (closed
+  enums + 1-128 char slugs; see below).
 - The end-of-run Git evidence (`ending_head`, `ending_tree`, changed files,
   line totals, `commit_created`) is recorded once by the manifest at
   capture finalize, so later normalization stays reproducible.
 - Unsupported by design (documented, never guessed): repeated-command
   count (command text is sanitized away), human intervention from
   telemetry, and any raw content.
+
+## Structured run context
+
+Cross-run analysis cannot safely infer task semantics from prompt text.
+Each run may therefore carry a small, privacy-safe, **explicitly supplied**
+structured context in `<run-dir>/run-context.json` (git-ignored with the
+run, versioned `schema_version: 1`):
+
+```json
+{
+  "schema_version": 1,
+  "task_type": "Bug | Vertical Slice | Domain | Stabilization | Documentation",
+  "session_mode": "CURRENT | NEW",
+  "task_key": "<bounded slug> | null",
+  "harness_variant": "<bounded slug> | null"
+}
+```
+
+- `task_type` and `session_mode` are **closed enums** matching the
+  repository's orchestration contract; they are attached with
+  `./scripts/agent-observability context current|<run-id> --task-type T
+  --session M` and are otherwise null.
+- `task_key` (optional) explicitly pairs/group runs that represent the
+  same logical task for future controlled comparisons; `harness_variant`
+  (optional) labels explicit future A/B harness runs. Both are bounded
+  slugs (1-128 chars of `[A-Za-z0-9._-]`, no whitespace) — **arbitrary
+  prompt/chat text cannot be stored in any field**; malformed or
+  prompt-shaped values fail closed (exit 2 at write, exit 7 on a
+  corrupted stored file).
+- Nothing is inferred: task type is never derived from the prompt, session
+  mode is never derived from the transcript, and no extra free-form
+  analytics tags exist.
+- `current` resolves deterministically: exactly one live product capture
+  (collector PID alive + manifest kind `capture`; probes excluded). Zero
+  live captures → exit 10; multiple → exit 11 with the candidates named.
+  An explicit run id always works (including after the run stopped).
+- Updates are partial and idempotent: re-attaching the same values is a
+  byte-identical no-op; fields not passed are preserved.
+- The ledger (schema v2) copies the four fields into `context` and counts
+  them among the comparability dimensions.
+
+Agent adoption (root `AGENTS.md`, kept deliberately short): when exactly
+one local product capture is active, attach the task's already-given Task
+type and Session to that run once; never invent `task_key` or
+`harness_variant`; if observability is unavailable, product work proceeds
+normally.
+
+## Normal product acceptance (controller shell)
+
+The acceptance that a **fresh ordinary product-agent session** is captured
+end-to-end runs from the **controller shell** (a long-lived process is
+needed: the agent sandbox reaps background processes when a command ends,
+so the collector cannot be sustained from inside an agent session).
+
+1. Register the product runtime from a normal product-agent session (where
+   `CODEX_HOME` is set): `./scripts/agent-observability product-runtime
+   register`. It is idempotent and also happens automatically when the agent
+   runs the `context` command, so it need only be done once. It writes the
+   git-ignored `.artifacts/agent-observability/product-runtime.json`.
+2. From the **controller shell**, verify the normal-product OTel config state
+   (read-only): `./scripts/agent-observability status` — expect
+   `product codex home: registered — <home>` and
+   `product otel config: configured (local: true)` and a found collector. If
+   `config` refuses with "product Codex home is not registered", register
+   first (step 1). If the product otel config is `absent`, apply the exact
+   block printed by `./scripts/agent-observability config` to the
+   **registered product** `$CODEX_HOME/config.toml` **manually, explicitly**
+   (the repository never edits it), then start a **new** agent session so
+   Codex loads the configuration.
+3. `./scripts/agent-observability start` — starts the loopback collector,
+   stores the read-only doctor snapshot, records initial Git state.
+4. Start a fresh ordinary coding-agent session and give it a harmless,
+   bounded repository task.
+5. Inside that session, the agent attaches its already-given task type and
+   session once:
+   `./scripts/agent-observability context current --task-type "<Task type>"
+   --session "<Session>"`.
+6. The agent performs normal repository/tool work and runs a verification
+   profile with a summary, correlated explicitly across the identity
+   boundary: resolve the current run id (same canonical liveness as
+   step 5) and pass it —
+   `RUN_ID=$(./scripts/agent-observability current-run)` then
+   `FG_AGENT_RUN_ID="$RUN_ID" ./scripts/agent-verify.sh --summary-json
+   .artifacts/agent-runs/$RUN_ID/verify-quick.json quick`. (With
+   `FG_AGENT_RUN_ID` unset, agent-verify best-effort auto-correlates to a
+   single same-identity active capture; a controller-owned capture is not
+   auto-detected, so the explicit id is the reliable path.)
+7. End the agent task.
+8. `./scripts/agent-observability stop` — flushes, finalizes (end Git
+   state), and **automatically** writes `<run-id>/run-ledger.json`,
+   reporting the ledger path and evidence gaps.
+9. Inspect the ledger: conversation id, model, reasoning effort (when the
+   native event provides it), sandbox mode/approval policy (same), tool
+   events, task type + session mode, correlated verification + doctor
+   evidence, start/end Git state — and confirm no prompt contents and no
+   credentials anywhere in the run directory (sanitized raw + ledger +
+   context).
+
+`native-probe` remains an acceptance/diagnostic overlay for the capture
+pipeline itself; it is **not** a substitute for product-session adoption
+proof.
 
 ## How to inspect one trace
 
@@ -326,9 +626,21 @@ jq . "$RUN/capture-manifest.json"
 ## Troubleshooting
 
 - **No telemetry in a new run** — the user-level `[otel]` config is not
-  active (check `status` → `codex otel config`), the collector is not
-  running, or the port mismatched (`FG_OBS_PORT` must match the
-  configured endpoints).
+  active in the **product** `CODEX_HOME` (check `status` →
+  `product otel config`; it must say `configured (local: true)` for the
+  **registered** product home — a `~/.codex` in the controller shell is not
+  the product home; if `status` reports the product home as `not registered`,
+  run `product-runtime register` from a product-agent session first), the
+  collector is not running (`start` it; it does not survive reboots and is
+  reaped when the spawning agent sandbox command ends — start it from the
+  controller shell), the agent session was started before the config change
+  (Codex reads `[otel]` at process start), or the port mismatched
+  (`FG_OBS_PORT` must match the configured endpoints). `status` always
+  separates these: collector availability vs running state vs product OTel
+  configuration.
+- **`context current` exits 10/11** — no live product capture, or more
+  than one (candidates are named); start a capture or pass an explicit
+  run id. Probes never count as product captures.
 - **`doctor` BLOCKED** — port occupied (stop the running capture or set
   `FG_OBS_PORT`), sandbox denies loopback binding, or no `python3`.
 - **`doctor` BROKEN** — event accepted but not persisted (collector

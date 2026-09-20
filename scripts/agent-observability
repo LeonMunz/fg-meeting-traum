@@ -12,9 +12,17 @@
 #   ./scripts/agent-observability ledger [run-id] [--json]
 #                                               normalize a run into the
 #                                               versioned Run Ledger record
+#   ./scripts/agent-observability context current --task-type T --session M
+#                                               attach the bounded structured
+#                                               run context to the current
+#                                               product capture
 #   ./scripts/agent-observability annotate <run-id> --correction yes|no
 #                                               explicit post-hoc human
 #                                               annotation (see --help)
+#   ./scripts/agent-observability product-runtime register|show
+#                                               register/show the product-agent
+#                                               runtime identity (product
+#                                               CODEX_HOME) for telemetry config
 #   ./scripts/agent-observability help              usage
 #
 # Privacy and safety contract:
@@ -38,10 +46,14 @@ OBS_LIB="$REPO_ROOT/scripts/observability"
 TEMPLATE="$OBS_LIB/otelcol-local.yaml"
 PINS="$OBS_LIB/pins.json"
 MANIFEST_PY="$OBS_LIB/manifest.py"
+LIVENESS_PY="$OBS_LIB/liveness.py"
 PROBE_CLIENT="$OBS_LIB/acp-probe-client.mjs"
 LEDGER_PY="$OBS_LIB/ledger.py"
+RUNCONTEXT_PY="$OBS_LIB/runcontext.py"
+RUNTIME_PY="$OBS_LIB/productruntime.py"
 OBS_DIR="$REPO_ROOT/.artifacts/agent-observability"
 RUNS_DIR="${FG_OBS_RUNS_DIR:-$REPO_ROOT/.artifacts/agent-runs}"
+PRODUCT_RUNTIME_FILE="${FG_PRODUCT_RUNTIME_FILE:-$OBS_DIR/product-runtime.json}"
 
 PORT="${FG_OBS_PORT:-4318}"
 RETENTION_DAYS="${FG_OBS_RETENTION_DAYS:-14}"
@@ -120,7 +132,17 @@ run_bounded() { # run_bounded <secs> <cmd...> — uses timeout/gtimeout when pre
 }
 
 pid_alive() {
-  [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null
+  # Canonical liveness semantic (scripts/observability/liveness.py): a pid is
+  # ALIVE whether it is signalable or merely permission-denied (EPERM). Only a
+  # nonexistent (ESRCH) or invalid pid is dead, so a controller-owned collector
+  # the agent cannot signal is still correctly recognized as running. This is
+  # the single liveness decision shared by status, active-run discovery,
+  # context current, current-run, start/stop and stale-pidfile cleanup.
+  local py
+  [ -n "${1:-}" ] || return 1
+  py="$(probe_python)"
+  [ -n "$py" ] || return 1
+  "$py" "$LIVENESS_PY" alive "$1"
 }
 
 resolve_collector() {
@@ -239,6 +261,48 @@ ledger_python() {
   printf '%s' "$py"
 }
 
+# Live product captures: run-* directories with a live collector pid and a
+# manifest whose kind is "capture". Probes are diagnostic and never count.
+# Deterministic: lexicographic directory order; liveness is the same
+# pidfile+alive check the control surface uses for `status` (no
+# timestamp-nearest guessing anywhere).
+live_product_runs() { # prints run ids, one per line
+  [ -d "$RUNS_DIR" ] || return 0
+  local d name pidfile pid manifest
+  for d in "$RUNS_DIR"/run-*/; do
+    [ -d "$d" ] || continue
+    name="$(basename "$d")"
+    pidfile="$d/collector.pid"
+    [ -f "$pidfile" ] || continue
+    pid="$(cat "$pidfile" 2>/dev/null || true)"
+    pid_alive "$pid" || continue
+    manifest="$d/capture-manifest.json"
+    [ -f "$manifest" ] || continue
+    grep -q '"kind": "capture"' "$manifest" 2>/dev/null || continue
+    printf '%s\n' "$name"
+  done
+  return 0
+}
+
+# Resolve the single live product capture to its run dir (deterministic;
+# the canonical liveness semantic; no timestamp-nearest guessing). Sets the
+# global CURRENT_RUN_DIR on success and exits 10 (zero live captures) or
+# 11 (several). Must be called in the current shell, never inside a command
+# substitution (die() exits). Reused by `context current` and `current-run`.
+resolve_current_run_dir() {
+  local live=() r
+  CURRENT_RUN_DIR=""
+  while IFS= read -r r; do
+    [ -n "$r" ] && live+=("$r")
+  done < <(live_product_runs)
+  if [ "${#live[@]}" -eq 0 ]; then
+    die "no active product capture — start one first (./scripts/agent-observability start)" 10
+  elif [ "${#live[@]}" -gt 1 ]; then
+    die "ambiguous: multiple active product captures (${live[*]}) — pass an explicit run id" 11
+  fi
+  CURRENT_RUN_DIR="$RUNS_DIR/${live[0]}"
+}
+
 # --------------------------------------------------------------- ledger -----
 
 cmd_ledger() {
@@ -272,6 +336,63 @@ cmd_annotate() {
   [ -n "$run_dir" ] || return "$rc"
   py="$(ledger_python)"
   "$py" "$LEDGER_PY" annotate "$run_dir" "$@"
+}
+
+# ----------------------------------------------------------------- context --
+
+cmd_context() {
+  local target="${1:-}"
+  shift || true
+  if [ -z "$target" ]; then
+    die "context requires 'current' or an explicit <run-id> (usage: agent-observability context current --task-type T --session M [--task-key K] [--harness-variant H])" 2
+  fi
+  # Adoption side-effect: when running inside a normal product-agent session
+  # (CODEX_HOME is set), idempotently record the product runtime identity so
+  # the controller shell can later resolve the product home deterministically.
+  # Best-effort: a registration problem never blocks attaching the context.
+  if [ -n "${CODEX_HOME:-}" ]; then
+    local _ctx_py _ctx_cppath
+    _ctx_py="$(probe_python)"
+    if [ -n "$_ctx_py" ]; then
+      [ -d "$OBS_DIR" ] || mkdir -p "$OBS_DIR"
+      _ctx_cppath=""
+      if [ -n "${CODEX_PATH:-}" ] && valid_product_home_path "$CODEX_PATH"; then _ctx_cppath="$CODEX_PATH"; fi
+      run_tolerated "$_ctx_py" "$RUNTIME_PY" register "$PRODUCT_RUNTIME_FILE" \
+        --codex-home "$CODEX_HOME" --codex-path "$_ctx_cppath" \
+        --codex-acp-version "$(codex_acp_version)"
+      if [ "$TOL_RC" -eq 0 ]; then
+        printf 'product-runtime: %s\n' "$TOL_OUT"
+      else
+        printf 'agent-observability: note: product-runtime registration not recorded (%s)\n' \
+          "$(printf '%s' "$TOL_OUT" | head -c 160)" >&2
+      fi
+    fi
+  fi
+  local run_dir
+  if [ "$target" = "current" ]; then
+    resolve_current_run_dir
+    run_dir="$CURRENT_RUN_DIR"
+  else
+    run_dir="$(resolve_run_dir "$target")" || return $?
+  fi
+  [ -n "$run_dir" ] || return 1
+  local py rc=0
+  py="$(ledger_python)"
+  "$py" "$RUNCONTEXT_PY" set "$run_dir" "$@" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    return "$rc"
+  fi
+  printf 'run-context attached to %s (%s/run-context.json)\n' \
+    "$(basename "$run_dir")" "$run_dir"
+  return 0
+}
+
+cmd_current_run() {
+  # Read-only deterministic current-run resolver (same canonical liveness as
+  # status and context current). Prints just the run id — the value to feed
+  # as an explicit FG_AGENT_RUN_ID to agent-verify. Exits 10 (none) / 11 (several).
+  resolve_current_run_dir
+  printf '%s\n' "$(basename "$CURRENT_RUN_DIR")"
 }
 
 render_config() { # render_config <run_dir> <out_file>
@@ -526,28 +647,204 @@ codex_path_version() { # <state> <path> — version of the codex the probe runs
   printf '%s' "${out:-unknown}"
 }
 
-otel_config_state() {
-  # <state>|<detail>
-  local line state path detail rest
-  line="$(resolve_codex_home)"
-  state="${line%%|*}"
-  rest="${line#*|}"
-  path="${rest%%|*}"
-  detail="${rest#*|}"
-  case "$state" in
-    explicit|discovered) ;;
-    *) printf 'unknown|%s' "$detail"; return 0 ;;
+# ------------------------------------------- product runtime identity -------
+#
+# The *normal product-agent* Codex home is a distinct concept from a generic
+# $HOME/.codex* discovery. Generic discovery is unreliable whenever the
+# controller shell and the product agent coexist on one machine (e.g.
+# $HOME/.codex is a standalone Codex 0.139.0 while the host-managed product
+# home is $HOME/.codex-lucid). So product identity is established ONLY from
+# explicit, evidence-based sources, in this precedence:
+#
+#   1. FG_PRODUCT_CODEX_HOME  - an explicit product-specific override
+#   2. CODEX_HOME             - the live product-agent environment (the host
+#                                exports CODEX_HOME to the product process); an
+#                                explicitly set CODEX_HOME is authoritative
+#   3. persisted registration - product-runtime.json written from inside a real
+#                                product-agent session (productruntime.py)
+#   4. not_registered/corrupt - otherwise (fail closed; NEVER generic
+#                                discovery). A bare $HOME/.codex is reported
+#                                separately as the *controller* home and is
+#                                never used to tell the user where to configure
+#                                product telemetry.
+
+valid_product_home_path() { # <path> - syntactically plausible product home?
+  local v="${1:-}"
+  [ -n "$v" ] || return 1
+  [ "${#v}" -le 1024 ] || return 1
+  case "$v" in *[[:space:]]*) return 1 ;; esac
+  case "$v" in /*) return 0 ;; *) return 1 ;; esac
+}
+
+# prints "state|path"; always exits 0. States: override | product_session |
+# registered | not_registered | corrupt | invalid.
+resolve_product_home() {
+  if [ -n "${FG_PRODUCT_CODEX_HOME:-}" ]; then
+    if valid_product_home_path "$FG_PRODUCT_CODEX_HOME"; then
+      printf 'override|%s' "$FG_PRODUCT_CODEX_HOME"
+    else
+      printf 'invalid|%s' "$FG_PRODUCT_CODEX_HOME"
+    fi
+    return 0
+  fi
+  if [ -n "${CODEX_HOME:-}" ]; then
+    if valid_product_home_path "$CODEX_HOME"; then
+      printf 'product_session|%s' "$CODEX_HOME"
+    else
+      printf 'invalid|%s' "$CODEX_HOME"
+    fi
+    return 0
+  fi
+  local py state
+  py="$(probe_python)"
+  if [ -n "$py" ]; then
+    state="$("$py" "$RUNTIME_PY" state "$PRODUCT_RUNTIME_FILE" 2>/dev/null || true)"
+    case "$state" in
+      registered\|*|not_registered\|*|corrupt\|*) ;;
+      *) state="not_registered|" ;;
+    esac
+    printf '%s' "$state"
+    return 0
+  fi
+  printf 'not_registered|'
+  return 0
+}
+
+# Informational only: the GENERIC Codex home via directory discovery
+# ($HOME/.codex and $HOME/.codex-*), computed WITHOUT consulting any
+# CODEX_HOME env var. This is exactly what native-probe resolves when
+# CODEX_HOME is unset, and it is NEVER the product home and never used for
+# product telemetry guidance. Always exits 0.
+# States: discovered | ambiguous | not_found.
+controller_codex_home() { # prints "state|path"
+  local c
+  local valid=()
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    if codex_home_valid "$c"; then valid+=("$c"); fi
+  done < <(codex_home_candidates)
+  if [ "${#valid[@]}" -eq 0 ]; then
+    printf 'not_found|'
+  elif [ "${#valid[@]}" -eq 1 ]; then
+    printf 'discovered|%s' "${valid[0]}"
+  else
+    printf 'ambiguous|'
+  fi
+  return 0
+}
+
+# version of the standalone Codex reachable on the controller PATH
+# (independent of the product-agent CODEX_PATH). Informational only.
+controller_codex_version() {
+  local out=""
+  if command -v codex >/dev/null 2>&1; then
+    out="$(run_bounded 5 codex --version 2>/dev/null | head -n1 || true)"
+  fi
+  printf '%s' "${out:-unknown}"
+}
+
+# Register the product runtime identity from the live product-agent
+# environment. Fails closed (exit 5) when CODEX_HOME is not set - it NEVER
+# infers the product home. Writes only the bounded registration artifact.
+register_product_runtime() {
+  local py home cppath
+  py="$(probe_python)"
+  [ -n "$py" ] || die "python3 not found (needed to register product runtime)" 5
+  home="${CODEX_HOME:-}"
+  [ -n "$home" ] || die "CODEX_HOME is not set in this environment - run 'agent-observability product-runtime register' from inside a normal product-agent session" 5
+  [ -d "$OBS_DIR" ] || mkdir -p "$OBS_DIR"
+  cppath=""
+  if [ -n "${CODEX_PATH:-}" ] && valid_product_home_path "$CODEX_PATH"; then cppath="$CODEX_PATH"; fi
+  "$py" "$RUNTIME_PY" register "$PRODUCT_RUNTIME_FILE" \
+    --codex-home "$home" \
+    --codex-path "$cppath" \
+    --codex-acp-version "$(codex_acp_version)"
+}
+
+cmd_product_runtime() {
+  local sub="${1:-}"
+  shift || true
+  case "$sub" in
+    register)
+      register_product_runtime
+      ;;
+    show)
+      local py
+      py="$(probe_python)"
+      [ -n "$py" ] || die "python3 not found (needed to read the product-runtime registration)" 1
+      "$py" "$RUNTIME_PY" show "$PRODUCT_RUNTIME_FILE"
+      ;;
+    *)
+      die "usage: agent-observability product-runtime register|show" 2
+      ;;
   esac
+}
+
+# Extract the raw [otel] section of a config file (nothing else).
+otel_section_of() { # <config-file>
+  awk '/^[[:space:]]*\[otel\][[:space:]]*$/{f=1; next} /^[[:space:]]*\[/{f=0} f' "$1" 2>/dev/null
+}
+
+# Judge the [otel] block of one specific Codex home (read-only). Prints
+# "<state>|<detail>". States: configured | misconfigured | absent |
+# not_checked.
+otel_config_state_for_home() { # <home-path>
+  local path="${1:-}"
+  [ -n "$path" ] || { printf 'not_checked|no product Codex home available'; return 0; }
   local cfg="$path/config.toml"
   if [ ! -r "$cfg" ]; then
-    printf 'not_checked|cannot read %s in this environment' "$cfg"
+    printf 'not_checked|cannot read %s in this environment (sandbox policy?) — check from the controller shell' "$cfg"
     return 0
   fi
-  if grep -qE '^[[:space:]]*\[otel\]' "$cfg" 2>/dev/null; then
-    printf 'configured|%s contains an [otel] section' "$cfg"
+  if ! grep -qE '^[[:space:]]*\[otel\]' "$cfg" 2>/dev/null; then
+    printf 'absent|no [otel] section in %s — add the block from: ./scripts/agent-observability config' "$cfg"
     return 0
   fi
-  printf 'absent|no [otel] section in %s — run: ./scripts/agent-observability config' "$cfg"
+  local section endpoint hostpart problems=""
+  section="$(otel_section_of "$cfg")"
+  if printf '%s\n' "$section" | grep -qE '^[[:space:]]*log_user_prompt[[:space:]]*=[[:space:]]*true'; then
+    problems=" log_user_prompt=true"
+  fi
+  while IFS= read -r endpoint; do
+    [ -n "$endpoint" ] || continue
+    case "$endpoint" in
+      "http://127.0.0.1:$PORT/"*|"http://localhost:$PORT/"*|"http://[::1]:$PORT/"*) ;;
+      *)
+        # scheme://host:port only — never a path, query or config value
+        hostpart="$(printf '%s' "$endpoint" | sed -E 's|^(https?://[^/]+).*|\1|')"
+        problems="$problems endpoint-not-local-or-port-mismatch:$hostpart"
+        ;;
+    esac
+  done < <(printf '%s\n' "$section"     | grep -oE 'endpoint[[:space:]]*=[[:space:]]*"[^"]*"'     | sed -E 's/.*"([^"]*)"$/\1/')
+  if [ -n "$problems" ]; then
+    printf 'misconfigured|otel section present but privacy/loopback checks failed:%s' "$problems"
+  else
+    printf 'configured|otel routing active; all exporters loopback (127.0.0.1:%s), log_user_prompt not true' "$PORT"
+  fi
+}
+
+# The product-agent [otel] state, judged on the *product* Codex home (never
+# generic discovery). Prints "<state>|<detail>"; always exits 0.
+product_otel_config_state() {
+  local line state path
+  line="$(resolve_product_home)"
+  state="${line%%|*}"
+  path="${line#*|}"
+  case "$state" in
+    override|product_session|registered)
+      otel_config_state_for_home "$path"
+      ;;
+    invalid)
+      printf 'not_checked|product Codex home is an invalid path (%s) — fix FG_PRODUCT_CODEX_HOME or CODEX_HOME' "$path"
+      ;;
+    corrupt)
+      printf 'not_checked|product-runtime registration is corrupt (%s) — re-run: agent-observability product-runtime register' "$path"
+      ;;
+    *)
+      printf 'not_checked|product Codex home not registered — run: ./scripts/agent-observability product-runtime register (from a product-agent session)'
+      ;;
+  esac
+  return 0
 }
 
 # ------------------------------------------------------------------ status --
@@ -570,25 +867,38 @@ cmd_status() {
     in_use) portlabel="in use" ;;
     *) portlabel="unknown" ;;
   esac
-  local otel_state otel_detail
-  otel_state="$(otel_config_state)"
-  otel_detail="${otel_state#*|}"; otel_state="${otel_state%%|*}"
-  local homeline home_state home_path homerest
-  homeline="$(resolve_codex_home)"
-  home_state="${homeline%%|*}"
-  homerest="${homeline#*|}"
-  home_path="${homerest%%|*}"
+  local ppline pstate ppath
+  ppline="$(resolve_product_home)"
+  pstate="${ppline%%|*}"
+  ppath="${ppline#*|}"
+  local potel_state potel_detail potel_local
+  potel_state="$(product_otel_config_state)"
+  potel_detail="${potel_state#*|}"; potel_state="${potel_state%%|*}"
+  case "$potel_state" in
+    configured) potel_local="true" ;;
+    misconfigured|absent) potel_local="false" ;;
+    *) potel_local="null" ;;
+  esac
+  local chline chstate chpath
+  chline="$(controller_codex_home)"
+  chstate="${chline%%|*}"
+  chpath="${chline#*|}"
+  local ccver
+  ccver="$(controller_codex_version)"
   local cver_now="unknown" cver_now_acp="unknown"
   if [ -n "${CODEX_PATH:-}" ] || command -v codex >/dev/null 2>&1; then
     cver_now="$(codex_version)"
   fi
   cver_now_acp="$(codex_acp_version)"
+  local collector_avail="false" in_product="false"
+  [ -n "$collector" ] && collector_avail="true"
+  [ -n "${CODEX_SESSION_ID:-}" ] && in_product="true"
   if [ "$json" -eq 1 ]; then
     printf '{\n'
     printf '  "schema_version": 1,\n'
     printf '  "tool": "agent-observability",\n'
-    printf '  "collector": {"path": "%s", "version": "%s"},\n' \
-      "$(json_escape "$collector")" "$(json_escape "$cver")"
+    printf '  "collector": {"path": "%s", "version": "%s", "available": %s},\n' \
+      "$(json_escape "$collector")" "$(json_escape "$cver")" "$collector_avail"
     printf '  "running": {"state": "%s", "run_id": "%s", "pid": "%s"},\n' \
       "$running" "$(json_escape "$run_id")" "$(json_escape "$pid")"
     printf '  "endpoint": "http://127.0.0.1:%s",\n' "$PORT"
@@ -597,10 +907,14 @@ cmd_status() {
     printf '  "latest_run": "%s",\n' "$(json_escape "$latest")"
     printf '  "retention_days": %s,\n' "$RETENTION_DAYS"
     printf '  "privacy_mode": "%s",\n' "$(json_escape "$PRIVACY_MODE")"
-    printf '  "codex_home": {"state": "%s", "path": "%s"},\n' \
-      "$home_state" "$(json_escape "$home_path")"
-    printf '  "codex_otel_config": {"state": "%s", "detail": "%s"},\n' \
-      "$(json_escape "$otel_state")" "$(json_escape "$otel_detail")"
+    printf '  "product_codex_home": {"state": "%s", "path": "%s"},\n' \
+      "$pstate" "$(json_escape "$ppath")"
+    printf '  "product_otel_config": {"state": "%s", "detail": "%s", "local": %s},\n' \
+      "$(json_escape "$potel_state")" "$(json_escape "$potel_detail")" "$potel_local"
+    printf '  "controller_codex_home": {"state": "%s", "path": "%s"},\n' \
+      "$chstate" "$(json_escape "$chpath")"
+    printf '  "controller_codex_version": "%s",\n' "$(json_escape "$ccver")"
+    printf '  "in_product_session": %s,\n' "$in_product"
     printf '  "versions": {"codex": "%s", "codex_acp": "%s", "collector": "%s"}\n' \
       "$(json_escape "$cver_now")" "$(json_escape "$cver_now_acp")" "$(json_escape "$cver")"
     printf '}\n'
@@ -615,9 +929,38 @@ cmd_status() {
     printf '  runs dir:         %s\n' "$RUNS_DIR"
     printf '  latest run:       %s\n' "${latest:-none}"
     printf '  retention:        %s days, %s MiB/file, %s backups\n' "$RETENTION_DAYS" "$MAX_MB" "$MAX_BACKUPS"
-    printf '  codex home:       %s — %s\n' "$home_state" "${home_path:-<none>}"
-    printf '  codex otel config: %s — %s\n' "$otel_state" "$otel_detail"
+    printf '  product codex home:  %s — %s\n' "$pstate" "${ppath:-<none>}"
+    printf '  product otel config: %s (local: %s) — %s\n' "$potel_state" "$potel_local" "$potel_detail"
+    printf '  controller codex home: %s — %s (generic/standalone discovery; informational, NOT the product home)\n' "$chstate" "${chpath:-<none>}"
+    printf '  controller codex version: %s (standalone codex on PATH; informational)\n' "$ccver"
+    [ "$in_product" = "true" ] && printf '  session:          product-agent session (CODEX_SESSION_ID set)\n'
     printf '  versions:         codex=%s codex-acp=%s collector=%s\n' "$cver_now" "$cver_now_acp" "$cver"
+  fi
+  return 0
+}
+
+# Read-only environment doctor snapshot stored in the run directory so the
+# ledger can correlate environment evidence. A DEGRADED doctor result is
+# stored as evidence; a failed/partial doctor run leaves no file (and is
+# reported as a gap). Observability capture never depends on the doctor.
+doctor_snapshot() { # doctor_snapshot <run_dir>
+  local run_dir="$1"
+  local doctor_sh="$REPO_ROOT/scripts/agent-doctor.sh"
+  [ -f "$doctor_sh" ] || return 0
+  local out="$run_dir/agent-doctor-start.json"
+  run_bounded 180 bash "$doctor_sh" --json > "$out" 2>/dev/null || true
+  local py
+  py="$(probe_python)"
+  if [ -n "$py" ] && "$py" -c 'import json,sys; json.load(open(sys.argv[1]))' "$out" 2>/dev/null; then
+    local overall
+    overall="$("$py" -c 'import json,sys
+d = json.load(open(sys.argv[1]))
+s = d.get("summary")
+print(s.get("overall") if isinstance(s, dict) and isinstance(s.get("overall"), str) else "unknown")' "$out" 2>/dev/null || true)"
+    printf '  doctor:     %s (read-only snapshot stored: agent-doctor-start.json)\n' "${overall:-unknown}"
+  else
+    rm -f "$out"
+    printf '  doctor:     snapshot unavailable (continuing; ledger will record a doctor gap)\n'
   fi
   return 0
 }
@@ -675,7 +1018,48 @@ cmd_start() {
   printf '  endpoint: http://127.0.0.1:%s (loopback only)\n' "$PORT"
   printf '  pid:      %s\n' "$COLLECTOR_PID"
   printf '  traces:   %s/raw/\n' "$run_dir"
+  local sp_line sp_state sp_path
+  sp_line="$(resolve_product_home)"
+  sp_state="${sp_line%%|*}"
+  sp_path="${sp_line#*|}"
+  printf '  product home: %s — %s\n' "$sp_state" "${sp_path:-<none>}"
   printf '  note:     Codex sessions emit telemetry here only while the user-level [otel] config is active (see: ./scripts/agent-observability config)\n'
+  case "$sp_state" in
+    not_registered) printf '  note:     product Codex home not registered — from a product-agent session run: ./scripts/agent-observability product-runtime register\n' ;;
+    corrupt)        printf '  note:     product-runtime registration is corrupt — re-run: ./scripts/agent-observability product-runtime register\n' ;;
+  esac
+  doctor_snapshot "$run_dir"
+  return 0
+}
+
+# Automatically normalize the just-finalized run into run-ledger.json.
+# A normalization failure is reported distinctly from the collector
+# shutdown: the raw capture is always preserved (exit 9 signals the
+# ledger step only).
+auto_ledger() { # auto_ledger <run_dir>; 0 = ok, 9 = normalization failed
+  local run_dir="$1" py
+  py="$(probe_python)"
+  if [ -z "$py" ]; then
+    printf 'agent-observability: python3 not found — ledger normalization skipped (raw capture preserved)\n' >&2
+    return 0
+  fi
+  run_tolerated "$py" "$LEDGER_PY" normalize "$run_dir"
+  if [ "$TOL_RC" -ne 0 ]; then
+    printf 'agent-observability: ERROR: ledger normalization FAILED (exit %s) — raw capture preserved at %s\n' \
+      "$TOL_RC" "$run_dir" >&2
+    [ -n "$TOL_OUT" ] && printf '%s\n' "$TOL_OUT" >&2
+    return 9
+  fi
+  local gaps
+  gaps="$("$py" -c 'import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+    g = d.get("evidence_gaps") or []
+    print(", ".join(g) if g else "none")
+except Exception:
+    print("unknown")' "$run_dir/run-ledger.json" 2>/dev/null || echo unknown)"
+  printf '  ledger:     %s/run-ledger.json\n' "$run_dir"
+  printf '  evidence gaps: %s\n' "$gaps"
   return 0
 }
 
@@ -703,6 +1087,8 @@ cmd_stop() {
       if [ -f "$manifest" ] && grep -q '"stop_status": "running"' "$manifest" 2>/dev/null; then
         finalize_run "$latest" "interrupted"
         printf 'agent-observability: not running; finalized interrupted run %s\n' "$(basename "$latest")"
+        auto_ledger "$latest"
+        return $?
       else
         printf 'agent-observability: collector is not running (nothing to do)\n'
       fi
@@ -722,7 +1108,8 @@ cmd_stop() {
   printf 'agent-observability: stopped (status %s)\n' "$STOP_STATUS"
   printf '  run:      %s (trace history kept)\n' "$run_dir"
   printf '  manifest: %s/capture-manifest.json\n' "$run_dir"
-  return 0
+  auto_ledger "$run_dir"
+  return $?
 }
 
 # ------------------------------------------------------------------ doctor --
@@ -849,8 +1236,61 @@ emit_doctor_result() {
 # ------------------------------------------------------------------ config --
 
 cmd_config() {
+  local ppline pstate ppath
+  ppline="$(resolve_product_home)"
+  pstate="${ppline%%|*}"
+  ppath="${ppline#*|}"
+
+  # Refuse to print an actionable product OTel destination when the product
+  # runtime identity is unknown: guessing would point the user at the wrong
+  # (controller) Codex config. Explain how to register it instead.
+  case "$pstate" in
+    override|product_session|registered)
+      : ;; # product identity known -> actionable block below
+    *)
+      local reason
+      case "$pstate" in
+        corrupt) reason="the product-runtime registration is corrupt ($ppath); re-run register from a product-agent session" ;;
+        invalid) reason="the product Codex home path is invalid ($ppath); fix FG_PRODUCT_CODEX_HOME or CODEX_HOME" ;;
+        *)       reason="the product Codex home is not registered" ;;
+      esac
+      cat <<EOF
+Codex user-level OpenTelemetry activation (manual, one-time).
+
+Product Codex home: UNKNOWN — $reason.
+
+This repository never guesses which Codex home is the *product* one. Generic
+\$HOME/.codex* discovery (the controller shell's standalone Codex installation)
+is not the product-agent home and is intentionally not used here.
+
+Register the real product runtime identity by running this FROM INSIDE a
+normal product-agent session (where the host exports CODEX_HOME):
+
+    ./scripts/agent-observability product-runtime register
+
+Then re-run:  ./scripts/agent-observability config
+
+WHY this cannot live in the repository:
+  Codex reads [otel] only from the user-level Codex configuration
+  (\$CODEX_HOME/config.toml). Repository-local .codex/config.toml cannot enable
+  OTel, so this repository never edits your Codex config. Adding the block is
+  an explicit, auditable, user-level opt-in.
+EOF
+      return 0
+      ;;
+  esac
+
+  local target="$ppath/config.toml"
+  local otel_state otel_detail
+  otel_state="$(product_otel_config_state)"
+  otel_detail="${otel_state#*|}"; otel_state="${otel_state%%|*}"
   cat <<EOF
 Codex user-level OpenTelemetry activation (manual, one-time).
+
+Product Codex home: $pstate — $ppath
+  (authoritative: from registration / live product environment / explicit
+   override — never from generic controller discovery)
+  current otel config state: $otel_state — $otel_detail
 
 WHY this cannot live in the repository:
   Codex reads [otel] only from the user-level Codex configuration
@@ -858,10 +1298,8 @@ WHY this cannot live in the repository:
   enable OTel, so this repository never edits your Codex config. Adding
   the block below is an explicit, auditable, user-level opt-in; removing
   it (or stopping the collector) disables local capture.
-  In this deployment CODEX_HOME is normally \$HOME/.codex-lucid (verify
-  with: echo \$CODEX_HOME).
 
-Add to \$CODEX_HOME/config.toml:
+Add to $target:
 
 [otel]
 environment = "dev"
@@ -879,12 +1317,12 @@ Effect:
     sensitive attribute set before persistence (docs/agent/OBSERVABILITY.md).
 
 Verify:
-  ./scripts/agent-observability status      # codex otel config: configured
+  ./scripts/agent-observability status      # product otel config: configured
   ./scripts/agent-observability doctor      # AVAILABLE
 
 Disable completely:
   stop the collector (./scripts/agent-observability stop) and/or remove
-  the [otel] section from \$CODEX_HOME/config.toml.
+  the [otel] section from $target.
 EOF
 }
 
@@ -1093,6 +1531,21 @@ Usage:
   ./scripts/agent-observability annotate <run-id> --correction yes|no
                           [--category <c>] [--note <s>]
                           [--classification <K>] [--for-failure <ref>]
+  ./scripts/agent-observability context current --task-type T --session M
+                          [--task-key K] [--harness-variant H]
+      attach the bounded structured run context to the current product
+      capture (or an explicit <run-id> instead of 'current')
+  ./scripts/agent-observability current-run
+      print the id of the single live product capture. Read-only,
+      deterministic resolver (same liveness as status / context current);
+      exit 10 if none, 11 if several. Feed it to agent-verify as
+      FG_AGENT_RUN_ID for reliable cross-identity correlation.
+  ./scripts/agent-observability product-runtime register|show
+      register/show the product-agent runtime identity (the product
+      CODEX_HOME) used to resolve where product telemetry is configured.
+      'register' runs FROM INSIDE a normal product-agent session and
+      derives CODEX_HOME from that environment; it never infers the
+      home and never edits user Codex config or auth.
   ./scripts/agent-observability help
 
 Local, privacy-conscious trace capture for normal Codex/ACP agent sessions.
@@ -1117,18 +1570,50 @@ Run Ledger (normalized, versioned run records):
       ENVIRONMENT_OR_HARNESS|SCOPE_DISCOVERY> --for-failure <identifier-or-ref>
       explicitly attaches a failure classification (never inferred).
       Correlate verification evidence by running agent-verify with
-      FG_AGENT_RUN_ID=<run-id> and --summary-json inside the run directory.
+      FG_AGENT_RUN_ID=<run-id> and --summary-json inside the run directory
+      (without FG_AGENT_RUN_ID, agent-verify auto-correlates a summary to
+      exactly one active local product capture and refuses ambiguity).
       Ledger schema: docs/agent/ledger-contract.json.
+  context current|<run-id> --task-type T --session M [--task-key K]
+            [--harness-variant H]
+      Attach the structured, bounded run context (run-context.json) to a
+      product capture. T is one of: Bug, Vertical Slice, Domain,
+      Stabilization, Documentation. M is CURRENT or NEW. K and H are
+      optional bounded slugs (1-128 chars of [A-Za-z0-9._-], never
+      prompt text). 'current' succeeds only when exactly one live product
+      capture exists; zero or multiple fail closed (no guessing).
+      Idempotent; existing fields are preserved.
+
+Product runtime identity (product Codex home):
+  status / config / start resolve the *product* Codex home from
+  evidence, in this precedence (never generic $HOME/.codex* discovery):
+    1. FG_PRODUCT_CODEX_HOME (explicit override)
+    2. CODEX_HOME (the live product-agent environment; the host exports it)
+    3. the persisted registration (product-runtime.json)
+    4. not_registered / corrupt (fail closed)
+  product-runtime register  (run FROM INSIDE a product-agent session)
+      Records the bounded, non-secret runtime identity (CODEX_HOME, and
+      optionally CODEX_PATH + codex-acp version) to
+      .artifacts/agent-observability/product-runtime.json (git-ignored).
+      Requires CODEX_HOME in the environment and fails closed when absent;
+      never infers the home or touches user Codex config / auth. An explicit
+      re-registration deliberately replaces stale identity (no timestamps).
+  product-runtime show      Prints the registration (or 'null' when absent).
 
 Environment overrides:
   FG_OBS_PORT (default 4318), FG_OBS_RETENTION_DAYS (14),
   FG_OBS_MAX_MB (32), FG_OBS_MAX_BACKUPS (10),
   FG_OBS_RUNS_DIR (runs root; default .artifacts/agent-runs — testability),
   FG_OTELCOL (explicit collector binary), CODEX_ACP_ADAPTER (adapter path),
-  FG_OBS_PROBE_TIMEOUT (ms, native-probe).
-  CODEX_HOME / CODEX_PATH are optional: when unset they are resolved
-  automatically (explicit values stay authoritative); the contract is
-  documented in docs/agent/OBSERVABILITY.md.
+  FG_OBS_PROBE_TIMEOUT (ms, native-probe),
+  FG_PRODUCT_CODEX_HOME (explicit product Codex home override - highest
+  product-identity precedence),
+  FG_PRODUCT_RUNTIME_FILE (product-runtime registration artifact; default
+  .artifacts/agent-observability/product-runtime.json - testability).
+  CODEX_HOME / CODEX_PATH: on the product path an explicitly set CODEX_HOME
+  is authoritative (see "Product runtime identity" above); for
+  native-probe, unset values are resolved from the installed Codex
+  conventions. The full contract is in docs/agent/OBSERVABILITY.md.
 
 Exit codes:
   0  ok (including idempotent no-ops)
@@ -1136,10 +1621,13 @@ Exit codes:
   2  usage error
   3  collector binary missing
   4  port conflict
-  5  probe prerequisites missing
+  5  probe prerequisites missing / product-runtime register without CODEX_HOME
   6  run directory not found (ledger/annotate)
-  7  required capture manifest or annotations file malformed
+  7  capture manifest/annotations malformed / product-runtime registration corrupt (show)
   8  verification evidence attribution mismatch (ledger)
+  9  ledger normalization failed after stop (raw capture preserved)
+  10 no active product capture (context current / current-run)
+  11 ambiguous: multiple active product captures (context current / current-run)
 EOF
 }
 
@@ -1156,6 +1644,9 @@ main() {
     native-probe) [ $# -eq 0 ] || { usage >&2; exit 2; }; cmd_native_probe ;;
     ledger) cmd_ledger "$@" ;;
     annotate) cmd_annotate "$@" ;;
+    context) [ $# -ge 1 ] || { usage >&2; exit 2; }; cmd_context "$@" ;;
+    current-run) [ $# -eq 0 ] || { usage >&2; exit 2; }; cmd_current_run ;;
+    product-runtime) [ $# -ge 1 ] || { usage >&2; exit 2; }; cmd_product_runtime "$@" ;;
     help|--help|-h) usage ;;
     *) usage >&2; exit 2 ;;
   esac

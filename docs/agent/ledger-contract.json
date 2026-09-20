@@ -1,74 +1,79 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "name": "fg-agent-run-ledger-record",
-  "description": "Versioned schema of the normalized Agent Run Ledger record. The ledger is the normalization boundary between captured evidence and later Harness analysis: analytics must consume ledger records, not raw Codex OTel field names.",
+  "description": "Versioned schema of the normalized Agent Run Ledger record. The ledger is the normalization boundary between captured evidence and later Harness analysis: analytics must consume ledger records, not raw Codex OTel field names. Schema v2 adds the bounded structured run context, native run-level runtime configuration (reasoning effort / sandbox mode / approval policy where the native event provides them) and the deterministic comparability section; see \"compatibility\".",
   "boundary": {
     "inputs": [
-      "raw sanitized OTel (raw/logs*.jsonl, raw/traces*.jsonl, raw/metrics*.jsonl) \u2014 only trace-contract-named attributes are read (docs/agent/trace-contract.json)",
+      "raw sanitized OTel (raw/logs*.jsonl, raw/traces*.jsonl, raw/metrics*.jsonl) — only trace-contract-named attributes are read (docs/agent/trace-contract.json)",
       "capture-manifest.json (capture session metadata incl. end-of-run Git evidence)",
       "verification evidence JSON stored in the run directory (agent-verify --summary-json output, agent-doctor.sh --json output, agent-observability doctor --json output)",
-      "annotations.json (explicit post-hoc human annotations)"
+      "annotations.json (explicit post-hoc human annotations)",
+      "run-context.json (structured, bounded run context; optional — produced by ./scripts/agent-observability context)"
     ],
     "output": ".artifacts/agent-runs/<run-id>/run-ledger.json (git-ignored)",
     "commands": [
       "./scripts/agent-observability ledger [run-id] [--json]",
-      "./scripts/agent-observability annotate <run-id> --correction yes|no [--category <c>] [--note <s>] [--classification <K>] [--for-failure <ref>]"
+      "./scripts/agent-observability annotate <run-id> --correction yes|no [--category <c>] [--note <s>] [--classification <K>] [--for-failure <ref>]",
+      "./scripts/agent-observability context current|<run-id> --task-type <T> --session <M> [--task-key <K>] [--harness-variant <H>]"
     ],
     "determinism": "the record is a pure function of the stored evidence: no wall clock, no live git state, no environment values. Re-running normalization on unchanged evidence produces byte-identical output (idempotent).",
     "missingEvidence": "unavailable optional evidence yields null/empty values plus a stable code in evidence_gaps; nothing is guessed. Malformed required data (missing capture manifest, manifest/run-id mismatch, verification evidence with a foreign agentRunId) fails with a nonzero exit code."
   },
   "correlation": {
     "runId": "the run directory name under .artifacts/agent-runs/ (run-<ts> or probe-native-<ts>)",
-    "verification": "agent-verify.sh records FG_AGENT_RUN_ID=<run-id> as agentRunId in its --summary-json output; a summary whose agentRunId does not equal the run id is rejected by the ledger (exit 8). Placing a summary without agentRunId inside the run directory is explicit placement attribution.",
+    "verification": "agent-verify.sh records FG_AGENT_RUN_ID=<run-id> as agentRunId in its --summary-json output; a summary whose agentRunId does not equal the run id is rejected by the ledger (exit 8). Without FG_AGENT_RUN_ID, agent-verify auto-correlates its summary to exactly one active local product capture (deterministic pidfile liveness, never timestamp); zero active captures keep agentRunId null and multiple active captures are refused. Placing a summary without agentRunId inside the run directory is explicit placement attribution.",
     "never": "no timestamp-nearest correlation is performed anywhere"
   },
   "record": {
     "schema_version": "integer, currently 1",
     "record_name": "\"fg-agent-run-ledger\"",
-    "run_id": "string \u2014 the captured run id",
+    "run_id": "string — the captured run id",
     "identity": {
-      "conversation_ids": "string[] \u2014 native Codex conversation/session ids observed in the capture (empty when none)",
+      "conversation_ids": "string[] — native Codex conversation/session ids observed in the capture (empty when none)",
       "capture_kind": "\"capture\" | \"probe-native\" | null",
       "repo_root": "string | null",
       "branch": "string | null",
       "starting_head": "string (git commit id) | null",
-      "ending_head": "string (git commit id) | null \u2014 recorded at capture finalize; null for captures finalized before this field existed",
+      "ending_head": "string (git commit id) | null — recorded at capture finalize; null for captures finalized before this field existed",
       "start_ts": "ISO-8601 UTC string (capture session start)",
       "end_ts": "ISO-8601 UTC string | null (capture session end)",
-      "duration_s": "integer seconds | null \u2014 capture session duration",
+      "duration_s": "integer seconds | null — capture session duration",
       "stop_status": "\"graceful\" | \"interrupted\" | \"collector_forced\" | \"running\" | null"
     },
     "runtime": {
       "codex_version": "string | null",
       "codex_acp_version": "string | null",
-      "models": "string[] \u2014 model identifiers observed in telemetry",
+      "models": "string[] — model identifiers observed in telemetry",
       "collector_version": "string | null",
-      "originators": "string[] \u2014 sanitized originator strings",
+      "originators": "string[] — sanitized originator strings",
       "privacy_mode": "string | null",
-      "app_versions": "string[] \u2014 app.version values observed in telemetry"
+      "app_versions": "string[] — app.version values observed in telemetry",
+      "reasoning_effort": "string | null — from the first codex.conversation_starts event when the native event carries reasoning_effort (0.148.0 emits it only when an effort is set; e.g. absent for default/auto runs). Null + a comparability gap otherwise; never inferred",
+      "sandbox_mode": "string | null — from the first codex.conversation_starts event's sandbox_policy attribute (e.g. \"read-only\", \"workspace-write\"); null + gap when absent",
+      "approval_policy": "string | null — from the first codex.conversation_starts event's approval_policy attribute (e.g. \"on-request\"); null + gap when absent"
     },
     "git_wip": {
       "starting_tree": "\"clean\" | \"dirty\" | null",
       "ending_tree": "\"clean\" | \"dirty\" | null",
-      "changed_file_count": "integer | null \u2014 repository-relative paths only, never diff content",
-      "changed_files": "string[] \u2014 bounded (max 500, sorted); empty when unavailable",
-      "changed_files_truncated": "boolean \u2014 true when the bound was applied",
-      "lines_added": "integer | null \u2014 tracked-file numstat vs starting_head at finalize",
+      "changed_file_count": "integer | null — repository-relative paths only, never diff content",
+      "changed_files": "string[] — bounded (max 500, sorted); empty when unavailable",
+      "changed_files_truncated": "boolean — true when the bound was applied",
+      "lines_added": "integer | null — tracked-file numstat vs starting_head at finalize",
       "lines_deleted": "integer | null",
-      "commit_created": "boolean | null \u2014 ending_head != starting_head",
+      "commit_created": "boolean | null — ending_head != starting_head",
       "starting_head": "string (git commit id) | null",
       "ending_head": "string (git commit id) | null"
     },
     "activity": {
-      "tool_call_count": "integer | null \u2014 distinct tool invocations (call_id) with a result",
-      "tool_calls_by_type": "object \u2014 broad category -> count (shell|file|search|web|plan|interaction|other); raw tool names are not exposed here",
+      "tool_call_count": "integer | null — distinct tool invocations (call_id) with a result",
+      "tool_calls_by_type": "object — broad category -> count (shell|file|search|web|plan|interaction|other); raw tool names are not exposed here",
       "successful_tool_calls": "integer | null",
       "failed_tool_calls": "integer | null",
-      "shell_command_count": "integer | null \u2014 broad type shell",
+      "shell_command_count": "integer | null — broad type shell",
       "failed_shell_commands": "integer | null",
-      "file_activity_count": "integer | null \u2014 broad type file",
-      "api_request_count": "integer | null \u2014 model API requests observed",
-      "failed_api_requests": "integer | null \u2014 success=false or HTTP status >= 400",
+      "file_activity_count": "integer | null — broad type file",
+      "api_request_count": "integer | null — model API requests observed",
+      "failed_api_requests": "integer | null — success=false or HTTP status >= 400",
       "token_usage": {
         "input": "integer | null",
         "output": "integer | null",
@@ -78,33 +83,44 @@
         "total": "integer | null",
         "source": "\"metrics\" (codex.turn.token_usage datapoints) | \"sse-events\" (response.completed token counters) | null"
       },
-      "turn_count": "integer | null \u2014 user prompts observed",
-      "time_to_first_tool_action_ms": "integer | null \u2014 first tool result minus first prompt (or conversation start)",
-      "time_to_first_failure_ms": "integer | null \u2014 first failed tool call / API request minus the same baseline; null when no failure",
-      "time_to_final_response_ms": "integer | null \u2014 last response completion (or last API request) minus the baseline"
+      "turn_count": "integer | null — user prompts observed",
+      "time_to_first_tool_action_ms": "integer | null — first tool result minus first prompt (or conversation start)",
+      "time_to_first_failure_ms": "integer | null — first failed tool call / API request minus the same baseline; null when no failure",
+      "time_to_final_response_ms": "integer | null — last response completion (or last API request) minus the baseline"
     },
     "verification": {
-      "doctor": "{ status, capabilities: [{name,status}], source } | null \u2014 from an agent-doctor.sh --json file in the run directory",
-      "observability_doctor": "{ status, source } | null \u2014 from an agent-observability doctor --json file",
-      "profiles": "[{ profile, result, exit_code, started_at, finished_at, duration_ms, agent_run_id, source, phases: [{name,outcome,exit_code}] }] \u2014 one entry per agent-verify --summary-json file in the run directory",
-      "final_gate": "{ profile, result, source } | null \u2014 the most recently started correlated verify summary (deterministic ordering by started_at, then file name); never claims RUNTIME_VERIFIED"
+      "doctor": "{ status, capabilities: [{name,status}], source } | null — from an agent-doctor.sh --json file in the run directory",
+      "observability_doctor": "{ status, source } | null — from an agent-observability doctor --json file",
+      "profiles": "[{ profile, result, exit_code, started_at, finished_at, duration_ms, agent_run_id, source, phases: [{name,outcome,exit_code}] }] — one entry per agent-verify --summary-json file in the run directory",
+      "final_gate": "{ profile, result, source } | null — the most recently started correlated verify summary (deterministic ordering by started_at, then file name); never claims RUNTIME_VERIFIED"
     },
     "failures": [
       {
         "kind": "\"tool_call\" | \"api_request\" | \"verification_phase\"",
-        "identifier": "tool name for tool_call, \"model_api_request\" for api_request, phase name for verification_phase \u2014 bounded identifiers, no command text",
-        "ref": "string | null \u2014 call_id / attempt / profile (bounded identifier)",
+        "identifier": "tool name for tool_call, \"model_api_request\" for api_request, phase name for verification_phase — bounded identifiers, no command text",
+        "ref": "string | null — call_id / attempt / profile (bounded identifier)",
         "timestamp": "ISO-8601 UTC string | null",
         "result": "\"success=false\" | \"http_status=<code>\" | \"exit_code=<n>\" | \"failed\"",
-        "classification": "PRODUCT_REGRESSION | STALE_TEST | ENVIRONMENT_OR_HARNESS | SCOPE_DISCOVERY | null \u2014 set only by an explicit annotation (--classification --for-failure); never inferred from exit codes or success flags"
+        "classification": "PRODUCT_REGRESSION | STALE_TEST | ENVIRONMENT_OR_HARNESS | SCOPE_DISCOVERY | null — set only by an explicit annotation (--classification --for-failure); never inferred from exit codes or success flags"
       }
     ],
     "human": {
-      "correction_occurred": "\"yes\" | \"no\" | null \u2014 null means no annotation exists (unknown, not inferred)",
-      "categories": "string[] \u2014 sorted unique annotation categories",
+      "correction_occurred": "\"yes\" | \"no\" | null — null means no annotation exists (unknown, not inferred)",
+      "categories": "string[] — sorted unique annotation categories",
       "annotations": "[{ ts, correction: yes|no, category, note (max 280 chars) | null, classification | null, applies_to | null }]"
     },
-    "evidence_gaps": "string[] \u2014 stable codes for missing optional evidence, sorted: no_telemetry, no_metrics_file, token_usage_unavailable, no_end_git_evidence, no_verification_evidence, no_doctor_evidence, no_annotations"
+    "evidence_gaps": "string[] — stable codes for missing optional evidence, sorted: no_telemetry, no_metrics_file, token_usage_unavailable, no_end_git_evidence, no_verification_evidence, no_doctor_evidence, no_annotations, no_run_context",
+    "context": {
+      "task_type": "string | null — closed enum: Bug | Vertical Slice | Domain | Stabilization | Documentation (the repository's orchestration contract). null until explicitly attached via the context command; never inferred from prompt text",
+      "session_mode": "string | null — closed enum: CURRENT | NEW. null until explicitly attached; never inferred",
+      "task_key": "string | null — optional bounded slug (1-128 chars of [A-Za-z0-9._-]) explicitly pairing runs that represent the same logical task in future controlled comparisons. null unless explicitly supplied; arbitrary text is rejected fail-closed",
+      "harness_variant": "string | null — optional bounded low-cardarity identifier for explicit future A/B harness comparisons. null unless explicitly supplied; never labels runs 'better'/'candidate' or similar",
+      "_source": "run-context.json in the run directory (git-ignored with the run); written only by the context command with fail-closed enum/slug validation. Malformed file fails normalization (exit 7)."
+    },
+    "comparability": {
+      "dimensions": "object — 12 fixed boolean keys, each TRUE only when the dimension's evidence exists in this run: model, reasoning_effort, codex_version, codex_acp_version, sandbox_mode, approval_policy, task_type, session_mode, git_starting_revision, verification_evidence, doctor_evidence, harness_variant. Presence-of-evidence only: never a quality score, never a ranking",
+      "missing": "string[] — sorted dimension keys whose evidence is absent; the explicit representation of non-comparability for future cohorting"
+    }
   },
   "annotationCategories": [
     "wrong_approach",
@@ -117,9 +133,14 @@
     "other"
   ],
   "unsupportedMetrics": {
-    "repeated_command_count": "command text is sanitized away (arguments dropped by the collector); repeated commands cannot be identified without it \u2014 recorded as unavailable, never guessed",
+    "repeated_command_count": "command text is sanitized away (arguments dropped by the collector); repeated commands cannot be identified without it — recorded as unavailable, never guessed",
     "human_intervention_from_telemetry": "native OTel carries no reliable human-correction signal; only explicit annotations count",
     "raw_command_or_diff_content": "deliberately excluded (privacy); counts, bounded identifiers and statuses only"
   },
-  "privacy": "the ledger copies only contract-named, already-sanitized, bounded fields (counts, statuses, durations, ids, file paths). It never contains raw prompt text, hidden reasoning, auth/token contents, shell stdout/stderr, source diffs, environment dumps, or raw tool arguments."
+  "privacy": "the ledger copies only contract-named, already-sanitized, bounded fields (counts, statuses, durations, ids, file paths). It never contains raw prompt text, hidden reasoning, auth/token contents, shell stdout/stderr, source diffs, environment dumps, or raw tool arguments. The run context is bounded and low-cardinality by construction: closed enums plus 1-128 character slugs; task titles, descriptions, user messages, arbitrary labels, usernames and machine identity can never be stored (rejected fail-closed at write time).",
+  "compatibility": {
+    "v1Records": "Records with schema_version 1 remain valid v1 documents. They are never rewritten in place by any tooling: re-normalization is an explicit per-run command (./scripts/agent-observability ledger <run-id>) and emits a v2 record for that run's stored evidence.",
+    "historicalCaptures": "Captures made before v2 (no run-context.json, or native events without reasoning_effort/sandbox_policy/approval_policy) normalize to v2 with null context/runtime values plus explicit evidence_gaps (no_run_context) and comparability.missing entries. Nothing is guessed or back-filled.",
+    "consumers": "Consumers must branch on schema_version. v2 is a strict field superset of v1 (no v1 field changed meaning); the comparability section and context section are additive."
+  }
 }

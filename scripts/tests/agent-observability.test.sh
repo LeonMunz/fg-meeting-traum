@@ -86,6 +86,23 @@ capture_running() {
     | "$PY" -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d["running"]["state"]=="running" else 1)'
 }
 
+# Run the control surface with the product-identity environment isolated so
+# tests are deterministic and never touch the real product registration or the
+# host's live product env: CODEX_HOME / CODEX_PATH / CODEX_SESSION_ID /
+# FG_PRODUCT_CODEX_HOME are unset and FG_PRODUCT_RUNTIME_FILE points at the
+# given (temp) path. The command may itself lead with VAR=val assignments
+# (e.g. FG_PRODUCT_CODEX_HOME=...) which override the unset above.
+obs_env() { # obs_env <FG_PRODUCT_RUNTIME_FILE> <cmd...>
+  local rt="$1"; shift
+  env -u CODEX_HOME -u CODEX_PATH -u CODEX_SESSION_ID -u FG_PRODUCT_CODEX_HOME \
+      FG_PRODUCT_RUNTIME_FILE="$rt" "$@"
+}
+# A temp registration file (left nonexistent -> not_registered) shared by the
+# product-identity tests so they are deterministic and never clobber the real
+# .artifacts/agent-observability/product-runtime.json.
+TESTRT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/fg-obs-testrt.XXXXXX")"
+TESTRT="$TESTRT_DIR/product-runtime.json"
+
 # ------------------------------------------------------------- t01 usage ----
 run_cmd bash "$OBS" --help
 expect_rc "t01a --help exits 0" 0 "$RC"
@@ -97,15 +114,34 @@ run_cmd bash "$OBS" start --bogus
 expect_rc "t01e start with extra arg exits 2" 2 "$RC"
 
 # ---------------------------------------------------------------- t02 config -
-run_cmd bash "$OBS" config
+# `config` refuses an actionable destination when the product identity is
+# unknown, and targets exactly the product home once it is known.
+T02HOME="$(mktemp -d "${TMPDIR:-/tmp}/fg-obs-t02.XXXXXX")/.codex"
+mkdir -p "$T02HOME"
+printf '[otel]\nlog_user_prompt = false\nexporter = { otlp-http = { endpoint = "http://127.0.0.1:4318/v1/logs", protocol = "json" } }\ntrace_exporter = { otlp-http = { endpoint = "http://127.0.0.1:4318/v1/traces", protocol = "json" } }\nmetrics_exporter = { otlp-http = { endpoint = "http://127.0.0.1:4318/v1/metrics", protocol = "json" } }\n' > "$T02HOME/config.toml"
+
+# (1) no product identity -> non-actionable registration guidance
+run_cmd obs_env "$TESTRT" bash "$OBS" config
 out="$CAP_OUT"
-expect_rc "t02a config exits 0" 0 "$RC"
-expect_contains "t02b config emits [otel] section" "$out" "[otel]"
-expect_contains "t02c config keeps log_user_prompt false" "$out" "log_user_prompt = false"
-expect_contains "t02d config points at loopback" "$out" "127.0.0.1:4318"
-expect_contains "t02e config overrides metrics exporter" "$out" "metrics_exporter"
-expect_contains "t02f config explains repo limitation" "$out" "cannot"
-expect_contains "t02g config never claims to edit user config" "$out" "never"
+expect_rc "t02a config (no identity) exits 0" 0 "$RC"
+expect_contains "t02b config (no identity) reports UNKNOWN product home" "$out" "UNKNOWN"
+expect_contains "t02c config (no identity) explains how to register" "$out" "product-runtime register"
+expect_not_contains "t02d config (no identity) prints no actionable destination" "$out" "Add to"
+expect_not_contains "t02e config (no identity) never says to edit .codex/config.toml" "$out" "/.codex/config.toml"
+
+# (2) product identity known (explicit override) -> exact destination + [otel]
+run_cmd obs_env "$TESTRT" FG_PRODUCT_CODEX_HOME="$T02HOME" bash "$OBS" config
+out="$CAP_OUT"
+expect_rc "t02f config (identity known) exits 0" 0 "$RC"
+expect_contains "t02g config (identity known) targets the product home" "$out" "Add to $T02HOME/config.toml:"
+expect_contains "t02h config emits [otel] section" "$out" "[otel]"
+expect_contains "t02i config keeps log_user_prompt false" "$out" "log_user_prompt = false"
+expect_contains "t02j config points at loopback" "$out" "127.0.0.1:4318"
+expect_contains "t02k config overrides metrics exporter" "$out" "metrics_exporter"
+expect_contains "t02l config explains repo limitation" "$out" "cannot"
+expect_contains "t02m config never claims to edit user config" "$out" "never"
+expect_contains "t02n config reports current otel config state" "$out" "current otel config state:"
+rm -rf "$(dirname "$T02HOME")"
 
 # ------------------------------------------------------------ t03 gitignore --
 run_cmd git -C "$REPO_ROOT" check-ignore -q .artifacts/agent-runs/run-x/raw/logs.jsonl
@@ -116,33 +152,90 @@ run_cmd git -C "$REPO_ROOT" check-ignore -q .artifacts/agent-runs/probe-native-x
 expect_rc "t03c manifest is git-ignored" 0 "$RC"
 
 # ------------------------------------------------------------------ t04 status -
+# status separates the *product* Codex identity (evidence-based) from the
+# generic standalone controller home (informational only).
 before_tree="$(git -C "$REPO_ROOT" status --porcelain)"
-run_cmd bash "$OBS" status
+run_cmd obs_env "$TESTRT" bash "$OBS" status
 expect_rc "t04a status (no collector) exits 0" 0 "$RC"
 expect_contains "t04b status shows endpoint" "$CAP_OUT" "127.0.0.1:4318"
-run_cmd bash "$OBS" status --json
+expect_contains "t04c status labels the product codex home" "$CAP_OUT" "product codex home"
+expect_contains "t04d status labels the product otel config" "$CAP_OUT" "product otel config"
+expect_contains "t04e status labels the controller/standalone home" "$CAP_OUT" "controller codex home"
+run_cmd obs_env "$TESTRT" bash "$OBS" status --json
 out="$CAP_OUT"
-expect_rc "t04c status --json exits 0" 0 "$RC"
+expect_rc "t04f status --json exits 0" 0 "$RC"
 run_cmd "$PY" - "$out" <<'PYCHK'
 import json, sys
 d = json.loads(sys.argv[1])
 assert d["schema_version"] == 1
 assert d["tool"] == "agent-observability"
 assert d["running"]["state"] in ("running", "stopped")
-assert d["codex_otel_config"]["state"] in ("configured", "absent", "unknown", "not_checked")
-assert d["codex_home"]["state"] in ("explicit", "discovered", "not_found", "ambiguous", "invalid")
-assert "path" in d["codex_home"]
+# product identity (evidence-based; never generic discovery)
+assert d["product_codex_home"]["state"] in ("override","product_session","registered","not_registered","corrupt","invalid")
+assert "path" in d["product_codex_home"]
+assert d["product_otel_config"]["state"] in ("configured","misconfigured","absent","unknown","not_checked")
+assert d["product_otel_config"]["local"] in (True, False, None)
+# standalone/generic (informational; NOT the product home)
+assert d["controller_codex_home"]["state"] in ("discovered","ambiguous","not_found")
+assert "path" in d["controller_codex_home"]
+assert "controller_codex_version" in d
+# the old conflating keys are gone
+assert "codex_home" not in d
+assert "codex_otel_config" not in d
 assert d["endpoint"].startswith("http://127.0.0.1:")
 assert set(d["versions"]) == {"codex", "codex_acp", "collector"}
+assert isinstance(d["collector"]["available"], bool)
+assert isinstance(d["in_product_session"], bool)
 PYCHK
-expect_rc "t04d status --json schema valid" 0 "$RC"
-run_cmd bash "$OBS" status --json
+expect_rc "t04g status --json schema valid (product vs standalone separated)" 0 "$RC"
+run_cmd obs_env "$TESTRT" bash "$OBS" status --json
 shape1="$("$PY" -c 'import json,sys; d=json.loads(sys.argv[1]); print(sorted(d.keys()))' "$CAP_OUT")"
-run_cmd bash "$OBS" status --json
+run_cmd obs_env "$TESTRT" bash "$OBS" status --json
 shape2="$("$PY" -c 'import json,sys; d=json.loads(sys.argv[1]); print(sorted(d.keys()))' "$CAP_OUT")"
-expect_eq "t04e status --json structure deterministic" "$shape1" "$shape2"
+expect_eq "t04h status --json structure deterministic" "$shape1" "$shape2"
 after_tree="$(git -C "$REPO_ROOT" status --porcelain)"
-expect_eq "t04f status did not mutate the working tree" "$before_tree" "$after_tree"
+expect_eq "t04i status did not mutate the working tree" "$before_tree" "$after_tree"
+
+# --- t04x otel config states: synthetic product homes, deterministic ---
+# The product [otel] state is judged on the *product* Codex home (here supplied
+# as an explicit override), never by generic discovery.
+T04X="$(mktemp -d "${TMPDIR:-/tmp}/fg-obs-otelcfg.XXXXXX")"
+mkdir -p "$T04X/home-good/.codex" "$T04X/home-badport/.codex" \
+         "$T04X/home-nonlocal/.codex" "$T04X/home-prompt/.codex" "$T04X/home-absent/.codex"
+for h in good badport nonlocal prompt absent; do
+  printf '{}\n' > "$T04X/home-$h/.codex/auth.json"
+done
+printf '[model]\nmodel = "t"\n\n[otel]\nlog_user_prompt = false\nexporter = { otlp-http = { endpoint = "http://127.0.0.1:4318/v1/logs", protocol = "json" } }\ntrace_exporter = { otlp-http = { endpoint = "http://127.0.0.1:4318/v1/traces", protocol = "json" } }\nmetrics_exporter = { otlp-http = { endpoint = "http://127.0.0.1:4318/v1/metrics", protocol = "json" } }\n' > "$T04X/home-good/.codex/config.toml"
+printf '[otel]\nlog_user_prompt = false\nexporter = { otlp-http = { endpoint = "http://127.0.0.1:9999/v1/logs", protocol = "json" } }\n' > "$T04X/home-badport/.codex/config.toml"
+printf '[otel]\nlog_user_prompt = false\nexporter = { otlp-http = { endpoint = "http://telemetry.example.com:4318/v1/logs", protocol = "json" } }\n' > "$T04X/home-nonlocal/.codex/config.toml"
+printf '[otel]\nlog_user_prompt = true\nexporter = { otlp-http = { endpoint = "http://127.0.0.1:4318/v1/logs", protocol = "json" } }\n' > "$T04X/home-prompt/.codex/config.toml"
+printf '[model]\nmodel = "t"\n' > "$T04X/home-absent/.codex/config.toml"
+# judge product_otel_config on an explicit product home (override)
+t04x_state() { env -u CODEX_HOME -u CODEX_PATH -u CODEX_SESSION_ID -u FG_PRODUCT_CODEX_HOME \
+    FG_PRODUCT_RUNTIME_FILE="$TESTRT" FG_PRODUCT_CODEX_HOME="$1/.codex" \
+    bash "$OBS" status --json \
+    | "$PY" -c 'import json,sys; d=json.load(sys.stdin)["product_otel_config"]; print(d["state"] + "|" + str(d["local"]))'; }
+expect_eq "t04xa all-local [otel] on the product home -> configured" \
+  "configured|True" "$(t04x_state "$T04X/home-good")"
+expect_eq "t04xb port-mismatched [otel] -> misconfigured" \
+  "misconfigured|False" "$(t04x_state "$T04X/home-badport")"
+expect_eq "t04xc non-loopback [otel] endpoint -> misconfigured" \
+  "misconfigured|False" "$(t04x_state "$T04X/home-nonlocal")"
+expect_eq "t04xd log_user_prompt=true -> misconfigured (privacy guard)" \
+  "misconfigured|False" "$(t04x_state "$T04X/home-prompt")"
+expect_eq "t04xe no [otel] section -> absent" \
+  "absent|False" "$(t04x_state "$T04X/home-absent")"
+# an invalid (relative) override fails closed -> not_checked
+expect_eq "t04xf invalid (relative) product-home override -> not_checked" \
+  "not_checked|None" "$(env -u CODEX_HOME -u CODEX_PATH -u CODEX_SESSION_ID -u FG_PRODUCT_CODEX_HOME \
+    FG_PRODUCT_RUNTIME_FILE="$TESTRT" FG_PRODUCT_CODEX_HOME="relative/path" \
+    bash "$OBS" status --json | "$PY" -c 'import json,sys; d=json.load(sys.stdin)["product_otel_config"]; print(d["state"] + "|" + str(d["local"]))')"
+# the misconfigured detail must name only scheme://host:port, never other config
+run_cmd env -u CODEX_HOME -u CODEX_PATH -u CODEX_SESSION_ID -u FG_PRODUCT_CODEX_HOME \
+    FG_PRODUCT_RUNTIME_FILE="$TESTRT" FG_PRODUCT_CODEX_HOME="$T04X/home-nonlocal/.codex" bash "$OBS" status
+expect_contains "t04xg misconfigured detail names the offending endpoint host" "$CAP_OUT" "telemetry.example.com"
+expect_not_contains "t04xh misconfigured detail leaks no unrelated config values" "$CAP_OUT" 'model = "t"'
+rm -rf "$T04X"
 
 # --------------------------------------------------- t05 collector-dependent --
 E2E_DONE=0
@@ -188,6 +281,8 @@ if collector_present; then
 
     run_cmd bash "$OBS" stop
     expect_rc "t05j stop exits 0" 0 "$RC"
+    expect_contains "t05j2 stop auto-reports the ledger path" "$CAP_OUT" "ledger:"
+    expect_contains "t05j3 stop auto-reports the evidence gaps" "$CAP_OUT" "evidence gaps"
     run_cmd bash "$OBS" stop
     expect_rc "t05k stop is idempotent (already stopped) exit 0" 0 "$RC"
     ststate="$(bash "$OBS" status --json | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["running"]["state"])')"
@@ -198,6 +293,20 @@ if collector_present; then
     [ -f "$man" ] && ok "t05m manifest exists after stop" || bad "t05m manifest exists after stop"
     mstat="$("$PY" -c 'import json,sys; print(json.load(open(sys.argv[1]))["stop_status"])' "$man" 2>/dev/null || true)"
     expect_eq "t05n manifest stop_status is graceful" "graceful" "$mstat"
+    led="$REPO_ROOT/.artifacts/agent-runs/$latest/run-ledger.json"
+    [ -f "$led" ] && ok "t05n2 run-ledger.json auto-generated at stop" || bad "t05n2 run-ledger.json auto-generated at stop"
+    "$PY" -c 'import json,sys
+d = json.load(open(sys.argv[1]))
+assert d["schema_version"] == 2 and d["run_id"] == sys.argv[2]
+assert "context" in d and "comparability" in d' "$led" "$latest" \
+      && ok "t05n3 auto ledger is a valid v2 record for the run" || bad "t05n3 auto ledger is a valid v2 record for the run"
+    doc="$(cd "$REPO_ROOT/.artifacts/agent-runs" && readlink latest)/agent-doctor-start.json"
+    [ -f "$REPO_ROOT/.artifacts/agent-runs/$doc" ] && ok "t05n4 doctor snapshot stored in the run dir at start" || bad "t05n4 doctor snapshot stored in the run dir at start"
+    "$PY" -c 'import json,sys
+d = json.load(open(sys.argv[1]))
+assert d["tool"] == "agent-doctor"
+assert isinstance(d["summary"]["overall"], str)' "$REPO_ROOT/.artifacts/agent-runs/$doc" \
+      && ok "t05n5 doctor snapshot is the real agent-doctor JSON (status recorded, never aborts)" || bad "t05n5 doctor snapshot is the real agent-doctor JSON (status recorded, never aborts)"
     rawdir="$REPO_ROOT/.artifacts/agent-runs/$latest/raw"
     expect_contains "t05o fake email dropped from persisted trace" "no" "$([ -d "$rawdir" ] && { grep -rl "test-secret-email@example.com" "$rawdir" 2>/dev/null | head -n1 || echo no; })"
     expect_not_contains "t05p fake sk- token absent from persisted trace" "$([ -d "$rawdir" ] && grep -rh "sk-fake-test-1a2b3c4d5e6f" "$rawdir" 2>/dev/null || true)" "sk-fake-test-1a2b3c4d5e6f"
@@ -310,8 +419,9 @@ printf '{}\n' > "$T10/amb/.codex-lucid/auth.json"
 mkdir -p "$T10/noauth/.codex"
 printf 'model = "t"\n' > "$T10/noauth/.codex/config.toml"
 
-t10json_state() { "$PY" -c 'import json,sys; print(json.loads(sys.argv[1])["codex_home"]["state"])' "$1" 2>/dev/null || true; }
-t10json_path()  { "$PY" -c 'import json,sys; print(json.loads(sys.argv[1])["codex_home"]["path"])' "$1" 2>/dev/null || true; }
+# read the *generic/standalone* resolution surfaced by status (controller home)
+t10json_state() { "$PY" -c 'import json,sys; print(json.loads(sys.argv[1])["controller_codex_home"]["state"])' "$1" 2>/dev/null || true; }
+t10json_path()  { "$PY" -c 'import json,sys; print(json.loads(sys.argv[1])["controller_codex_home"]["path"])' "$1" 2>/dev/null || true; }
 
 # missing: no candidates at all -> fail closed
 run_cmd env -u CODEX_HOME -u CODEX_PATH HOME="$T10/empty" bash "$OBS" native-probe
@@ -322,24 +432,30 @@ expect_contains "t10b diagnostic advises exporting CODEX_HOME" "$CAP_OUT" "expor
 run_cmd env -u CODEX_HOME -u CODEX_PATH HOME="$T10/noauth" bash "$OBS" native-probe
 expect_rc "t10c native-probe fails closed for a home missing auth.json (exit 5)" 5 "$RC"
 
-# valid candidate, CODEX_HOME unset -> discovered (asserted via read-only status --json)
-run_cmd env -u CODEX_HOME -u CODEX_PATH HOME="$T10/home" bash "$OBS" status --json
+# valid candidate, CODEX_HOME unset -> discovered (asserted via read-only
+# status --json on the generic/standalone controller home)
+run_cmd env -u CODEX_HOME -u CODEX_PATH -u CODEX_SESSION_ID FG_PRODUCT_RUNTIME_FILE="$TESTRT" HOME="$T10/home" bash "$OBS" status --json
 t10out="$CAP_OUT"
 expect_rc "t10d status with unset CODEX_HOME exits 0" 0 "$RC"
 expect_eq "t10e unset CODEX_HOME discovers the normal Codex home" "discovered" "$(t10json_state "$t10out")"
 expect_eq "t10f discovered path is the synthetic $HOME/.codex" "$T10/home/.codex" "$(t10json_path "$t10out")"
 
 # ambiguous: two valid homes -> ambiguous + fail closed
-run_cmd env -u CODEX_HOME -u CODEX_PATH HOME="$T10/amb" bash "$OBS" status --json
+run_cmd env -u CODEX_HOME -u CODEX_PATH -u CODEX_SESSION_ID FG_PRODUCT_RUNTIME_FILE="$TESTRT" HOME="$T10/amb" bash "$OBS" status --json
 expect_eq "t10g multiple valid homes report ambiguous" "ambiguous" "$(t10json_state "$CAP_OUT")"
 run_cmd env -u CODEX_HOME -u CODEX_PATH HOME="$T10/amb" bash "$OBS" native-probe
 expect_rc "t10h native-probe fails closed on ambiguous homes (exit 5)" 5 "$RC"
 
-# explicit CODEX_HOME stays authoritative (wins over discovery)
-run_cmd env -u CODEX_PATH CODEX_HOME="$T10/home/.codex" HOME="$T10/amb" bash "$OBS" status --json
-t10out="$CAP_OUT"
-expect_eq "t10i explicit CODEX_HOME is authoritative" "explicit" "$(t10json_state "$t10out")"
-expect_eq "t10j explicit path preserved" "$T10/home/.codex" "$(t10json_path "$t10out")"
+# explicit CODEX_HOME stays authoritative for native-probe (wins over
+# discovery): with an ambiguous HOME but an explicit VALID CODEX_HOME plus an
+# invalid CODEX_PATH, native-probe must pass home resolution (accept the
+# explicit home) and fail at PATH resolution -- never with a home-resolution
+# (missing/ambiguous) diagnostic.
+run_cmd env -u CODEX_PATH CODEX_HOME="$T10/home/.codex" CODEX_PATH="$T10/empty/missing" HOME="$T10/amb" bash "$OBS" native-probe
+expect_rc "t10i native-probe accepts the explicit home (fails later at path, exit 5)" 5 "$RC"
+expect_not_contains "t10j explicit CODEX_HOME not reported as ambiguous" "$CAP_OUT" "multiple valid Codex homes"
+expect_not_contains "t10j2 explicit CODEX_HOME not reported as missing" "$CAP_OUT" "no valid Codex home"
+expect_contains "t10j3 the failure is about CODEX_PATH" "$CAP_OUT" "CODEX_PATH"
 
 # explicit but invalid CODEX_HOME -> fail closed
 run_cmd env -u CODEX_PATH CODEX_HOME="$T10/amb" HOME="$T10/empty" bash "$OBS" native-probe
@@ -416,7 +532,8 @@ def rec(ts, name, **kw):
         {"logRecords": [{"severityNumber": 9,
                          "attributes": [{"key": k, "value": {"stringValue": str(v)}} for k, v in sorted(attrs.items())]}]}]}]}
 lines = [
-    rec("2026-01-01T00:00:00.000Z", "codex.conversation_starts", reasoning_effort="low"),
+    rec("2026-01-01T00:00:00.000Z", "codex.conversation_starts", reasoning_effort="low",
+        sandbox_policy="workspace-write", approval_policy="on-request"),
     rec("2026-01-01T00:00:01.000Z", "codex.user_prompt", prompt_length="64"),
     rec("2026-01-01T00:00:02.000Z", "codex.api_request", attempt="0",
         **{"http.response.status_code": "200", "success": "true", "duration_ms": "100"}),
@@ -454,12 +571,13 @@ expect_file "t12d ledger record written" "$LED"
 run_cmd "$PY" - "$LED" <<'PYCHK'
 import json, sys
 d = json.load(open(sys.argv[1]))
-assert d["schema_version"] == 1
+assert d["schema_version"] == 2
 assert d["record_name"] == "fg-agent-run-ledger"
 assert d["run_id"] == "run-20260101T000000Z"
 assert set(d) == {"schema_version", "record_name", "run_id", "identity",
-                  "runtime", "git_wip", "activity", "verification",
-                  "failures", "human", "evidence_gaps"}
+                  "runtime", "context", "git_wip", "activity",
+                  "verification", "failures", "human", "comparability",
+                  "evidence_gaps"}
 i = d["identity"]
 assert i["conversation_ids"] == ["conv-ledger-42"]
 assert i["capture_kind"] == "capture"
@@ -470,8 +588,25 @@ r = d["runtime"]
 assert r["models"] == ["ledger-model"]
 assert r["codex_acp_version"] == "1.7.0"
 assert r["privacy_mode"] == "trace-safe-sanitized"
+# native run-level config: only what the fixture event actually carries
+assert r["reasoning_effort"] == "low"
+assert r["sandbox_mode"] == "workspace-write"
+assert r["approval_policy"] == "on-request"
+# no run-context attached yet: bounded nulls, gap present
+assert d["context"] == {"task_type": None, "session_mode": None,
+                        "task_key": None, "harness_variant": None}
+assert "no_run_context" in d["evidence_gaps"]
+comp = d["comparability"]
+assert comp["dimensions"]["model"] is True
+assert comp["dimensions"]["reasoning_effort"] is True
+assert comp["dimensions"]["sandbox_mode"] is True
+assert comp["dimensions"]["approval_policy"] is True
+assert comp["dimensions"]["task_type"] is False
+assert comp["dimensions"]["session_mode"] is False
+assert comp["missing"] == sorted(comp["missing"])
+assert "task_type" in comp["missing"] and "session_mode" in comp["missing"]
 PYCHK
-expect_rc "t12e ledger record schema + identity/runtime valid" 0 "$RC"
+expect_rc "t12e ledger v2 schema + identity/runtime/context/comparability valid" 0 "$RC"
 
 run_cmd cp "$LED" "$T12/ledger-first.json"
 run_cmd "$PY" "$LEDGER_PY" normalize "$RUNA"
@@ -672,11 +807,103 @@ assert d["failures"] == []
 gaps = d["evidence_gaps"]
 for code in ("no_telemetry", "no_metrics_file", "token_usage_unavailable",
              "no_end_git_evidence", "no_verification_evidence",
-             "no_doctor_evidence", "no_annotations"):
+             "no_doctor_evidence", "no_annotations", "no_run_context"):
     assert code in gaps, gaps
 assert d["human"]["correction_occurred"] is None
+assert d["runtime"]["reasoning_effort"] is None  # absent, never guessed
+assert d["runtime"]["sandbox_mode"] is None
+assert d["runtime"]["approval_policy"] is None
+assert d["comparability"]["dimensions"]["reasoning_effort"] is False
+assert "reasoning_effort" in d["comparability"]["missing"]
 PYCHK
-expect_rc "t12ac missing telemetry yields null + gap codes" 0 "$RC"
+expect_rc "t12ac missing telemetry yields null + gap codes (no inference)" 0 "$RC"
+
+# run context in the ledger: explicit, bounded, idempotent, no inference
+RUNCONTEXT_PY="$REPO_ROOT/scripts/observability/runcontext.py"
+run_cmd "$PY" "$RUNCONTEXT_PY" set "$RUNA" --task-type "Vertical Slice" --session NEW --task-key "task-slice-01"
+expect_rc "t12b run-context set exits 0" 0 "$RC"
+expect_file "t12ba run-context file stored in the run dir" "$RUNA/run-context.json"
+run_cmd "$PY" "$LEDGER_PY" normalize "$RUNA"
+expect_rc "t12bb re-normalize with run context exits 0" 0 "$RC"
+run_cmd "$PY" - "$LED" <<'PYCHK'
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["context"] == {"task_type": "Vertical Slice", "session_mode": "NEW",
+                        "task_key": "task-slice-01", "harness_variant": None}
+assert "no_run_context" not in d["evidence_gaps"]
+assert d["comparability"]["dimensions"]["task_type"] is True
+assert d["comparability"]["dimensions"]["session_mode"] is True
+assert d["comparability"]["dimensions"]["harness_variant"] is False
+assert "harness_variant" in d["comparability"]["missing"]
+assert "task_type" not in d["comparability"]["missing"]
+PYCHK
+expect_rc "t12bc run context + comparability normalized" 0 "$RC"
+run_cmd cp "$LED" "$T12/ledger-with-context.json"
+run_cmd "$PY" "$LEDGER_PY" normalize "$RUNA"
+run_cmd cmp -s "$LED" "$T12/ledger-with-context.json"
+expect_rc "t12bd re-normalization with context is byte-identical" 0 "$RC"
+
+# wrapper context on an explicit run id (stop_status already finalized is fine)
+run_cmd env FG_OBS_RUNS_DIR="$T12/runs" bash "$OBS" context run-20260101T000000Z \
+  --task-type "Vertical Slice" --session NEW --task-key "task-slice-01" --harness-variant "hv-a"
+expect_rc "t12be wrapper context <run-id> exits 0" 0 "$RC"
+expect_contains "t12bf wrapper reports the attached run" "$CAP_OUT" "run-20260101T000000Z"
+run_cmd "$PY" -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d["harness_variant"]=="hv-a" and d["task_type"]=="Vertical Slice" else 1)' "$RUNA/run-context.json"
+expect_rc "t12bg idempotent update preserved prior fields + added harness variant" 0 "$RC"
+
+# malformed run-context fails closed (exit 7), raw telemetry untouched
+printf '{"schema_version": 1, "task_type": "my full prompt text here", "session_mode": null, "task_key": null, "harness_variant": null}\n' > "$RUNA/run-context.json"
+run_cmd "$PY" "$LEDGER_PY" normalize "$RUNA"
+expect_rc "t12bh prompt-like run-context value rejected (exit 7)" 7 "$RC"
+expect_contains "t12bi malformed-context message names the file" "$CAP_OUT" "run-context"
+RAW_AFTER2="$(sha256_file "$RUNA/raw/logs.jsonl")"
+expect_eq "t12bj failed normalization left raw telemetry byte-identical" "$RAW_BEFORE" "$RAW_AFTER2"
+# restore the valid context and re-normalize for the later wrapper tests
+run_cmd "$PY" "$RUNCONTEXT_PY" set "$RUNA" --task-type "Vertical Slice" --session NEW --task-key "task-slice-01" --harness-variant "hv-a"
+expect_rc "t12bk context restored" 0 "$RC"
+
+# v1 compatibility: a hand-written v1 record is a valid, self-contained
+# document (no v2 keys) and is only upgraded by an explicit re-normalize
+cat > "$T12/legacy-v1-ledger.json" <<'V1JSON'
+{
+  "schema_version": 1,
+  "record_name": "fg-agent-run-ledger",
+  "run_id": "run-20250101T000000Z",
+  "identity": {"conversation_ids": [], "capture_kind": "capture", "repo_root": null,
+    "branch": null, "starting_head": null, "ending_head": null,
+    "start_ts": "2025-01-01T00:00:00Z", "end_ts": "2025-01-01T00:01:00Z",
+    "duration_s": 60, "stop_status": "graceful"},
+  "runtime": {"codex_version": "0.148.0", "codex_acp_version": "1.7.0",
+    "models": [], "collector_version": "0.161.0", "originators": [],
+    "privacy_mode": "trace-safe-sanitized", "app_versions": []},
+  "git_wip": {"starting_tree": "clean", "ending_tree": "clean",
+    "changed_file_count": 0, "changed_files": [], "changed_files_truncated": false,
+    "lines_added": 0, "lines_deleted": 0, "commit_created": false,
+    "starting_head": null, "ending_head": null},
+  "activity": {"tool_call_count": null, "tool_calls_by_type": {}, "successful_tool_calls": null,
+    "failed_tool_calls": null, "shell_command_count": null, "failed_shell_commands": null,
+    "file_activity_count": null, "api_request_count": 0, "failed_api_requests": 0,
+    "token_usage": {"input": null, "output": null, "cached": null, "cache_write": null,
+      "reasoning": null, "total": null, "source": null},
+    "turn_count": 0, "time_to_first_tool_action_ms": null,
+    "time_to_first_failure_ms": null, "time_to_final_response_ms": null},
+  "verification": {"doctor": null, "observability_doctor": null, "profiles": [], "final_gate": null},
+  "failures": [],
+  "human": {"correction_occurred": null, "categories": [], "annotations": []},
+  "evidence_gaps": ["no_telemetry", "no_metrics_file", "token_usage_unavailable",
+    "no_end_git_evidence", "no_verification_evidence", "no_doctor_evidence", "no_annotations"]
+}
+V1JSON
+run_cmd "$PY" - "$T12/legacy-v1-ledger.json" <<'PYCHK'
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["schema_version"] == 1
+assert "context" not in d and "comparability" not in d
+assert set(d) == {"schema_version", "record_name", "run_id", "identity",
+                  "runtime", "git_wip", "activity", "verification",
+                  "failures", "human", "evidence_gaps"}
+PYCHK
+expect_rc "t12bl historical v1 record remains a valid v1 document (never rewritten)" 0 "$RC"
 
 # bash wrapper: resolve_run_dir, --json, latest symlink, usage errors
 ln -sfn run-20260101T000000Z "$T12/runs/latest"
@@ -685,8 +912,8 @@ expect_rc "t12ad wrapper ledger (latest) exits 0" 0 "$RC"
 expect_contains "t12ae wrapper human output names the run" "$CAP_OUT" "run-20260101T000000Z"
 run_cmd env FG_OBS_RUNS_DIR="$T12/runs" bash "$OBS" ledger run-20260101T000000Z --json
 expect_rc "t12af wrapper ledger --json exits 0" 0 "$RC"
-"$PY" -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["run_id"]=="run-20260101T000000Z" and d["schema_version"]==1' "$CAP_OUT" \
-  && ok "t12ag wrapper --json emits the record" || bad "t12ag wrapper --json emits the record"
+"$PY" -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["run_id"]=="run-20260101T000000Z" and d["schema_version"]==2 and "comparability" in d' "$CAP_OUT" \
+  && ok "t12ag wrapper --json emits the v2 record" || bad "t12ag wrapper --json emits the v2 record"
 run_cmd env FG_OBS_RUNS_DIR="$T12/runs" bash "$OBS" ledger "bad id"
 expect_rc "t12ah wrapper rejects invalid run id (exit 2)" 2 "$RC"
 run_cmd env FG_OBS_RUNS_DIR="$T12/runs" bash "$OBS" ledger no-such-run
@@ -697,6 +924,288 @@ run_cmd env FG_OBS_RUNS_DIR="$T12/runs" bash "$OBS" annotate run-20260101T000000
 expect_rc "t12ak annotate without --correction exits 2" 2 "$RC"
 expect_contains "t12al usage mentions ledger + annotate" "$(bash "$OBS" help)" "annotate <run-id>"
 rm -rf "$T12"
+
+# ------------------------------------------------------------ t13 context ---
+# `context current` resolves exactly one live product capture deterministically
+# (pidfile liveness, same check as status). No timestamp-nearest guessing.
+T13="$(mktemp -d "${TMPDIR:-/tmp}/fg-obs-context.XXXXXX")"
+mkdir -p "$T13/runs"
+LIVE_PID=""
+sleep 300 & LIVE_PID=$!
+trap 'kill "$LIVE_PID" 2>/dev/null || true' EXIT
+mk_live_run() { # mk_live_run <run-id> <kind>
+  mkdir -p "$T13/runs/$1/raw"
+  printf '%s' "$LIVE_PID" > "$T13/runs/$1/collector.pid"
+  printf '{"schema_version": 1, "run_id": "%s", "kind": "%s", "stop_status": "running"}\n' "$1" "$2" > "$T13/runs/$1/capture-manifest.json"
+}
+
+# zero live captures
+run_cmd env -u CODEX_HOME FG_OBS_RUNS_DIR="$T13/runs" bash "$OBS" context current --task-type Bug --session NEW
+expect_rc "t13a zero live captures fails closed (exit 10)" 10 "$RC"
+expect_contains "t13b zero-capture message advises start" "$CAP_OUT" "agent-observability start"
+expect_no_file "t13c no context file created on failure" "$T13/runs/run-context.json"
+
+# exactly one live product capture
+mk_live_run run-20260101T090000Z capture
+run_cmd env -u CODEX_HOME FG_OBS_RUNS_DIR="$T13/runs" bash "$OBS" context current --task-type Bug --session NEW
+expect_rc "t13d exactly one live capture succeeds" 0 "$RC"
+expect_contains "t13e context attached to the resolved run" "$CAP_OUT" "run-20260101T090000Z"
+expect_file "t13f run-context.json written in the live run dir" "$T13/runs/run-20260101T090000Z/run-context.json"
+run_cmd "$PY" -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["schema_version"]==1 and d["task_type"]=="Bug" and d["session_mode"]=="NEW" and d["task_key"] is None and d["harness_variant"] is None' "$T13/runs/run-20260101T090000Z/run-context.json"
+expect_rc "t13g context record has the bounded v1 shape" 0 "$RC"
+
+# idempotent: identical bytes on re-run
+run_cmd cp "$T13/runs/run-20260101T090000Z/run-context.json" "$T13/ctx-before.json"
+run_cmd env -u CODEX_HOME FG_OBS_RUNS_DIR="$T13/runs" bash "$OBS" context current --task-type Bug --session NEW
+run_cmd cmp -s "$T13/runs/run-20260101T090000Z/run-context.json" "$T13/ctx-before.json"
+expect_rc "t13h identical re-attach is byte-identical (idempotent)" 0 "$RC"
+
+# partial update preserves existing unrelated fields
+run_cmd env -u CODEX_HOME FG_OBS_RUNS_DIR="$T13/runs" bash "$OBS" context current --task-type Bug --session CURRENT --task-key "pair-7"
+expect_rc "t13i update with task-key exits 0" 0 "$RC"
+run_cmd "$PY" -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["session_mode"]=="CURRENT" and d["task_key"]=="pair-7" and d["harness_variant"] is None and d["task_type"]=="Bug"' "$T13/runs/run-20260101T090000Z/run-context.json"
+expect_rc "t13j existing fields preserved on partial update" 0 "$RC"
+
+# fail-closed value validation through the wrapper
+run_cmd env -u CODEX_HOME FG_OBS_RUNS_DIR="$T13/runs" bash "$OBS" context current --task-type "Not A Type" --session NEW
+expect_rc "t13k invalid task_type fails closed (exit 2)" 2 "$RC"
+run_cmd env -u CODEX_HOME FG_OBS_RUNS_DIR="$T13/runs" bash "$OBS" context current --task-type Bug --session "new"
+expect_rc "t13l lowercase session enum fails closed (exit 2)" 2 "$RC"
+run_cmd env -u CODEX_HOME FG_OBS_RUNS_DIR="$T13/runs" bash "$OBS" context current --task-type Bug --session NEW --task-key "please fix the bug in auth"
+expect_rc "t13m prompt-like task_key rejected (exit 2)" 2 "$RC"
+run_cmd env -u CODEX_HOME FG_OBS_RUNS_DIR="$T13/runs" bash "$OBS" context current --task-type Bug --session NEW --harness-variant ".leading-dot"
+expect_rc "t13n malformed slug (leading dot) rejected (exit 2)" 2 "$RC"
+run_cmd "$PY" -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["task_key"]=="pair-7"' "$T13/runs/run-20260101T090000Z/run-context.json"
+expect_rc "t13o rejected updates did not modify the stored context" 0 "$RC"
+run_cmd env -u CODEX_HOME FG_OBS_RUNS_DIR="$T13/runs" bash "$OBS" context current --task-type Bug
+expect_rc "t13p missing --session fails closed (exit 2)" 2 "$RC"
+run_cmd env -u CODEX_HOME FG_OBS_RUNS_DIR="$T13/runs" bash "$OBS" context
+expect_rc "t13q context without target fails (exit 2)" 2 "$RC"
+
+# multiple live captures -> ambiguous (exit 11), no guessing
+mk_live_run run-20260101T090001Z capture
+run_cmd env -u CODEX_HOME FG_OBS_RUNS_DIR="$T13/runs" bash "$OBS" context current --task-type Bug --session NEW
+expect_rc "t13r multiple live captures fail closed (exit 11)" 11 "$RC"
+expect_contains "t13s ambiguity message names the candidates" "$CAP_OUT" "run-20260101T090000Z"
+expect_contains "t13t ambiguity message suggests an explicit run id" "$CAP_OUT" "explicit run id"
+# explicit run id still works under ambiguity
+run_cmd env -u CODEX_HOME FG_OBS_RUNS_DIR="$T13/runs" bash "$OBS" context run-20260101T090001Z --task-type Domain --session CURRENT
+expect_rc "t13u explicit run id succeeds despite ambiguity" 0 "$RC"
+run_cmd "$PY" -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["task_type"]=="Domain" and d["session_mode"]=="CURRENT"' "$T13/runs/run-20260101T090001Z/run-context.json"
+expect_rc "t13v explicit-run context stored in the right dir" 0 "$RC"
+
+# probe runs are diagnostic: never a "current" product capture
+rm -f "$T13/runs/run-20260101T090001Z/collector.pid" \
+      "$T13/runs/run-20260101T090000Z/collector.pid"
+mk_live_run probe-native-20260101T090002Z probe-native
+run_cmd env -u CODEX_HOME FG_OBS_RUNS_DIR="$T13/runs" bash "$OBS" context current --task-type Bug --session NEW
+expect_rc "t13w probe-only liveness is not a product capture (exit 10)" 10 "$RC"
+# dead pid is not live
+mkdir -p "$T13/runs/run-20260101T090003Z/raw"
+printf '999999\n' > "$T13/runs/run-20260101T090003Z/collector.pid"
+printf '{"schema_version": 1, "run_id": "run-20260101T090003Z", "kind": "capture", "stop_status": "running"}\n' > "$T13/runs/run-20260101T090003Z/capture-manifest.json"
+run_cmd env -u CODEX_HOME FG_OBS_RUNS_DIR="$T13/runs" bash "$OBS" context current --task-type Bug --session NEW
+expect_rc "t13x dead pidfile is not a live capture (exit 10)" 10 "$RC"
+kill "$LIVE_PID" 2>/dev/null || true
+
+# context file is git-ignored with the run
+run_cmd git -C "$REPO_ROOT" check-ignore -q .artifacts/agent-runs/run-x/run-context.json
+expect_rc "t13y run-context.json is git-ignored" 0 "$RC"
+rm -rf "$T13"
+
+# ------------------------------------------------- t14 product identity -----
+# The normal product-agent Codex home must be established only from evidence
+# (override / live CODEX_HOME / registration), NEVER from generic discovery.
+# A controller shell with valid $HOME/.codex AND $HOME/.codex-lucid must NOT
+# have either inferred as the product home.
+T14="$(mktemp -d "${TMPDIR:-/tmp}/fg-obs-t14.XXXXXX")"
+T14RT="$T14/product-runtime.json"         # temp; never the real registration
+T14HOME="$T14/homes"
+mkdir -p "$T14HOME/.codex" "$T14HOME/.codex-lucid"
+printf 'model = "t"\n' > "$T14HOME/.codex/config.toml";      printf '{}\n' > "$T14HOME/.codex/auth.json"
+printf 'model = "t"\n' > "$T14HOME/.codex-lucid/config.toml"; printf '{}\n' > "$T14HOME/.codex-lucid/auth.json"
+
+# (1) controller with two valid generic homes + no registration -> NOT inferred
+run_cmd env -u CODEX_HOME -u CODEX_PATH -u CODEX_SESSION_ID -u FG_PRODUCT_CODEX_HOME HOME="$T14HOME" FG_PRODUCT_RUNTIME_FILE="$T14RT" bash "$OBS" status --json
+t14o="$CAP_OUT"
+expect_rc "t14a status (controller, no registration) exits 0" 0 "$RC"
+expect_eq "t14b product home is not_registered (never inferred as a generic home)" "not_registered" "$("$PY" -c 'import json,sys; print(json.loads(sys.argv[1])["product_codex_home"]["state"])' "$t14o")"
+expect_eq "t14c product home path is empty" "" "$("$PY" -c 'import json,sys; print(json.loads(sys.argv[1])["product_codex_home"]["path"])' "$t14o")"
+expect_eq "t14d generic discovery is ambiguous (two .codex* homes exist)" "ambiguous" "$("$PY" -c 'import json,sys; print(json.loads(sys.argv[1])["controller_codex_home"]["state"])' "$t14o")"
+
+# (2) config with no registration -> non-actionable
+run_cmd env -u CODEX_HOME -u CODEX_PATH -u CODEX_SESSION_ID -u FG_PRODUCT_CODEX_HOME HOME="$T14HOME" FG_PRODUCT_RUNTIME_FILE="$T14RT" bash "$OBS" config
+expect_rc "t14e config (no registration) exits 0" 0 "$RC"
+expect_not_contains "t14f config (no registration) prints no actionable destination" "$CAP_OUT" "Add to"
+expect_not_contains "t14g config (no registration) never says edit the standalone .codex" "$CAP_OUT" "$T14HOME/.codex/config.toml"
+
+# (3) register from a simulated product env -> exact home recorded
+run_cmd env -u CODEX_PATH CODEX_HOME="$T14HOME/.codex-lucid" FG_PRODUCT_RUNTIME_FILE="$T14RT" bash "$OBS" product-runtime register
+expect_rc "t14h register (simulated product env) exits 0" 0 "$RC"
+expect_contains "t14i register reports the recorded home" "$CAP_OUT" "$T14HOME/.codex-lucid"
+expect_file "t14j registration artifact written" "$T14RT"
+run_cmd "$PY" - "$T14RT" "$T14HOME/.codex-lucid" <<'PYCHK'
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["schema_version"] == 1, d
+assert d["codex_home"] == sys.argv[2], (d, sys.argv[2])
+PYCHK
+expect_rc "t14k registration records exactly the registered home" 0 "$RC"
+
+# (4) status/config after registration use the registered home
+run_cmd env -u CODEX_HOME -u CODEX_PATH -u CODEX_SESSION_ID -u FG_PRODUCT_CODEX_HOME HOME="$T14HOME" FG_PRODUCT_RUNTIME_FILE="$T14RT" bash "$OBS" status --json
+t14o="$CAP_OUT"
+expect_eq "t14l status after registration -> registered" "registered" "$("$PY" -c 'import json,sys; print(json.loads(sys.argv[1])["product_codex_home"]["state"])' "$t14o")"
+expect_eq "t14m status product home = the registered .codex-lucid" "$T14HOME/.codex-lucid" "$("$PY" -c 'import json,sys; print(json.loads(sys.argv[1])["product_codex_home"]["path"])' "$t14o")"
+expect_eq "t14n generic home still ambiguous (standalone .codex present)" "ambiguous" "$("$PY" -c 'import json,sys; print(json.loads(sys.argv[1])["controller_codex_home"]["state"])' "$t14o")"
+run_cmd env -u CODEX_HOME -u CODEX_PATH -u CODEX_SESSION_ID -u FG_PRODUCT_CODEX_HOME HOME="$T14HOME" FG_PRODUCT_RUNTIME_FILE="$T14RT" bash "$OBS" config
+expect_contains "t14o config after registration targets the registered home" "$CAP_OUT" "Add to $T14HOME/.codex-lucid/config.toml:"
+
+# (5) a standalone .codex (a different generic home) cannot override the
+# registered product identity
+run_cmd "$PY" - "$T14RT" "$T14HOME/.codex" <<'PYCHK'
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["codex_home"] != sys.argv[2], d
+PYCHK
+expect_rc "t14p registered product identity is not the standalone .codex" 0 "$RC"
+
+# (6) re-registration changes the product identity deterministically
+run_cmd env -u CODEX_PATH CODEX_HOME="$T14HOME/.codex-lucid" FG_PRODUCT_RUNTIME_FILE="$T14RT" bash "$OBS" product-runtime register
+expect_contains "t14q unchanged re-registration is idempotent" "$CAP_OUT" "unchanged"
+run_cmd env -u CODEX_PATH CODEX_HOME="$T14HOME/.codex-other" FG_PRODUCT_RUNTIME_FILE="$T14RT" bash "$OBS" product-runtime register
+expect_contains "t14r re-registration replaces stale identity" "$CAP_OUT" "replaced"
+expect_eq "t14s registration now points at the new home" "$T14HOME/.codex-other" "$("$PY" -c 'import json,sys; print(json.load(open(sys.argv[1]))["codex_home"])' "$T14RT")"
+
+# (7) register without CODEX_HOME fails closed
+run_cmd env -u CODEX_HOME -u CODEX_PATH FG_PRODUCT_RUNTIME_FILE="$T14RT" bash "$OBS" product-runtime register
+expect_rc "t14t register without CODEX_HOME fails closed (exit 5)" 5 "$RC"
+
+# (8) corrupt registrations fail clearly
+printf 'not-json' > "$T14RT"
+run_cmd env -u CODEX_HOME -u CODEX_PATH -u CODEX_SESSION_ID -u FG_PRODUCT_CODEX_HOME FG_PRODUCT_RUNTIME_FILE="$T14RT" bash "$OBS" status --json
+expect_eq "t14u corrupt (bad json) -> corrupt state" "corrupt" "$("$PY" -c 'import json,sys; print(json.loads(sys.argv[1])["product_codex_home"]["state"])' "$CAP_OUT")"
+run_cmd env -u CODEX_HOME -u CODEX_PATH -u CODEX_SESSION_ID -u FG_PRODUCT_CODEX_HOME FG_PRODUCT_RUNTIME_FILE="$T14RT" bash "$OBS" config
+expect_not_contains "t14v config refuses when the registration is corrupt" "$CAP_OUT" "Add to"
+printf '{"schema_version": 1, "codex_home": "relative/path"}\n' > "$T14RT"
+run_cmd env -u CODEX_HOME -u CODEX_PATH -u CODEX_SESSION_ID -u FG_PRODUCT_CODEX_HOME FG_PRODUCT_RUNTIME_FILE="$T14RT" bash "$OBS" status --json
+expect_eq "t14w corrupt (relative home) -> corrupt state" "corrupt" "$("$PY" -c 'import json,sys; print(json.loads(sys.argv[1])["product_codex_home"]["state"])' "$CAP_OUT")"
+printf '{"schema_version": 99, "codex_home": "/x"}\n' > "$T14RT"
+run_cmd env -u CODEX_HOME -u CODEX_PATH -u CODEX_SESSION_ID -u FG_PRODUCT_CODEX_HOME FG_PRODUCT_RUNTIME_FILE="$T14RT" bash "$OBS" status --json
+expect_eq "t14x corrupt (wrong schema_version) -> corrupt state" "corrupt" "$("$PY" -c 'import json,sys; print(json.loads(sys.argv[1])["product_codex_home"]["state"])' "$CAP_OUT")"
+run_cmd env FG_PRODUCT_RUNTIME_FILE="$T14RT" bash "$OBS" product-runtime show
+expect_rc "t14y product-runtime show on a corrupt registration exits 7" 7 "$RC"
+
+# (9) privacy: only the four bounded fields are stored; no env value leaks
+run_cmd env -u CODEX_PATH CODEX_HOME="$T14HOME/.codex-lucid" CODEX_CONFIG="evil-config-marker" FG_SECRET_TOKEN="sk-super-secret-123" FG_PRODUCT_RUNTIME_FILE="$T14RT" bash "$OBS" product-runtime register
+expect_rc "t14z register with arbitrary extra env exits 0" 0 "$RC"
+run_cmd "$PY" - "$T14RT" <<'PYCHK'
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert set(d.keys()) == {"schema_version", "codex_home", "codex_path", "codex_acp_version"}, d
+raw = open(sys.argv[1]).read()
+assert "sk-super-secret-123" not in raw
+assert "evil-config-marker" not in raw
+assert "CODEX_CONFIG" not in raw
+PYCHK
+expect_rc "t14z2 registration stores only the bounded fields; no env leak" 0 "$RC"
+
+rm -rf "$T14" "$TESTRT_DIR"
+
+
+# --------------------------------------------------- t15 liveness (EPERM) ---
+# Cross-identity liveness: a collector owned by a different identity cannot be
+# signaled (EPERM) but is ALIVE. Simulated deterministically with NO second OS
+# user: for a non-root user, os.kill(1, 0) -> EPERM (init/launchd is root-owned),
+# so PID 1 stands in for a controller-owned collector. Under root PID 1 is
+# signalable, so the integration cases skip; the mocked-os.kill unit case below
+# is environment-independent and always runs.
+LIVENESS_PY="$REPO_ROOT/scripts/observability/liveness.py"
+
+# t15a/b: canonical semantic via mocked os.kill (no environment dependency):
+# success -> signalable (alive), EPERM -> denied (alive), ESRCH -> dead.
+run_cmd env FG_LIVENESS_DIR="$REPO_ROOT/scripts/observability" "$PY" -c '
+import os, sys
+sys.path.insert(0, os.environ["FG_LIVENESS_DIR"])
+import liveness
+real = os.kill
+def sig(p, s): return None
+def eperm(p, s): raise PermissionError("simulated EPERM")
+def esrch(p, s): raise ProcessLookupError("simulated ESRCH")
+os.kill = sig;   assert liveness.classify("4242") == "signalable" and liveness.is_alive("4242") is True
+os.kill = eperm; assert liveness.classify("4242") == "denied"     and liveness.is_alive("4242") is True
+os.kill = esrch; assert liveness.classify("4242") == "dead"       and liveness.is_alive("4242") is False
+os.kill = real
+print("semantic-ok")
+'
+expect_rc "t15a canonical semantic (mocked os.kill): ok->signalable, EPERM->denied(alive), ESRCH->dead" 0 "$RC"
+expect_contains "t15b mocked-semantic probe printed its marker" "$CAP_OUT" "semantic-ok"
+
+if [ "$(id -u)" -eq 0 ]; then
+  skip "t15 cross-identity EPERM integration cases require a non-root user (running as root)"
+else
+  EPERM_PID=1
+  T15="$(mktemp -d "${TMPDIR:-/tmp}/fg-obs-liveness.XXXXXX")"
+  mkdir -p "$T15/runs"
+  # a pid that is reliably dead (ESRCH) on this platform
+  DEAD_PID=""
+  for cand in 4194305 2147483646 99999999; do
+    if [ "$("$PY" "$LIVENESS_PY" classify "$cand" 2>/dev/null)" = "dead" ]; then DEAD_PID="$cand"; break; fi
+  done
+  [ -n "$DEAD_PID" ] && ok "t15c a dead (ESRCH) pid was found for the fixture" || bad "t15c a dead (ESRCH) pid was found for the fixture"
+
+  mk15() { # mk15 <run-id> <kind> <pid>
+    mkdir -p "$T15/runs/$1/raw"
+    printf '%s' "$3" > "$T15/runs/$1/collector.pid"
+    printf '{"schema_version": 1, "run_id": "%s", "kind": "%s", "stop_status": "running"}\n' "$1" "$2" > "$T15/runs/$1/capture-manifest.json"
+  }
+  env15() { # run agent-observability under the temp runs dir, outside a product session
+    env -u CODEX_HOME -u CODEX_SESSION_ID FG_OBS_RUNS_DIR="$T15/runs" bash "$OBS" "$@"
+  }
+
+  # 4: status reports a permission-denied (EPERM) collector as running
+  mk15 run-15-1 capture "$EPERM_PID"
+  run_cmd env15 status
+  expect_contains "t15d status reports a permission-denied (EPERM) collector as running" "$CAP_OUT" "running (run run-15-1, pid 1)"
+
+  # 5: context current resolves one permission-denied live capture
+  run_cmd env15 context current --task-type Bug --session NEW
+  expect_rc "t15e context current resolves the permission-denied live capture" 0 "$RC"
+  expect_contains "t15f context attached to the EPERM run" "$CAP_OUT" "run-15-1"
+  expect_file "t15g run-context.json written in the EPERM run dir" "$T15/runs/run-15-1/run-context.json"
+
+  # current-run resolves the same single EPERM capture
+  run_cmd env15 current-run
+  expect_rc "t15h current-run exits 0 with one EPERM capture" 0 "$RC"
+  expect_eq "t15i current-run prints just the run id" "run-15-1" "$CAP_OUT"
+
+  # 7 (+11 no-timestamp-guess): two permission-denied captures are ambiguous
+  mk15 run-15-2 capture "$EPERM_PID"
+  run_cmd env15 context current --task-type Bug --session NEW
+  expect_rc "t15j two EPERM captures are ambiguous (exit 11, not newest-wins)" 11 "$RC"
+  run_cmd env15 current-run
+  expect_rc "t15k current-run is ambiguous with two EPERM captures (exit 11)" 11 "$RC"
+
+  # 6: zero live captures still fails closed
+  rm -f "$T15/runs"/run-*/collector.pid 2>/dev/null || true
+  run_cmd env15 context current --task-type Bug --session NEW
+  expect_rc "t15l zero live captures fails closed (exit 10)" 10 "$RC"
+  run_cmd env15 current-run
+  expect_rc "t15m current-run zero live captures fails closed (exit 10)" 10 "$RC"
+
+  # a dead (ESRCH) pid is not a live capture
+  mk15 run-15-3 capture "$DEAD_PID"
+  run_cmd env15 current-run
+  expect_rc "t15n dead (ESRCH) pid is not a live capture (exit 10)" 10 "$RC"
+
+  # 8: probe runs are excluded
+  rm -f "$T15/runs"/run-*/collector.pid 2>/dev/null || true
+  mk15 probe-native-15 probe-native "$EPERM_PID"
+  run_cmd env15 current-run
+  expect_rc "t15o probe runs are excluded from current-run (exit 10)" 10 "$RC"
+
+  rm -rf "$T15"
+fi
 
 
 # ---------------------------------------------------------------- summary ---

@@ -30,6 +30,10 @@
 #   * no secrets or environment values in the summary
 #   * FG_AGENT_RUN_ID correlation: agentRunId recorded when set, null
 #     otherwise, invalid values rejected before any phase runs
+#   * auto-correlation (FG_AGENT_RUN_ID unset): exactly one active product
+#     capture selected deterministically (pidfile liveness; probes
+#     excluded), multiple active captures refused (exit 2, no summary),
+#     explicit FG_AGENT_RUN_ID always overrides
 #   * profile matrix (simulated success): every executable profile (quick,
 #     frontend, backend, core, e2e, full) produces a valid schemaVersion-1
 #     summary whose phases match the script's own read-only plan output
@@ -279,6 +283,11 @@ TMPROOT="$(mktemp -d)"
 trap 'rm -rf "$TMPROOT"' EXIT
 SUMDIR="$TMPROOT/summaries"
 mkdir -p "$SUMDIR"
+# Deterministic run correlation for every summary run in this suite: point
+# the auto-correlation discovery at a non-existent runs directory (zero
+# candidates -> agentRunId null, no informational line). Individual
+# auto-correlation tests override FG_OBS_RUNS_DIR explicitly.
+export FG_OBS_RUNS_DIR="$TMPROOT/no-runs"
 FAKE_BIN_OK="$TMPROOT/bin-ok"
 FAKE_BIN_FAIL="$TMPROOT/bin-fail"
 make_fake_bin "$FAKE_BIN_OK" 0
@@ -313,6 +322,8 @@ expect_contains "t01e --help documents exit code 75" "$out" "75"
 expect_contains "t01f --help documents no directory creation" "$out" "never creates directories"
 expect_contains "t01g --help documents evidence-only boundary" "$out" "never claims RUNTIME_VERIFIED"
 expect_contains "t01h --help documents FG_AGENT_RUN_ID correlation" "$out" "FG_AGENT_RUN_ID"
+expect_contains "t01h2 --help scopes auto-correlation as same-identity" "$out" "same-identity"
+expect_contains "t01h3 --help points to current-run for reliable correlation" "$out" "current-run"
 
 # ------------------------------------------------------- t02 usage errors --
 run_cmd "$BASH_BIN" "$VERIFY" --summary-json
@@ -346,6 +357,44 @@ run_cmd env PATH="$FAKE_BIN_OK" FG_AGENT_RUN_ID="bad id!" "$BASH_BIN" "$VERIFY" 
 expect_rc "t03j invalid FG_AGENT_RUN_ID rejected before phases (exit 2)" 2 "$RC"
 expect_no_file "t03k no summary created for invalid FG_AGENT_RUN_ID" "$SUMDIR/runid/bad.json"
 
+# --------------------- auto-correlation (FG_AGENT_RUN_ID unset) ----------
+# Deterministic discovery of the single active local product capture:
+# pidfile liveness, never timestamps; probes are diagnostic and excluded.
+mkdir -p "$SUMDIR/auto" "$TMPROOT/runs"
+sleep 300 & AUTO_PID=$!
+mk_live_capture() { # mk_live_capture <run-id> <kind>
+  mkdir -p "$TMPROOT/runs/$1/raw"
+  printf '%s' "$AUTO_PID" > "$TMPROOT/runs/$1/collector.pid"
+  printf '{"schema_version": 1, "run_id": "%s", "kind": "%s", "stop_status": "running"}\n' "$1" "$2" > "$TMPROOT/runs/$1/capture-manifest.json"
+}
+mk_live_capture run-auto-1 capture
+run_cmd env PATH="$FAKE_BIN_OK" FG_OBS_RUNS_DIR="$TMPROOT/runs" "$BASH_BIN" "$VERIFY" --summary-json "$SUMDIR/auto/one.json" quick
+expect_rc "t03l auto-correlation with one active capture exits 0" 0 "$RC"
+node -e 'const d=require(process.argv[1]); process.exit(d.agentRunId==="run-auto-1"?0:1)' "$SUMDIR/auto/one.json" \
+  && ok "t03m single active capture selected as agentRunId" \
+  || bad "t03m single active capture selected as agentRunId"
+expect_contains "t03n auto-correlation is announced (overridable via FG_AGENT_RUN_ID)" "$CAP_OUT" "auto-correlating"
+mk_live_capture run-auto-2 capture
+run_cmd env PATH="$FAKE_BIN_OK" FG_OBS_RUNS_DIR="$TMPROOT/runs" "$BASH_BIN" "$VERIFY" --summary-json "$SUMDIR/auto/two.json" quick
+expect_rc "t03o multiple active captures refused before phases (exit 2)" 2 "$RC"
+expect_contains "t03p ambiguity message instructs explicit FG_AGENT_RUN_ID" "$CAP_OUT" "FG_AGENT_RUN_ID="
+expect_no_file "t03q no summary written on ambiguity" "$SUMDIR/auto/two.json"
+rm -f "$TMPROOT/runs/run-auto-1/collector.pid" "$TMPROOT/runs/run-auto-2/collector.pid"
+mk_live_capture probe-native-auto probe-native
+run_cmd env PATH="$FAKE_BIN_OK" FG_OBS_RUNS_DIR="$TMPROOT/runs" "$BASH_BIN" "$VERIFY" --summary-json "$SUMDIR/auto/probe.json" quick
+expect_rc "t03r probe-only liveness exits 0 (not a product capture)" 0 "$RC"
+node -e 'const d=require(process.argv[1]); process.exit(d.agentRunId===null?0:1)' "$SUMDIR/auto/probe.json" \
+  && ok "t03s probe runs are never auto-correlated" \
+  || bad "t03s probe runs are never auto-correlated"
+mk_live_capture run-auto-3 capture
+run_cmd env PATH="$FAKE_BIN_OK" FG_OBS_RUNS_DIR="$TMPROOT/runs" FG_AGENT_RUN_ID=run-explicit-999 "$BASH_BIN" "$VERIFY" --summary-json "$SUMDIR/auto/exp.json" quick
+expect_rc "t03t explicit FG_AGENT_RUN_ID with active captures exits 0" 0 "$RC"
+node -e 'const d=require(process.argv[1]); process.exit(d.agentRunId==="run-explicit-999"?0:1)' "$SUMDIR/auto/exp.json" \
+  && ok "t03u explicit FG_AGENT_RUN_ID stays authoritative over auto-correlation" \
+  || bad "t03u explicit FG_AGENT_RUN_ID stays authoritative over auto-correlation"
+kill "$AUTO_PID" 2>/dev/null || true
+wait "$AUTO_PID" 2>/dev/null || true
+
 # --------------------------------------- t04 no file without the flag ------
 run_cmd env PATH="$FAKE_BIN_OK" "$BASH_BIN" "$VERIFY" quick
 expect_rc "t04a plain run exits 0" 0 "$RC"
@@ -370,7 +419,7 @@ expect_rc "t06d fail summary schema valid (one failed, later not_run)" 0 "$vrc"
 leftover="$(find "$SUMDIR" -name '.agent-verify-summary-*' | wc -l | tr -d ' ')"
 expect_eq "t07a no leftover temporary files" "0" "$leftover"
 json_count="$(find "$SUMDIR" -type f -name '*.json' | wc -l | tr -d ' ')"
-expect_eq "t07b exactly the four expected summaries (incl. runid fixture)" "4" "$json_count"
+expect_eq "t07b exactly the seven expected summaries (incl. runid + auto-correlation fixtures)" "7" "$json_count"
 
 # -------------------------------------- t08 invalid target directories -----
 run_cmd env PATH="$FAKE_BIN_OK" "$BASH_BIN" "$VERIFY" --summary-json "$SUMDIR/no/such/dir/x.json" quick
