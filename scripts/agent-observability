@@ -1,0 +1,1058 @@
+#!/usr/bin/env bash
+#
+# FG Workspace — local agent observability control surface.
+#
+#   ./scripts/agent-observability status [--json]   read-only state
+#   ./scripts/agent-observability start             idempotently start the local collector
+#   ./scripts/agent-observability stop              gracefully stop + finalize the run
+#   ./scripts/agent-observability doctor [--json]   end-to-end local OTLP capability probe
+#   ./scripts/agent-observability config            print the Codex user-level [otel] config
+#   ./scripts/agent-observability install           explicitly fetch the pinned collector
+#   ./scripts/agent-observability native-probe      acceptance probe through the real ACP path
+#   ./scripts/agent-observability help              usage
+#
+# Privacy and safety contract:
+#   * the collector binds to 127.0.0.1 only; no external telemetry backend exists
+#   * raw traces are sanitized by the collector transform before persistence
+#   * everything persisted lives under git-ignored .artifacts/
+#   * user-level Codex configuration is NEVER modified by this script;
+#     `config` only prints what the user must add explicitly
+#
+# Canonical documentation: docs/agent/OBSERVABILITY.md
+
+set -Eeuo pipefail
+
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+case "$SCRIPT_PATH" in
+  */*) REPO_ROOT="$(cd "${SCRIPT_PATH%/*}/.." && pwd)" ;;
+  *)   REPO_ROOT="$(cd .. && pwd)" ;;
+esac
+
+OBS_LIB="$REPO_ROOT/scripts/observability"
+TEMPLATE="$OBS_LIB/otelcol-local.yaml"
+PINS="$OBS_LIB/pins.json"
+MANIFEST_PY="$OBS_LIB/manifest.py"
+PROBE_CLIENT="$OBS_LIB/acp-probe-client.mjs"
+OBS_DIR="$REPO_ROOT/.artifacts/agent-observability"
+RUNS_DIR="$REPO_ROOT/.artifacts/agent-runs"
+
+PORT="${FG_OBS_PORT:-4318}"
+RETENTION_DAYS="${FG_OBS_RETENTION_DAYS:-14}"
+MAX_MB="${FG_OBS_MAX_MB:-32}"
+MAX_BACKUPS="${FG_OBS_MAX_BACKUPS:-10}"
+PRIVACY_MODE="trace-safe-sanitized"
+
+# ---------------------------------------------------------------- helpers ---
+
+TOL_OUT=""
+TOL_RC=0
+run_tolerated() {
+  TOL_OUT=""
+  TOL_RC=0
+  set +Ee
+  TOL_OUT="$("$@" 2>&1)" || TOL_RC=$?
+  set -Ee
+}
+
+die() {
+  printf 'agent-observability: ERROR: %s\n' "$1" >&2
+  exit "${2:-1}"
+}
+
+probe_python() {
+  if [ -x "$REPO_ROOT/apps/api/.venv/bin/python" ]; then
+    printf '%s' "$REPO_ROOT/apps/api/.venv/bin/python"
+  elif command -v python3 >/dev/null 2>&1; then
+    printf '%s' "python3"
+  else
+    printf '%s' ""
+  fi
+}
+
+json_escape() {
+  local s="$1"
+  s="$(printf '%s' "$s" | LC_ALL=C tr -d '\000-\037\177')"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  printf '%s' "$s"
+}
+
+# Prints one of: free | in_use | unknown. Always exits 0 (the value is the
+# output, never the exit code, so callers stay safe under set -e).
+port_state() {
+  local py rc=0
+  py="$(probe_python)"
+  if [ -z "$py" ]; then printf 'unknown'; return 0; fi
+  "$py" - "$PORT" <<'PY' >/dev/null 2>&1 || rc=$?
+import socket, sys
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+try:
+    s.bind(("127.0.0.1", int(sys.argv[1])))
+    s.close()
+except OSError:
+    sys.exit(1)
+sys.exit(0)
+PY
+  case "$rc" in
+    0) printf 'free' ;;
+    1) printf 'in_use' ;;
+    *) printf 'unknown' ;;
+  esac
+}
+
+run_bounded() { # run_bounded <secs> <cmd...> — uses timeout/gtimeout when present
+  local secs="$1"; shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$secs" "$@"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$secs" "$@"
+  else
+    "$@"
+  fi
+}
+
+pid_alive() {
+  [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null
+}
+
+resolve_collector() {
+  # Prints the collector binary path, or nothing.
+  if [ -n "${FG_OTELCOL:-}" ] && [ -x "${FG_OTELCOL:-}" ]; then
+    printf '%s' "$FG_OTELCOL"
+    return 0
+  fi
+  if command -v otelcol >/dev/null 2>&1; then
+    command -v otelcol
+    return 0
+  fi
+  local pinned
+  pinned=""
+  local cand
+  for cand in "$OBS_DIR/otelcol"/*/otelcol; do
+    if [ -x "$cand" ]; then pinned="$cand"; break; fi
+  done
+  if [ -n "$pinned" ]; then
+    printf '%s' "$pinned"
+  fi
+  return 0
+}
+
+collector_version_of() {
+  local out
+  run_tolerated "$1" --version
+  out="$TOL_OUT"
+  if [ "$TOL_RC" -ne 0 ] || [ -z "$out" ]; then printf 'unknown'; return 0; fi
+  printf '%s' "$(printf '%s' "$out" | head -n1)"
+}
+
+pins_version() {
+  local py out
+  py="$(probe_python)"
+  if [ -z "$py" ] || [ ! -f "$PINS" ]; then printf 'unknown'; return 0; fi
+  out="$("$py" -c 'import json,sys; print(json.load(open(sys.argv[1]))["collector"]["version"])' "$PINS" 2>/dev/null || true)"
+  printf '%s' "${out:-unknown}"
+}
+
+# Newest run directory with a live collector pid. Prints "<run_dir>|<pid>".
+running_run() {
+  local latest pidfile pid
+  latest="$(readlink "$RUNS_DIR/latest" 2>/dev/null || true)"
+  local dirs=()
+  if [ -n "$latest" ] && [ -d "$RUNS_DIR/$latest" ]; then dirs+=("$latest"); fi
+  for d in "$RUNS_DIR"/*/; do
+    [ -d "$d" ] || continue
+    local name
+    name="$(basename "$d")"
+    case "$name" in run-*|probe-*) ;; *) continue ;; esac
+    dirs+=("$name")
+  done
+  local d
+  for d in "${dirs[@]:-}"; do
+    [ -n "$d" ] || continue
+    pidfile="$RUNS_DIR/$d/collector.pid"
+    if [ -f "$pidfile" ]; then
+      pid="$(cat "$pidfile" 2>/dev/null || true)"
+      if pid_alive "$pid"; then
+        printf '%s|%s' "$d" "$pid"
+        return 0
+      fi
+    fi
+  done
+  return 0
+}
+
+latest_run_dir() {
+  local latest
+  latest="$(readlink "$RUNS_DIR/latest" 2>/dev/null || true)"
+  if [ -n "$latest" ] && [ -d "$RUNS_DIR/$latest" ]; then
+    printf '%s' "$latest"
+    return 0
+  fi
+  local best="" d
+  for d in "$RUNS_DIR"/run-* "$RUNS_DIR"/probe-*; do
+    [ -d "$d" ] || continue
+    best="$d"
+  done
+  printf '%s' "$best"
+  return 0
+}
+
+render_config() { # render_config <run_dir> <out_file>
+  sed -e "s|__RUN_DIR__|$1|g" \
+      -e "s|__PORT__|$PORT|g" \
+      -e "s|__MAX_MB__|$MAX_MB|g" \
+      -e "s|__MAX_DAYS__|$RETENTION_DAYS|g" \
+      -e "s|__MAX_BACKUPS__|$MAX_BACKUPS|g" \
+      "$TEMPLATE" > "$2"
+}
+
+wait_port_listening() { # wait_port_listening <timeout_ms>; 0 when listening
+  local py deadline now
+  py="$(probe_python)"
+  [ -n "$py" ] || return 1
+  deadline=$(( $(date +%s) * 1000 + ${1:-10000} ))
+  while :; do
+    if "$py" - "$PORT" <<'PY' >/dev/null 2>&1
+import socket, sys
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.settimeout(0.5)
+try:
+    s.connect(("127.0.0.1", int(sys.argv[1])))
+    s.close()
+    sys.exit(0)
+except Exception:
+    sys.exit(1)
+PY
+    then return 0; fi
+    now=$(( $(date +%s) * 1000 ))
+    [ "$now" -ge "$deadline" ] && return 1
+    sleep 0.2
+  done
+}
+
+start_collector() { # start_collector <run_dir> ; sets COLLECTOR_PID
+  local run_dir="$1"
+  local cfg="$run_dir/otelcol.yaml"
+  render_config "$run_dir" "$cfg"
+  run_tolerated "$COLLECTOR" validate --config "$cfg"
+  if [ "$TOL_RC" -ne 0 ]; then
+    die "collector config failed validation: $(printf '%s' "$TOL_OUT" | head -c 400)" 1
+  fi
+  nohup "$COLLECTOR" --config "$cfg" > "$run_dir/collector.log" 2>&1 &
+  COLLECTOR_PID=$!
+  printf '%s' "$COLLECTOR_PID" > "$run_dir/collector.pid"
+  if ! wait_port_listening 15000; then
+    kill "$COLLECTOR_PID" 2>/dev/null || true
+    wait "$COLLECTOR_PID" 2>/dev/null || true
+    die "collector did not start listening on 127.0.0.1:$PORT (see $run_dir/collector.log)" 1
+  fi
+}
+
+stop_collector() { # stop_collector <run_dir>; sets STOP_STATUS
+  local run_dir="$1"
+  local pidfile="$run_dir/collector.pid"
+  local pid
+  STOP_STATUS="graceful"
+  if [ ! -f "$pidfile" ]; then return 0; fi
+  pid="$(cat "$pidfile" 2>/dev/null || true)"
+  if ! pid_alive "$pid"; then
+    rm -f "$pidfile"
+    return 0
+  fi
+  kill "$pid" 2>/dev/null || true
+  local i
+  for i in $(seq 1 40); do
+    if ! pid_alive "$pid"; then break; fi
+    sleep 0.25
+  done
+  if pid_alive "$pid"; then
+    kill -9 "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    STOP_STATUS="collector_forced"
+  fi
+  wait "$pid" 2>/dev/null || true
+  rm -f "$pidfile"
+  return 0
+}
+
+finalize_run() { # finalize_run <run_dir> <stop_status>
+  local py
+  py="$(probe_python)"
+  [ -n "$py" ] || return 0
+  (
+    export FG_OBS_REPO_ROOT="$REPO_ROOT"
+    "$py" "$MANIFEST_PY" finalize "$1" --stop-status "$2" >/dev/null 2>&1 || true
+  )
+}
+
+prune_retention() {
+  [ -d "$RUNS_DIR" ] || return 0
+  local d
+  for d in "$RUNS_DIR"/*/; do
+    [ -d "$d" ] || continue
+    case "$(basename "$d")" in run-*|probe-*) ;; *) continue ;; esac
+    if [ -n "$(find "$d" -maxdepth 0 -mtime +"$RETENTION_DAYS" 2>/dev/null)" ]; then
+      rm -rf "$d"
+      if [ "$(readlink "$RUNS_DIR/latest" 2>/dev/null || true)" = "$(basename "$d")" ]; then
+        rm -f "$RUNS_DIR/latest"
+      fi
+    fi
+  done
+}
+
+codex_version() {
+  local out=""
+  if [ -n "${CODEX_PATH:-}" ] && [ -x "${CODEX_PATH:-}" ]; then
+    out="$(run_bounded 5 "$CODEX_PATH" --version 2>/dev/null | head -n1 || true)"
+  fi
+  if [ -z "$out" ] && command -v codex >/dev/null 2>&1; then
+    out="$(run_bounded 5 codex --version 2>/dev/null | head -n1 || true)"
+  fi
+  printf '%s' "${out:-unknown}"
+}
+
+codex_acp_version() {
+  local adapter pkg out
+  adapter="$(adapter_path || true)"
+  if [ -n "$adapter" ]; then
+    pkg="$(cd "$(dirname "$adapter")/.." && pwd)/package.json"
+    if [ -f "$pkg" ] && command -v node >/dev/null 2>&1; then
+      out="$(node -e 'process.stdout.write(require(process.argv[1]).version)' "$pkg" 2>/dev/null || true)"
+      [ -n "$out" ] && { printf '%s' "$out"; return 0; }
+    fi
+  fi
+  printf 'unknown'
+}
+
+adapter_path() {
+  if [ -n "${CODEX_ACP_ADAPTER:-}" ] && [ -f "${CODEX_ACP_ADAPTER:-}" ]; then
+    printf '%s' "$CODEX_ACP_ADAPTER"
+    return 0
+  fi
+  local root
+  if command -v npm >/dev/null 2>&1; then
+    root="$(npm root -g 2>/dev/null || true)"
+    if [ -n "$root" ] && [ -f "$root/@agentclientprotocol/codex-acp/dist/index.js" ]; then
+      printf '%s' "$root/@agentclientprotocol/codex-acp/dist/index.js"
+      return 0
+    fi
+  fi
+  local f
+  for f in /opt/homebrew/lib/node_modules/@agentclientprotocol/codex-acp/dist/index.js \
+           /usr/local/lib/node_modules/@agentclientprotocol/codex-acp/dist/index.js; do
+    [ -f "$f" ] && { printf '%s' "$f"; return 0; }
+  done
+  return 0
+}
+
+# ------------------------------------------------ codex home/path resolution --
+#
+# Resolution contract (shared by `status` and `native-probe`):
+#   * an explicitly set CODEX_HOME / CODEX_PATH is authoritative and is
+#     validated before use;
+#   * otherwise the normal Codex home is discovered from the installed
+#     Codex conventions under $HOME: $HOME/.codex (Codex's default home),
+#     then $HOME/.codex-* (deployment variants), in sorted order;
+#   * a candidate home is valid only if it plausibly is a real, usable
+#     Codex home: a readable config.toml plus auth.json (the credential
+#     file Codex 0.148.x reads from the home);
+#   * zero or several valid candidates fail closed with a diagnostic
+#     (no guessing, no machine-specific paths are hard-coded);
+#   * CODEX_PATH: when unset, the probe leaves it unset so the codex-acp
+#     agent spawns its bundled @openai/codex — the default the adapter's
+#     ACP path applies (it does NOT fall back to `codex` on PATH, which may
+#     be a different Codex version than the bundled one). The resolved
+#     launcher and its version are reported in the evidence summary.
+
+codex_home_candidates() { # prints candidate home dirs, one per line
+  [ -n "${HOME:-}" ] || return 0
+  if [ -d "$HOME/.codex" ]; then printf '%s\n' "$HOME/.codex"; fi
+  local f
+  for f in "$HOME"/.codex-*/; do
+    if [ -d "$f" ]; then printf '%s\n' "${f%/}"; fi
+  done
+  return 0
+}
+
+codex_home_valid() { # <dir> — plausibly a real, usable Codex home?
+  local d="${1:-}"
+  [ -n "$d" ] || return 1
+  [ -d "$d" ] || return 1
+  [ -r "$d/config.toml" ] || return 1
+  [ -e "$d/auth.json" ]
+}
+
+resolve_codex_home() { # prints "state|path|detail"; always exits 0
+  if [ -n "${CODEX_HOME:-}" ]; then
+    if codex_home_valid "$CODEX_HOME"; then
+      printf 'explicit|%s|CODEX_HOME explicitly set' "$CODEX_HOME"
+    else
+      printf 'invalid|%s|explicit CODEX_HOME is not a usable Codex home (needs a readable config.toml and auth.json)' "$CODEX_HOME"
+    fi
+    return 0
+  fi
+  local c
+  local valid=()
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    if codex_home_valid "$c"; then valid+=("$c"); fi
+  done < <(codex_home_candidates)
+  if [ "${#valid[@]}" -eq 0 ]; then
+    local checked=""
+    while IFS= read -r c; do
+      if [ -n "$c" ]; then checked="$checked $c"; fi
+    done < <(codex_home_candidates)
+    printf 'not_found||no valid Codex home discovered (checked:%s) — export CODEX_HOME or complete `codex login` in the normal environment' "${checked:- nothing}"
+  elif [ "${#valid[@]}" -eq 1 ]; then
+    printf 'discovered|%s|resolved from installed Codex conventions under $HOME' "${valid[0]}"
+  else
+    printf 'ambiguous||multiple valid Codex homes discovered: %s — export CODEX_HOME to select one explicitly' "${valid[*]}"
+  fi
+}
+
+resolve_codex_path() { # prints "state|path|detail"; always exits 0
+  if [ -n "${CODEX_PATH:-}" ]; then
+    if [ -f "$CODEX_PATH" ] && [ -x "$CODEX_PATH" ]; then
+      printf 'explicit|%s|CODEX_PATH explicitly set' "$CODEX_PATH"
+    else
+      printf 'invalid|%s|explicit CODEX_PATH is not an executable file' "$CODEX_PATH"
+    fi
+    return 0
+  fi
+  local adapter bundled
+  adapter="$(adapter_path || true)"
+  if [ -z "$adapter" ]; then
+    printf 'not_found||codex-acp adapter not found — install @agentclientprotocol/codex-acp or set CODEX_PATH'
+    return 0
+  fi
+  bundled="$(bundled_codex_js "$adapter")"
+  if [ -n "$bundled" ] && [ -f "$bundled" ]; then
+    printf 'bundled|%s|adapter-bundled @openai/codex (the adapter default when CODEX_PATH is unset)' "$bundled"
+  else
+    printf 'not_found||could not resolve the adapter-bundled @openai/codex launcher — set CODEX_PATH explicitly'
+  fi
+}
+
+bundled_codex_js() { # <adapter> — the bundled @openai/codex launcher the
+  # adapter spawns when CODEX_PATH is unset (the adapter's own module
+  # resolution; no hard-coded vendor path). Prints the path or nothing.
+  node -e 'const { createRequire } = require("node:module"); process.stdout.write(createRequire(process.argv[1]).resolve("@openai/codex/bin/codex.js"))' "$1" 2>/dev/null || true
+}
+
+codex_path_version() { # <state> <path> — version of the codex the probe runs
+  local out=""
+  if [ "$1" = "bundled" ]; then
+    out="$(run_bounded 5 node "$2" --version 2>/dev/null | head -n1 || true)"
+  else
+    out="$(run_bounded 5 "$2" --version 2>/dev/null | head -n1 || true)"
+  fi
+  printf '%s' "${out:-unknown}"
+}
+
+otel_config_state() {
+  # <state>|<detail>
+  local line state path detail rest
+  line="$(resolve_codex_home)"
+  state="${line%%|*}"
+  rest="${line#*|}"
+  path="${rest%%|*}"
+  detail="${rest#*|}"
+  case "$state" in
+    explicit|discovered) ;;
+    *) printf 'unknown|%s' "$detail"; return 0 ;;
+  esac
+  local cfg="$path/config.toml"
+  if [ ! -r "$cfg" ]; then
+    printf 'not_checked|cannot read %s in this environment' "$cfg"
+    return 0
+  fi
+  if grep -qE '^[[:space:]]*\[otel\]' "$cfg" 2>/dev/null; then
+    printf 'configured|%s contains an [otel] section' "$cfg"
+    return 0
+  fi
+  printf 'absent|no [otel] section in %s — run: ./scripts/agent-observability config' "$cfg"
+}
+
+# ------------------------------------------------------------------ status --
+
+cmd_status() {
+  local json=0
+  [ "${1:-}" = "--json" ] && json=1
+  local collector="" cver="" runline="" run_id="none" pid="none" running="stopped"
+  collector="$(resolve_collector)"
+  if [ -n "$collector" ]; then cver="$(collector_version_of "$collector")"; fi
+  runline="$(running_run)"
+  if [ -n "$runline" ]; then
+    run_id="${runline%|*}"; pid="${runline#*|}"; running="running"
+  fi
+  local latest="" portst="" portlabel
+  latest="$(latest_run_dir || true)"
+  portst="$(port_state)"
+  case "$portst" in
+    free) portlabel="free" ;;
+    in_use) portlabel="in use" ;;
+    *) portlabel="unknown" ;;
+  esac
+  local otel_state otel_detail
+  otel_state="$(otel_config_state)"
+  otel_detail="${otel_state#*|}"; otel_state="${otel_state%%|*}"
+  local homeline home_state home_path homerest
+  homeline="$(resolve_codex_home)"
+  home_state="${homeline%%|*}"
+  homerest="${homeline#*|}"
+  home_path="${homerest%%|*}"
+  local cver_now="unknown" cver_now_acp="unknown"
+  if [ -n "${CODEX_PATH:-}" ] || command -v codex >/dev/null 2>&1; then
+    cver_now="$(codex_version)"
+  fi
+  cver_now_acp="$(codex_acp_version)"
+  if [ "$json" -eq 1 ]; then
+    printf '{\n'
+    printf '  "schema_version": 1,\n'
+    printf '  "tool": "agent-observability",\n'
+    printf '  "collector": {"path": "%s", "version": "%s"},\n' \
+      "$(json_escape "$collector")" "$(json_escape "$cver")"
+    printf '  "running": {"state": "%s", "run_id": "%s", "pid": "%s"},\n' \
+      "$running" "$(json_escape "$run_id")" "$(json_escape "$pid")"
+    printf '  "endpoint": "http://127.0.0.1:%s",\n' "$PORT"
+    printf '  "port": "%s",\n' "$portlabel"
+    printf '  "runs_dir": "%s",\n' "$(json_escape "$RUNS_DIR")"
+    printf '  "latest_run": "%s",\n' "$(json_escape "$latest")"
+    printf '  "retention_days": %s,\n' "$RETENTION_DAYS"
+    printf '  "privacy_mode": "%s",\n' "$(json_escape "$PRIVACY_MODE")"
+    printf '  "codex_home": {"state": "%s", "path": "%s"},\n' \
+      "$home_state" "$(json_escape "$home_path")"
+    printf '  "codex_otel_config": {"state": "%s", "detail": "%s"},\n' \
+      "$(json_escape "$otel_state")" "$(json_escape "$otel_detail")"
+    printf '  "versions": {"codex": "%s", "codex_acp": "%s", "collector": "%s"}\n' \
+      "$(json_escape "$cver_now")" "$(json_escape "$cver_now_acp")" "$(json_escape "$cver")"
+    printf '}\n'
+  else
+    printf 'agent-observability status\n'
+    printf '  collector:        %s\n' "${collector:-NOT FOUND (run: ./scripts/agent-observability install)}"
+    [ -n "$collector" ] && printf '  collector version: %s\n' "$cver"
+    printf '  running:          %s' "$running"
+    [ "$running" = "running" ] && printf ' (run %s, pid %s)' "$run_id" "$pid"
+    printf '\n'
+    printf '  endpoint:         http://127.0.0.1:%s (%s)\n' "$PORT" "$portlabel"
+    printf '  runs dir:         %s\n' "$RUNS_DIR"
+    printf '  latest run:       %s\n' "${latest:-none}"
+    printf '  retention:        %s days, %s MiB/file, %s backups\n' "$RETENTION_DAYS" "$MAX_MB" "$MAX_BACKUPS"
+    printf '  codex home:       %s — %s\n' "$home_state" "${home_path:-<none>}"
+    printf '  codex otel config: %s — %s\n' "$otel_state" "$otel_detail"
+    printf '  versions:         codex=%s codex-acp=%s collector=%s\n' "$cver_now" "$cver_now_acp" "$cver"
+  fi
+  return 0
+}
+
+# ------------------------------------------------------------------- start --
+
+cmd_start() {
+  local collector
+  collector="$(resolve_collector)"
+  [ -n "$collector" ] || die "collector binary not found — run ./scripts/agent-observability install" 3
+  COLLECTOR="$collector"
+
+  local runline
+  runline="$(running_run)"
+  if [ -n "$runline" ]; then
+    printf 'agent-observability: already running (run %s, pid %s) — nothing to do\n' \
+      "${runline%|*}" "${runline#*|}"
+    return 0
+  fi
+
+  local portst
+  portst="$(port_state)"
+  if [ "$portst" = "in_use" ]; then
+    die "port 127.0.0.1:$PORT is occupied by another process — stop it or set FG_OBS_PORT" 4
+  fi
+
+  [ -f "$TEMPLATE" ] || die "collector template missing: $TEMPLATE" 1
+  local py
+  py="$(probe_python)"
+  [ -n "$py" ] || die "python3 not found (needed for manifest/ports)" 1
+
+  prune_retention
+  mkdir -p "$RUNS_DIR"
+
+  local run_id run_dir
+  run_id="run-$(date -u +%Y%m%dT%H%M%SZ)"
+  run_dir="$RUNS_DIR/$run_id"
+  mkdir -p "$run_dir/raw"
+
+  FG_OBS_REPO_ROOT="$REPO_ROOT" \
+  FG_OBS_CODEX_VERSION="$(codex_version)" \
+  FG_OBS_CODEX_ACP_VERSION="$(codex_acp_version)" \
+  FG_OBS_COLLECTOR_VERSION="$(collector_version_of "$COLLECTOR")" \
+  FG_OBS_OTEL_ENDPOINT="http://127.0.0.1:$PORT" \
+  FG_OBS_PRIVACY_MODE="$PRIVACY_MODE" \
+  FG_OBS_RETENTION_DAYS="$RETENTION_DAYS" \
+  FG_OBS_MAX_MB="$MAX_MB" \
+  FG_OBS_MAX_BACKUPS="$MAX_BACKUPS" \
+  "$py" "$MANIFEST_PY" seed "$run_dir" "$run_id" "capture" >/dev/null
+
+  start_collector "$run_dir"
+  ln -sfn "$run_id" "$RUNS_DIR/latest"
+  printf 'agent-observability: started local collector\n'
+  printf '  run:      %s\n' "$run_dir"
+  printf '  endpoint: http://127.0.0.1:%s (loopback only)\n' "$PORT"
+  printf '  pid:      %s\n' "$COLLECTOR_PID"
+  printf '  traces:   %s/raw/\n' "$run_dir"
+  printf '  note:     Codex sessions emit telemetry here only while the user-level [otel] config is active (see: ./scripts/agent-observability config)\n'
+  return 0
+}
+
+# -------------------------------------------------------------------- stop --
+
+cmd_stop() {
+  local runline run_dir
+  runline="$(running_run)"
+  if [ -z "$runline" ]; then
+    # Clean stale pid files, finalize any unfinalized latest run.
+    local d pidfile
+    for d in "$RUNS_DIR"/*/; do
+      [ -d "$d" ] || continue
+      pidfile="$d/collector.pid"
+      if [ -f "$pidfile" ]; then
+        local pid
+        pid="$(cat "$pidfile" 2>/dev/null || true)"
+        if ! pid_alive "$pid"; then rm -f "$pidfile"; fi
+      fi
+    done
+    local latest manifest
+    latest="$(latest_run_dir || true)"
+    if [ -n "$latest" ] && [ -d "$latest" ]; then
+      manifest="$latest/capture-manifest.json"
+      if [ -f "$manifest" ] && grep -q '"stop_status": "running"' "$manifest" 2>/dev/null; then
+        finalize_run "$latest" "interrupted"
+        printf 'agent-observability: not running; finalized interrupted run %s\n' "$(basename "$latest")"
+      else
+        printf 'agent-observability: collector is not running (nothing to do)\n'
+      fi
+    else
+      printf 'agent-observability: collector is not running (nothing to do)\n'
+    fi
+    return 0
+  fi
+
+  run_dir="$RUNS_DIR/${runline%|*}"
+  local collector pid
+  collector="$(resolve_collector || true)"
+  pid="${runline#*|}"
+  COLLECTOR="${collector:-otelcol}"
+  stop_collector "$run_dir"
+  finalize_run "$run_dir" "$STOP_STATUS"
+  printf 'agent-observability: stopped (status %s)\n' "$STOP_STATUS"
+  printf '  run:      %s (trace history kept)\n' "$run_dir"
+  printf '  manifest: %s/capture-manifest.json\n' "$run_dir"
+  return 0
+}
+
+# ------------------------------------------------------------------ doctor --
+
+SYNTHETIC_OTLP() {
+  # Synthetic OTLP/HTTP-JSON payload for the end-to-end probe. It carries
+  # fake secret values that MUST NOT survive sanitization.
+  cat <<JSON
+{"resourceLogs":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"fg-observability-doctor"}},{"key":"host.name","value":{"stringValue":"probe-host-name-must-not-persist"}}]},"scopeLogs":[{"logRecords":[{"timeUnixNano":"1758220000000000000","severityNumber":9,"severityText":"INFO","body":{"stringValue":"fg.observability.doctor probe"},"attributes":[{"key":"event.name","value":{"stringValue":"fg.observability.probe"}},{"key":"probe.marker","value":{"stringValue":"FG_OBS_PROBE_MARKER"}},{"key":"user.email","value":{"stringValue":"probe-secret-email@example.com"}},{"key":"arguments","value":{"stringValue":"FAKE_API_KEY=sk-fake-doctor-9f8e7d6c5b4a"}},{"key":"originator","value":{"stringValue":"probe client ghp_fakeDoct0r1234567890ABCD"}}]}]}]}]
+}
+JSON
+}
+
+cmd_doctor() {
+  local json=0
+  [ "${1:-}" = "--json" ] && json=1
+  local status detail collector cver=""
+  local marker="FG_OBS_PROBE_MARKER"
+  local secrets="probe-secret-email@example.com sk-fake-doctor-9f8e7d6c5b4a ghp_fakeDoct0r1234567890ABCD probe-host-name-must-not-persist"
+
+  collector="$(resolve_collector)"
+  if [ -z "$collector" ]; then
+    status="NOT_CONFIGURED"
+    detail="collector binary not found — install: ./scripts/agent-observability install (pinned otelcol-contrib $(pins_version))"
+    emit_doctor_result "$json" "$status" "$detail" "" ""
+    return 0
+  fi
+  cver="$(collector_version_of "$collector")"
+
+  if [ ! -f "$TEMPLATE" ]; then
+    status="BROKEN"; detail="collector template missing: $TEMPLATE"
+    emit_doctor_result "$json" "$status" "$detail" "$collector" "$cver"
+    return 0
+  fi
+  local portst
+  portst="$(port_state)"
+  if [ "$portst" = "in_use" ]; then
+    local runline
+    runline="$(running_run)"
+    if [ -n "$runline" ]; then
+      status="BLOCKED"
+      detail="port 127.0.0.1:$PORT is held by the running capture (run ${runline%|*}) — stop it first (./scripts/agent-observability stop)"
+      emit_doctor_result "$json" "$status" "$detail" "$collector" "$cver"
+      return 0
+    fi
+    status="BLOCKED"
+    detail="port 127.0.0.1:$PORT is occupied by another process"
+    emit_doctor_result "$json" "$status" "$detail" "$collector" "$cver"
+    return 0
+  fi
+  local py
+  py="$(probe_python)"
+  if [ -z "$py" ]; then
+    status="BLOCKED"; detail="python3 not found (probe needs it)"
+    emit_doctor_result "$json" "$status" "$detail" "$collector" "$cver"
+    return 0
+  fi
+
+  # Ephemeral probe stack in the system temp area (never the repo).
+  local probe_root
+  probe_root="$(mktemp -d "${TMPDIR:-/tmp}/fg-obs-doctor.XXXXXX")"
+  trap '[ -n "${probe_root:-}" ] && rm -rf "$probe_root" 2>/dev/null; true' EXIT
+  COLLECTOR="$collector"
+  start_collector "$probe_root" || {
+    status="BLOCKED"; detail="collector failed to start: $(tail -n 3 "$probe_root/collector.log" 2>/dev/null | tr '\n' ' ' | head -c 200)"
+    emit_doctor_result "$json" "$status" "$detail" "$collector" "$cver"
+    return 0
+  }
+  local http_rc
+  http_rc=0
+  curl -sS -m 10 -o /dev/null -w '%{http_code}' \
+    -H 'Content-Type: application/json' \
+    --data "$(SYNTHETIC_OTLP)" \
+    "http://127.0.0.1:$PORT/v1/logs" > "$probe_root/http_code.txt" 2>"$probe_root/curl.err" || http_rc=$?
+  local http_code
+  http_code="$(cat "$probe_root/http_code.txt" 2>/dev/null || true)"
+  local i
+  for i in $(seq 1 30); do
+    if grep -q "$marker" "$probe_root/raw/logs.jsonl" 2>/dev/null; then break; fi
+    sleep 0.3
+  done
+  stop_collector "$probe_root" || true
+
+  if [ "$http_rc" -ne 0 ]; then
+    status="BLOCKED"; detail="could not POST to loopback OTLP endpoint: $(head -c 160 "$probe_root/curl.err" 2>/dev/null)"
+  elif ! grep -q "$marker" "$probe_root/raw/logs.jsonl" 2>/dev/null; then
+    status="BROKEN"; detail="probe event was accepted (HTTP ${http_code:-?}) but never persisted to raw/logs.jsonl"
+  else
+    local leaked=0 s
+    for s in $secrets; do
+      if grep -q "$s" "$probe_root/raw/logs.jsonl" 2>/dev/null; then leaked=1; fi
+    done
+    if [ "$leaked" -ne 0 ]; then
+      status="BROKEN"; detail="FAKE SECRET SURVIVED SANITIZATION in $probe_root/raw/logs.jsonl — inspect the collector transform config"
+    else
+      status="AVAILABLE"
+      detail="end-to-end loopback OTLP capture + sanitization verified (probe event persisted, fake secrets dropped/redacted)"
+    fi
+  fi
+  emit_doctor_result "$json" "$status" "$detail" "$collector" "$cver"
+  return 0
+}
+
+emit_doctor_result() {
+  local json="$1" status="$2" detail="$3" collector="$4" cver="$5"
+  if [ "$json" -eq 1 ]; then
+    printf '{\n'
+    printf '  "schema_version": 1,\n'
+    printf '  "tool": "agent-observability-doctor",\n'
+    printf '  "capability": "agent_observability",\n'
+    printf '  "status": "%s",\n' "$status"
+    printf '  "detail": "%s",\n' "$(json_escape "$detail")"
+    printf '  "collector": {"path": "%s", "version": "%s"},\n' "$(json_escape "$collector")" "$(json_escape "$cver")"
+    printf '  "endpoint": "http://127.0.0.1:%s"\n' "$PORT"
+    printf '}\n'
+  else
+    printf 'agent-observability doctor: %s\n' "$status"
+    printf '  detail:    %s\n' "$detail"
+    [ -n "$collector" ] && printf '  collector: %s (%s)\n' "$collector" "$cver"
+    printf '  endpoint:  http://127.0.0.1:%s\n' "$PORT"
+  fi
+}
+
+# ------------------------------------------------------------------ config --
+
+cmd_config() {
+  cat <<EOF
+Codex user-level OpenTelemetry activation (manual, one-time).
+
+WHY this cannot live in the repository:
+  Codex reads [otel] only from the user-level Codex configuration
+  (\$CODEX_HOME/config.toml). Repository-local .codex/config.toml cannot
+  enable OTel, so this repository never edits your Codex config. Adding
+  the block below is an explicit, auditable, user-level opt-in; removing
+  it (or stopping the collector) disables local capture.
+  In this deployment CODEX_HOME is normally \$HOME/.codex-lucid (verify
+  with: echo \$CODEX_HOME).
+
+Add to \$CODEX_HOME/config.toml:
+
+[otel]
+environment = "dev"
+log_user_prompt = false
+exporter = { otlp-http = { endpoint = "http://127.0.0.1:$PORT/v1/logs", protocol = "json" } }
+trace_exporter = { otlp-http = { endpoint = "http://127.0.0.1:$PORT/v1/traces", protocol = "json" } }
+metrics_exporter = { otlp-http = { endpoint = "http://127.0.0.1:$PORT/v1/metrics", protocol = "json" } }
+
+Effect:
+  * all three OTel exporters point at the LOCAL loopback collector started
+    by ./scripts/agent-observability start (nothing leaves the machine);
+  * metrics_exporter must be set explicitly: Codex's default routes
+    product metrics to an external backend, which this block overrides;
+  * log_user_prompt stays false; the collector transform drops the
+    sensitive attribute set before persistence (docs/agent/OBSERVABILITY.md).
+
+Verify:
+  ./scripts/agent-observability status      # codex otel config: configured
+  ./scripts/agent-observability doctor      # AVAILABLE
+
+Disable completely:
+  stop the collector (./scripts/agent-observability stop) and/or remove
+  the [otel] section from \$CODEX_HOME/config.toml.
+EOF
+}
+
+# ------------------------------------------------------------------ install --
+
+cmd_install() {
+  local py ver platform file sha256 url base target_dir target tmp
+  py="$(probe_python)"
+  [ -n "$py" ] || die "python3 not found (needed to read pins.json)" 1
+  [ -f "$PINS" ] || die "pins file missing: $PINS" 1
+  ver="$("$py" -c 'import json,sys; print(json.load(open(sys.argv[1]))["collector"]["version"])' "$PINS")"
+  case "$(uname -s)-$(uname -m)" in
+    Darwin-arm64) platform="darwin_arm64" ;;
+    Darwin-x86_64) platform="darwin_amd64" ;;
+    Linux-x86_64) platform="linux_amd64" ;;
+    *) die "unsupported platform: $(uname -s)-$(uname -m)" 1 ;;
+  esac
+  file="$("$py" -c 'import json,sys; print(json.load(open(sys.argv[1]))["collector"]["assets"][sys.argv[2]]["file"])' "$PINS" "$platform")"
+  sha256="$("$py" -c 'import json,sys; print(json.load(open(sys.argv[1]))["collector"]["assets"][sys.argv[2]]["sha256"])' "$PINS" "$platform")"
+  base="$("$py" -c 'import json,sys; print(json.load(open(sys.argv[1]))["collector"]["releaseBase"])' "$PINS")"
+  url="$base/$file"
+
+  target_dir="$OBS_DIR/otelcol/$ver"
+  target="$target_dir/otelcol"
+  if [ -x "$target" ]; then
+    printf 'agent-observability: pinned collector already installed: %s\n' "$target"
+    return 0
+  fi
+
+  printf 'agent-observability: installing otelcol-contrib %s (%s)\n' "$ver" "$platform"
+  printf '  from: %s\n' "$url"
+  printf '  sha256: %s\n' "$sha256"
+  command -v curl >/dev/null 2>&1 || die "curl not found" 1
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/fg-obs-install.XXXXXX")"
+  trap '[ -n "${tmp:-}" ] && rm -rf "$tmp" 2>/dev/null; true' EXIT
+  curl -fL --retry 2 -o "$tmp/$file" "$url" || die "download failed" 1
+  local py
+  py="$(probe_python)"
+  [ -n "$py" ] || die "python3 not found (needed for checksum verification)" 1
+  local actual
+  actual="$("$py" - "$tmp/$file" <<'PYCHK'
+import hashlib, sys
+h = hashlib.sha256()
+with open(sys.argv[1], "rb") as fh:
+    for chunk in iter(lambda: fh.read(1 << 20), b""):
+        h.update(chunk)
+print(h.hexdigest())
+PYCHK
+  )"
+  [ -n "$actual" ] || die "checksum computation failed" 1
+  [ "$actual" = "$sha256" ] || die "sha256 mismatch (expected $sha256, got $actual) — aborting install" 1
+  mkdir -p "$target_dir"
+  tar -xzf "$tmp/$file" -C "$tmp" || die "extraction failed" 1
+  [ -f "$tmp/otelcol-contrib" ] || die "otelcol-contrib binary not found in the release tarball" 1
+  install -m 755 "$tmp/otelcol-contrib" "$target"
+  rm -rf "$tmp"
+  trap - EXIT
+  printf 'agent-observability: installed and checksum-verified: %s\n' "$target"
+  printf '  version: %s\n' "$(collector_version_of "$target")"
+  return 0
+}
+
+# --------------------------------------------------------------- native-probe --
+
+cmd_native_probe() {
+  command -v node >/dev/null 2>&1 || die "node not found (required for the ACP adapter)" 5
+  local hline hstate hpath hrest
+  hline="$(resolve_codex_home)"
+  hstate="${hline%%|*}"
+  hrest="${hline#*|}"
+  hpath="${hrest%%|*}"
+  case "$hstate" in
+    explicit|discovered) ;;
+    *) die "${hrest#*|}" 5 ;;
+  esac
+  local pline pstate ppath prest
+  pline="$(resolve_codex_path)"
+  pstate="${pline%%|*}"
+  prest="${pline#*|}"
+  ppath="${prest%%|*}"
+  case "$pstate" in
+    explicit|bundled) ;;
+    *) die "${prest#*|}" 5 ;;
+  esac
+  [ -r "$hpath/config.toml" ] || die "cannot read $hpath/config.toml" 5
+  [ -e "$hpath/auth.json" ] || die "no auth.json in $hpath — cannot run an authenticated probe session" 5
+  local adapter
+  adapter="$(adapter_path || true)"
+  [ -n "$adapter" ] || die "codex-acp adapter not found — set CODEX_ACP_ADAPTER" 5
+  local collector
+  collector="$(resolve_collector)"
+  [ -n "$collector" ] || die "collector binary not found — run ./scripts/agent-observability install" 3
+  COLLECTOR="$collector"
+
+  local portst
+  portst="$(port_state)"
+  if [ "$portst" = "in_use" ]; then
+    die "port 127.0.0.1:$PORT is occupied — stop the collector first or set FG_OBS_PORT" 4
+  fi
+
+  local run_id run_dir probe_home scratch
+  run_id="probe-native-$(date -u +%Y%m%dT%H%M%SZ)"
+  run_dir="$RUNS_DIR/$run_id"
+  mkdir -p "$run_dir/raw"
+  probe_home="$(mktemp -d "${TMPDIR:-/tmp}/fg-otel-probe-home.XXXXXX")"
+  scratch="$(mktemp -d "${TMPDIR:-/tmp}/fg-otel-probe-cwd.XXXXXX")"
+  trap '[ -n "${probe_home:-}" ] && rm -rf "$probe_home" 2>/dev/null; [ -n "${scratch:-}" ] && rm -rf "$scratch" 2>/dev/null; true' EXIT
+
+  # Overlay CODEX_HOME: the real config (with the [otel] section stripped),
+  # plus our local [otel] block. auth.json is referenced by symlink — the
+  # real credentials file is never copied and never modified.
+  awk 'BEGIN{skip=0}
+       /^[[:space:]]*\[otel\][[:space:]]*$/ {skip=1; next}
+       skip==1 && /^[[:space:]]*\[/ {skip=0}
+       skip==0 {print}' "$hpath/config.toml" > "$probe_home/config.toml"
+  cat >> "$probe_home/config.toml" <<EOF
+
+[otel]
+environment = "dev"
+log_user_prompt = false
+exporter = { otlp-http = { endpoint = "http://127.0.0.1:$PORT/v1/logs", protocol = "json" } }
+trace_exporter = { otlp-http = { endpoint = "http://127.0.0.1:$PORT/v1/traces", protocol = "json" } }
+metrics_exporter = { otlp-http = { endpoint = "http://127.0.0.1:$PORT/v1/metrics", protocol = "json" } }
+EOF
+  ln -s "$hpath/auth.json" "$probe_home/auth.json"
+  printf 'native-probe: overlay CODEX_HOME prepared at %s (auth via symlink, config copy)\n' "$probe_home" >&2
+
+  local py
+  py="$(probe_python)"
+  [ -n "$py" ] || die "python3 not found" 1
+  FG_OBS_REPO_ROOT="$REPO_ROOT" \
+  FG_OBS_CODEX_VERSION="$(codex_path_version "$pstate" "$ppath")" \
+  FG_OBS_CODEX_ACP_VERSION="$(codex_acp_version)" \
+  FG_OBS_COLLECTOR_VERSION="$(collector_version_of "$COLLECTOR")" \
+  FG_OBS_OTEL_ENDPOINT="http://127.0.0.1:$PORT" \
+  FG_OBS_PRIVACY_MODE="$PRIVACY_MODE" \
+  FG_OBS_RETENTION_DAYS="$RETENTION_DAYS" \
+  FG_OBS_MAX_MB="$MAX_MB" \
+  FG_OBS_MAX_BACKUPS="$MAX_BACKUPS" \
+  "$py" "$MANIFEST_PY" seed "$run_dir" "$run_id" "probe-native" >/dev/null
+
+  start_collector "$run_dir"
+  printf 'native-probe: collector listening on 127.0.0.1:%s (run %s)\n' "$PORT" "$run_dir" >&2
+
+  local prompt rc
+  prompt="Run the shell command 'echo fg-otel-native-probe $run_id' and reply with its exact output. Do nothing else."
+  rc=0
+  local -a probe_env=(CODEX_HOME="$probe_home" APP_SERVER_LOGS="$run_dir")
+  # Only an explicit CODEX_PATH is forwarded; for the bundled default the
+  # adapter must resolve its own bundled launcher (the product default).
+  if [ "$pstate" = "explicit" ]; then probe_env+=(CODEX_PATH="$ppath"); fi
+  env "${probe_env[@]}" \
+  node "$PROBE_CLIENT" \
+    --adapter "$adapter" \
+    --cwd "$scratch" \
+    --prompt "$prompt" \
+    --timeout "${FG_OBS_PROBE_TIMEOUT:-180000}" \
+    --log "$run_dir/probe-client.log" > "$run_dir/probe-summary.json" || rc=$?
+
+  stop_collector "$run_dir"
+  finalize_run "$run_dir" "${STOP_STATUS:-graceful}"
+  ln -sfn "$run_id" "$RUNS_DIR/latest"
+
+  printf '\nnative-probe: EVIDENCE SUMMARY\n'
+  printf '  run dir:        %s\n' "$run_dir"
+  printf '  codex home:     %s (%s)\n' "$hpath" "$hstate"
+  printf '  codex path:     %s (%s)\n' "$ppath" "$pstate"
+  local f
+  for f in "$run_dir"/raw/*.jsonl; do
+    [ -f "$f" ] && printf '  raw file:       %s (%s bytes)\n' "$f" "$(wc -c < "$f" | tr -d ' ')"
+  done
+  "$py" "$MANIFEST_PY" summary "$run_dir" | "$py" -c '
+import json, sys
+m = json.load(sys.stdin)
+print("  conversation:   " + ", ".join(m.get("conversation_ids") or ["<none>"]))
+ec = m.get("event_counts") or {}
+print("  event counts:   " + (", ".join("%s=%d" % (k, v) for k, v in sorted(ec.items())) or "<none>"))
+print("  log records:    %s  spans: %s  metric series: %s" % (
+    m.get("log_record_count"), m.get("span_count"), m.get("metric_series_count")))
+print("  models:         " + ", ".join(m.get("models") or ["<none>"]))
+print("  app versions:   " + ", ".join(m.get("app_versions") or ["<none>"]))
+'
+  printf '  client summary: cat %s\n' "$run_dir/probe-summary.json"
+  rm -rf "$probe_home" "$scratch"
+  trap - EXIT
+  if [ "$rc" -ne 0 ]; then
+    printf 'native-probe: FAILED (client exit %s) — see %s\n' "$rc" "$run_dir/probe-client.log"
+    return "$rc"
+  fi
+  return 0
+}
+
+# --------------------------------------------------------------------- help --
+
+usage() {
+  cat <<EOF
+Usage:
+  ./scripts/agent-observability status [--json]
+  ./scripts/agent-observability start
+  ./scripts/agent-observability stop
+  ./scripts/agent-observability doctor [--json]
+  ./scripts/agent-observability config
+  ./scripts/agent-observability install
+  ./scripts/agent-observability native-probe
+  ./scripts/agent-observability help
+
+Local, privacy-conscious trace capture for normal Codex/ACP agent sessions.
+All runtime artifacts (traces, state, pinned collector) stay in git-ignored
+.artifacts/ and are never committed. See docs/agent/OBSERVABILITY.md for the
+architecture, privacy model and the trace contract.
+
+Environment overrides:
+  FG_OBS_PORT (default 4318), FG_OBS_RETENTION_DAYS (14),
+  FG_OBS_MAX_MB (32), FG_OBS_MAX_BACKUPS (10),
+  FG_OTELCOL (explicit collector binary), CODEX_ACP_ADAPTER (adapter path),
+  FG_OBS_PROBE_TIMEOUT (ms, native-probe).
+  CODEX_HOME / CODEX_PATH are optional: when unset they are resolved
+  automatically (explicit values stay authoritative); the contract is
+  documented in docs/agent/OBSERVABILITY.md.
+
+Exit codes:
+  0  ok (including idempotent no-ops)
+  1  generic failure
+  2  usage error
+  3  collector binary missing
+  4  port conflict
+  5  probe prerequisites missing
+EOF
+}
+
+main() {
+  local cmd="${1:-help}"
+  shift || true
+  case "$cmd" in
+    status) [ $# -le 1 ] || { usage >&2; exit 2; }; cmd_status "${1:-}" ;;
+    start) [ $# -eq 0 ] || { usage >&2; exit 2; }; cmd_start ;;
+    stop) [ $# -eq 0 ] || { usage >&2; exit 2; }; cmd_stop ;;
+    doctor) [ $# -le 1 ] || { usage >&2; exit 2; }; cmd_doctor "${1:-}" ;;
+    config) [ $# -eq 0 ] || { usage >&2; exit 2; }; cmd_config ;;
+    install) [ $# -eq 0 ] || { usage >&2; exit 2; }; cmd_install ;;
+    native-probe) [ $# -eq 0 ] || { usage >&2; exit 2; }; cmd_native_probe ;;
+    help|--help|-h) usage ;;
+    *) usage >&2; exit 2 ;;
+  esac
+}
+
+main "$@"

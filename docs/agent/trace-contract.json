@@ -1,0 +1,132 @@
+{
+  "schemaVersion": 1,
+  "name": "fg-agent-observability-trace-contract",
+  "description": "Versioned contract for the local sanitized Codex OTel trace store. Later Harness analysis (Run Ledger, normalized metrics) must depend only on the keys named here. Raw OTLP field names outside this contract are implementation detail.",
+  "sourceVersions": {
+    "codex": "0.148.x",
+    "codexAcp": "1.7.0",
+    "acpProtocolVersion": 1,
+    "collector": "otelcol-contrib 0.161.0"
+  },
+  "rawFormat": {
+    "encoding": "OTLP/JSON, one self-contained payload object per line",
+    "files": {
+      "raw/logs.jsonl": "OTLP log payloads (Codex session events)",
+      "raw/traces.jsonl": "OTLP trace payloads (spans + span events)",
+      "raw/metrics.jsonl": "OTLP metric payloads (counts, durations, token usage)"
+    },
+    "lineShape": "each line is a ResourceLogs / ResourceSpans / ResourceMetrics object (resourceLogs|resourceSpans|resourceMetrics top-level key)"
+  },
+  "correlation": {
+    "conversationId": "conversation.id attribute (native Codex conversation/session ID; equals CODEX_SESSION_ID for ACP sessions)",
+    "toolCallId": "call_id attribute on tool_decision / tool_result / sandbox_outcome events",
+    "apiAttempt": "attempt attribute on codex.api_request events"
+  },
+  "resourceAttributes": {
+    "retained": ["service.name", "service.version"],
+    "dropped": ["host.name", "host.id", "host.arch"]
+  },
+  "events": {
+    "commonAttributesRetained": [
+      "event.timestamp",
+      "event.name",
+      "conversation.id",
+      "app.version",
+      "auth_mode",
+      "originator",
+      "terminal.type",
+      "model",
+      "slug"
+    ],
+    "byName": {
+      "codex.conversation_starts": {
+        "retained": ["provider_name", "reasoning_effort", "reasoning_summary", "context_window", "auto_compact_token_limit", "approval_policy", "sandbox_policy", "mcp_server_count", "auth.env_openai_api_key_present", "auth.env_codex_api_key_present", "auth.env_codex_api_key_enabled", "auth.env_provider_key_present", "auth.env_refresh_token_url_override_present"]
+      },
+      "codex.user_prompt": {
+        "retained": ["prompt_length", "text_input_count", "image_input_count", "local_image_input_count"],
+        "note": "prompt text is '[REDACTED]' at source (log_user_prompt=false) and the key is dropped by the collector regardless"
+      },
+      "codex.tool_decision": {
+        "retained": ["tool_name", "call_id", "decision", "source"]
+      },
+      "codex.tool_result": {
+        "retained": ["tool_name", "call_id", "duration_ms", "success", "arguments_length", "output_length", "output_line_count", "tool_origin", "mcp_tool"],
+        "note": "full arguments/output text is dropped by the collector; only bounded counts are retained"
+      },
+      "codex.sandbox_outcome": {
+        "retained": ["tool_name", "call_id", "outcome", "initial_duration_ms", "escalated_duration_ms"]
+      },
+      "codex.api_request": {
+        "retained": ["duration_ms", "http.response.status_code", "attempt", "auth.header_attached", "auth.retry_after_unauthorized", "auth.recovery_mode", "auth.recovery_phase"]
+      },
+      "codex.turn_ttft": { "retained": ["duration_ms"] },
+      "codex.sse_event": { "retained": ["kind", "duration_ms"] },
+      "codex.startup_phase": { "retained": ["phase", "duration_ms"] },
+      "codex.websocket_connect": { "retained": ["duration_ms"] },
+      "codex.websocket_request": { "retained": ["duration_ms"] },
+      "codex.auth_recovery": { "retained": ["phase"] },
+      "codex.plugin_install_elicitation_sent": { "retained": [] },
+      "codex.plugin_install_suggestion": { "retained": [] }
+    }
+  },
+  "spans": {
+    "note": "span names are implementation detail; span events carry the same event.name/attribute contract as logs. Retained span attributes follow the event contract above.",
+    "observedExamples": ["app_server.request", "session_loop", "thread_spawn", "shell_snapshot"]
+  },
+  "metrics": {
+    "note": "retained as OTLP metric data points; tags are low-cardinality",
+    "byName": {
+      "codex.turn.token_usage": "per-turn token counts (input/cached/output/reasoning/total variants)",
+      "codex.api_request": "API call count",
+      "codex.api_request.duration_ms": "API call duration",
+      "codex.tool.call": "tool call count (tagged by tool, success)",
+      "codex.tool.call.duration_ms": "tool call duration",
+      "codex.turn.e2e_duration_ms": "end-to-end turn duration",
+      "codex.turn.ttft.duration_ms": "time to first token",
+      "codex.turn.ttfm.duration_ms": "time to first message",
+      "codex.sse_event": "SSE event count",
+      "codex.sse_event.duration_ms": "SSE event duration",
+      "codex.process.start": "process start count",
+      "codex.startup.phase.duration_ms": "startup phase durations"
+    }
+  },
+  "droppedBySanitization": [
+    "user.email",
+    "user.account_id",
+    "auth.env_provider_key_name",
+    "auth.header_name",
+    "auth.agent_id",
+    "auth.task_id",
+    "auth.request_id",
+    "auth.cf_ray",
+    "error.message",
+    "endpoint",
+    "prompt",
+    "arguments",
+    "output",
+    "mcp_servers",
+    "host.name",
+    "host.id",
+    "host.arch"
+  ],
+  "redactionBackstop": {
+    "appliesTo": ["originator"],
+    "patterns": "sk-*, ghp_*, gho_*, xox[baprs]-*, AKIA*, AIza*, JWT-shaped (eyJ*) tokens"
+  },
+  "reasoningContent": "not persisted: Codex 0.148.x emits no hidden-reasoning text in OTel events; reasoning is observable only via token counts (metrics) and the reasoning_effort/reasoning_summary metadata on codex.conversation_starts",
+  "manifest": {
+    "file": "capture-manifest.json",
+    "schemaVersion": 1,
+    "fields": [
+      "schema_version", "run_id", "kind", "start_ts", "end_ts", "stop_status",
+      "repo_root", "branch", "starting_head", "starting_tree",
+      "codex_version", "codex_acp_version", "collector_version",
+      "otel_endpoint", "privacy_mode",
+      "retention_days", "max_file_mb", "max_backups",
+      "raw_trace_files", "conversation_ids", "event_counts",
+      "app_versions", "models", "originators", "span_counts", "metric_names",
+      "log_record_count", "span_count", "metric_series_count"
+    ],
+    "outOfScope": ["task success", "root cause", "human corrections", "verification outcome"]
+  }
+}

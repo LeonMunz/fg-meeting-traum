@@ -29,6 +29,9 @@
 #                       never sets FG_ALLOW_E2E_RESET and never touches the
 #                       fg_e2e schema
 #   network             deterministic TCP probe + proxy-env observation
+#   agent_observability OPTIONAL local trace-capture collector (otelcol).
+#                       Never gates the doctor result unless
+#                       FG_DOCTOR_REQUIRE_OBSERVABILITY=1 is set.
 #
 # Read-only contract (hard guarantees):
 #   * no tests are executed, no services or browsers are left running,
@@ -136,6 +139,20 @@ gate_missing_list() {
   printf '%s' "$out"
 }
 
+# Optional capabilities: their status is reported but excluded from the
+# overall result / exit code, unless explicitly required.
+OPTIONAL_CAPS="agent_observability"
+if [ "${FG_DOCTOR_REQUIRE_OBSERVABILITY:-0}" = "1" ]; then
+  OPTIONAL_CAPS=""
+fi
+
+is_optional_cap() {
+  case " $OPTIONAL_CAPS " in
+    *" $1 "*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 TOL_OUT=""
 TOL_RC=0
 # Run a command that is allowed to fail. Captures combined output in TOL_OUT
@@ -152,6 +169,16 @@ count_status() {
   local c=0 i st
   for i in "${!CAP_STATUSES[@]}"; do
     st="${CAP_STATUSES[$i]}"
+    if [ "$st" = "$1" ]; then c=$((c + 1)); fi
+  done
+  printf '%s' "$c"
+}
+
+count_status_required() {
+  local c=0 i st
+  for i in "${!CAP_STATUSES[@]}"; do
+    st="${CAP_STATUSES[$i]}"
+    if is_optional_cap "${CAP_NAMES[$i]}"; then continue; fi
     if [ "$st" = "$1" ]; then c=$((c + 1)); fi
   done
   printf '%s' "$c"
@@ -514,6 +541,37 @@ cap_chromium_launch() {
   fi
 }
 
+cap_agent_observability() {
+  # Optional: local agent trace-capture collector (see
+  # ./scripts/agent-observability and docs/agent/OBSERVABILITY.md).
+  # Read-only probe: binary discovery + `--version` only.
+  local bin ver
+  if [ -n "${FG_OTELCOL:-}" ] && [ -x "${FG_OTELCOL:-}" ]; then
+    bin="$FG_OTELCOL"
+  else
+    bin="$(command -v otelcol 2>/dev/null || true)"
+    if [ -z "$bin" ]; then
+      # Pure-bash discovery (the doctor must stay functional under a
+      # restricted PATH: no external commands in this probe).
+      local cand
+      for cand in "$REPO_ROOT/.artifacts/agent-observability/otelcol"/*/otelcol; do
+        if [ -x "$cand" ]; then bin="$cand"; break; fi
+      done
+    fi
+  fi
+  if [ -z "$bin" ]; then
+    add_cap "agent_observability" "unavailable" "otelcol not found (optional capability) — install: ./scripts/agent-observability install; e2e check: ./scripts/agent-observability doctor"
+    return 0
+  fi
+  run_tolerated "$bin" --version
+  if [ "$TOL_RC" -eq 0 ] && [ -n "$TOL_OUT" ]; then
+    ver="${TOL_OUT%%$'\n'}"  # first line, pure bash (restricted-PATH safe)
+    add_cap "agent_observability" "available" "${ver} (optional; not part of the doctor result unless FG_DOCTOR_REQUIRE_OBSERVABILITY=1)"
+  else
+    add_cap "agent_observability" "blocked" "otelcol found (${bin}) but --version failed: ${TOL_OUT:0:120}"
+  fi
+}
+
 # ------------------------------------------------------------- gate probes ---
 
 cap_frontend_gate() {
@@ -582,9 +640,15 @@ Status values:
                auth, network) — a known blocker, distinct from missing deps
   unknown      not determinable without mutation or extra context
 
+Optional capabilities:
+  agent_observability is reported but does NOT gate the result/exit code;
+  it is excluded from "required" unless FG_DOCTOR_REQUIRE_OBSERVABILITY=1.
+  A missing optional collector never turns a healthy product environment
+  into a failed doctor result.
+
 Exit codes:
-  0  all capabilities available
-  1  diagnosis completed; >=1 capability blocked/unavailable/unknown
+  0  all required capabilities available
+  1  diagnosis completed; >=1 required capability blocked/unavailable/unknown
   2  usage error
   3  internal doctor failure
 
@@ -612,21 +676,51 @@ print_human() {
   printf 'Summary: %d capabilities — %s available, %s blocked, %s unavailable, %s unknown\n' \
     "${#CAP_NAMES[@]}" "$(count_status available)" "$(count_status blocked)" \
     "$(count_status unavailable)" "$(count_status unknown)"
-  if [ "$(count_status available)" -eq "${#CAP_NAMES[@]}" ]; then
-    printf 'Result: OK (exit code 0)\n'
+  local n_required n_required_avail
+  n_required_avail="$(count_status_required available)"
+  n_required=$(( n_required_avail + $(count_status_required blocked) + $(count_status_required unavailable) + $(count_status_required unknown) ))
+  if [ "$n_required_avail" -eq "$n_required" ]; then
+    printf 'Result: OK (exit code 0)%s\n' "$(optional_note)"
   else
-    printf 'Result: DEGRADED — one or more capabilities are not fully available (exit code 1)\n'
+    printf 'Result: DEGRADED — one or more required capabilities are not fully available (exit code 1)%s\n' "$(optional_note)"
   fi
 }
 
+optional_note() {
+  local i missing=""
+  for i in "${!CAP_NAMES[@]}"; do
+    if is_optional_cap "${CAP_NAMES[$i]}" && [ "${CAP_STATUSES[$i]}" != "available" ]; then
+      if [ -n "$missing" ]; then missing="$missing, "; fi
+      missing="${CAP_NAMES[$i]}(${CAP_STATUSES[$i]})"
+    fi
+  done
+  if [ -n "$missing" ]; then
+    printf ' [optional capabilities not fully available: %s — they do not gate this result]' "$missing"
+  fi
+  return 0
+}
+
+optional_caps_json() {
+  local out="" i q='"'
+  for i in "${!CAP_NAMES[@]}"; do
+    if is_optional_cap "${CAP_NAMES[$i]}"; then
+      if [ -n "$out" ]; then out="$out, "; fi
+      out="${out}${q}${CAP_NAMES[$i]}${q}"
+    fi
+  done
+  printf '%s' "$out"
+}
+
 print_json() {
-  local i sep n_total n_avail n_block n_unavail n_unknown overall
+  local i sep n_total n_avail n_block n_unavail n_unknown n_required n_required_avail overall
   n_total="${#CAP_NAMES[@]}"
   n_avail="$(count_status available)"
   n_block="$(count_status blocked)"
   n_unavail="$(count_status unavailable)"
   n_unknown="$(count_status unknown)"
-  if [ "$n_avail" -eq "$n_total" ]; then overall="ok"; else overall="degraded"; fi
+  n_required_avail="$(count_status_required available)"
+  n_required=$(( n_required_avail + $(count_status_required blocked) + $(count_status_required unavailable) + $(count_status_required unknown) ))
+  if [ "$n_required_avail" -eq "$n_required" ]; then overall="ok"; else overall="degraded"; fi
   printf '{\n'
   printf '  "schema_version": %d,\n' "$SCHEMA_VERSION"
   printf '  "tool": "%s",\n' "$(json_escape "$DOCTOR_TOOL")"
@@ -651,6 +745,7 @@ print_json() {
       "$sep"
   done
   printf '  ],\n'
+  printf '  "optional_capabilities": [%s],\n' "$(optional_caps_json)"
   printf '  "summary": {\n'
   printf '    "total": %d,\n' "$n_total"
   printf '    "available": %d,\n' "$n_avail"
@@ -699,6 +794,7 @@ main() {
   cap_chromium_launch
   cap_e2e_gate
   cap_network
+  cap_agent_observability
 
   if [ "$mode" = "json" ]; then
     print_json
@@ -706,7 +802,10 @@ main() {
     print_human
   fi
 
-  if [ "$(count_status available)" -eq "${#CAP_NAMES[@]}" ]; then
+  local n_required n_required_avail
+  n_required_avail="$(count_status_required available)"
+  n_required=$(( n_required_avail + $(count_status_required blocked) + $(count_status_required unavailable) + $(count_status_required unknown) ))
+  if [ "$n_required_avail" -eq "$n_required" ]; then
     exit 0
   fi
   exit 1

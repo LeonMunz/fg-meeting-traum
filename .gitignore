@@ -23,3 +23,7 @@ __pycache__/
 db.sqlite3
 playwright-report/
 test-results/
+
+# Local agent observability: raw traces, capture state, pinned collector binary
+# (never commit telemetry; see docs/agent/OBSERVABILITY.md)
+.artifacts/

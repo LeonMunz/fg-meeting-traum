@@ -1,0 +1,167 @@
+# FG Workspace — local agent-observability collector configuration (template).
+#
+# Rendered by scripts/agent-observability with:
+#   __RUN_DIR__       capture run directory (git-ignored)
+#   __PORT__          loopback OTLP/HTTP port (default 4318)
+#   __MAX_MB__        rotation size limit per raw file (MiB)
+#   __MAX_DAYS__      rotation age limit (days)
+#   __MAX_BACKUPS__   max rotated raw files kept
+#
+# Privacy contract: the transform processor deterministically DROPS the
+# sensitive attribute set and whitelists resource attributes before
+# anything is persisted (see
+# docs/agent/OBSERVABILITY.md, "Privacy model"). The raw files under
+# __RUN_DIR__/raw/ are the sanitized persistence boundary.
+
+receivers:
+  otlp:
+    protocols:
+      # Loopback only. Codex speaks OTLP/HTTP (JSON) to the /v1/* paths.
+      http:
+        endpoint: "127.0.0.1:__PORT__"
+
+processors:
+  memory_limiter:
+    limit_mib: 256
+    spike_limit_mib: 128
+    check_interval: 1s
+
+  batch:
+    send_batch_size: 512
+    timeout: 1s
+
+  # Sanitization: drop the sensitive attribute set at the source of
+  # persistence (transform processor >= 0.120 advanced statement format).
+  # `delete_key()` on an absent key is a no-op, so this is a defensive
+  # contract: even if a future Codex version adds a sensitive field with
+  # one of these names, it never reaches the raw files.
+  transform:
+    error_mode: ignore
+    log_statements:
+      # Resource whitelist: Codex sets service.name, service.version, env
+      # (and host.name on log signals). keep_keys() deterministically drops
+      # host identity and any future resource attribute not on this list.
+      - context: resource
+        statements:
+          - keep_keys(resource.attributes, ["service.name", "service.version", "env"])
+      - context: log
+        statements:
+          # Account identity.
+          - delete_key(log.attributes, "user.email")
+          - delete_key(log.attributes, "user.account_id")
+          # Credential variable names and auth metadata.
+          - delete_key(log.attributes, "auth.env_provider_key_name")
+          - delete_key(log.attributes, "auth.header_name")
+          - delete_key(log.attributes, "auth.agent_id")
+          - delete_key(log.attributes, "auth.task_id")
+          - delete_key(log.attributes, "auth.request_id")
+          - delete_key(log.attributes, "auth.cf_ray")
+          # Error text and full endpoints.
+          - delete_key(log.attributes, "error.message")
+          - delete_key(log.attributes, "endpoint")
+          # Prompt / tool content (kept as *_length counts only).
+          - delete_key(log.attributes, "prompt")
+          - delete_key(log.attributes, "arguments")
+          - delete_key(log.attributes, "output")
+          - delete_key(log.attributes, "mcp_servers")
+          # Regex backstop on the one retained free-text field
+          # (client originator string) for embedded secret-like values.
+          - 'replace_pattern(log.attributes["originator"], "sk-[A-Za-z0-9]{16,}|ghp_[A-Za-z0-9]{16,}|gho_[A-Za-z0-9]{16,}|xox[baprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{20,}|eyJ[A-Za-z0-9_-]{20,}", "[REDACTED]")'
+    trace_statements:
+      - context: resource
+        statements:
+          - keep_keys(resource.attributes, ["service.name", "service.version", "env"])
+      - context: span
+        statements:
+          - delete_key(span.attributes, "user.email")
+          - delete_key(span.attributes, "user.account_id")
+          - delete_key(span.attributes, "auth.env_provider_key_name")
+          - delete_key(span.attributes, "auth.header_name")
+          - delete_key(span.attributes, "auth.agent_id")
+          - delete_key(span.attributes, "auth.task_id")
+          - delete_key(span.attributes, "auth.request_id")
+          - delete_key(span.attributes, "auth.cf_ray")
+          - delete_key(span.attributes, "error.message")
+          - delete_key(span.attributes, "endpoint")
+          - delete_key(span.attributes, "prompt")
+          - delete_key(span.attributes, "arguments")
+          - delete_key(span.attributes, "output")
+      - context: spanevent
+        statements:
+          - delete_key(spanevent.attributes, "user.email")
+          - delete_key(spanevent.attributes, "user.account_id")
+          - delete_key(spanevent.attributes, "auth.env_provider_key_name")
+          - delete_key(spanevent.attributes, "auth.header_name")
+          - delete_key(spanevent.attributes, "error.message")
+          - delete_key(spanevent.attributes, "endpoint")
+          - delete_key(spanevent.attributes, "prompt")
+          - delete_key(spanevent.attributes, "arguments")
+          - delete_key(spanevent.attributes, "output")
+
+    # Defenses for the metrics pipeline (Codex metrics such as token usage):
+    # same resource whitelist plus a defensive datapoint-attribute drop set.
+    metric_statements:
+      - context: resource
+        statements:
+          - keep_keys(resource.attributes, ["service.name", "service.version", "env"])
+      - context: datapoint
+        statements:
+          - delete_key(datapoint.attributes, "user.email")
+          - delete_key(datapoint.attributes, "user.account_id")
+          - delete_key(datapoint.attributes, "auth.env_provider_key_name")
+          - delete_key(datapoint.attributes, "auth.header_name")
+          - delete_key(datapoint.attributes, "auth.agent_id")
+          - delete_key(datapoint.attributes, "auth.task_id")
+          - delete_key(datapoint.attributes, "auth.request_id")
+          - delete_key(datapoint.attributes, "auth.cf_ray")
+          - delete_key(datapoint.attributes, "error.message")
+          - delete_key(datapoint.attributes, "endpoint")
+
+exporters:
+  # One file exporter per signal so the three pipelines never share a
+  # (truncate-on-start) file. Human-inspectable OTLP JSON, one object per
+  # line, with bounded rotation.
+  file/logs:
+    path: "__RUN_DIR__/raw/logs.jsonl"
+    format: json
+    create_directory: true
+    rotation:
+      max_megabytes: __MAX_MB__
+      max_days: __MAX_DAYS__
+      max_backups: __MAX_BACKUPS__
+  file/traces:
+    path: "__RUN_DIR__/raw/traces.jsonl"
+    format: json
+    create_directory: true
+    rotation:
+      max_megabytes: __MAX_MB__
+      max_days: __MAX_DAYS__
+      max_backups: __MAX_BACKUPS__
+  file/metrics:
+    path: "__RUN_DIR__/raw/metrics.jsonl"
+    format: json
+    create_directory: true
+    rotation:
+      max_megabytes: __MAX_MB__
+      max_days: __MAX_DAYS__
+      max_backups: __MAX_BACKUPS__
+
+service:
+  telemetry:
+    logs:
+      level: warn
+    metrics:
+      level: none
+  pipelines:
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch, transform]
+      exporters: [file/logs]
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch, transform]
+      exporters: [file/traces]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch, transform]
+      exporters: [file/metrics]

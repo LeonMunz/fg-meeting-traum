@@ -32,6 +32,7 @@ Do not change these choices without an explicit architecture decision.
 - `evals/` — historical-state eval case packages (pilot: `cases/activity-feed-query-cost`); see `evals/README.md`
 - `scripts/agent-verify.sh` — repository verification helper (profiles: `quick`, `frontend`, `backend`, `core`, `e2e`, `full`)
 - `scripts/agent-doctor.sh` — read-only environment capability doctor (human + JSON)
+- `scripts/agent-observability` — local native-Codex trace capture control surface (status/start/stop/doctor/config/install/native-probe); docs in `docs/agent/OBSERVABILITY.md`
 - `scripts/tests/agent-doctor.test.sh` — doctor tests (formats, exit codes, simulated blockers)
 - `scripts/tests/agent-verify.test.sh` — agent-verify harness tests (usage, plan mode, `--summary-json` contract)
 - `scripts/tests/core-workflow.test.sh` — CI core workflow contract tests

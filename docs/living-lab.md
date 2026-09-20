@@ -207,7 +207,15 @@ environment. It is diagnostic only:
 
 The JSON mode has a fixed structure (`schema_version: 1`): `repo`,
 `environment`, an ordered `capabilities` array (each capability has at least
-`name`, `status`, `detail`), and a `summary` block.
+`name`, `status`, `detail`), an `optional_capabilities` array, and a
+`summary` block.
+
+The last capability, `agent_observability` (local agent trace-capture
+collector), is **optional**: it is reported but does not gate the result or
+exit code, so a missing optional collector never turns a healthy product
+environment into a failed doctor result. Set
+`FG_DOCTOR_REQUIRE_OBSERVABILITY=1` to make it a required capability
+(observability-required mode). Details: `docs/agent/OBSERVABILITY.md`.
 
 ### Status values
 
@@ -222,8 +230,10 @@ The JSON mode has a fixed structure (`schema_version: 1`): `repo`,
 
 ### Exit codes
 
-- `0` — all capabilities `available`.
-- `1` — diagnosis completed; at least one capability is `blocked`,
+- `0` — all **required** capabilities `available` (optional capabilities
+  such as `agent_observability` do not gate the result unless
+  `FG_DOCTOR_REQUIRE_OBSERVABILITY=1`).
+- `1` — diagnosis completed; at least one required capability is `blocked`,
   `unavailable`, or `unknown`.
 - `2` — usage error.
 - `3` — internal doctor failure.
@@ -246,8 +256,19 @@ attempts.
 `bash scripts/tests/agent-doctor.test.sh` covers the output formats, exit
 codes, non-mutation, and simulated blockers (missing runtimes via restricted
 PATH, missing browser via empty `PLAYWRIGHT_BROWSERS_PATH`, blocked-launch
-classification and cause sanitization). The doctor is not part of any
-`agent-verify.sh` profile; run it directly.
+classification and cause sanitization, optional-capability semantics). The
+doctor is not part of any `agent-verify.sh` profile; run it directly.
+
+## Agent observability (local, optional)
+
+`./scripts/agent-observability` captures **native Codex OpenTelemetry** from
+normal Codex/ACP agent sessions into a local, privacy-conscious,
+git-ignored trace store (`.artifacts/agent-runs/`). It is a local capture
+facility only: no dashboards, no external telemetry backend, no product or
+Eval changes. Canonical documentation, privacy model, trace contract and
+command surface: `docs/agent/OBSERVABILITY.md` and
+`docs/agent/trace-contract.json`. Its own contract tests:
+`bash scripts/tests/agent-observability.test.sh`.
 
 ## Living-Lab tasks
 

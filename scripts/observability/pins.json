@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "collector": {
+    "distribution": "otelcol-contrib",
+    "vendor": "OpenTelemetry (official release)",
+    "version": "0.161.0",
+    "releaseBase": "https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v0.161.0",
+    "assets": {
+      "darwin_arm64": {
+        "file": "otelcol-contrib_0.161.0_darwin_arm64.tar.gz",
+        "sha256": "ccc0cf5de5242adcaedc7b5aebed43a1dc56aa2dc7de6ebc495d5db60512d34c"
+      },
+      "darwin_amd64": {
+        "file": "otelcol-contrib_0.161.0_darwin_amd64.tar.gz",
+        "sha256": "357fc0a7a77f5d42cab2f46af6be301062a7824b82454cc264cb8661fa9a8734"
+      },
+      "linux_amd64": {
+        "file": "otelcol-contrib_0.161.0_linux_amd64.tar.gz",
+        "sha256": "778c689efa681ff6e4722ce9f66b9b7f57c3ba009ab2e2b43dc2e0315862c731"
+      }
+    }
+  }
+}

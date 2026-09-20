@@ -17,6 +17,8 @@
 #   * no secrets in output
 #   * simulated blocker: missing runtimes (restricted PATH)
 #   * simulated blocker: missing browser (empty PLAYWRIGHT_BROWSERS_PATH)
+#   * optional capability agent_observability: reported but never gates the
+#     result unless FG_DOCTOR_REQUIRE_OBSERVABILITY=1
 #   * blocked-launch classification + cause sanitization (sourced helpers)
 #   * read-only contract markers in the doctor source
 
@@ -75,7 +77,9 @@ EXPECTED_CAPABILITIES=(
   repo_workspace node_runtime npm uv_runtime python_runtime
   frontend_deps backend_deps database frontend_gate backend_gate quick_gate
   playwright_runtime chromium_launch e2e_gate network
+  agent_observability
 )
+OPTIONAL_CAPABILITIES=(agent_observability)
 
 json_field() { # json_field <json> <capability-name> -> prints status
   node -e '
@@ -108,7 +112,7 @@ expect_rc "t02b multiple flags exit 2" 2 "$RC"
 run_cmd bash "$DOCTOR"
 out="$CAP_OUT"; rc="$RC"
 if [ "$rc" -eq 0 ] || [ "$rc" -eq 1 ]; then ok "t03a human mode exit code in {0,1}"; else bad "t03a human mode exit code in {0,1} (got $rc)"; fi
-expect_contains "t03b human mode has summary" "$out" "Summary: 15 capabilities"
+expect_contains "t03b human mode has summary" "$out" "Summary: 16 capabilities"
 
 # Every capability name appears with a valid status as its second column.
 rows="$(printf '%s\n' "$out" | awk '$2 ~ /^(available|blocked|unavailable|unknown)$/ { print $1 }')"
@@ -146,17 +150,27 @@ else {
 if (!d.repo || d.repo.root !== process.env.FG_DOCTOR_TEST_REPO_ROOT) errs.push("repo.root");
 if (typeof (d.repo || {}).writable !== "boolean") errs.push("repo.writable");
 if (!d.environment || typeof d.environment.platform !== "string") errs.push("environment");
+if (!Array.isArray(d.optional_capabilities)) errs.push("optional_capabilities not an array");
+else {
+  const opt = new Set(d.optional_capabilities);
+  const EXPECTED_OPT = '"$(printf '%s ' "${OPTIONAL_CAPABILITIES[@]}" | node -e 'const t=require("fs").readFileSync(0,"utf8"); console.log(JSON.stringify(t.trim().split(/\s+/)))')"';
+  eq(d.optional_capabilities.slice().sort().join("|"), EXPECTED_OPT.sort().join("|"), "optional_capabilities set");
+  d.optional_capabilities.forEach((n) => { if (!EXPECTED.includes(n)) errs.push("optional not a capability: " + n); });
+}
 const s = d.summary;
 if (!s) errs.push("summary missing");
 else {
   const caps = d.capabilities || [];
   const cnt = (st) => caps.filter((c) => c.status === st).length;
+  const opt = new Set(Array.isArray(d.optional_capabilities) ? d.optional_capabilities : []);
+  const req = caps.filter((c) => !opt.has(c.name));
+  const reqOk = req.every((c) => c.status === "available");
   eq(s.total, caps.length, "summary.total");
   eq(s.available, cnt("available"), "summary.available");
   eq(s.blocked, cnt("blocked"), "summary.blocked");
   eq(s.unavailable, cnt("unavailable"), "summary.unavailable");
   eq(s.unknown, cnt("unknown"), "summary.unknown");
-  eq(s.overall, s.available === s.total ? "ok" : "degraded", "summary.overall");
+  eq(s.overall, reqOk ? "ok" : "degraded", "summary.overall (required-caps rule)");
 }
 if (errs.length) { console.error(errs.join("\n")); process.exit(1); }
 ' <<<"$out" 2>&1)"; rc=$?
@@ -217,6 +231,11 @@ case "$dbst" in
   available|blocked|unavailable|unknown) ok "t08j database still diagnosed (${dbst})" ;;
   *) bad "t08j database still diagnosed (got: ${dbst:-<missing>})" ;;
 esac
+obst="$(json_field "$out" agent_observability)"
+case "$obst" in
+  available|unavailable|blocked) ok "t08j2 agent_observability always diagnosed (${obst})" ;;
+  *) bad "t08j2 agent_observability always diagnosed (got: ${obst:-<missing>})" ;;
+esac
 rm -rf "$FAKE_BIN"
 
 # --------------------------------- t09 simulated blocker: missing browser ---
@@ -263,6 +282,39 @@ map124="$(FG_DOCTOR_SOURCE_ONLY=1 bash -c 'source "$0" >/dev/null 2>&1; launch_s
 expect_eq "t10g rc 0 -> available" "available" "$map0"
 expect_eq "t10h rc 1 -> blocked" "blocked" "$map1"
 expect_eq "t10i rc 124 -> blocked" "blocked" "$map124"
+
+# --------------------------------- t11 optional observability semantics ---
+run_cmd bash "$DOCTOR" --json
+out="$CAP_OUT"
+obs_st="$(json_field "$out" agent_observability)"
+overall="$(node -e 'const d=JSON.parse(require("fs").readFileSync(0,"utf8")); console.log(d.summary.overall)' <<<"$out" 2>/dev/null || true)"
+# Rule: with the capability optional, its non-availability never forces degraded.
+opt_set="$(node -e 'const d=JSON.parse(require("fs").readFileSync(0,"utf8")); console.log((d.optional_capabilities||[]).includes("agent_observability")?"yes":"no")' <<<"$out" 2>/dev/null || true)"
+expect_eq "t11a agent_observability listed as optional" "yes" "$opt_set"
+if [ "$obs_st" != "available" ]; then
+  # All required caps determine the result: recompute expected overall.
+  expected_overall="$(node -e '
+    const d = JSON.parse(require("fs").readFileSync(0, "utf8"));
+    const opt = new Set(d.optional_capabilities || []);
+    const req = d.capabilities.filter((c) => !opt.has(c.name));
+    console.log(req.every((c) => c.status === "available") ? "ok" : "degraded");
+  ' <<<"$out" 2>/dev/null || true)"
+  expect_eq "t11b optional non-availability does not change overall" "$expected_overall" "$overall"
+fi
+
+# Require mode: the capability becomes required (no longer optional).
+run_cmd env FG_DOCTOR_REQUIRE_OBSERVABILITY=1 bash "$DOCTOR" --json
+out="$CAP_OUT"; rc="$RC"
+case "$rc" in
+  0|1) ok "t11c require mode exits 0/1" ;;
+  *) bad "t11c require mode exits 0/1 (got $rc)" ;;
+esac
+opt_set="$(node -e 'const d=JSON.parse(require("fs").readFileSync(0,"utf8")); console.log((d.optional_capabilities||[]).includes("agent_observability")?"yes":"no")' <<<"$out" 2>/dev/null || true)"
+expect_eq "t11d require mode removes capability from optional list" "no" "$opt_set"
+req_overall="$(node -e 'const d=JSON.parse(require("fs").readFileSync(0,"utf8")); console.log(d.summary.overall)' <<<"$out" 2>/dev/null || true)"
+if [ "$obs_st" != "available" ]; then
+  expect_eq "t11e require mode degrades result when capability is not available" "degraded" "$req_overall"
+fi
 
 # ---------------------------------------------------------------- summary ---
 printf '\n'
