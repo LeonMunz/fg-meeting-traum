@@ -221,6 +221,41 @@ export async function expectMyWorkReady(
 }
 
 /**
+ * Resolve a seeded Project's ID inside a seeded Research Group via
+ * the canonical group Project-list endpoint (preferences reference
+ * relational IDs, never names).
+ */
+export async function getProjectIdInGroup(
+  page: Page,
+  groupName: string,
+  projectName: string,
+): Promise<number> {
+  const groupId = await getResearchGroupId(
+    page,
+    groupName,
+  )
+  const response = await page.request.get(
+    `/api/research-groups/${groupId}/projects/`,
+  )
+  expect(
+    response.ok(),
+    `Listing the Projects of "${groupName}" must succeed.`,
+  ).toBe(true)
+  const projects = (await response.json()) as Array<{
+    id: number
+    name: string
+  }>
+  const project = projects.find(
+    (candidate) => candidate.name === projectName,
+  )
+  expect(
+    project,
+    `Seeded Project "${projectName}" must be accessible inside "${groupName}".`,
+  ).toBeTruthy()
+  return (project as { id: number }).id
+}
+
+/**
  * Event-based wait for the page's debounced preference save.
  *
  * Register the wait BEFORE the UI action that triggers the save. The

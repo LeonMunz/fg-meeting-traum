@@ -52,12 +52,22 @@ import {
   formatWorkItemResultCount,
 } from './myWorkGroupFilter'
 import {
+  deriveMyWorkProjectOptions,
+  filterMyWorkItemsByProject,
+  normalizeMyWorkProjectIdsForGroupScope,
+} from './myWorkProjectFilter'
+import {
+  MyWorkProjectsFilter,
+} from './MyWorkProjectsFilter'
+import {
   MyWorkResearchGroupFilter,
 } from './MyWorkResearchGroupFilter'
 
-// A stable empty reference so a null preference snapshot never
-// allocates a fresh array each render (keeps the filter memo stable).
+// Stable empty references so a null preference snapshot never
+// allocates a fresh array each render (keeps the filter memos
+// stable).
 const EMPTY_RESEARCH_GROUP_IDS: readonly number[] = []
+const EMPTY_PROJECT_IDS: readonly number[] = []
 
 /**
  * Personal cross-project My Work (List + Kanban).
@@ -562,7 +572,7 @@ const GLOBAL_STATUS_COLUMNS: Array<{
  * active Research Group filter yields zero results. Deliberately
  * distinct from the "Nothing assigned to you" unfiltered empty state
  * (no illustration). "Clear filters" removes the active Research
- * Group selections (this slice's only implemented filter).
+ * Group and Project selections (the implemented filter categories).
  */
 function FilteredEmptyState({
   onClear,
@@ -603,8 +613,8 @@ export function MyWorkPage() {
     string | null
   >(null)
 
-  // Research Group multi-select filter (this slice activates ONLY
-  // researchGroupIds). The single source of truth is the persisted
+  // Research Group multi-select filter (first implemented filter
+  // category). The single source of truth is the persisted
   // preference snapshot field `preferences.researchGroupIds` — there
   // is no separate transient filter state. The popover open/closed
   // state is the only transient UI concern, and it is lifted here so
@@ -615,14 +625,25 @@ export function MyWorkPage() {
     HTMLButtonElement | null
   >(null)
 
+  // Project multi-select filter (second implemented filter
+  // category): the SAME single-source-of-truth rule — the persisted
+  // `preferences.projectIds` — with the popover open/closed state
+  // lifted for the applied-row "+N" summary.
+  const [projectFilterOpen, setProjectFilterOpen] =
+    useState(false)
+  const projectFilterTriggerRef = useRef<
+    HTMLButtonElement | null
+  >(null)
+
   // The COMPLETE persisted My Work preference snapshot (the server
   // is the source of truth). `null` until the initial GET has
   // resolved — the final view is unknown until then, so the page
   // stays in its loading skeleton: a persisted List preference can
-  // never flash through a default Board first. The viewMode is the
-  // only field actively consumed in this slice; the three filter
-  // arrays are retained in the snapshot (not yet applied to
-  // filtering) and must survive every view-mode save untouched.
+  // never flash through a default Board first. The viewMode plus
+  // the two implemented filter categories (researchGroupIds,
+  // projectIds) are actively consumed; `workItemTypes` is retained
+  // in the snapshot (not yet applied to filtering) and must survive
+  // every save untouched.
   const [preferences, setPreferences] = useState<
     ApiMyWorkPreferences | null
   >(null)
@@ -743,8 +764,10 @@ export function MyWorkPage() {
   }, [])
 
   // Board/List switch: update the COMPLETE preference snapshot
-  // locally — only `viewMode` changes, the three not-yet-applied
-  // filter arrays are retained untouched — and owe a debounced save
+  // locally — only `viewMode` changes, the three filter arrays are
+  // retained untouched (the implemented categories keep their
+  // selections; `workItemTypes` is not yet applied) — and owe a
+  // debounced save
   // of the complete snapshot (the effect below). Purely
   // presentational for the Work Item data: no /api/me/work-items/
   // refetch, no Project configuration, no Project / Research Group
@@ -1354,16 +1377,25 @@ export function MyWorkPage() {
   // The single established presentation rule: completed items render
   // last — a stable partition, so backend relative order is
   // preserved within each group.
-  // ── Research Group multi-select filter (this slice) ─────────
-  // The single source of truth for the selection is the persisted
-  // preference snapshot field `researchGroupIds`. `projectIds` and
-  // `workItemTypes` remain preserved in the snapshot but are NOT yet
-  // applied to Work Item visibility (their UI slices come later).
+  // ── Persisted filter categories (Research Group + Project) ──
+  // The single source of truth for both selections is the persisted
+  // preference snapshot (`researchGroupIds` / `projectIds`).
+  // `workItemTypes` remains preserved in the snapshot but is NOT yet
+  // applied to Work Item visibility (its UI slice comes later).
   const selectedGroupIds =
     preferences?.researchGroupIds ??
     EMPTY_RESEARCH_GROUP_IDS
   const hasGroupFilter =
     selectedGroupIds.length > 0
+
+  const selectedProjectIds =
+    preferences?.projectIds ??
+    EMPTY_PROJECT_IDS
+  const hasProjectFilter =
+    selectedProjectIds.length > 0
+
+  const hasActiveFilter =
+    hasGroupFilter || hasProjectFilter
 
   // The canonical accessible Research Group id → name map, used to
   // label applied chips (NEVER derived from Work Items — a selected
@@ -1376,16 +1408,52 @@ export function MyWorkPage() {
     return map
   }, [groups])
 
-  // PRESENTATION-ONLY OR filter over the canonical payload — never a
-  // refetch of /api/me/work-items/. Empty selection = no restriction
-  // (the exact `items` reference is preserved for memo stability).
-  const filteredItems = useMemo(
+  // The canonical project id → name map from the LOADED My Work
+  // payload, used to label applied chips (a selected Project that
+  // no longer appears in the payload keeps filtering but has no
+  // resolvable chip label — the same treatment an unknown group
+  // gets).
+  const projectNameById = useMemo(() => {
+    const map = new Map<number, string>()
+    for (const item of items) {
+      if (!map.has(item.projectId)) {
+        map.set(item.projectId, item.projectName)
+      }
+    }
+    return map
+  }, [items])
+
+  // The Projects option set derived from the loaded canonical
+  // payload (presentation-only — no request of any kind), narrowed
+  // to the active Research Group scope.
+  const projectOptions = useMemo(
     () =>
-      filterMyWorkItemsByResearchGroup(
+      deriveMyWorkProjectOptions(
         items,
         selectedGroupIds,
       ),
     [items, selectedGroupIds],
+  )
+
+  // PRESENTATION-ONLY category filters over the canonical payload —
+  // never a refetch of /api/me/work-items/. Within each category the
+  // selections combine OR; the two active categories combine
+  // RESTRICTIVELY (an item must satisfy both). Empty selection = no
+  // restriction (the exact reference is preserved for memo stability).
+  const filteredItems = useMemo(
+    () =>
+      filterMyWorkItemsByProject(
+        filterMyWorkItemsByResearchGroup(
+          items,
+          selectedGroupIds,
+        ),
+        selectedProjectIds,
+      ),
+    [
+      items,
+      selectedGroupIds,
+      selectedProjectIds,
+    ],
   )
 
   // The selected groups resolved to renderable chips (id + name).
@@ -1408,6 +1476,29 @@ export function MyWorkPage() {
   const collapsedChips =
     collapseResearchGroupChips(selectedGroupChips)
 
+  // The selected Projects resolved to renderable chips (id + name).
+  const selectedProjectChips = useMemo(() => {
+    const chips: Array<{
+      id: number
+      name: string
+    }> = []
+
+    for (const id of selectedProjectIds) {
+      const name = projectNameById.get(id)
+      if (name !== undefined) {
+        chips.push({ id, name })
+      }
+    }
+
+    return chips
+  }, [selectedProjectIds, projectNameById])
+
+  // The SAME approved chip-density rule as the Research Group
+  // category (up to six individual chips; above that the first two +
+  // a "+N" summary) bounds the applied row in BOTH categories.
+  const collapsedProjectChips =
+    collapseResearchGroupChips(selectedProjectChips)
+
   const resultCount = formatWorkItemResultCount(
     filteredItems.length,
   )
@@ -1415,6 +1506,8 @@ export function MyWorkPage() {
   // Toggle one Research Group in the persisted selection. The list is
   // kept in ascending-PK order — the exact deterministic order the
   // server returns — so the complete-snapshot dirty check stays exact.
+  // A scope change can also INVALIDATE selected Projects — see the
+  // normalization inside.
   const handleGroupToggle = useCallback(
     (groupId: number, checked: boolean) => {
       if (preferences == null) {
@@ -1431,14 +1524,26 @@ export function MyWorkPage() {
         selected.delete(groupId)
       }
 
+      const nextGroupIds =
+        Array.from(selected).sort((a, b) => a - b)
+
+      // The group → project dependency (canonical §14a semantics —
+      // the server sanitizes the same way on every read/write): a
+      // scope change that invalidates selected Projects normalizes
+      // `projectIds` in the SAME snapshot update, so no impossible
+      // filter state survives the change and the debounced save
+      // persists the normalized snapshot.
       setPreferences({
         ...preferences,
-        researchGroupIds: Array.from(selected).sort(
-          (a, b) => a - b,
+        researchGroupIds: nextGroupIds,
+        projectIds: normalizeMyWorkProjectIdsForGroupScope(
+          preferences.projectIds,
+          items,
+          nextGroupIds,
         ),
       })
     },
-    [preferences],
+    [preferences, items],
   )
 
   const handleRemoveGroupChip = useCallback(
@@ -1448,26 +1553,95 @@ export function MyWorkPage() {
     [handleGroupToggle],
   )
 
+  // The Research Groups popover "Clear" clears ONLY the Research
+  // Group selection (`researchGroupIds`) — the Project selection is
+  // untouched. (Clearing the group scope invalidates nothing: the
+  // unrestricted scope keeps every Project selection valid.)
   const handleClearGroupFilter = useCallback(() => {
     if (preferences == null) {
       return
     }
 
-    // TEMPORARY intermediate-slice behavior: "Clear filters" clears
-    // ONLY the currently implemented Research Group filter. The
-    // persisted `projectIds` / `workItemTypes` categories are NOT yet
-    // active in the UI, so they are preserved untouched (never zeroed
-    // or rewritten) — a later slice makes them real filters.
     setPreferences({
       ...preferences,
       researchGroupIds: [],
     })
   }, [preferences])
 
+  // The Projects popover "Clear" clears ONLY the Project selection
+  // (`projectIds`) — the Research Group selection is untouched.
+  const handleClearProjectFilter = useCallback(() => {
+    if (preferences == null) {
+      return
+    }
+
+    setPreferences({
+      ...preferences,
+      projectIds: [],
+    })
+  }, [preferences])
+
+  // "Clear filters" (applied row + filtered-empty state) clears BOTH
+  // implemented filter categories — Research Groups and Projects.
+  // Unrelated preference fields (`viewMode`, the not-yet-applied
+  // `workItemTypes` snapshot) are preserved untouched.
+  const handleClearFilters = useCallback(() => {
+    if (preferences == null) {
+      return
+    }
+
+    setPreferences({
+      ...preferences,
+      researchGroupIds: [],
+      projectIds: [],
+    })
+  }, [preferences])
+
+  // Toggle one Project in the persisted selection (ascending-PK
+  // order, exactly like the Research Group selection).
+  const handleProjectToggle = useCallback(
+    (projectId: number, checked: boolean) => {
+      if (preferences == null) {
+        return
+      }
+
+      const selected = new Set(
+        preferences.projectIds,
+      )
+
+      if (checked) {
+        selected.add(projectId)
+      } else {
+        selected.delete(projectId)
+      }
+
+      setPreferences({
+        ...preferences,
+        projectIds: Array.from(selected).sort(
+          (a, b) => a - b,
+        ),
+      })
+    },
+    [preferences],
+  )
+
+  const handleRemoveProjectChip = useCallback(
+    (projectId: number) => {
+      handleProjectToggle(projectId, false)
+    },
+    [handleProjectToggle],
+  )
+
   // The applied-row "+N" summary opens AND focuses the toggle.
   const openGroupFilter = useCallback(() => {
     setGroupFilterOpen(true)
     groupFilterTriggerRef.current?.focus()
+  }, [])
+
+  // The applied-row "+N" summary opens AND focuses the toggle.
+  const openProjectFilter = useCallback(() => {
+    setProjectFilterOpen(true)
+    projectFilterTriggerRef.current?.focus()
   }, [])
 
   const orderedItems = useMemo(() => {
@@ -1588,10 +1762,10 @@ export function MyWorkPage() {
           </div>
         </header>
 
-        {/* Filter toolbar row. This intermediate slice exposes ONLY
-         * the Research Groups category on the left; the Projects and
-         * Types categories are added by their own slices (no fake /
-         * disabled controls here). Board/List stays on the right,
+        {/* Filter toolbar row: the two implemented filter
+         * categories (Research Groups + Projects) on the left; the
+         * Work Item Type category is added by its own slice (no fake
+         * / disabled controls here). Board/List stays on the right,
          * unchanged. flex-wrap keeps the row usable in the narrow
          * column without forcing document horizontal overflow. */}
         <div
@@ -1606,6 +1780,16 @@ export function MyWorkPage() {
               onOpenChange={setGroupFilterOpen}
               onToggle={handleGroupToggle}
               onClear={handleClearGroupFilter}
+            />
+
+            <MyWorkProjectsFilter
+              ref={projectFilterTriggerRef}
+              options={projectOptions}
+              selectedIds={selectedProjectIds}
+              open={projectFilterOpen}
+              onOpenChange={setProjectFilterOpen}
+              onToggle={handleProjectToggle}
+              onClear={handleClearProjectFilter}
             />
           </div>
 
@@ -1670,12 +1854,13 @@ export function MyWorkPage() {
         </div>
 
         {/* Applied-filters row — rendered ONLY while at least one
-         * Research Group filter is active (an active filter must
-         * never be invisible). Shows the current filtered result
-         * count, the selected-group chips (density-collapsed), and a
-         * "Clear filters" action that clears ONLY the implemented
-         * Research Group filter. */}
-        {hasGroupFilter && (
+         * implemented filter category is active (an active filter
+         * must never be invisible). Shows the current filtered
+         * result count (after ALL active categories), the
+         * selected-group chips then the selected-Project chips
+         * (each density-collapsed), and a "Clear filters" action
+         * that clears BOTH implemented categories. */}
+        {hasActiveFilter && (
           <div className="mt-2 flex w-full flex-wrap items-center gap-x-3 gap-y-2">
             <span className="shrink-0 text-[11px] leading-4 text-text-tertiary">
               {resultCount}
@@ -1722,11 +1907,54 @@ export function MyWorkPage() {
                   Research groups: +{collapsedChips.overflowCount}
                 </button>
               )}
+
+              {collapsedProjectChips.chips.map((chip) => (
+                <span
+                  key={`project-${chip.id}`}
+                  title={`PJ: ${chip.name}`}
+                  className="flex h-6 max-w-[220px] items-center gap-1.5 rounded border border-border-subtle bg-surface-muted pl-2 pr-[7px]"
+                >
+                  <span className="min-w-0 truncate text-[11px] font-medium leading-4 text-text">
+                    PJ: {chip.name}
+                  </span>
+
+                  <button
+                    type="button"
+                    aria-label={`Remove Project filter ${chip.name}`}
+                    onClick={() =>
+                      handleRemoveProjectChip(
+                        chip.id,
+                      )
+                    }
+                    className="shrink-0 rounded text-text-tertiary transition hover:text-text focus-visible:outline-2 focus-visible:outline focus-visible:outline-focus"
+                  >
+                    <span
+                      aria-hidden="true"
+                      className="material-symbols-outlined icon-stable text-[12px]"
+                    >
+                      close
+                    </span>
+                  </button>
+                </span>
+              ))}
+
+              {collapsedProjectChips.overflowCount != null && (
+                // Shrinkable (label truncates) so the summary chip
+                // cannot push the applied row past the narrow column
+                // width and overflow the document.
+                <button
+                  type="button"
+                  onClick={openProjectFilter}
+                  className="flex h-6 min-w-0 max-w-full items-center overflow-hidden text-ellipsis whitespace-nowrap rounded border border-border-subtle bg-surface-muted px-2 text-[11px] font-medium leading-4 text-text transition hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline focus-visible:outline-focus"
+                >
+                  Projects: +{collapsedProjectChips.overflowCount}
+                </button>
+              )}
             </div>
 
             <button
               type="button"
-              onClick={handleClearGroupFilter}
+              onClick={handleClearFilters}
               className="shrink-0 text-[11px] font-semibold leading-4 text-text-muted transition hover:text-text focus-visible:outline-2 focus-visible:outline focus-visible:outline-focus"
             >
               Clear filters
@@ -1847,13 +2075,13 @@ export function MyWorkPage() {
            * filtered-empty state (distinct from "nothing assigned"). */}
           {filteredItems.length === 0 && (
             <FilteredEmptyState
-              onClear={handleClearGroupFilter}
+              onClear={handleClearFilters}
             />
           )}
         </>
       ) : filteredItems.length === 0 ? (
         <FilteredEmptyState
-          onClear={handleClearGroupFilter}
+          onClear={handleClearFilters}
         />
       ) : (
         <section className="mt-6 overflow-hidden rounded-xl border border-border-structural bg-surface-quiet shadow-sm">

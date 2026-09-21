@@ -8,6 +8,7 @@ import {
   expectMyWorkPreferenceSave,
   expectMyWorkReady,
   getMyWorkPreferences,
+  getProjectIdInGroup,
   getResearchGroupId,
   MY_WORK_PREFERENCES_BASELINE,
   sameMyWorkPreferences,
@@ -830,6 +831,332 @@ test('My Work Research Groups multiselect filters, persists, and restores', asyn
   await page.screenshot({
     path: testInfo.outputPath(
       'my-work-research-group-filter.png',
+    ),
+    fullPage: true,
+  })
+})
+
+test('My Work Projects multiselect filters, persists, restores, and narrows with Research Groups', async ({ page }, testInfo) => {
+  const myWorkRequests: string[] = []
+  page.on('request', (request) => {
+    if (request.url().includes('/api/me/work-items/')) {
+      myWorkRequests.push(request.url())
+    }
+  })
+
+  await login(page, 'alex')
+
+  // Canonical server-side baseline BEFORE the UI change (Board view,
+  // no filter) — independent of earlier tests or their leftover
+  // in-flight saves.
+  const persisted = await setMyWorkPreferences(
+    page,
+    MY_WORK_PREFERENCES_BASELINE,
+  )
+  expect(
+    sameMyWorkPreferences(
+      persisted,
+      MY_WORK_PREFERENCES_BASELINE,
+    ),
+  ).toBe(true)
+
+  // Complete-snapshot PATCHes carry relational IDs — resolve the
+  // seeded Projects through the canonical list endpoints.
+  const fgExampleId = await getResearchGroupId(
+    page,
+    'FG Example',
+  )
+  const paperXyzId = await getProjectIdInGroup(
+    page,
+    'FG Example',
+    'Paper XYZ',
+  )
+  const robotStudyId = await getProjectIdInGroup(
+    page,
+    'Robotics Lab',
+    'E2E Robot Study',
+  )
+
+  await page.goto('/my-work')
+
+  // Functionally ready: baseline applied (Board, no filter) and both
+  // seeded Work Items rendered.
+  await expectMyWorkReady(page, {
+    viewMode: 'board',
+    visibleTitles: [
+      'First Draft Complete',
+      'E2E Analyze robot data',
+    ],
+  })
+
+  const firstDraftCard = page.getByRole('button', {
+    name: 'Open First Draft Complete',
+  })
+  const robotCard = page.getByRole('button', {
+    name: 'Open E2E Analyze robot data',
+  })
+
+  const projectToggle = page.getByRole('button', {
+    name: 'Projects, none selected',
+  })
+  await expect(projectToggle).toBeVisible()
+
+  const requestCountBeforeFilterChange =
+    myWorkRequests.length
+  expect(requestCountBeforeFilterChange).toBeGreaterThanOrEqual(
+    1,
+  )
+
+  // ── Project options with NO Research Group filter: every seeded
+  // Project represented by the canonical payload. ──
+  await projectToggle.click()
+  const paperCheckbox = page.getByRole('checkbox', {
+    name: 'Paper XYZ',
+  })
+  const robotCheckbox = page.getByRole('checkbox', {
+    name: 'E2E Robot Study',
+  })
+  await expect(paperCheckbox).toBeVisible()
+  await expect(robotCheckbox).toBeVisible()
+
+  // Select Paper XYZ: only its item remains, without a refetch of
+  // the personal endpoint.
+  const projectSaveFlushed = expectMyWorkPreferenceSave(
+    page,
+    {
+      ...MY_WORK_PREFERENCES_BASELINE,
+      projectIds: [paperXyzId],
+    },
+  )
+
+  await paperCheckbox.check()
+
+  await expect(robotCard).toBeHidden()
+  await expect(firstDraftCard).toBeVisible()
+  expect(myWorkRequests.length).toBe(
+    requestCountBeforeFilterChange,
+  )
+
+  // The active filter is visible: count badge, "PJ: ..." chip, and
+  // the filtered result count.
+  await expect(
+    page.getByRole('button', {
+      name: 'Projects, 1 selected',
+    }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole('button', {
+      name: 'Remove Project filter Paper XYZ',
+    }),
+  ).toBeVisible()
+  await expect(
+    page.getByText('1 work item'),
+  ).toBeVisible()
+
+  // The applied filter survives a full reload (server-side
+  // preference restore) — the verified save must have landed first.
+  await projectSaveFlushed
+  await page.reload()
+  await expectMyWorkReady(page, {
+    viewMode: 'board',
+    visibleTitles: ['First Draft Complete'],
+    hiddenTitles: ['E2E Analyze robot data'],
+  })
+  await expect(
+    page.getByRole('button', {
+      name: 'Projects, 1 selected',
+    }),
+  ).toBeVisible()
+
+  // Board -> List keeps the same filtered set (one row only), and
+  // back to Board. The coalesced view-mode save is verified
+  // event-based (registered BEFORE the switch).
+  const viewModeSaveFlushed = expectMyWorkPreferenceSave(
+    page,
+    {
+      ...MY_WORK_PREFERENCES_BASELINE,
+      projectIds: [paperXyzId],
+    },
+  )
+  await page
+    .getByRole('button', { name: 'List' })
+    .click()
+  await expect(
+    page.getByRole('button', {
+      name: 'Open First Draft Complete',
+    }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole('button', {
+      name: 'Open E2E Analyze robot data',
+    }),
+  ).toHaveCount(0)
+  await page
+    .getByRole('button', { name: 'Board' })
+    .click()
+  await viewModeSaveFlushed
+
+  // ── Research Group → Project narrowing: with FG Example active,
+  // the Projects control exposes only that group's Project. ──
+  const groupToggle = page.getByRole('button', {
+    name: /Research groups,/,
+  })
+  await groupToggle.click()
+  const fgCheckbox = page.getByRole('checkbox', {
+    name: 'FG Example',
+  })
+  const groupSaveFlushed = expectMyWorkPreferenceSave(
+    page,
+    {
+      ...MY_WORK_PREFERENCES_BASELINE,
+      researchGroupIds: [fgExampleId],
+      projectIds: [paperXyzId],
+    },
+  )
+  await fgCheckbox.check()
+
+  // Combined filters (FG Example + Paper XYZ): the intersection —
+  // still exactly the one Paper XYZ item; both applied chips show.
+  await expect(firstDraftCard).toBeVisible()
+  await expect(robotCard).toBeHidden()
+  await expect(
+    page.getByRole('button', {
+      name: 'Remove Research Group filter FG Example',
+    }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole('button', {
+      name: 'Remove Project filter Paper XYZ',
+    }),
+  ).toBeVisible()
+  await groupSaveFlushed
+
+  // The group popover stays open after a selection — close it, then
+  // open the Projects popover: only Paper XYZ remains an option.
+  await groupToggle.click()
+  await page
+    .getByRole('button', { name: /Projects, / })
+    .click()
+  await expect(
+    page.getByRole('checkbox', {
+      name: 'Paper XYZ',
+    }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole('checkbox', {
+      name: 'E2E Robot Study',
+    }),
+  ).toHaveCount(0)
+  await page
+    .getByRole('button', { name: /Projects, / })
+    .click()
+
+  // ── Dependency normalization: a Project selection invalidated by
+  // a Research Group scope change is normalized away (never left as
+  // an impossible/hidden filter), and the normalized snapshot is
+  // what gets persisted. ──
+  // Clear the Project selection (chip remove), then the Research
+  // Group selection (group popover Clear), returning to the full
+  // unfiltered set.
+  const chipRemoveSaveFlushed = expectMyWorkPreferenceSave(
+    page,
+    {
+      ...MY_WORK_PREFERENCES_BASELINE,
+      researchGroupIds: [fgExampleId],
+    },
+  )
+  await page
+    .getByRole('button', {
+      name: 'Remove Project filter Paper XYZ',
+    })
+    .click()
+  await chipRemoveSaveFlushed
+
+  const groupClearSaveFlushed =
+    expectMyWorkPreferenceSave(
+      page,
+      MY_WORK_PREFERENCES_BASELINE,
+    )
+  await groupToggle.click()
+  await page.getByRole('button', { name: 'Clear' }).click()
+  // The popover stays open after Clear — close it so the Projects
+  // toggle below is not covered.
+  await groupToggle.click()
+  await groupClearSaveFlushed
+  await expect(firstDraftCard).toBeVisible()
+  await expect(robotCard).toBeVisible()
+
+  // Select E2E Robot Study (unrestricted scope: both Projects are
+  // options again).
+  const robotSaveFlushed = expectMyWorkPreferenceSave(
+    page,
+    {
+      ...MY_WORK_PREFERENCES_BASELINE,
+      projectIds: [robotStudyId],
+    },
+  )
+  await page
+    .getByRole('button', { name: /Projects, / })
+    .click()
+  await robotCheckbox.check()
+  await expect(robotCard).toBeVisible()
+  await expect(firstDraftCard).toBeHidden()
+  await robotSaveFlushed
+
+  // Now select FG Example: E2E Robot Study is OUTSIDE the active
+  // group scope — the Project selection is normalized client-side
+  // and the normalized snapshot (projectIds []) is persisted. The
+  // Group-scope item is visible again: the invalidated selection
+  // does not keep hiding it (no impossible filter state).
+  const normalizedSaveFlushed =
+    expectMyWorkPreferenceSave(page, {
+      ...MY_WORK_PREFERENCES_BASELINE,
+      researchGroupIds: [fgExampleId],
+      projectIds: [],
+    })
+  await groupToggle.click()
+  await fgCheckbox.check()
+
+  await expect(firstDraftCard).toBeVisible()
+  await expect(robotCard).toBeHidden()
+  // The Project selection is gone (normalized): no chip, inactive
+  // toggle.
+  await expect(
+    page.getByRole('button', {
+      name: 'Remove Project filter E2E Robot Study',
+    }),
+  ).toHaveCount(0)
+  await expect(
+    page.getByRole('button', {
+      name: 'Projects, none selected',
+    }),
+  ).toBeVisible()
+  await normalizedSaveFlushed
+
+  // ── Clear filters: removes BOTH categories in one save, restores
+  // the full set, and leaves the canonical baseline persisted for
+  // the later specs. ──
+  const clearSaveFlushed = expectMyWorkPreferenceSave(
+    page,
+    MY_WORK_PREFERENCES_BASELINE,
+  )
+  await page
+    .getByRole('button', { name: 'Clear filters' })
+    .click()
+  await expect(firstDraftCard).toBeVisible()
+  await expect(robotCard).toBeVisible()
+  await clearSaveFlushed
+  const serverState = await getMyWorkPreferences(page)
+  expect(
+    sameMyWorkPreferences(
+      serverState,
+      MY_WORK_PREFERENCES_BASELINE,
+    ),
+  ).toBe(true)
+
+  await page.screenshot({
+    path: testInfo.outputPath(
+      'my-work-project-filter.png',
     ),
     fullPage: true,
   })
