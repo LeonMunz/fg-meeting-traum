@@ -28,7 +28,8 @@
 #     activity/timing/token metrics, git/WIP evidence, failures without
 #     invented classifications, explicit verification correlation
 #     (agentRunId match/mismatch), doctor evidence, human annotations,
-#     privacy (dropped-key values never reach the ledger), missing
+#     privacy (dropped-key values never reach the ledger), dedup identity
+#     (distinct paired records kept, exact copies collapsed), missing
 #     telemetry -> null + gap codes, malformed manifest -> clear failure
 #
 set -Eeuo pipefail
@@ -878,6 +879,111 @@ assert d["comparability"]["dimensions"]["codex_version"] is False
 assert "codex_version" in d["comparability"]["missing"]
 PYCHK
 expect_rc "t12ac3 multiple app versions: preserved, unresolved, no guess" 0 "$RC"
+
+# Dedup-identity regression (paired response.completed): records that share
+# the correlation tuple (event name / timestamp / conversation.id /
+# reference) but differ in their SANITIZED attributes are distinct logical
+# events; byte-equivalent copies of one record still collapse to one.
+# Fixture reconstructed from the paired 0.148.0 response.completed shape
+# observed in stored product telemetry (run-20260921T111009Z): one record
+# without token counters + one with counters at the same millisecond.
+RUND="$T12/runs/run-20260101T000005Z"
+mkdir -p "$RUND/raw"
+cp "$RUNE/capture-manifest.json" "$RUND/capture-manifest.json"
+"$PY" - "$RUND/capture-manifest.json" run-20260101T000005Z <<'FIXPY5'
+import json, sys
+d = json.load(open(sys.argv[1]))
+d["run_id"] = sys.argv[2]
+json.dump(d, open(sys.argv[1], "w"), indent=2, sort_keys=True)
+FIXPY5
+"$PY" - "$RUND/raw/logs.jsonl" <<'FIXLOG5'
+import json, sys
+def sse(ts, **kw):
+    attrs = {"event.timestamp": ts, "event.name": "codex.sse_event",
+             "conversation.id": "conv-dedup-1", "model": "dedup-model",
+             "app.version": "0.148.0", "originator": "fixture-originator",
+             "event.kind": "response.completed"}
+    attrs.update(kw)
+    return {"resourceLogs": [{"resource": {"attributes": []}, "scopeLogs": [
+        {"logRecords": [{"severityNumber": 9,
+                         "attributes": [{"key": k, "value": {"stringValue": str(v)}} for k, v in sorted(attrs.items())]}]}]}]}
+# T0 pair: identical name/timestamp/conversation/reference, distinct
+# sanitized attributes (A without counters, B with counters).
+A = sse("2026-01-01T00:00:10.000Z", duration_ms="53")
+B = sse("2026-01-01T00:00:10.000Z",
+        input_token_count="108787", output_token_count="11957",
+        cached_token_count="105600", cache_write_token_count="0",
+        reasoning_token_count="11834", tool_token_count="120744",
+        ttft_ms="950", model_reasoning_effort="medium")
+# T1: counter-bearing record emitted twice, byte-equivalent (true duplicate).
+C = sse("2026-01-01T00:00:12.000Z",
+        input_token_count="100", output_token_count="20",
+        cached_token_count="0", cache_write_token_count="0",
+        reasoning_token_count="5")
+def toolrec():
+    attrs = {"event.timestamp": "2026-01-01T00:00:14.000Z",
+             "event.name": "codex.tool_result",
+             "conversation.id": "conv-dedup-1", "model": "dedup-model",
+             "app.version": "0.148.0", "originator": "fixture-originator",
+             "tool_name": "exec_command", "call_id": "d1",
+             "success": "true", "duration_ms": "90"}
+    return {"resourceLogs": [{"resource": {"attributes": []}, "scopeLogs": [
+        {"logRecords": [{"severityNumber": 9,
+                         "attributes": [{"key": k, "value": {"stringValue": str(v)}} for k, v in sorted(attrs.items())]}]}]}]}
+D = toolrec()
+with open(sys.argv[1], "w") as fh:
+    for l in (A, B, C, C, D, D):
+        fh.write(json.dumps(l, sort_keys=True) + "\n")
+FIXLOG5
+run_cmd "$PY" "$LEDGER_PY" normalize "$RUND"
+expect_rc "t12dedup0 dedup fixture normalize exits 0" 0 "$RC"
+# Case A (distinct pair survives) + Case B (exact copies collapse), at the
+# logical-event level.
+run_cmd "$PY" - "$LEDGER_PY" "$RUND" <<'PYDEDUP'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("ledger", sys.argv[1])
+ledger = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(ledger)
+evs = ledger.collect_events(sys.argv[2])
+sse = [e for e in evs if e["name"] == "codex.sse_event"
+       and e["attrs"].get("event.kind") == "response.completed"]
+# Case A: the T0 pair (same name/timestamp/conversation/reference, distinct
+# sanitized attributes) survives as two logical events.
+t0 = [e for e in sse if e["ts_iso"] == "2026-01-01T00:00:10.000Z"]
+assert len(t0) == 2, t0
+assert sum(1 for e in t0 if e["attrs"].get("input_token_count") is None) == 1
+assert sum(1 for e in t0 if e["attrs"].get("input_token_count") is not None) == 1
+# Case B: the byte-equivalent copies collapse to one logical event each.
+assert len(sse) == 3, len(sse)
+tools = [e for e in evs if e["name"] == "codex.tool_result"]
+assert len(tools) == 1, len(tools)
+assert len(evs) == 4, len(evs)
+PYDEDUP
+expect_rc "t12dedup1 distinct paired records kept, exact copies collapsed" 0 "$RC"
+# Case A at the ledger level: the counter-bearing record of the T0 pair
+# contributes to token accounting (input 108787+100, output 11957+20,
+# cached 105600+0, cache_write 0, reasoning 11834+5).
+run_cmd "$PY" - "$RUND/run-ledger.json" <<'PYDEDUP2'
+import json, sys
+a = json.load(open(sys.argv[1]))["activity"]
+t = a["token_usage"]
+assert t["source"] == "sse-events"
+assert (t["input"], t["output"], t["cached"], t["cache_write"],
+        t["reasoning"], t["total"]) == (108887, 11977, 105600, 0, 11839, 238303)
+assert a["tool_call_count"] == 1  # the duplicated tool result is one call
+PYDEDUP2
+expect_rc "t12dedup2 counter-bearing pair contributes to token accounting" 0 "$RC"
+# Privacy: the identity-only sanitized attributes that distinguish the pair
+# (non-contract keys) are never copied into the ledger record.
+out="$(cat "$RUND/run-ledger.json")"
+expect_not_contains "t12dedup3 identity-only attribute name never reaches ledger" "$out" "tool_token_count"
+expect_not_contains "t12dedup4 identity-only attribute value never reaches ledger" "$out" "120744"
+# Case C: deterministic ledger generation (byte-identical re-normalization).
+run_cmd cp "$RUND/run-ledger.json" "$T12/dedup-first.json"
+run_cmd "$PY" "$LEDGER_PY" normalize "$RUND"
+expect_rc "t12dedup5 dedup fixture re-normalize exits 0" 0 "$RC"
+run_cmd cmp -s "$RUND/run-ledger.json" "$T12/dedup-first.json"
+expect_rc "t12dedup6 dedup fixture ledger byte-identical across generations" 0 "$RC"
 
 # run context in the ledger: explicit, bounded, idempotent, no inference
 RUNCONTEXT_PY="$REPO_ROOT/scripts/observability/runcontext.py"

@@ -264,9 +264,12 @@ def iter_events(run_dir):
 
     Sources: log records in raw/logs*.jsonl and span events named codex.* in
     raw/traces*.jsonl (same trace-contract attribute shape). Consumers dedup
-    via _event_key so an event that appears both as a log record and a span
-    event is counted once. Only trace-contract-named attributes are exposed
-    downstream.
+    via _event_key (correlation tuple + canonical sanitized-attribute
+    serialization) so an event that appears both as a log record and a span
+    event is counted once, while distinct records that share the
+    correlation tuple (e.g. the paired 0.148.0 response.completed with and
+    without token counters) are kept. Only trace-contract-named attributes
+    are exposed downstream.
     """
     for prefix in ("logs", "traces"):
         for path in raw_jsonl_files(run_dir, prefix):
@@ -309,8 +312,53 @@ def iter_events(run_dir):
                                         yield ev
 
 
+def _canonical_attrs(attrs):
+    """Canonical, deterministic serialization of the sanitized attribute map.
+
+    Sorted keys and compact separators make the output a pure function of
+    the attribute content: it does not depend on dictionary insertion
+    order, on Python object identity, or on per-process hash randomization
+    (``json.dumps`` with ``sort_keys`` is stable across runs and processes).
+    The input is the already-sanitized attribute set persisted by the
+    collector (private keys are dropped at capture time), so the string
+    carries no raw/private payload. It is used only to build the in-memory
+    dedup identity and is never written into the ledger record.
+    """
+    return json.dumps(attrs, sort_keys=True, separators=(",", ":"))
+
+
 def _event_key(ev):
-    return (ev.get("name"), ev.get("ts_iso") or "", ev.get("conv") or "", ev.get("ref") or "")
+    """Logical identity of one normalized telemetry event.
+
+    The correlation tuple (event name, timestamp, conversation id,
+    reference id) is necessary but NOT sufficient. Codex 0.148.0 can emit
+    two distinct ``response.completed`` records for the same API response
+    in the same payload at the same millisecond: one without token
+    counters and one with them. They share name/timestamp/conversation/
+    reference, so the correlation tuple alone would wrongly collapse one
+    into the other and silently drop the counter-bearing record.
+
+    The identity therefore additionally covers the COMPLETE sanitized
+    attribute set (a canonical deterministic serialization of the
+    already-sanitized attributes). Consequences:
+
+    * two records that differ in any meaningful sanitized attribute remain
+      distinct logical events even when they share the correlation tuple;
+    * two byte/logically equivalent copies of the same record still
+      collapse to one logical event (identical attributes -> identical
+      canonical serialization), preserving the existing exact-duplicate
+      (log/span) dedup behavior;
+    * the result is deterministic and depends only on sanitized content —
+      never on insertion order, object identity, randomized hashing, or
+      unsanitized/private payload data.
+    """
+    return (
+        ev.get("name"),
+        ev.get("ts_iso") or "",
+        ev.get("conv") or "",
+        ev.get("ref") or "",
+        _canonical_attrs(ev.get("attrs") or {}),
+    )
 
 
 def collect_events(run_dir):
@@ -318,9 +366,15 @@ def collect_events(run_dir):
     seen = set()
     for ev in iter_events(run_dir):
         # Deduplicate only when the key is complete: an event observed both
-        # as a log record and as a span event carries the same timestamp.
-        # Events without a timestamp cannot be matched reliably and are
-        # always kept (e.g. codex.api_request records, which in 0.148.0
+        # as a log record and as a span event carries the same timestamp and
+        # the same sanitized attributes, so its full identity matches. The
+        # identity also covers the sanitized attribute content: an exact
+        # copy of an already-seen record is dropped, while a record that
+        # shares name/timestamp/conversation/reference but differs in
+        # sanitized attributes (e.g. the paired 0.148.0 response.completed
+        # with/without token counters) is a distinct logical event and is
+        # kept. Events without a timestamp cannot be matched reliably and
+        # are always kept (e.g. codex.api_request records, which in 0.148.0
         # carry no event.timestamp).
         if ev.get("ts_iso"):
             key = _event_key(ev)

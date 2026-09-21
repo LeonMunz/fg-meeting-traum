@@ -453,6 +453,19 @@ raw sanitized OTel (logs/traces/metrics)  — only trace-contract fields
   function of the stored evidence — no wall clock, no live git state — so
   re-running on unchanged evidence yields identical bytes. `stop` runs
   this normalization automatically after finalizing a run.
+- **Event dedup identity is correlation tuple + sanitized content.** The
+  ledger collapses a telemetry record as a duplicate of an already-seen
+  record only when they share the correlation tuple (event name,
+  timestamp, conversation id, reference id) **and** the canonical
+  deterministic serialization of their full sanitized attribute set. This
+  is what lets Codex 0.148.0's paired `response.completed` records for one
+  API response (emitted in the same payload at the same millisecond, one
+  without token counters and one with) survive as two distinct logical
+  events, while byte/logically equivalent copies (e.g. the same event seen
+  both as a log record and a span event) still collapse to one. The
+  serialization is in-memory only and never written to the record, so the
+  privacy boundary is unchanged; it depends only on sanitized content,
+  never on insertion order, object identity, or randomized hashing.
 - Missing optional evidence (metrics file, verification JSON, end-of-run
   git state on old captures, annotations, run context) yields `null`/empty
   values plus a stable code in `evidence_gaps` (e.g. `no_run_context`);
