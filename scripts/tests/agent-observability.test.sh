@@ -38,7 +38,15 @@
 #     activity.foreign reporting (Cases B/C incl. metrics datapoint
 #     attribution), missing identity -> aggregate + explicit
 #     captured_conversation_unknown gap (Case D), historical incident
-#     reconstruction (Case F)
+#     reconstruction (Case F); pathological run diagnostics (schema v4):
+#     explicit deterministic signals with observed-value evidence,
+#     diagnostic-only (no termination, no budget changes), incident
+#     shape detected (Case A), short no-tool response not flagged
+#     (Case B), healthy long engineering turn not flagged (Case C),
+#     tool-heavy failed run exposes only the failure signal (Case D),
+#     extreme foreign telemetry never changes the captured diagnosis
+#     (Case E), byte-identical re-normalization (Case F), incident
+#     replay via the established forensic fixture (Case G)
 #
 set -Eeuo pipefail
 
@@ -310,9 +318,9 @@ if collector_present; then
     [ -f "$led" ] && ok "t05n2 run-ledger.json auto-generated at stop" || bad "t05n2 run-ledger.json auto-generated at stop"
     "$PY" -c 'import json,sys
 d = json.load(open(sys.argv[1]))
-assert d["schema_version"] == 3 and d["run_id"] == sys.argv[2]
-assert "context" in d and "comparability" in d' "$led" "$latest" \
-      && ok "t05n3 auto ledger is a valid v3 record for the run" || bad "t05n3 auto ledger is a valid v3 record for the run"
+assert d["schema_version"] == 4 and d["run_id"] == sys.argv[2]
+assert "context" in d and "comparability" in d and "diagnostics" in d' "$led" "$latest" \
+      && ok "t05n3 auto ledger is a valid v4 record for the run" || bad "t05n3 auto ledger is a valid v4 record for the run"
     doc="$(cd "$REPO_ROOT/.artifacts/agent-runs" && readlink latest)/agent-doctor-start.json"
     [ -f "$REPO_ROOT/.artifacts/agent-runs/$doc" ] && ok "t05n4 doctor snapshot stored in the run dir at start" || bad "t05n4 doctor snapshot stored in the run dir at start"
     "$PY" -c 'import json,sys
@@ -606,13 +614,13 @@ expect_file "t12d ledger record written" "$LED"
 run_cmd "$PY" - "$LED" <<'PYCHK'
 import json, sys
 d = json.load(open(sys.argv[1]))
-assert d["schema_version"] == 3
+assert d["schema_version"] == 4
 assert d["record_name"] == "fg-agent-run-ledger"
 assert d["run_id"] == "run-20260101T000000Z"
 assert set(d) == {"schema_version", "record_name", "run_id", "identity",
                   "runtime", "context", "git_wip", "activity",
                   "verification", "failures", "human", "comparability",
-                  "evidence_gaps"}
+                  "diagnostics", "evidence_gaps"}
 i = d["identity"]
 assert i["conversation_ids"] == ["conv-ledger-42"]
 # Case A: the persisted captured identity names the single observed
@@ -659,7 +667,18 @@ assert comp["dimensions"]["session_mode"] is False
 assert comp["missing"] == sorted(comp["missing"])
 assert "task_type" in comp["missing"] and "session_mode" in comp["missing"]
 PYCHK
-expect_rc "t12e ledger v3 schema + identity/runtime/context/comparability valid" 0 "$RC"
+expect_rc "t12e ledger v4 schema + identity/runtime/context/comparability valid" 0 "$RC"
+
+# diagnostics (schema v4) on the normal fixture run: nothing detected and
+# every signal EVALUATED (no unevaluated entries) — 3 tools / 1 failure,
+# 50 output tokens and a seconds-long window are not pathological shapes.
+run_cmd "$PY" - "$LED" <<'PYDIAGA0'
+import json, sys
+dg = json.load(open(sys.argv[1]))["diagnostics"]["pathological_run"]
+assert dg["detected"] is False and dg["signals"] == []
+assert dg["unevaluated"] == []
+PYDIAGA0
+expect_rc "t12e2 diagnostics: normal fixture run not flagged, all signals evaluated" 0 "$RC"
 
 run_cmd cp "$LED" "$T12/ledger-first.json"
 run_cmd "$PY" "$LEDGER_PY" normalize "$RUNA"
@@ -1114,6 +1133,17 @@ assert "captured_conversation_unknown" not in d["evidence_gaps"]
 PYCHK
 expect_rc "t12capB3 primary scoped to A, foreign B reported explicitly" 0 "$RC"
 
+# diagnostics: the captured turn (A) is small and healthy; foreign B's
+# values (1660 tokens, a failure) must NOT change the captured turn's
+# diagnosis. All signals evaluated on A's scoped metrics; none fire.
+run_cmd "$PY" - "$RUNXB/run-ledger.json" <<'PYDIAGB'
+import json, sys
+dg = json.load(open(sys.argv[1]))["diagnostics"]["pathological_run"]
+assert dg["detected"] is False and dg["signals"] == []
+assert dg["unevaluated"] == []
+PYDIAGB
+expect_rc "t12capB4 diagnostics never influenced by foreign telemetry" 0 "$RC"
+
 # Case C — captured A + foreign B AND C (deterministic ordering) +
 # metrics-sourced tokens with per-conversation datapoint attribution
 # (a datapoint without a conversation.id is attributed to NOBODY)
@@ -1201,6 +1231,24 @@ assert "captured_conversation_unknown" not in d["evidence_gaps"]
 PYCHK
 expect_rc "t12capC1 two foreign conversations, deterministic, no cross-attribution" 0 "$RC"
 
+# diagnostics with metrics-sourced tokens: per-field token values are
+# null (only total is attributable), so the generation-based signals are
+# explicitly UNEVALUATED (missing_evidence) — never guessed, never
+# silently false. The tool-based signal evaluates normally (0 tools ->
+# false); the run-level signal has no Git evidence -> unevaluated too.
+run_cmd "$PY" - "$RUNXC/run-ledger.json" <<'PYDIAGC'
+import json, sys
+dg = json.load(open(sys.argv[1]))["diagnostics"]["pathological_run"]
+assert dg["detected"] is False and dg["signals"] == []
+assert dg["unevaluated"] == [
+    {"name": "extreme_reasoning_dominance", "reason": "missing_evidence"},
+    {"name": "huge_generation_on_few_api_requests", "reason": "missing_evidence"},
+    {"name": "long_generation_without_tool_progress", "reason": "missing_evidence"},
+    {"name": "no_progress_after_long_run", "reason": "missing_evidence"},
+]
+PYDIAGC
+expect_rc "t12capC2 metrics-sourced tokens: generation signals unevaluated, not guessed" 0 "$RC"
+
 # Case D — mixed telemetry, NO persisted captured identity: the run-wide
 # aggregate is preserved (backward compatible), NO conversation is
 # heuristically selected, and the explicit gap is present
@@ -1245,6 +1293,26 @@ assert "captured_conversation_unknown" in d["evidence_gaps"]
 PYCHK
 expect_rc "t12capD1 missing identity: aggregate kept + explicit gap, no guessing" 0 "$RC"
 
+# diagnostics without a persisted captured identity and with two observed
+# conversations: the run-wide aggregate MUST NOT be read as the captured
+# turn's activity, so every conversation-attributable signal is
+# unevaluated (captured_conversation_unknown), never inferred. The
+# run-level signal has no Git evidence -> unevaluated (missing_evidence).
+# Nothing is detected and nothing is guessed.
+run_cmd "$PY" - "$RUNXD/run-ledger.json" <<'PYDIAGD'
+import json, sys
+dg = json.load(open(sys.argv[1]))["diagnostics"]["pathological_run"]
+assert dg["detected"] is False and dg["signals"] == []
+assert dg["unevaluated"] == [
+    {"name": "extreme_reasoning_dominance", "reason": "captured_conversation_unknown"},
+    {"name": "high_failed_tool_concentration", "reason": "captured_conversation_unknown"},
+    {"name": "huge_generation_on_few_api_requests", "reason": "captured_conversation_unknown"},
+    {"name": "long_generation_without_tool_progress", "reason": "captured_conversation_unknown"},
+    {"name": "no_progress_after_long_run", "reason": "missing_evidence"},
+]
+PYDIAGD
+expect_rc "t12capD2 no identity + 2 conversations: attributable signals unevaluated" 0 "$RC"
+
 # Case F — historical incident reconstruction (run-20260921T111009Z):
 # the captured ACP session 01a0c3a6-dd79-7652-bb05-ecb528dd8c5d
 # (prompt request id 14) emitted one model/API stream (the paired
@@ -1258,6 +1326,9 @@ expect_rc "t12capD1 missing identity: aggregate kept + explicit gap, no guessing
 # event log is a rotating shared diagnostic, not per-run durable
 # metadata); this fixture mirrors its surviving evidence shape with the
 # authoritative relay-log attribution applied to the fixture manifest.
+# The fixture window mirrors the real run's 2178 s capture session
+# (2026-09-21T11:10:09Z -> 2026-09-21T11:46:27Z) so the incident's
+# duration is part of the replayed evidence.
 RUNXF="$T12/runs/run-20260101T000013Z"
 mkdir -p "$RUNXF/raw"
 cat > "$RUNXF/capture-manifest.json" <<'MANJSON'
@@ -1265,7 +1336,7 @@ cat > "$RUNXF/capture-manifest.json" <<'MANJSON'
   "schema_version": 1, "run_id": "run-20260101T000013Z",
   "kind": "capture",
   "captured_conversation_id": "01a0c3a6-dd79-7652-bb05-ecb528dd8c5d",
-  "start_ts": "2026-01-01T00:00:00Z", "end_ts": "2026-01-01T00:01:00Z",
+  "start_ts": "2026-01-01T00:00:00Z", "end_ts": "2026-01-01T00:36:18Z",
   "stop_status": "graceful",
   "repo_root": null, "branch": null, "starting_head": null,
   "starting_tree": null,
@@ -1351,6 +1422,36 @@ assert "captured_conversation_unknown" not in d["evidence_gaps"]
 PYCHK
 expect_rc "t12capF1 incident reconstruction: captured turn scoped, foreign detected" 0 "$RC"
 
+# Case G — historical incident replay: with the persisted captured
+# identity and the real run's 2178 s window, the current
+# captured-conversation evidence triggers the intended diagnostics: the
+# incident signature (huge generation, zero tools, no attributed API
+# request, 100% reasoning share) is detected with explicit signals and
+# observed-value evidence. Only the run-level signal is unevaluated (the
+# fixture manifest carries no end-of-run Git evidence) — never guessed,
+# and foreign conversation 01a0c317 never influences the diagnosis.
+run_cmd "$PY" - "$RUNXF/run-ledger.json" <<'PYDIAGF'
+import json, sys
+dg = json.load(open(sys.argv[1]))["diagnostics"]["pathological_run"]
+assert dg["detected"] is True
+by_name = {x["name"]: x for x in dg["signals"]}
+assert sorted(by_name) == [
+    "extreme_reasoning_dominance",
+    "huge_generation_on_few_api_requests",
+    "long_generation_without_tool_progress",
+]
+assert by_name["long_generation_without_tool_progress"]["evidence"] == {
+    "duration_s": 2178, "output_tokens": 221128, "tool_call_count": 0}
+assert by_name["extreme_reasoning_dominance"]["evidence"] == {
+    "output_tokens": 221128, "reasoning_tokens": 221128}
+assert by_name["huge_generation_on_few_api_requests"]["evidence"] == {
+    "api_request_count": 0, "duration_s": 2178,
+    "output_tokens": 221128, "tool_call_count": 0}
+assert dg["unevaluated"] == [
+    {"name": "no_progress_after_long_run", "reason": "missing_evidence"}]
+PYDIAGF
+expect_rc "t12capF2 incident replay: captured-conversation evidence triggers the diagnostics" 0 "$RC"
+
 # determinism of the scoped normalization (byte-identical re-normalization)
 run_cmd cp "$RUNXB/run-ledger.json" "$T12/capb-first.json"
 run_cmd cp "$RUNXF/run-ledger.json" "$T12/capf-first.json"
@@ -1361,6 +1462,366 @@ expect_rc "t12capX1 re-normalization of B is byte-identical" 0 "$RC"
 run_cmd "$PY" "$LEDGER_PY" normalize "$RUNXF"
 run_cmd cmp -s "$RUNXF/run-ledger.json" "$T12/capf-first.json"
 expect_rc "t12capX2 re-normalization of F is byte-identical" 0 "$RC"
+
+# --------------------------------------------- t12diag diagnostics (v4) --
+# Pathological run diagnostics: explicit deterministic signals over the
+# normalized captured-scoped metrics. Diagnostic only — the section flags
+# behavior for human review; it never terminates anything and never
+# changes token budgets or model settings.
+#
+# diag_write_manifest <run-id> <captured-conv> <start> <end> <start-head>
+#                     <end-head> <commit:true|false> <changed> <convs-json>
+diag_write_manifest() {
+  local rid="$1" cap="$2" st="$3" en="$4" sh="$5" eh="$6" commit="$7" chg="$8" convs="$9"
+  cat > "$T12/runs/$rid/capture-manifest.json" <<MANJSON
+{
+  "schema_version": 1, "run_id": "$rid",
+  "kind": "capture",
+  "captured_conversation_id": "$cap",
+  "start_ts": "$st", "end_ts": "$en",
+  "stop_status": "graceful",
+  "repo_root": null, "branch": null,
+  "starting_head": "$sh", "ending_head": "$eh",
+  "starting_tree": "clean", "ending_tree": "clean",
+  "changed_file_count": $chg, "lines_added": 0, "lines_deleted": 0,
+  "commit_created": $commit,
+  "codex_version": null, "codex_acp_version": "1.7.0",
+  "collector_version": "0.161.0", "otel_endpoint": "http://127.0.0.1:4318",
+  "privacy_mode": "trace-safe-sanitized",
+  "raw_trace_files": [], "conversation_ids": $convs,
+  "event_counts": {}, "app_versions": ["0.148.0"], "models": [],
+  "originators": [], "span_counts": {}, "metric_names": {},
+  "log_record_count": 0, "span_count": 0, "metric_series_count": 0
+}
+MANJSON
+}
+
+# Case A — original pathological shape (synthetic): long duration (2178 s),
+# one API request, very high reasoning/output (221,128 of 221,128), 0
+# tools, 0 failures, no verification, no repository progress.
+RUNDA="$T12/runs/run-20260101T000014Z"
+mkdir -p "$RUNDA/raw"
+diag_write_manifest run-20260101T000014Z conv-incident \
+  "2026-01-01T00:00:00Z" "2026-01-01T00:36:18Z" \
+  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
+  false 0 '["conv-incident"]'
+"$PY" - "$RUNDA/raw/logs.jsonl" <<'FIXLOGDA'
+import json, sys
+def rec(ts, name, **kw):
+    attrs = {"event.timestamp": ts, "event.name": name,
+             "conversation.id": "conv-incident", "app.version": "0.148.0"}
+    attrs.update(kw)
+    return {"resourceLogs": [{"resource": {"attributes": []}, "scopeLogs": [
+        {"logRecords": [{"severityNumber": 9,
+                         "attributes": [{"key": k, "value": {"stringValue": str(v)}} for k, v in sorted(attrs.items())]}]}]}]}
+lines = [
+    rec("2026-01-01T00:00:00.000Z", "codex.conversation_starts"),
+    rec("2026-01-01T00:00:01.000Z", "codex.user_prompt", prompt_length="64"),
+    rec("2026-01-01T00:00:02.000Z", "codex.api_request", attempt="0",
+        **{"http.response.status_code": "200", "success": "true"}),
+    rec("2026-01-01T00:36:17.500Z", "codex.sse_event",
+        **{"event.kind": "response.completed", "input_token_count": "41016",
+           "output_token_count": "221128", "cached_token_count": "36800",
+           "cache_write_token_count": "0", "reasoning_token_count": "221128"}),
+]
+with open(sys.argv[1], "w") as fh:
+    for l in lines:
+        fh.write(json.dumps(l, sort_keys=True) + "\n")
+FIXLOGDA
+run_cmd "$PY" "$LEDGER_PY" normalize "$RUNDA"
+expect_rc "t12diagA0 Case A normalize exits 0" 0 "$RC"
+run_cmd "$PY" - "$RUNDA/run-ledger.json" <<'PYDIAGA'
+import json, sys
+d = json.load(open(sys.argv[1]))
+dg = d["diagnostics"]["pathological_run"]
+a = d["activity"]
+# captured-scoped activity: 1 API request, 0 tools, incident token shape
+assert a["api_request_count"] == 1 and a["tool_call_count"] == 0
+assert a["failed_tool_calls"] == 0 and d["failures"] == []
+t = a["token_usage"]
+assert (t["input"], t["output"], t["cached"], t["cache_write"],
+        t["reasoning"], t["total"]) == (41016, 221128, 36800, 0, 221128, 520072)
+assert dg["detected"] is True
+by_name = {x["name"]: x for x in dg["signals"]}
+assert sorted(by_name) == [
+    "extreme_reasoning_dominance",
+    "huge_generation_on_few_api_requests",
+    "long_generation_without_tool_progress",
+    "no_progress_after_long_run",
+]
+assert by_name["long_generation_without_tool_progress"]["evidence"] == {
+    "duration_s": 2178, "output_tokens": 221128, "tool_call_count": 0}
+assert by_name["extreme_reasoning_dominance"]["evidence"] == {
+    "output_tokens": 221128, "reasoning_tokens": 221128}
+assert by_name["no_progress_after_long_run"]["evidence"] == {
+    "changed_file_count": 0, "commit_created": False, "duration_s": 2178,
+    "verification_profiles": 0}
+assert by_name["huge_generation_on_few_api_requests"]["evidence"] == {
+    "api_request_count": 1, "duration_s": 2178,
+    "output_tokens": 221128, "tool_call_count": 0}
+assert dg["unevaluated"] == []
+# foreign is defined (captured identity present) but empty
+assert a["foreign"]["present"] is False
+PYDIAGA
+expect_rc "t12diagA1 Case A: incident shape detected with explicit signals + evidence" 0 "$RC"
+run_cmd "$PY" "$LEDGER_PY" show "$RUNDA"
+expect_rc "t12diagA2 Case A human ledger show exits 0" 0 "$RC"
+expect_contains "t12diagA3 human output names the pathological-run diagnostic" "$CAP_OUT" "PATHOLOGICAL RUN"
+expect_contains "t12diagA4 human output lists the fired signals" "$CAP_OUT" "long_generation_without_tool_progress"
+
+# Case B — normal short no-tool response: short duration, small output,
+# 0 tools. Must NOT be flagged — tool_count == 0 is not a pathology.
+RUNDB="$T12/runs/run-20260101T000015Z"
+mkdir -p "$RUNDB/raw"
+diag_write_manifest run-20260101T000015Z conv-short \
+  "2026-01-01T00:00:00Z" "2026-01-01T00:00:30Z" \
+  "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" \
+  false 0 '["conv-short"]'
+"$PY" - "$RUNDB/raw/logs.jsonl" <<'FIXLOGDB'
+import json, sys
+def rec(ts, name, **kw):
+    attrs = {"event.timestamp": ts, "event.name": name,
+             "conversation.id": "conv-short", "app.version": "0.148.0"}
+    attrs.update(kw)
+    return {"resourceLogs": [{"resource": {"attributes": []}, "scopeLogs": [
+        {"logRecords": [{"severityNumber": 9,
+                         "attributes": [{"key": k, "value": {"stringValue": str(v)}} for k, v in sorted(attrs.items())]}]}]}]}
+lines = [
+    rec("2026-01-01T00:00:00.000Z", "codex.conversation_starts"),
+    rec("2026-01-01T00:00:01.000Z", "codex.user_prompt", prompt_length="32"),
+    rec("2026-01-01T00:00:02.000Z", "codex.api_request", attempt="0",
+        **{"http.response.status_code": "200", "success": "true"}),
+    rec("2026-01-01T00:00:05.000Z", "codex.sse_event",
+        **{"event.kind": "response.completed", "input_token_count": "1200",
+           "output_token_count": "240", "cached_token_count": "1000",
+           "cache_write_token_count": "0", "reasoning_token_count": "120"}),
+]
+with open(sys.argv[1], "w") as fh:
+    for l in lines:
+        fh.write(json.dumps(l, sort_keys=True) + "\n")
+FIXLOGDB
+run_cmd "$PY" "$LEDGER_PY" normalize "$RUNDB"
+expect_rc "t12diagB0 Case B normalize exits 0" 0 "$RC"
+run_cmd "$PY" - "$RUNDB/run-ledger.json" <<'PYDIAGB'
+import json, sys
+d = json.load(open(sys.argv[1]))
+dg = d["diagnostics"]["pathological_run"]
+assert d["activity"]["tool_call_count"] == 0  # zero tools, still not flagged
+assert dg["detected"] is False and dg["signals"] == []
+assert dg["unevaluated"] == []  # everything evaluated, nothing missing
+PYDIAGB
+expect_rc "t12diagB1 Case B: short no-tool response not flagged, all signals evaluated" 0 "$RC"
+run_cmd "$PY" "$LEDGER_PY" show "$RUNDB"
+expect_rc "t12diagB2 Case B human ledger show exits 0" 0 "$RC"
+expect_contains "t12diagB3 normal run human output is a compact single line" "$CAP_OUT" "no pathological-run signals"
+expect_not_contains "t12diagB4 normal run output does not flood with diagnostics" "$CAP_OUT" "PATHOLOGICAL RUN"
+
+# Case C — healthy engineering turn: long duration (2400 s, beyond the
+# 1800 s threshold), many tools, repository progress (12 changed files,
+# commit created), verification evidence, normal token profile (50%
+# reasoning share) -> NOT flagged. Long duration with progress is fine.
+RUNDC="$T12/runs/run-20260101T000016Z"
+mkdir -p "$RUNDC/raw"
+diag_write_manifest run-20260101T000016Z conv-healthy \
+  "2026-01-01T00:00:00Z" "2026-01-01T00:40:00Z" \
+  "1111111111111111111111111111111111111111" "2222222222222222222222222222222222222222" \
+  true 12 '["conv-healthy"]'
+cat > "$RUNDC/verify-quick.json" <<'VERIFYC'
+{
+  "schemaVersion": 1, "profile": "quick", "mode": "run",
+  "result": "pass", "exitCode": 0,
+  "startedAt": "2026-01-01T00:39:00Z", "finishedAt": "2026-01-01T00:39:20Z",
+  "durationMs": 20000, "agentRunId": "run-20260101T000016Z",
+  "phases": [
+    {"name": "repo_hygiene", "outcome": "passed", "exitCode": 0},
+    {"name": "frontend_typecheck", "outcome": "passed", "exitCode": 0}
+  ]
+}
+VERIFYC
+"$PY" - "$RUNDC/raw/logs.jsonl" <<'FIXLOGDC'
+import json, sys
+def rec(ts, name, **kw):
+    attrs = {"event.timestamp": ts, "event.name": name,
+             "conversation.id": "conv-healthy", "app.version": "0.148.0"}
+    attrs.update(kw)
+    return {"resourceLogs": [{"resource": {"attributes": []}, "scopeLogs": [
+        {"logRecords": [{"severityNumber": 9,
+                         "attributes": [{"key": k, "value": {"stringValue": str(v)}} for k, v in sorted(attrs.items())]}]}]}]}
+lines = [
+    rec("2026-01-01T00:00:00.000Z", "codex.conversation_starts"),
+    rec("2026-01-01T00:00:01.000Z", "codex.user_prompt", prompt_length="128"),
+]
+for i in range(6):
+    lines.append(rec("2026-01-01T00:0%d:00.000Z" % (i // 2), "codex.api_request",
+                     attempt=str(i), **{"http.response.status_code": "200",
+                                        "success": "true"}))
+for i in range(1, 13):
+    lines.append(rec("2026-01-01T00:0%d:%02d.000Z" % (i // 2, (i * 7) % 60),
+                     "codex.tool_result", tool_name="exec_command",
+                     call_id="h%d" % i,
+                     success="false" if i in (4, 9) else "true",
+                     duration_ms="50"))
+lines.append(rec("2026-01-01T00:39:00.000Z", "codex.sse_event",
+                 **{"event.kind": "response.completed",
+                    "input_token_count": "50000", "output_token_count": "90000",
+                    "cached_token_count": "40000", "cache_write_token_count": "0",
+                    "reasoning_token_count": "45000"}))
+with open(sys.argv[1], "w") as fh:
+    for l in lines:
+        fh.write(json.dumps(l, sort_keys=True) + "\n")
+FIXLOGDC
+run_cmd "$PY" "$LEDGER_PY" normalize "$RUNDC"
+expect_rc "t12diagC0 Case C normalize exits 0" 0 "$RC"
+run_cmd "$PY" - "$RUNDC/run-ledger.json" <<'PYDIAGC'
+import json, sys
+d = json.load(open(sys.argv[1]))
+dg = d["diagnostics"]["pathological_run"]
+a = d["activity"]
+assert a["tool_call_count"] == 12 and a["failed_tool_calls"] == 2
+assert d["git_wip"]["commit_created"] is True
+assert d["git_wip"]["changed_file_count"] == 12
+assert d["verification"]["final_gate"]["result"] == "pass"
+assert dg["detected"] is False and dg["signals"] == []
+assert dg["unevaluated"] == []
+PYDIAGC
+expect_rc "t12diagC1 Case C: healthy long engineering turn not flagged" 0 "$RC"
+
+# Case D — tool-heavy failed run: 7 of 12 tool calls failed but bounded
+# generation and short duration. The detector exposes ONLY the supported
+# failure-related signal; it is not classified as the model-generation
+# pathology of the original incident (criteria do not independently
+# justify it).
+RUNDD="$T12/runs/run-20260101T000017Z"
+mkdir -p "$RUNDD/raw"
+diag_write_manifest run-20260101T000017Z conv-flaky \
+  "2026-01-01T00:00:00Z" "2026-01-01T00:05:00Z" \
+  "cccccccccccccccccccccccccccccccccccccccc" "cccccccccccccccccccccccccccccccccccccccc" \
+  false 0 '["conv-flaky"]'
+"$PY" - "$RUNDD/raw/logs.jsonl" <<'FIXLOGDD'
+import json, sys
+def rec(ts, name, **kw):
+    attrs = {"event.timestamp": ts, "event.name": name,
+             "conversation.id": "conv-flaky", "app.version": "0.148.0"}
+    attrs.update(kw)
+    return {"resourceLogs": [{"resource": {"attributes": []}, "scopeLogs": [
+        {"logRecords": [{"severityNumber": 9,
+                         "attributes": [{"key": k, "value": {"stringValue": str(v)}} for k, v in sorted(attrs.items())]}]}]}]}
+lines = [
+    rec("2026-01-01T00:00:00.000Z", "codex.conversation_starts"),
+    rec("2026-01-01T00:00:01.000Z", "codex.user_prompt", prompt_length="64"),
+]
+for i in range(3):
+    lines.append(rec("2026-01-01T00:00:%02d.000Z" % (2 + i), "codex.api_request",
+                     attempt=str(i), **{"http.response.status_code": "200",
+                                        "success": "true"}))
+for i in range(1, 13):
+    lines.append(rec("2026-01-01T00:00:%02d.500Z" % (3 + i), "codex.tool_result",
+                     tool_name="exec_command", call_id="f%d" % i,
+                     success="false" if i <= 7 else "true",
+                     duration_ms="40"))
+lines.append(rec("2026-01-01T00:04:50.000Z", "codex.sse_event",
+                 **{"event.kind": "response.completed",
+                    "input_token_count": "8000", "output_token_count": "4000",
+                    "cached_token_count": "2000", "cache_write_token_count": "0",
+                    "reasoning_token_count": "2000"}))
+with open(sys.argv[1], "w") as fh:
+    for l in lines:
+        fh.write(json.dumps(l, sort_keys=True) + "\n")
+FIXLOGDD
+run_cmd "$PY" "$LEDGER_PY" normalize "$RUNDD"
+expect_rc "t12diagD0 Case D normalize exits 0" 0 "$RC"
+run_cmd "$PY" - "$RUNDD/run-ledger.json" <<'PYDIAGD'
+import json, sys
+d = json.load(open(sys.argv[1]))
+dg = d["diagnostics"]["pathological_run"]
+assert d["activity"]["failed_tool_calls"] == 7
+assert dg["detected"] is True
+assert [x["name"] for x in dg["signals"]] == ["high_failed_tool_concentration"]
+assert dg["signals"][0]["evidence"] == {
+    "failed_tool_calls": 7, "tool_call_count": 12}
+assert dg["unevaluated"] == []
+PYDIAGD
+expect_rc "t12diagD1 Case D: only the failure-related signal is exposed" 0 "$RC"
+
+# Case E — foreign telemetry isolation: captured conversation A is a
+# small healthy turn; foreign conversation B is extreme (huge tokens,
+# many API requests, many failed tools). A must NOT be diagnosed as
+# pathological; B's values appear only in activity.foreign and never in
+# the diagnostics.
+RUNDE="$T12/runs/run-20260101T000018Z"
+mkdir -p "$RUNDE/raw"
+diag_write_manifest run-20260101T000018Z conv-a-healthy \
+  "2026-01-01T00:00:00Z" "2026-01-01T00:10:00Z" \
+  "dddddddddddddddddddddddddddddddddddddddd" "dddddddddddddddddddddddddddddddddddddddd" \
+  false 0 '["conv-a-healthy", "conv-b-extreme"]'
+"$PY" - "$RUNDE/raw/logs.jsonl" <<'FIXLOGDE'
+import json, sys
+def rec(ts, conv, name, **kw):
+    attrs = {"event.timestamp": ts, "event.name": name,
+             "conversation.id": conv, "app.version": "0.148.0"}
+    attrs.update(kw)
+    return {"resourceLogs": [{"resource": {"attributes": []}, "scopeLogs": [
+        {"logRecords": [{"severityNumber": 9,
+                         "attributes": [{"key": k, "value": {"stringValue": str(v)}} for k, v in sorted(attrs.items())]}]}]}]}
+lines = [
+    rec("2026-01-01T00:00:00.000Z", "conv-a-healthy", "codex.conversation_starts"),
+    rec("2026-01-01T00:00:01.000Z", "conv-a-healthy", "codex.user_prompt", prompt_length="10"),
+    rec("2026-01-01T00:00:02.000Z", "conv-a-healthy", "codex.api_request", attempt="0",
+        **{"http.response.status_code": "200", "success": "true"}),
+    rec("2026-01-01T00:00:05.000Z", "conv-a-healthy", "codex.sse_event",
+        **{"event.kind": "response.completed", "input_token_count": "100",
+           "output_token_count": "20", "cached_token_count": "30",
+           "cache_write_token_count": "0", "reasoning_token_count": "5"}),
+    # foreign conversation B: extreme generation + failures
+    rec("2026-01-01T00:00:01.000Z", "conv-b-extreme", "codex.user_prompt", prompt_length="99"),
+]
+for i in range(20):
+    lines.append(rec("2026-01-01T00:00:%02d.100Z" % (2 + i // 16), "conv-b-extreme",
+                     "codex.api_request", attempt=str(i),
+                     **{"http.response.status_code": "500" if i % 4 == 0 else "200",
+                        "success": "false" if i % 4 == 0 else "true"}))
+for i in range(1, 31):
+    lines.append(rec("2026-01-01T00:01:%02d.200Z" % i, "conv-b-extreme",
+                     "codex.tool_result", tool_name="exec_command",
+                     call_id="x%d" % i,
+                     success="false" if i % 2 == 0 else "true",
+                     duration_ms="30"))
+lines.append(rec("2026-01-01T00:09:50.000Z", "conv-b-extreme", "codex.sse_event",
+                 **{"event.kind": "response.completed",
+                    "input_token_count": "500000", "output_token_count": "450000",
+                    "cached_token_count": "100000", "cache_write_token_count": "0",
+                    "reasoning_token_count": "400000"}))
+with open(sys.argv[1], "w") as fh:
+    for l in lines:
+        fh.write(json.dumps(l, sort_keys=True) + "\n")
+FIXLOGDE
+run_cmd "$PY" "$LEDGER_PY" normalize "$RUNDE"
+expect_rc "t12diagE0 Case E normalize exits 0" 0 "$RC"
+run_cmd "$PY" - "$RUNDE/run-ledger.json" <<'PYDIAGE'
+import json, sys
+d = json.load(open(sys.argv[1]))
+dg = d["diagnostics"]["pathological_run"]
+a = d["activity"]
+# captured A: small healthy turn — NOT diagnosed as pathological
+assert dg["detected"] is False and dg["signals"] == []
+assert dg["unevaluated"] == []  # captured identity present: all evaluated
+# extreme foreign B is reported separately, never merged, never diagnosed
+f = a["foreign"]
+assert f["present"] is True and f["conversation_ids"] == ["conv-b-extreme"]
+assert f["api_request_count"] == 20 and f["failed_api_requests"] == 5
+assert f["tool_call_count"] == 30 and f["failed_tool_calls"] == 15
+assert f["token_usage_total"] == 1450000
+assert a["api_request_count"] == 1 and a["tool_call_count"] == 0
+PYDIAGE
+expect_rc "t12diagE1 Case E: extreme foreign telemetry never changes the captured diagnosis" 0 "$RC"
+
+# Case F — deterministic normalization: the diagnostic-bearing record is
+# byte-identical across re-normalization.
+run_cmd cp "$RUNDA/run-ledger.json" "$T12/diagA-first.json"
+run_cmd "$PY" "$LEDGER_PY" normalize "$RUNDA"
+expect_rc "t12diagF0 Case F re-normalize exits 0" 0 "$RC"
+run_cmd cmp -s "$RUNDA/run-ledger.json" "$T12/diagA-first.json"
+expect_rc "t12diagF1 Case F re-normalization is byte-identical (diagnostics deterministic)" 0 "$RC"
 
 # run context in the ledger: explicit, bounded, idempotent, no inference
 RUNCONTEXT_PY="$REPO_ROOT/scripts/observability/runcontext.py"
@@ -1456,8 +1917,8 @@ expect_rc "t12ad wrapper ledger (latest) exits 0" 0 "$RC"
 expect_contains "t12ae wrapper human output names the run" "$CAP_OUT" "run-20260101T000000Z"
 run_cmd env FG_OBS_RUNS_DIR="$T12/runs" bash "$OBS" ledger run-20260101T000000Z --json
 expect_rc "t12af wrapper ledger --json exits 0" 0 "$RC"
-"$PY" -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["run_id"]=="run-20260101T000000Z" and d["schema_version"]==3 and "comparability" in d' "$CAP_OUT" \
-  && ok "t12ag wrapper --json emits the v3 record" || bad "t12ag wrapper --json emits the v3 record"
+"$PY" -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["run_id"]=="run-20260101T000000Z" and d["schema_version"]==4 and "comparability" in d and "diagnostics" in d' "$CAP_OUT" \
+  && ok "t12ag wrapper --json emits the v4 record" || bad "t12ag wrapper --json emits the v4 record"
 run_cmd env FG_OBS_RUNS_DIR="$T12/runs" bash "$OBS" ledger "bad id"
 expect_rc "t12ah wrapper rejects invalid run id (exit 2)" 2 "$RC"
 run_cmd env FG_OBS_RUNS_DIR="$T12/runs" bash "$OBS" ledger no-such-run

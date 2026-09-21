@@ -19,14 +19,19 @@ Normalization boundary:
   + explicit human annotations
 + run-context.json (structured, bounded run context)
   -> versioned normalized Run Ledger record (docs/agent/ledger-contract.json,
-     schema v3: adds the bounded structured run context, native
-     run-config runtime fields, the comparability section, and — since
-     v3 — the persisted captured conversation identity
-     (identity.captured_conversation_id): the primary activity / failure /
-     token metrics are scoped to that captured conversation, and foreign
-     telemetry (other conversation ids in the same raw run) is reported
-     explicitly via activity.foreign instead of being merged into the
-     captured turn's metrics)
+     schema v4: adds the bounded structured run context, native
+     run-config runtime fields, the comparability section, the persisted
+     captured conversation identity (identity.captured_conversation_id,
+     since v3 — the primary activity / failure / token metrics are scoped
+     to that captured conversation, and foreign telemetry (other
+     conversation ids in the same raw run) is reported explicitly via
+     activity.foreign instead of being merged into the captured turn's
+     metrics), and — since v4 — the bounded diagnostic-only pathological
+     run section (diagnostics.pathological_run): explicit deterministic
+     signals over the normalized captured-scoped metrics that flag clearly
+     pathological behavior for human review. Diagnostic only: it never
+     terminates or cancels anything and never changes budgets or model
+     settings)
 
 Rules:
   * deterministic: the record is a pure function of the stored evidence
@@ -59,7 +64,7 @@ except ImportError:  # pragma: no cover - same-directory import fallback
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import runcontext
 
-LEDGER_SCHEMA_VERSION = 3
+LEDGER_SCHEMA_VERSION = 4
 RECORD_NAME = "fg-agent-run-ledger"
 LEDGER_FILE = "run-ledger.json"
 ANNOTATIONS_FILE = "annotations.json"
@@ -647,6 +652,188 @@ def final_gate(profiles):
             "source": latest.get("source")}
 
 
+# ------------------------------------------------------- diagnostics (v4) --
+#
+# Pathological run diagnostics (schema v4).
+#
+# Diagnostic ONLY: this section flags clearly pathological captured-turn
+# behavior for human review. It is a warning surface, never an
+# intervention: nothing here terminates or cancels a model, a turn, the
+# agent, or the ACP session, and nothing here changes token budgets or
+# model settings. Detection and intervention are separate decisions.
+#
+# Design principle: explicit deterministic signals over observable
+# telemetry features (normalized, stored metrics) + the observed values
+# that fired them — never a single opaque pathology score, never a
+# semantic guess about whether the model's prose "looks bad". A signal
+# whose required evidence is absent is reported in "unevaluated" with a
+# stable reason; it is never guessed and never silently false.
+#
+# Scoping: all conversation-attributable signals use the PRIMARY
+# (captured-conversation-scoped) activity metrics only. Foreign telemetry
+# (activity.foreign) never influences this section. When no captured
+# identity is persisted and more than one conversation was observed, the
+# primary activity is the run-wide aggregate and MUST NOT be read as the
+# captured turn's activity (the captured_conversation_unknown gap): the
+# attributable signals are then unevaluated, never inferred. The
+# no_progress_after_long_run signal uses only deliberately unscoped
+# run-level facts (capture window, end-of-run Git evidence, verification
+# evidence in the run directory) and stays evaluable.
+#
+# Thresholds — INITIAL conservative heuristics (high precision first),
+# derived from the stored evidence of the captured runs 2026-09-19..21
+# (rationale: docs/agent/OBSERVABILITY.md, "Pathological run
+# diagnostics"). Reference points: the pathological incident
+# run-20260921T111009Z, captured conversation 01a0c3a6-dd79-7652-bb05-
+# ecb528dd8c5d: 2178 s, 0 tool calls, 0 attributed API requests,
+# 221,128 output tokens of which 221,128 are reasoning (essentially no
+# visible output), graceful end. Across the corpus: no normal run
+# combined zero tool progress with large generation (no run with >= 3k
+# output tokens used 0 tools; every run with >= 84k output tokens used
+# >= 36 tools); the maximum reasoning share among runs with >= 50k
+# output tokens is 0.82; no normal run >= 1800 s ended with zero changed
+# files and no verification; the maximum failed-tool concentration is
+# 8.3%. Recalibrate as more evidence accumulates.
+
+DIAG_MIN_DURATION_S = 1800        # incident: 2178 s; longest normal >= 1800 s runs all ended with changed files
+DIAG_MIN_OUTPUT_TOKENS = 200000   # incident: 221,128; max normal output with 0 tools: 1,789
+DIAG_REASONING_DOMINANCE_OUTPUT_MIN = 50000
+# reasoning share in basis points (integer math, no floats): 9500 = 95%
+DIAG_REASONING_DOMINANCE_BPS = 9500
+DIAG_MIN_FAILED_TOOLS = 5
+# failed share in basis points: 5000 = 50% (max normal concentration: 8.3%)
+DIAG_FAILED_TOOL_CONCENTRATION_BPS = 5000
+
+
+def diagnostics_section(identity, activity, git_wip, verification,
+                        captured, observed_conversation_ids):
+    """Deterministic pathological-run diagnostics (schema v4, additive).
+
+    Returns the bounded "diagnostics" record section. Diagnostic only:
+    the output is a warning surface for human review — it never drives
+    termination, cancellation, budgets, or model settings.
+
+    * "signals" — fired signals, each with the observed contract-named
+      values that triggered it (integers/booleans only; sorted by name).
+    * "unevaluated" — signals whose required evidence is absent, each
+      with a stable reason: "missing_evidence" (a required normalized
+      field is null) or "captured_conversation_unknown" (no persisted
+      captured identity AND >= 2 observed conversations, so the
+      conversation-attributable signal cannot be attributed to the
+      captured turn). Never guessed, never silently false.
+    * "detected" — true when at least one signal fired.
+    """
+    tok = activity.get("token_usage") or {}
+    dur = identity.get("duration_s")
+    api = activity.get("api_request_count")
+    tools = activity.get("tool_call_count")
+    tools_failed = activity.get("failed_tool_calls")
+    t_out = tok.get("output")
+    t_reason = tok.get("reasoning")
+    chg = git_wip.get("changed_file_count")
+    commit = git_wip.get("commit_created")
+    has_verify = bool((verification or {}).get("profiles"))
+
+    scope_unknown = captured is None and len(observed_conversation_ids) >= 2
+
+    signals = []
+    unevaluated = []
+
+    def fire(name, evidence):
+        signals.append({"name": name,
+                        "evidence": dict(sorted(evidence.items()))})
+
+    def uneval(name, reason):
+        unevaluated.append({"name": name, "reason": reason})
+
+    # A. long_generation_without_tool_progress: very high generation, no
+    #    tool progression, long duration. "Zero tools" alone is NOT
+    #    pathological (a legitimate simple answer uses no tools); all
+    #    three conditions must hold together.
+    if scope_unknown:
+        uneval("long_generation_without_tool_progress",
+               "captured_conversation_unknown")
+    elif dur is None or tools is None or t_out is None:
+        uneval("long_generation_without_tool_progress", "missing_evidence")
+    elif (dur >= DIAG_MIN_DURATION_S and tools == 0
+          and t_out >= DIAG_MIN_OUTPUT_TOKENS):
+        fire("long_generation_without_tool_progress",
+             {"duration_s": dur, "tool_call_count": tools,
+              "output_tokens": t_out})
+
+    # B. extreme_reasoning_dominance: reasoning tokens dominate the
+    #    generated output. Codex 0.148.0 output counters include
+    #    reasoning tokens, so a share of ~100% means essentially no
+    #    visible output was produced. Zero denominators are safe:
+    #    t_out == 0 evaluates the signal false (no generation, no
+    #    dominance), t_out None is missing evidence. Not every
+    #    high-reasoning turn is pathological: the floor keeps small
+    #    turns out.
+    if scope_unknown:
+        uneval("extreme_reasoning_dominance", "captured_conversation_unknown")
+    elif t_out is None or t_reason is None:
+        uneval("extreme_reasoning_dominance", "missing_evidence")
+    elif (t_out > 0 and t_out >= DIAG_REASONING_DOMINANCE_OUTPUT_MIN
+          and t_reason * 10000 >= t_out * DIAG_REASONING_DOMINANCE_BPS):
+        fire("extreme_reasoning_dominance",
+             {"output_tokens": t_out, "reasoning_tokens": t_reason})
+
+    # C. no_progress_after_long_run: long capture window AND no changed
+    #    files AND no commit AND no verification evidence. Supporting
+    #    evidence only: long duration alone never fires; a long
+    #    research/analysis run that ends without engineering-state
+    #    progress is surfaced for human review, not failed. Uses only
+    #    run-level (deliberately unscoped) facts; activity.foreign is
+    #    never read.
+    if dur is None or chg is None or commit is None:
+        uneval("no_progress_after_long_run", "missing_evidence")
+    elif (dur >= DIAG_MIN_DURATION_S and chg == 0 and commit is False
+          and not has_verify):
+        fire("no_progress_after_long_run",
+             {"changed_file_count": chg, "commit_created": commit,
+              "duration_s": dur, "verification_profiles": 0})
+
+    # D. high_failed_tool_concentration: repeated failed tools, high
+    #    failure concentration. Count-based only: tool arguments are
+    #    sanitized away, so identical/repeated command content is NOT
+    #    claimed (see the contract's unsupportedMetrics).
+    if scope_unknown:
+        uneval("high_failed_tool_concentration", "captured_conversation_unknown")
+    elif tools is None or tools_failed is None:
+        uneval("high_failed_tool_concentration", "missing_evidence")
+    elif (tools > 0 and tools_failed >= DIAG_MIN_FAILED_TOOLS
+          and tools_failed * 10000
+          >= tools * DIAG_FAILED_TOOL_CONCENTRATION_BPS):
+        fire("high_failed_tool_concentration",
+             {"failed_tool_calls": tools_failed, "tool_call_count": tools})
+
+    # E. huge_generation_on_few_api_requests: one/few API requests, very
+    #    large generation, zero tools, long duration — the specific
+    #    incident signature (a single continuous generation stream).
+    #    api <= 1 because the captured turn's own codex.api_request event
+    #    may not survive in the raw capture (the incident's scoped count
+    #    is 0 while one model response is provable from the token
+    #    counters).
+    if scope_unknown:
+        uneval("huge_generation_on_few_api_requests",
+               "captured_conversation_unknown")
+    elif dur is None or api is None or tools is None or t_out is None:
+        uneval("huge_generation_on_few_api_requests", "missing_evidence")
+    elif (api <= 1 and tools == 0 and t_out >= DIAG_MIN_OUTPUT_TOKENS
+          and dur >= DIAG_MIN_DURATION_S):
+        fire("huge_generation_on_few_api_requests",
+             {"api_request_count": api, "duration_s": dur,
+              "output_tokens": t_out, "tool_call_count": tools})
+
+    signals.sort(key=lambda x: x["name"])
+    unevaluated.sort(key=lambda x: x["name"])
+    return {"pathological_run": {
+        "detected": bool(signals),
+        "signals": signals,
+        "unevaluated": unevaluated,
+    }}
+
+
 # ------------------------------------------------------------------ git/wip --
 
 def git_wip_section(manifest):
@@ -1094,6 +1281,10 @@ def build_record(run_dir):
         "human": human_section(annotations),
         "comparability": comparability_section(identity, runtime, ctx,
                                                profiles, doctor, obs_doctor),
+        "diagnostics": diagnostics_section(
+            identity, activity, git_wip,
+            {"profiles": profiles or []},
+            captured, observed_ids),
         "evidence_gaps": list_gaps(manifest, events, profiles or [], doctor,
                                    obs_doctor, annotations,
                                    activity["token_usage"],
@@ -1250,6 +1441,19 @@ def print_human(r):
     miss = comp.get("missing") or []
     print("  comparable: %s" % ("all dimensions evidenced" if not miss
                                 else "missing: " + ", ".join(miss)))
+    diag = ((r.get("diagnostics") or {}).get("pathological_run")) or {}
+    if diag.get("detected"):
+        # warning surface only: diagnostic, never an intervention
+        print("  diagnostic: PATHOLOGICAL RUN (warning; diagnostic only, "
+              "no action taken)")
+        print("    signals:    %s" % ", ".join(
+            x["name"] for x in diag.get("signals") or []))
+        unev = diag.get("unevaluated") or []
+        if unev:
+            print("    unevaluated: %s" % ", ".join(
+                "%s (%s)" % (x["name"], x["reason"]) for x in unev))
+    else:
+        print("  diagnostic: no pathological-run signals")
     print("  missing:    %s" % (", ".join(r["evidence_gaps"]) or "none"))
 
 

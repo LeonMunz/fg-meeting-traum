@@ -455,7 +455,7 @@ raw sanitized OTel (logs/traces/metrics)  — only trace-contract fields
 + annotations.json                         — explicit human annotations
   ↓
 .artifacts/agent-runs/<run-id>/run-ledger.json   (versioned record, schema
-  docs/agent/ledger-contract.json — currently schemaVersion 3)
+  docs/agent/ledger-contract.json — currently schemaVersion 4)
 ```
 
 - `./scripts/agent-observability ledger [run-id] [--json]` normalizes one
@@ -549,6 +549,57 @@ raw sanitized OTel (logs/traces/metrics)  — only trace-contract fields
   verification evidence, doctor/environment evidence, explicit harness
   variant) plus a sorted `missing` list. The section answers only whether
   evidence exists — it is not a quality score and never ranks runs.
+- **Pathological run diagnostics (schema v4; diagnostic only).**
+  `diagnostics.pathological_run` deterministically flags clearly
+  pathological captured-turn behavior for human review. It is a WARNING
+  surface, never an intervention: it never terminates or cancels a model,
+  turn, agent, or ACP session, never changes token budgets or model
+  settings, and carries no scoring — detection and intervention are
+  separate decisions. The section is a pure function of the normalized
+  captured-scoped metrics plus the deliberately unscoped run-level facts:
+  no prompt/response text, no semantic guesses about prose quality, no
+  opaque score — only a small set of explicit Boolean signals, each with
+  the observed values that fired it. Signals (initial conservative
+  heuristics, high precision first, derived from the stored run evidence —
+  recalibrate as evidence accumulates):
+  - `long_generation_without_tool_progress` — duration >= 1800 s AND
+    `tool_call_count == 0` AND output tokens >= 200,000. Zero tools alone
+    is not pathological (a legitimate simple answer uses no tools); all
+    three conditions must hold together.
+  - `extreme_reasoning_dominance` — output tokens >= 50,000 AND reasoning
+    tokens >= 95% of output tokens. Codex 0.148.0 output counters include
+    reasoning tokens, so ~100% means essentially no visible output was
+    produced; zero denominators are handled safely.
+  - `no_progress_after_long_run` — duration >= 1800 s AND
+    `changed_file_count == 0` AND `commit_created == false` AND no
+    verification evidence. Supporting evidence, never an unconditional
+    failure: long duration alone never fires, and a long
+    research/analysis run that ends without engineering-state progress is
+    surfaced for human review, not failed. Evaluated on run-level facts
+    only (by contract these are unscoped); it never reads
+    `activity.foreign`.
+  - `high_failed_tool_concentration` — failed tool calls >= 5 AND >= 50%
+    of all tool calls failed. Count-based only: command text is sanitized
+    away, so identical/repeated commands are never claimed.
+  - `huge_generation_on_few_api_requests` — API requests <= 1 AND
+    `tool_call_count == 0` AND output tokens >= 200,000 AND duration >=
+    1800 s (the run-20260921T111009Z incident signature: one continuous
+    generation stream with no tool progression).
+  Threshold rationale from stored evidence: the incident's captured
+  conversation shows 2178 s / 0 tools / 0 attributed API requests /
+  221,128 output tokens (100% reasoning); no normal run combined zero
+  tool progress with large generation, the maximum reasoning share among
+  >= 50k-output runs is 0.82, no normal run >= 1800 s ended with zero
+  changed files and no verification, and the maximum failed-tool
+  concentration is 8.3%. A signal whose required evidence is absent is
+  reported in `unevaluated` with a stable reason (`missing_evidence`, or
+  `captured_conversation_unknown` when no persisted captured identity
+  exists and >= 2 conversations were observed) — never guessed, never
+  silently false. `activity.foreign` never influences the section: all
+  conversation-attributable signals use the captured turn's scoped
+  metrics only. The human ledger output reports a compact `diagnostic:`
+  line — signal names when detected, otherwise
+  "no pathological-run signals".
 - **Codex version attribution (telemetry, not PATH).** `runtime.codex_version`
   is the Codex version that actually executed the captured turn, derived
   exclusively from the telemetry `app.version` attribute the Codex process
@@ -562,15 +613,17 @@ raw sanitized OTel (logs/traces/metrics)  — only trace-contract fields
   captures; only `native-probe` records the exact binary the probe ran), and
   the standalone version remains available via `status`
   (`controller_codex_version`, informational only).
-- **Historical captures.** v1/v2 ledger records remain valid documents and
-  are never rewritten in place by any tooling. Captures made before v2
-  normalize to v3 with null context/runtime values plus explicit
+- **Historical captures.** v1/v2/v3 ledger records remain valid documents
+  and are never rewritten in place by any tooling. Captures made before
+  v2 normalize to v4 with null context/runtime values plus explicit
   evidence/comparability gaps. Captures made before v3 (no persisted
-  captured conversation identity) normalize to v3 with
+  captured conversation identity) normalize to v4 with
   `identity.captured_conversation_id` null: the primary activity is the
   run-wide aggregate, represented explicitly by the
   `captured_conversation_unknown` gap whenever at least one conversation
-  was observed; nothing is guessed or back-filled.
+  was observed; nothing is guessed or back-filled. Records persisted as
+  v3 or earlier lack the `diagnostics` section; its absence means "not
+  computed", never "not detected".
 - **Human intervention is never inferred.** `annotate` records, after the
   fact: whether a human correction occurred (`--correction yes|no`), a
   bounded category (required with `yes`), an optional note (≤ 280 chars),

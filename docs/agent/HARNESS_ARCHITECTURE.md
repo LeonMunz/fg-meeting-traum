@@ -1620,7 +1620,7 @@ the repository root; all git-ignored via `.artifacts/`):
                                        # when attached via `context`
       verify-<profile>.json            # agent-verify --summary-json output (agentRunId)
       annotations.json                 # explicit human annotations (schema_version 1)
-      run-ledger.json                  # normalized record (schema v3; by `stop` or `ledger`)
+      run-ledger.json                  # normalized record (schema v4; by `stop` or `ledger`)
     probe-native-<UTC ts>/             # native-probe runs (same shape; kind "probe-native")
   agent-observability/
     otelcol/<version>/otelcol          # pinned collector binary (install)
@@ -1639,7 +1639,7 @@ deterministic normalized output.
 ## 22. Run Ledger architecture
 
 **CURRENT IMPLEMENTATION.** Canonical contract:
-`docs/agent/ledger-contract.json` (schemaVersion 3); implementation:
+`docs/agent/ledger-contract.json` (schemaVersion 4); implementation:
 `scripts/observability/ledger.py`; pins: `agent-observability.test.sh`.
 
 ### 22.1 Normalization boundary
@@ -1661,7 +1661,7 @@ live git state, no environment values — re-running on unchanged evidence
 yields **byte-identical** output; the end-of-run Git evidence is recorded
 once at capture finalize so later normalization stays reproducible.
 
-### 22.2 Record sections (schema v3)
+### 22.2 Record sections (schema v4)
 
 - `identity` — run id, observed conversation ids, the persisted captured
   conversation identity (`captured_conversation_id`; null = unknown, never
@@ -1702,6 +1702,15 @@ once at capture finalize so later normalization stays reproducible.
 - `context` — the four bounded fields (§24).
 - `comparability` — 12 fixed boolean presence dimensions + sorted
   `missing` list (§24).
+- `diagnostics` (v4, additive) — `pathological_run`: `detected` boolean +
+  bounded `signals` (closed signal name + the observed values that fired
+  it) + `unevaluated` (signal name + stable reason). Diagnostic-only
+  warning surface for human review: deterministic explicit predicates over
+  the normalized captured-scoped metrics + deliberately unscoped
+  run-level facts; never terminates or cancels anything, never changes
+  budgets or model settings, never an opaque score. Foreign telemetry
+  (`activity.foreign`) never influences it; absent required evidence is
+  reported explicitly as `unevaluated`, never guessed.
 
 What does NOT belong in the ledger: prompt text, hidden reasoning,
 auth/token values, shell stdout/stderr, source diffs, environment dumps,
@@ -1711,18 +1720,21 @@ intervention from telemetry, raw command/diff content.
 
 ### 22.3 Versioning notes
 
-v1/v2 ledger records remain valid documents and are never rewritten in
-place; re-normalization is an explicit per-run command emitting a v3
+v1/v2/v3 ledger records remain valid documents and are never rewritten in
+place; re-normalization is an explicit per-run command emitting a v4
 record for that run's stored evidence. Captures made before v2 normalize
-to v3 with null context/runtime values plus explicit gaps; captures made
-before v3 (no persisted `captured_conversation_id`) normalize to v3 with
+to v4 with null context/runtime values plus explicit gaps; captures made
+before v3 (no persisted `captured_conversation_id`) normalize to v4 with
 the identity null, the run-wide aggregate preserved as primary activity,
 and the `captured_conversation_unknown` gap present whenever at least one
 conversation was observed — nothing is guessed or back-filled. Consumers
 must branch on `schema_version`: v2 is a strict field superset of v1; v3
 is a strict field superset of v2 EXCEPT that, when a captured conversation
 identity is present, the activity / failures / token-usage fields changed
-meaning (captured turn only; foreign telemetry moves to `activity.foreign`).
+meaning (captured turn only; foreign telemetry moves to `activity.foreign`);
+v4 is a strict field superset of v3 — it adds the diagnostic-only
+`diagnostics` section (no v3 field changed meaning); a persisted record
+without the section means "not computed", never "not detected".
 
 ## 23. Product Codex version attribution
 
@@ -1840,7 +1852,7 @@ directly when touching the harness — `bash scripts/tests/<suite>`).
 |---|---|---|---|---|---|
 | `scripts/tests/agent-doctor.test.sh` | doctor output formats (human + JSON schema, stable capability order, summary consistency), exit codes, non-mutation, no secrets in output, simulated blockers (restricted PATH = missing runtimes; empty `PLAYWRIGHT_BROWSERS_PATH` = missing browser), optional-capability gating (`FG_DOCTOR_REQUIRE_OBSERVABILITY`), launch-error classification + cause sanitization, read-only contract markers in source | runs the real doctor against restricted environments; no collector | format drift, exit-code drift, mutation, secret leakage, optional-cap leakage into the result | none (harness only) | CORE mechanism, CONFIG probes |
 | `scripts/tests/agent-verify.test.sh` | usage, `plan` mode (read-only, rejects `--summary-json`), the `--summary-json` contract: schemaVersion-1 shape, exact announced commands, stable phase order, fail-fast (process rc == JSON exitCode, one failed phase, later phases `not_run`), no file without the flag, identical human output with/without flag (timing normalized), target validation (missing/unwritable/invalid dir rejected before any phase; no parent creation; relative paths vs caller CWD), no secrets/env in summary, no leftover temp files | **no real profile executes** — phase tools replaced by deterministic PATH shims with scripted exit codes (same restricted-PATH convention as the doctor tests) | summary schema drift, fail-fast contract drift, mutation/leakage | none | CORE |
-| `scripts/tests/agent-observability.test.sh` | usage/exit codes; `config` output contract (loopback endpoints, `log_user_prompt=false`, repo-config rationale); gitignore coverage of all runtime artifact paths; `status` read-only + deterministic; collector config template (sanitization statements, loopback-only); `pins.json` integrity; `manifest.py` seed/finalize/summary + interrupted-run safety; probe-client usage contract; `CODEX_HOME`/`CODEX_PATH` resolution (discovery, explicit authority, invalid/ambiguous fail-closed); ACP probe-client schema contract vs codex-acp 1.7.0 (fake-agent fixture); collector-dependent e2e (start/stop idempotency + fake-secret sanitization + doctor) — executed only when a collector is present and none is running, else SKIPPED; Run Ledger: deterministic normalization of a synthetic capture (fixture OTel + real manifest seed/finalize in a temp git repo), idempotency, activity/timing/token metrics, git/WIP evidence, failures without invented classifications, explicit verification correlation (agentRunId match/mismatch), doctor evidence, annotations, privacy (dropped-key values never reach the ledger), dedup identity (distinct paired records sharing the correlation tuple are kept — incl. the 0.148.0 paired `response.completed` with/without token counters — while byte-equivalent copies collapse and the pair's counters reach token accounting), captured-conversation attribution (v3 ledger: clean single-conversation run unchanged; captured + foreign conversation → primary metrics = captured only with the foreign telemetry explicitly reported; multiple foreign conversations deterministic; missing identity → run-wide aggregate + `captured_conversation_unknown` gap; historical-incident reconstruction), manifest `captured_conversation_id` persistence (seed, finalize survival, invalid value fails safe to null), missing telemetry → null + gaps, malformed manifest → clear failure | mixed: static + Python unit-level + one real-collector e2e section (conditional) | schema/pin drift, privacy regression, determinism break, correlation mismatch, dedup over-collapse (counter-bearing records dropped), liveness semantic regression | none (synthetic captures only) | CORE |
+| `scripts/tests/agent-observability.test.sh` | usage/exit codes; `config` output contract (loopback endpoints, `log_user_prompt=false`, repo-config rationale); gitignore coverage of all runtime artifact paths; `status` read-only + deterministic; collector config template (sanitization statements, loopback-only); `pins.json` integrity; `manifest.py` seed/finalize/summary + interrupted-run safety; probe-client usage contract; `CODEX_HOME`/`CODEX_PATH` resolution (discovery, explicit authority, invalid/ambiguous fail-closed); ACP probe-client schema contract vs codex-acp 1.7.0 (fake-agent fixture); collector-dependent e2e (start/stop idempotency + fake-secret sanitization + doctor) — executed only when a collector is present and none is running, else SKIPPED; Run Ledger: deterministic normalization of a synthetic capture (fixture OTel + real manifest seed/finalize in a temp git repo), idempotency, activity/timing/token metrics, git/WIP evidence, failures without invented classifications, explicit verification correlation (agentRunId match/mismatch), doctor evidence, annotations, privacy (dropped-key values never reach the ledger), dedup identity (distinct paired records sharing the correlation tuple are kept — incl. the 0.148.0 paired `response.completed` with/without token counters — while byte-equivalent copies collapse and the pair's counters reach token accounting), captured-conversation attribution (v3 ledger: clean single-conversation run unchanged; captured + foreign conversation → primary metrics = captured only with the foreign telemetry explicitly reported; multiple foreign conversations deterministic; missing identity → run-wide aggregate + `captured_conversation_unknown` gap; historical-incident reconstruction), pathological-run diagnostics (v4, diagnostic-only: explicit deterministic signals with observed-value evidence — incident shape detected, short no-tool / healthy long / tool-failure negative shapes, extreme-foreign isolation, unevaluated-evidence discipline, byte-identical re-normalization, incident replay via the forensic fixture), manifest `captured_conversation_id` persistence (seed, finalize survival, invalid value fails safe to null), missing telemetry → null + gaps, malformed manifest → clear failure | mixed: static + Python unit-level + one real-collector e2e section (conditional) | schema/pin drift, privacy regression, determinism break, correlation mismatch, dedup over-collapse (counter-bearing records dropped), liveness semantic regression | none (synthetic captures only) | CORE |
 | `scripts/tests/agent-product-launch.test.sh` | the per-**prompt-turn** lifecycle end-to-end: session open starts NO run; prompt A → run A (+ active-turn mapping); response A → graceful finalization (end Git evidence, ledger, mapping released, collector stopped) with the session STAYING ALIVE; prompt B → distinct run B; exact request-id correlation (forged wrong-id never finalizes; late duplicate bounded no-op); close during active turn → interrupted; duplicate/unknown closes harmless; no run for session-less process / session without prompt; prompt content never persisted; fragmented stream stays valid ACP; crash/signal fallbacks (crash mid-prompt → interrupted, no orphan collector, exit status kept; SIGTERM mid-turn → 143); concurrency (foreign live capture → fail open; after it ends the same session's next prompt is captured); run identity (inherited stale `FG_AGENT_RUN_ID` dropped; mapping resolves the turn's run including over a newer live run; explicit override still wins); verification correlation (summary attributed to the ACTIVE TURN's run via the mapping; finalization ledger consumes it); fail-open (broken collector → uncaptured, stream intact, bounded warning); re-opens (`session/resume` + `session/load` as fresh ROOT sessions, `session/fork` response id) — every prompt turn gets its own run; mapping-write failure contract; NDJSON wire on real newline-delimited traffic; opt-out `FG_AGENT_OBSERVABILITY=0`; doctor-snapshot knob; `start --json` contract; captured conversation identity persisted by the relay into the run manifest at start (`captured_conversation_id` — present after finalization and mapping release, echoed into the generated ledger identity); one-time install (backup/trampoline/config, idempotency, status, trampoline end-to-end with a real ACP session through the installed trampoline, fallback when the wrapper is missing, uninstall) | **yes** — real subprocesses: scenario driver + fake long-lived ACP server + **real collector** in temp dirs, plus the byte-level framer units (no collector needed) | lifecycle-boundary regression (wrong finalization trigger), correlation regression (id guessing), privacy leakage, install/rollback break, wire-format regression | none (fake ACP server stands in for the product launcher) | CORE mechanism + HOST INTEGRATION contract |
 | `scripts/tests/core-workflow.test.sh` | `.github/workflows/core.yml` security/contract invariants: triggers exactly PR(main)+push(main)+dispatch; `permissions: contents: read`; single job on pinned ubuntu (no `ubuntu-latest`) with bounded timeout; concurrency cancels PR superseded runs only; all `uses:` pinned to 40-char SHAs; `postgres:16` health-checked service on 5432; reproducible setup (`npm ci`, `uv sync --frozen`, **no** Playwright browser); exactly one canonical `agent-verify … core` invocation with the `--summary-json` target; upload conditions `!cancelled()` | no (static file assertions; optional actionlint if installed) | trigger/permission drift, unpinned action, non-canonical gate invocation, browser leak into core | none | CONFIG (FG CI wiring) |
 | `scripts/tests/e2e-workflow.test.sh` | same for `e2e.yml`, plus: Playwright chromium-only install; **no** direct `npm run test:e2e` / `playwright test` gate call — the only invocation is the canonical `agent-verify e2e` with `--summary-json`; `FG_ALLOW_E2E_RESET` appears **exactly once**, on the canonical gate line; exact upload matrix (summary `!cancelled()`; failure artifacts `failure() && !cancelled()`) | no (static) | consent flag duplication/missing, non-canonical gate, upload matrix drift | none | CONFIG |
@@ -2330,8 +2342,8 @@ harness-readiness evidence.
 | Artifact | Version field | Current value | Compatibility rule |
 |---|---|---|---|
 | `docs/agent/trace-contract.json` | `schemaVersion` | 2 | raw field names outside the contract are implementation detail; re-verify on Codex upgrades |
-| `docs/agent/ledger-contract.json` | `schemaVersion` | 2 | v2 is a strict field superset of v1; consumers branch on `schema_version`; v1 records never rewritten in place |
-| ledger record | `schema_version` | 2 (written by `ledger.py`; see the documented-drift note in §22.3) | idempotent re-normalization is explicit per run |
+| `docs/agent/ledger-contract.json` | `schemaVersion` | 4 | strict field superset per major version (v4 adds the diagnostic-only `diagnostics` section); consumers branch on `schema_version`; v1–v3 records never rewritten in place |
+| ledger record | `schema_version` | 4 (written by `ledger.py`) | idempotent re-normalization is explicit per run |
 | `capture-manifest.json` | `schema_version` | 1 | finalized manifest is the normalization input |
 | `run-context.json` | `schema_version` | 1 | fail-closed on unsupported version (exit 7) |
 | `annotations.json` | `schema_version` | 1 | append-only |
@@ -2488,8 +2500,10 @@ re-documenting them as solved):
 - **Codex version attribution**: multi-value runs stay unresolved (by
   design, §23); the manifest never seeds a version from the collector
   shell.
-- **Ledger contract doc drift**: one stale "currently 1" line in
-  `ledger-contract.json` vs the implemented `schema_version: 2` (§22.3).
+- **Ledger schema**: contract and implementation are in sync at
+  `schema_version: 4` (the v4 `diagnostics` section is diagnostic-only,
+  §22.2–22.3); v1–v3 records remain valid and are never rewritten in
+  place.
 - **E2E test debt**: `e2e/project-work-item-inspector.spec.ts` is a
   temporary validation spec (test debt, per `CURRENT_STATE.md`), not a
   permanent regression signal.

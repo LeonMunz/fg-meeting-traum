@@ -1,14 +1,14 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "name": "fg-agent-run-ledger-record",
-  "description": "Versioned schema of the normalized Agent Run Ledger record. The ledger is the normalization boundary between captured evidence and later Harness analysis: analytics must consume ledger records, not raw Codex OTel field names. Schema v2 adds the bounded structured run context, native run-level runtime configuration (reasoning effort / sandbox mode / approval policy where the native event provides them) and the deterministic comparability section. Schema v3 persists the captured conversation identity (identity.captured_conversation_id, from the capture manifest): the primary activity / failure / token metrics are scoped to that captured conversation, and foreign telemetry from other conversations in the same raw run is reported explicitly via activity.foreign instead of being merged into the captured turn's metrics. See \"compatibility\". runtime.codex_version is attributed from the telemetry app.version emitted by the Codex process itself (one distinct value is authoritative; otherwise null) and never from controller PATH discovery.",
+  "description": "Versioned schema of the normalized Agent Run Ledger record. The ledger is the normalization boundary between captured evidence and later Harness analysis: analytics must consume ledger records, not raw Codex OTel field names. Schema v2 adds the bounded structured run context, native run-level runtime configuration (reasoning effort / sandbox mode / approval policy where the native event provides them) and the deterministic comparability section. Schema v3 persists the captured conversation identity (identity.captured_conversation_id, from the capture manifest): the primary activity / failure / token metrics are scoped to that captured conversation, and foreign telemetry from other conversations in the same raw run is reported explicitly via activity.foreign instead of being merged into the captured turn's metrics. Schema v4 adds the bounded diagnostic-only pathological run section (diagnostics.pathological_run): explicit deterministic signals over the normalized captured-scoped metrics (plus deliberately unscoped run-level facts) that flag clearly pathological behavior for human review; diagnostic only \u2014 it never terminates or cancels anything and never changes token budgets or model settings; foreign telemetry never influences it. See \"compatibility\". runtime.codex_version is attributed from the telemetry app.version emitted by the Codex process itself (one distinct value is authoritative; otherwise null) and never from controller PATH discovery.",
   "boundary": {
     "inputs": [
-      "raw sanitized OTel (raw/logs*.jsonl, raw/traces*.jsonl, raw/metrics*.jsonl) — only trace-contract-named attributes are read (docs/agent/trace-contract.json)",
+      "raw sanitized OTel (raw/logs*.jsonl, raw/traces*.jsonl, raw/metrics*.jsonl) \u2014 only trace-contract-named attributes are read (docs/agent/trace-contract.json)",
       "capture-manifest.json (capture session metadata incl. end-of-run Git evidence)",
       "verification evidence JSON stored in the run directory (agent-verify --summary-json output, agent-doctor.sh --json output, agent-observability doctor --json output)",
       "annotations.json (explicit post-hoc human annotations)",
-      "run-context.json (structured, bounded run context; optional — produced by ./scripts/agent-observability context)"
+      "run-context.json (structured, bounded run context; optional \u2014 produced by ./scripts/agent-observability context)"
     ],
     "output": ".artifacts/agent-runs/<run-id>/run-ledger.json (git-ignored)",
     "commands": [
@@ -25,56 +25,56 @@
     "never": "no timestamp-nearest correlation is performed anywhere"
   },
   "record": {
-    "schema_version": "integer, currently 3",
+    "schema_version": "integer, currently 4",
     "record_name": "\"fg-agent-run-ledger\"",
-    "run_id": "string — the captured run id",
+    "run_id": "string \u2014 the captured run id",
     "identity": {
-      "conversation_ids": "string[] — native Codex conversation/session ids observed in the capture (empty when none)",
-      "captured_conversation_id": "string | null — the native Codex conversation of the ACP session/prompt that caused this run, persisted into the capture manifest by the ACP lifecycle relay at start time; it survives finalization and the release of the transient session/run mapping. Null for historical captures, manual starts and probes — nothing is ever derived or back-filled (token counts, event majorities and timestamps are never used to guess it)",
+      "conversation_ids": "string[] \u2014 native Codex conversation/session ids observed in the capture (empty when none)",
+      "captured_conversation_id": "string | null \u2014 the native Codex conversation of the ACP session/prompt that caused this run, persisted into the capture manifest by the ACP lifecycle relay at start time; it survives finalization and the release of the transient session/run mapping. Null for historical captures, manual starts and probes \u2014 nothing is ever derived or back-filled (token counts, event majorities and timestamps are never used to guess it)",
       "capture_kind": "\"capture\" | \"probe-native\" | null",
       "repo_root": "string | null",
       "branch": "string | null",
       "starting_head": "string (git commit id) | null",
-      "ending_head": "string (git commit id) | null — recorded at capture finalize; null for captures finalized before this field existed",
+      "ending_head": "string (git commit id) | null \u2014 recorded at capture finalize; null for captures finalized before this field existed",
       "start_ts": "ISO-8601 UTC string (capture session start)",
       "end_ts": "ISO-8601 UTC string | null (capture session end)",
-      "duration_s": "integer seconds | null — capture session duration",
+      "duration_s": "integer seconds | null \u2014 capture session duration",
       "stop_status": "\"graceful\" | \"interrupted\" | \"collector_forced\" | \"running\" | null"
     },
     "runtime": {
-      "codex_version": "string | null — the Codex version that actually executed the captured turn, derived exclusively from the telemetry `app.version` attribute the Codex process itself emitted (the values of runtime.app_versions): exactly one distinct non-empty value observed in the run -> that value; zero or several distinct values -> null (explicitly unresolved, listed in evidence_gaps as codex_version_unresolved). Never derived from the controller/standalone `codex` on PATH or from capture-time (manifest) discovery; no prefixing/formatting is applied beyond the emitted value",
+      "codex_version": "string | null \u2014 the Codex version that actually executed the captured turn, derived exclusively from the telemetry `app.version` attribute the Codex process itself emitted (the values of runtime.app_versions): exactly one distinct non-empty value observed in the run -> that value; zero or several distinct values -> null (explicitly unresolved, listed in evidence_gaps as codex_version_unresolved). Never derived from the controller/standalone `codex` on PATH or from capture-time (manifest) discovery; no prefixing/formatting is applied beyond the emitted value",
       "codex_acp_version": "string | null",
-      "models": "string[] — model identifiers observed in telemetry",
+      "models": "string[] \u2014 model identifiers observed in telemetry",
       "collector_version": "string | null",
-      "originators": "string[] — sanitized originator strings",
+      "originators": "string[] \u2014 sanitized originator strings",
       "privacy_mode": "string | null",
-      "app_versions": "string[] — app.version values observed in telemetry; when exactly one distinct value is present it is the authoritative product Codex version (runtime.codex_version); several values are all preserved and codex_version stays null (no inference)",
-      "reasoning_effort": "string | null — from the first codex.conversation_starts event when the native event carries reasoning_effort (0.148.0 emits it only when an effort is set; e.g. absent for default/auto runs). Null + a comparability gap otherwise; never inferred",
-      "sandbox_mode": "string | null — from the first codex.conversation_starts event's sandbox_policy attribute (e.g. \"read-only\", \"workspace-write\"); null + gap when absent",
-      "approval_policy": "string | null — from the first codex.conversation_starts event's approval_policy attribute (e.g. \"on-request\"); null + gap when absent"
+      "app_versions": "string[] \u2014 app.version values observed in telemetry; when exactly one distinct value is present it is the authoritative product Codex version (runtime.codex_version); several values are all preserved and codex_version stays null (no inference)",
+      "reasoning_effort": "string | null \u2014 from the first codex.conversation_starts event when the native event carries reasoning_effort (0.148.0 emits it only when an effort is set; e.g. absent for default/auto runs). Null + a comparability gap otherwise; never inferred",
+      "sandbox_mode": "string | null \u2014 from the first codex.conversation_starts event's sandbox_policy attribute (e.g. \"read-only\", \"workspace-write\"); null + gap when absent",
+      "approval_policy": "string | null \u2014 from the first codex.conversation_starts event's approval_policy attribute (e.g. \"on-request\"); null + gap when absent"
     },
     "git_wip": {
       "starting_tree": "\"clean\" | \"dirty\" | null",
       "ending_tree": "\"clean\" | \"dirty\" | null",
-      "changed_file_count": "integer | null — repository-relative paths only, never diff content",
-      "changed_files": "string[] — bounded (max 500, sorted); empty when unavailable",
-      "changed_files_truncated": "boolean — true when the bound was applied",
-      "lines_added": "integer | null — tracked-file numstat vs starting_head at finalize",
+      "changed_file_count": "integer | null \u2014 repository-relative paths only, never diff content",
+      "changed_files": "string[] \u2014 bounded (max 500, sorted); empty when unavailable",
+      "changed_files_truncated": "boolean \u2014 true when the bound was applied",
+      "lines_added": "integer | null \u2014 tracked-file numstat vs starting_head at finalize",
       "lines_deleted": "integer | null",
-      "commit_created": "boolean | null — ending_head != starting_head",
+      "commit_created": "boolean | null \u2014 ending_head != starting_head",
       "starting_head": "string (git commit id) | null",
       "ending_head": "string (git commit id) | null"
     },
     "activity": {
-      "tool_call_count": "integer | null — distinct tool invocations (call_id) with a result",
-      "tool_calls_by_type": "object — broad category -> count (shell|file|search|web|plan|interaction|other); raw tool names are not exposed here",
+      "tool_call_count": "integer | null \u2014 distinct tool invocations (call_id) with a result",
+      "tool_calls_by_type": "object \u2014 broad category -> count (shell|file|search|web|plan|interaction|other); raw tool names are not exposed here",
       "successful_tool_calls": "integer | null",
       "failed_tool_calls": "integer | null",
-      "shell_command_count": "integer | null — broad type shell",
+      "shell_command_count": "integer | null \u2014 broad type shell",
       "failed_shell_commands": "integer | null",
-      "file_activity_count": "integer | null — broad type file",
-      "api_request_count": "integer | null — model API requests observed",
-      "failed_api_requests": "integer | null — success=false or HTTP status >= 400",
+      "file_activity_count": "integer | null \u2014 broad type file",
+      "api_request_count": "integer | null \u2014 model API requests observed",
+      "failed_api_requests": "integer | null \u2014 success=false or HTTP status >= 400",
       "token_usage": {
         "input": "integer | null",
         "output": "integer | null",
@@ -84,44 +84,51 @@
         "total": "integer | null",
         "source": "\"metrics\" (codex.turn.token_usage datapoints) | \"sse-events\" (response.completed token counters) | null"
       },
-      "turn_count": "integer | null — user prompts observed",
-      "time_to_first_tool_action_ms": "integer | null — first tool result minus first prompt (or conversation start)",
-      "time_to_first_failure_ms": "integer | null — first failed tool call / API request minus the same baseline; null when no failure",
-      "time_to_final_response_ms": "integer | null — last response completion (or last API request) minus the baseline",
-      "foreign": "{ present: boolean, conversation_count: integer, conversation_ids: string[] (sorted), api_request_count: integer, failed_api_requests: integer, tool_call_count: integer, failed_tool_calls: integer, turn_count: integer, token_usage_total: integer | null } — bounded compact aggregate of telemetry from conversations OTHER than identity.captured_conversation_id in the same raw run (present/counts true only when such telemetry exists). Present only when identity.captured_conversation_id is non-null — without a persisted captured identity, 'foreign' is undefined and the captured_conversation_unknown evidence gap represents the case. It is a diagnostic, not a full secondary ledger; run-level infrastructure facts (git_wip, duration, runtime versions, stop status, runtime.models / app_versions, identity.conversation_ids) are deliberately NOT scoped and remain run-wide"
+      "turn_count": "integer | null \u2014 user prompts observed",
+      "time_to_first_tool_action_ms": "integer | null \u2014 first tool result minus first prompt (or conversation start)",
+      "time_to_first_failure_ms": "integer | null \u2014 first failed tool call / API request minus the same baseline; null when no failure",
+      "time_to_final_response_ms": "integer | null \u2014 last response completion (or last API request) minus the baseline",
+      "foreign": "{ present: boolean, conversation_count: integer, conversation_ids: string[] (sorted), api_request_count: integer, failed_api_requests: integer, tool_call_count: integer, failed_tool_calls: integer, turn_count: integer, token_usage_total: integer | null } \u2014 bounded compact aggregate of telemetry from conversations OTHER than identity.captured_conversation_id in the same raw run (present/counts true only when such telemetry exists). Present only when identity.captured_conversation_id is non-null \u2014 without a persisted captured identity, 'foreign' is undefined and the captured_conversation_unknown evidence gap represents the case. It is a diagnostic, not a full secondary ledger; run-level infrastructure facts (git_wip, duration, runtime versions, stop status, runtime.models / app_versions, identity.conversation_ids) are deliberately NOT scoped and remain run-wide"
     },
     "verification": {
-      "doctor": "{ status, capabilities: [{name,status}], source } | null — from an agent-doctor.sh --json file in the run directory",
-      "observability_doctor": "{ status, source } | null — from an agent-observability doctor --json file",
-      "profiles": "[{ profile, result, exit_code, started_at, finished_at, duration_ms, agent_run_id, source, phases: [{name,outcome,exit_code}] }] — one entry per agent-verify --summary-json file in the run directory",
-      "final_gate": "{ profile, result, source } | null — the most recently started correlated verify summary (deterministic ordering by started_at, then file name); never claims RUNTIME_VERIFIED"
+      "doctor": "{ status, capabilities: [{name,status}], source } | null \u2014 from an agent-doctor.sh --json file in the run directory",
+      "observability_doctor": "{ status, source } | null \u2014 from an agent-observability doctor --json file",
+      "profiles": "[{ profile, result, exit_code, started_at, finished_at, duration_ms, agent_run_id, source, phases: [{name,outcome,exit_code}] }] \u2014 one entry per agent-verify --summary-json file in the run directory",
+      "final_gate": "{ profile, result, source } | null \u2014 the most recently started correlated verify summary (deterministic ordering by started_at, then file name); never claims RUNTIME_VERIFIED"
     },
     "failures": [
       {
         "kind": "\"tool_call\" | \"api_request\" | \"verification_phase\"",
-        "identifier": "tool name for tool_call, \"model_api_request\" for api_request, phase name for verification_phase — bounded identifiers, no command text",
-        "ref": "string | null — call_id / attempt / profile (bounded identifier)",
+        "identifier": "tool name for tool_call, \"model_api_request\" for api_request, phase name for verification_phase \u2014 bounded identifiers, no command text",
+        "ref": "string | null \u2014 call_id / attempt / profile (bounded identifier)",
         "timestamp": "ISO-8601 UTC string | null",
         "result": "\"success=false\" | \"http_status=<code>\" | \"exit_code=<n>\" | \"failed\"",
-        "classification": "PRODUCT_REGRESSION | STALE_TEST | ENVIRONMENT_OR_HARNESS | SCOPE_DISCOVERY | null — set only by an explicit annotation (--classification --for-failure); never inferred from exit codes or success flags"
+        "classification": "PRODUCT_REGRESSION | STALE_TEST | ENVIRONMENT_OR_HARNESS | SCOPE_DISCOVERY | null \u2014 set only by an explicit annotation (--classification --for-failure); never inferred from exit codes or success flags"
       }
     ],
     "human": {
-      "correction_occurred": "\"yes\" | \"no\" | null — null means no annotation exists (unknown, not inferred)",
-      "categories": "string[] — sorted unique annotation categories",
+      "correction_occurred": "\"yes\" | \"no\" | null \u2014 null means no annotation exists (unknown, not inferred)",
+      "categories": "string[] \u2014 sorted unique annotation categories",
       "annotations": "[{ ts, correction: yes|no, category, note (max 280 chars) | null, classification | null, applies_to | null }]"
     },
-    "evidence_gaps": "string[] — stable codes for missing optional evidence, sorted: no_telemetry, codex_version_unresolved, no_metrics_file, token_usage_unavailable, no_end_git_evidence, no_verification_evidence, no_doctor_evidence, no_annotations, no_run_context, captured_conversation_unknown (telemetry from at least one conversation is present but the run carries no persisted captured conversation identity: the primary activity is the run-wide aggregate and MUST NOT be read as the captured turn's activity — never guessed)",
+    "evidence_gaps": "string[] \u2014 stable codes for missing optional evidence, sorted: no_telemetry, codex_version_unresolved, no_metrics_file, token_usage_unavailable, no_end_git_evidence, no_verification_evidence, no_doctor_evidence, no_annotations, no_run_context, captured_conversation_unknown (telemetry from at least one conversation is present but the run carries no persisted captured conversation identity: the primary activity is the run-wide aggregate and MUST NOT be read as the captured turn's activity \u2014 never guessed)",
     "context": {
-      "task_type": "string | null — closed enum: Bug | Vertical Slice | Domain | Stabilization | Documentation (the repository's orchestration contract). null until explicitly attached via the context command; never inferred from prompt text",
-      "session_mode": "string | null — closed enum: CURRENT | NEW. null until explicitly attached; never inferred",
-      "task_key": "string | null — optional bounded slug (1-128 chars of [A-Za-z0-9._-]) explicitly pairing runs that represent the same logical task in future controlled comparisons. null unless explicitly supplied; arbitrary text is rejected fail-closed",
-      "harness_variant": "string | null — optional bounded low-cardarity identifier for explicit future A/B harness comparisons. null unless explicitly supplied; never labels runs 'better'/'candidate' or similar",
+      "task_type": "string | null \u2014 closed enum: Bug | Vertical Slice | Domain | Stabilization | Documentation (the repository's orchestration contract). null until explicitly attached via the context command; never inferred from prompt text",
+      "session_mode": "string | null \u2014 closed enum: CURRENT | NEW. null until explicitly attached; never inferred",
+      "task_key": "string | null \u2014 optional bounded slug (1-128 chars of [A-Za-z0-9._-]) explicitly pairing runs that represent the same logical task in future controlled comparisons. null unless explicitly supplied; arbitrary text is rejected fail-closed",
+      "harness_variant": "string | null \u2014 optional bounded low-cardarity identifier for explicit future A/B harness comparisons. null unless explicitly supplied; never labels runs 'better'/'candidate' or similar",
       "_source": "run-context.json in the run directory (git-ignored with the run); written only by the context command with fail-closed enum/slug validation. Malformed file fails normalization (exit 7)."
     },
     "comparability": {
-      "dimensions": "object — 12 fixed boolean keys, each TRUE only when the dimension's evidence exists in this run: model, reasoning_effort, codex_version, codex_acp_version, sandbox_mode, approval_policy, task_type, session_mode, git_starting_revision, verification_evidence, doctor_evidence, harness_variant. Presence-of-evidence only: never a quality score, never a ranking",
-      "missing": "string[] — sorted dimension keys whose evidence is absent; the explicit representation of non-comparability for future cohorting"
+      "dimensions": "object \u2014 12 fixed boolean keys, each TRUE only when the dimension's evidence exists in this run: model, reasoning_effort, codex_version, codex_acp_version, sandbox_mode, approval_policy, task_type, session_mode, git_starting_revision, verification_evidence, doctor_evidence, harness_variant. Presence-of-evidence only: never a quality score, never a ranking",
+      "missing": "string[] \u2014 sorted dimension keys whose evidence is absent; the explicit representation of non-comparability for future cohorting"
+    },
+    "diagnostics": {
+      "pathological_run": {
+        "detected": "boolean \u2014 true when at least one pathological-run signal fired on the normalized evidence. Warning surface only: diagnostic classification for human review \u2014 it never terminates or cancels a model/turn/agent/ACP session, never changes token budgets or model settings, and is never an intervention point (detection and intervention are separate decisions)",
+        "signals": "[{ name: string \u2014 closed signal name (long_generation_without_tool_progress | extreme_reasoning_dominance | no_progress_after_long_run | high_failed_tool_concentration | huge_generation_on_few_api_requests), evidence: object \u2014 the observed contract-named values that triggered the signal (integers/booleans only) }] \u2014 sorted by name, bounded (max 5). Explicit deterministic predicates over observable telemetry features, never a single opaque pathology score and never a semantic guess about prose quality. Thresholds: initial conservative heuristics (high precision first) derived from stored run evidence \u2014 see diagnosticThresholds and docs/agent/OBSERVABILITY.md (\"Pathological run diagnostics\")",
+        "unevaluated": "[{ name: string \u2014 signal name, reason: \"missing_evidence\" | \"captured_conversation_unknown\" }] \u2014 sorted by name. A signal whose required evidence is absent is explicitly unevaluated \u2014 never guessed and never silently false (distinguishes signal=false from not-evaluable). missing_evidence = a required normalized field is null (e.g. no token_usage per-field values, no end-of-run Git evidence). captured_conversation_unknown = no persisted captured identity AND >= 2 observed conversations, so the conversation-attributable signals (all except no_progress_after_long_run, which uses only run-level facts) cannot be attributed to the captured turn and are never inferred from the run-wide aggregate"
+      }
     }
   },
   "annotationCategories": [
@@ -135,14 +142,42 @@
     "other"
   ],
   "unsupportedMetrics": {
-    "repeated_command_count": "command text is sanitized away (arguments dropped by the collector); repeated commands cannot be identified without it — recorded as unavailable, never guessed",
+    "repeated_command_count": "command text is sanitized away (arguments dropped by the collector); repeated commands cannot be identified without it \u2014 recorded as unavailable, never guessed. Consequently the high_failed_tool_concentration diagnostic is count-based only: it claims a high failure concentration, never identical/repeated command content",
     "human_intervention_from_telemetry": "native OTel carries no reliable human-correction signal; only explicit annotations count",
     "raw_command_or_diff_content": "deliberately excluded (privacy); counts, bounded identifiers and statuses only"
   },
   "privacy": "the ledger copies only contract-named, already-sanitized, bounded fields (counts, statuses, durations, ids, file paths). It never contains raw prompt text, hidden reasoning, auth/token contents, shell stdout/stderr, source diffs, environment dumps, or raw tool arguments. The run context is bounded and low-cardinality by construction: closed enums plus 1-128 character slugs; task titles, descriptions, user messages, arbitrary labels, usernames and machine identity can never be stored (rejected fail-closed at write time).",
   "compatibility": {
-    "v1Records": "Records with schema_version 1 remain valid v1 documents. They are never rewritten in place by any tooling: re-normalization is an explicit per-run command (./scripts/agent-observability ledger <run-id>) and emits a v3 record for that run's stored evidence.",
-    "historicalCaptures": "Captures made before v2 (no run-context.json, or native events without reasoning_effort/sandbox_policy/approval_policy) normalize to v3 with null context/runtime values plus explicit evidence_gaps (no_run_context) and comparability.missing entries. Captures made before v3 (no captured_conversation_id in the manifest) normalize to v3 with identity.captured_conversation_id null and activity.foreign null: the primary activity is the run-wide aggregate, and whenever at least one conversation was observed the captured_conversation_unknown gap is present. Nothing is guessed or back-filled.",
-    "consumers": "Consumers must branch on schema_version. v2 is a strict field superset of v1 (no v1 field changed meaning); the comparability section and context section are additive. v3 is a strict field superset of v2 EXCEPT that, when a captured conversation identity is present, the activity / failures / token-usage fields changed meaning: they describe the captured turn only, and foreign telemetry is reported via activity.foreign instead of being merged into them."
+    "v1Records": "Records with schema_version 1 remain valid v1 documents. They are never rewritten in place by any tooling: re-normalization is an explicit per-run command (./scripts/agent-observability ledger <run-id>) and emits a v4 record for that run's stored evidence.",
+    "historicalCaptures": "Captures made before v2 (no run-context.json, or native events without reasoning_effort/sandbox_policy/approval_policy) normalize to v4 with null context/runtime values plus explicit evidence_gaps (no_run_context) and comparability.missing entries. Captures made before v3 (no captured_conversation_id in the manifest) normalize to v4 with identity.captured_conversation_id null and activity.foreign null: the primary activity is the run-wide aggregate, and whenever at least one conversation was observed the captured_conversation_unknown gap is present. Nothing is guessed or back-filled.",
+    "consumers": "Consumers must branch on schema_version. v2 is a strict field superset of v1 (no v1 field changed meaning); the comparability section and context section are additive. v3 is a strict field superset of v2 EXCEPT that, when a captured conversation identity is present, the activity / failures / token-usage fields changed meaning: they describe the captured turn only, and foreign telemetry is reported via activity.foreign instead of being merged into them. v4 is a strict field superset of v3: it adds the diagnostics section (diagnostic-only pathological-run signals); no v3 field changed meaning. Records persisted as v3 or earlier lack the diagnostics section \u2014 its absence means 'not computed', never 'not detected'."
+  },
+  "diagnosticThresholds": {
+    "note": "The v4 signal thresholds. INITIAL conservative heuristics (high precision first), derived from the stored evidence of the captured runs 2026-09-19..21: the pathological incident run-20260921T111009Z (captured conversation 01a0c3a6-dd79-7652-bb05-ecb528dd8c5d) shows 2178 s, 0 tool calls, 0 attributed API requests, 221,128 output tokens of which 221,128 are reasoning; across the corpus no normal run combined zero tool progress with large generation (no run with >= 3k output tokens used 0 tools; every run with >= 84k output tokens used >= 36 tools), the maximum reasoning share among runs with >= 50k output tokens is 0.82, no normal run >= 1800 s ended with zero changed files and no verification, and the maximum failed-tool concentration is 8.3%. Recalibrate as more evidence accumulates; the thresholds are documented heuristics, not statistically established limits. All comparisons are on normalized, captured-scoped metrics (run-level facts for no_progress_after_long_run); activity.foreign is never read.",
+    "long_generation_without_tool_progress": {
+      "min_duration_s": 1800,
+      "tool_call_count": 0,
+      "min_output_tokens": 200000
+    },
+    "extreme_reasoning_dominance": {
+      "min_output_tokens": 50000,
+      "min_reasoning_share_bps": 9500
+    },
+    "no_progress_after_long_run": {
+      "min_duration_s": 1800,
+      "changed_file_count": 0,
+      "commit_created": false,
+      "verification_profiles": 0
+    },
+    "high_failed_tool_concentration": {
+      "min_failed_tool_calls": 5,
+      "min_failed_share_bps": 5000
+    },
+    "huge_generation_on_few_api_requests": {
+      "max_api_requests": 1,
+      "tool_call_count": 0,
+      "min_output_tokens": 200000,
+      "min_duration_s": 1800
+    }
   }
 }
