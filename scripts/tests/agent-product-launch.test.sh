@@ -77,6 +77,15 @@
 #   * framer unit tests (no collector required): the wire-observer
 #     contract at byte level (fragmentation, multi-line reads,
 #     per-line skip boundary, CRLF, blank lines, long lines)
+#   * live shadow-warning unit tests (no collector required): the
+#     pathological-generation shadow warning (diagnostic only; at most
+#     one bounded relay event per captured turn) — incident shape,
+#     1800 s boundary, segment/completion semantics, tool /
+#     non-reasoning negatives, foreign-telemetry isolation, one-shot,
+#     rotation (rename-preserving inode offsets), incomplete trailing
+#     line, read/parsing failure (no error storm), relay event format,
+#     plus a read-only replay of the stored incident and representative
+#     captured runs when local artifacts are present
 #   * opt-out: FG_AGENT_OBSERVABILITY=0 -> direct launch, no relay, no
 #     capture, no diagnostics
 #   * doctor snapshot knob (FG_OBS_NO_DOCTOR_SNAPSHOT)
@@ -386,6 +395,29 @@ while IFS= read -r line; do
   esac
 done <<< "$CAP_OUT"
 expect_rc "t17z framer unit tests exit 0" 0 "$RC"
+
+# ------------------------------- t19 live shadow-warning unit tests ----
+# The live pathological-generation shadow warning (diagnostic only, one
+# bounded relay event per captured turn) is unit-tested WITHOUT a
+# collector: synthetic timestamped JSONL telemetry drives the
+# incremental raw-log reader and the predicate with injected time
+# (cases A-K plus the relay event-format contract; the byte-transparent
+# ACP stream of case L is covered by the scenario tests above), and the
+# stored incident (when local artifacts are present) is replayed
+# READ-ONLY through the same predicate (see
+# scripts/tests/fixtures/shadow-warning-units.py).
+RC=0
+set +e
+CAP_OUT="$("$PY" "$REPO_ROOT/scripts/tests/fixtures/shadow-warning-units.py" 2>&1)" || RC=$?
+set -e
+while IFS= read -r line; do
+  case "$line" in
+    ok\ \ \ *) ok "t19 ${line#ok   }" ;;
+    FAIL\ *)   bad "t19 ${line#FAIL }" ;;
+    *) : ;;
+  esac
+done <<< "$CAP_OUT"
+expect_rc "t19z shadow-warning unit tests exit 0" 0 "$RC"
 
 # --------------------------------------------------------- t09 doctor knob ---
 if [ "$E2E_AVAILABLE" -eq 1 ]; then

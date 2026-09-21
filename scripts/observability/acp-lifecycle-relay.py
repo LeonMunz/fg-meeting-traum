@@ -102,6 +102,21 @@ Privacy / protocol safety:
     never emits malformed ACP output;
   * no environment dumps; diagnostics are bounded single lines.
 
+Live pathological-generation shadow warning (diagnostic only):
+   while a captured turn is still running, the relay evaluates a
+   bounded live predicate (open-segment elapsed >= 1800 s, zero
+   codex.tool_result for the captured turn, all observed generation in
+   the open segment is response.reasoning_text.delta,
+   codex.api_request <= 1, segment still open) at most once every 60 s
+   per turn, reading only NEW bytes of the run's raw log files
+   (incremental, rotation-aware, captured-conversation-scoped). When
+   the predicate becomes true the relay appends EXACTLY ONE bounded
+   identifier/evidence-only `shadow-warning` event for the turn
+   (one-shot; no re-arm). The warning never delays, modifies, or
+   cancels the ACP stream, the model, or the collector — it is
+   diagnostic only; read/parse anomalies fail open with at most one
+   bounded `shadow-warning-read-error` event per error state.
+
 This file is repository-owned and is launched by
 scripts/agent-product-launch (one-time host integration, see
 docs/agent/OBSERVABILITY.md, "Automatic product-session lifecycle").
@@ -125,6 +140,29 @@ OBSCTL = os.environ.get("FG_PRODUCT_RELAY_OBSCTL") or os.path.join(
     REPO_ROOT, "scripts", "agent-observability")
 MAP_DIR = os.environ.get("FG_PRODUCT_SESSION_MAP_DIR") or os.path.join(
     REPO_ROOT, ".artifacts", "agent-observability", "session-runs")
+RUNS_DIR = os.environ.get("FG_OBS_RUNS_DIR") or os.path.join(
+    REPO_ROOT, ".artifacts", "agent-runs")
+
+
+def _load_shadow_warning():
+    """Load the live shadow-warning module (same directory).
+
+    The shadow warning is DIAGNOSTIC ONLY; a load failure must never
+    break the relay — the byte-transparent ACP stream is the contract.
+    """
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "fg_shadow_warning",
+            os.path.join(SCRIPT_PATH, "shadow_warning.py"))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    except Exception:
+        return None
+
+
+shadow_warning = _load_shadow_warning()
 
 CHUNK = 65536
 START_DEADLINE = float(os.environ.get("FG_PRODUCT_RELAY_START_DEADLINE", "60"))
@@ -168,7 +206,9 @@ class EventLog:
     Records ONLY the bounded identifiers the lifecycle contract allows
     (relay started/exited, ACP method names, request ids, session ids,
     capture start results, mapping write results, close/delete events,
-    finalization results). It never records prompts, content blocks,
+    finalization results, live shadow-warning diagnostics — bounded
+    session/run ids and integer counters only). It never records prompts,
+    content blocks,
     tool arguments/results, auth material, environment dumps, or ACP
     bodies. Every write is best-effort and bounded: diagnostics must
     never break or delay the ACP stream.
@@ -771,7 +811,8 @@ class Relay:
     def _new_session_state():
         return {"state": "idle", "run_id": None, "turn_id": None,
                 "start": None, "stop": None, "stop_status": None,
-                "closed": False}
+                "closed": False, "turn_started_at": None,
+                "shadow": None, "shadow_error_logged": False}
 
     def open_session(self, sid, via="session/new"):
         st = self.sessions.get(sid)
@@ -840,6 +881,11 @@ class Relay:
                                "reason=control-surface-unavailable"
                                % (sid, _fmt_id(mid)))
             return False
+        # Authoritative turn timing: the relay's monotonic clock at the
+        # moment the prompt turn is observed (the segment-elapsed source
+        # for the live shadow warning — never SSE count, mtime, or
+        # token counters).
+        st["turn_started_at"] = time.monotonic()
         self._remember_pending_prompt(mid, sid)
         st["state"] = "pending"
         st["turn_id"] = mid
@@ -967,6 +1013,12 @@ class Relay:
                     self._events.write("start-result session=%s status=started run=%s"
                                        % (sid, run_id))
                     st["run_id"] = run_id
+                    # Live shadow warning host (diagnostic only): the
+                    # tracker reads this run's raw log files
+                    # incrementally and may append at most ONE bounded
+                    # shadow-warning event for the turn. It never
+                    # touches the ACP stream or the collector.
+                    self._start_shadow_tracking(sid, st, run_id, run_dir=extra)
                     if st["stop_status"] is not None:
                         # The turn already ended (prompt response or
                         # session close) while the run was coming up:
@@ -1011,6 +1063,7 @@ class Relay:
                     remove_mapping(sid)
                     st["state"] = "closed" if st["closed"] else "idle"
                     st["turn_id"] = None
+                    self._clear_shadow(st)
                     self._events.write("stop-result session=%s stop_status=%s rc=0 "
                                        "run=%s mapping=released"
                                        % (sid, stop.stop_status, st["run_id"]))
@@ -1021,6 +1074,7 @@ class Relay:
                     # re-finalize. The raw evidence is untouched.
                     st["state"] = "idle"
                     st["turn_id"] = None
+                    self._clear_shadow(st)
                     self._events.write("stop-result session=%s stop_status=%s rc=%s "
                                        "run=%s mapping=kept-for-retry"
                                        % (sid, stop.stop_status, stop.rc, st["run_id"]))
@@ -1045,6 +1099,7 @@ class Relay:
                     write_mapping(sid, run_id)
                     st["state"] = "open"
                     st["run_id"] = run_id
+                    self._start_shadow_tracking(sid, st, run_id)
                     log("session %s turn captured after start deadline (run %s)" % (sid, run_id))
                     return
                 except Exception:
@@ -1071,12 +1126,89 @@ class Relay:
             remove_mapping(sid)
             st["state"] = "closed" if st["closed"] else "idle"
             st["turn_id"] = None
+            self._clear_shadow(st)
             log("session %s turn finalized (%s); run %s" % (sid, stop_status, st["run_id"]))
         else:
             st["state"] = "idle"
             st["turn_id"] = None
+            self._clear_shadow(st)
             log("session %s: finalization failed (stop exit %s) — run %s; %s"
                 % (sid, rc, st["run_id"], " ".join(err.decode("utf-8", "replace").split())[:160]))
+
+    # ----- live shadow warning (diagnostic only) --------------------------
+
+    def _start_shadow_tracking(self, sid, st, run_id, run_dir=None):
+        # Host the live pathological-generation shadow warning for this
+        # captured turn (diagnostic only — see module docstring and
+        # docs/agent/OBSERVABILITY.md, "Live pathological-generation
+        # shadow warning"). Any failure degrades to "no shadow
+        # warning"; the turn and the ACP stream are never affected.
+        if shadow_warning is None:
+            return
+        if run_dir is None:
+            run_dir = os.path.join(RUNS_DIR, run_id)
+        try:
+            st["shadow"] = shadow_warning.ShadowWarningTracker(
+                conversation_id=sid,
+                run_id=run_id,
+                run_dir=run_dir,
+                turn_start=st.get("turn_started_at"),
+                on_warning=lambda warning: self._shadow_warning_event(
+                    sid, st, warning),
+                on_error=lambda reason: self._shadow_error_event(
+                    sid, st, reason))
+        except Exception:
+            st["shadow"] = None
+            self._events.write("shadow-warning-read-error session=%s "
+                               "run=%s reason=init-failure" % (sid, run_id))
+
+    def _clear_shadow(self, st):
+        # The turn is over (finalized, whatever the outcome): release
+        # the tracker (bounded memory) — no more warnings for it.
+        if st.get("shadow") is not None:
+            st["shadow"] = None
+            st["shadow_error_logged"] = False
+
+    def _evaluate_shadow(self):
+        # Live diagnostic evaluation, called from the pump loop. The
+        # tracker rate-limits itself to at most one raw-telemetry
+        # inspection every 60 s per turn; this call is otherwise a
+        # bounded no-op. Never raises: the ACP pump is the contract.
+        if shadow_warning is None:
+            return
+        now = time.monotonic()
+        for sid, st in list(self.sessions.items()):
+            if st.get("shadow") is None:
+                continue
+            if st["state"] not in ("open", "finalizing"):
+                continue
+            try:
+                st["shadow"].maybe_evaluate(now)
+            except Exception:
+                # Belt and braces (the tracker already fails open):
+                # one bounded diagnostic per error state.
+                if not st.get("shadow_error_logged"):
+                    st["shadow_error_logged"] = True
+                    self._events.write("shadow-warning-read-error "
+                                       "session=%s run=%s reason=unexpected"
+                                       % (sid, st.get("run_id")))
+
+    def _shadow_warning_event(self, sid, st, warning):
+        # The one-shot live warning: bounded identifiers + integer
+        # counters only. all_reasoning=true / tools=0 are implied by
+        # the predicate (the warning fires only when both hold).
+        self._events.write("shadow-warning session=%s run=%s "
+                           "elapsed_s=%d sse_events=%d all_reasoning=true "
+                           "tools=0 api=%d"
+                           % (sid, st.get("run_id"), warning["elapsed_s"],
+                              warning["sse_events"], warning["api"]))
+
+    def _shadow_error_event(self, sid, st, reason):
+        # At most one per turn/error state (enforced by the tracker):
+        # the bounded error class name — never a path or payload.
+        self._events.write("shadow-warning-read-error session=%s run=%s "
+                           "reason=%s"
+                           % (sid, st.get("run_id"), str(reason)[:64]))
 
     # ----- child exit / fallback ------------------------------------------
 
@@ -1121,8 +1253,10 @@ class Relay:
                 if stop.rc == 0:
                     remove_mapping(sid)
                     st["state"] = "closed"
+                    self._clear_shadow(st)
                 else:
                     st["state"] = "idle"
+                    self._clear_shadow(st)
                 continue
             if st["state"] == "pending" and st.get("start") is not None:
                 st["start"].cleanup()
@@ -1291,6 +1425,10 @@ class Relay:
                            % (os.getpid(), OBSCTL))
         if not self.capture_available:
             log("control surface not available at %s — transparent passthrough only" % OBSCTL)
+        if shadow_warning is None:
+            # Diagnostic-only capability lost; the relay itself is
+            # unaffected (one bounded note).
+            log("live shadow warning unavailable (module load failed) — diagnostic only")
         child_argv = [sys.executable, "-c", SHIM, self.delegate] + list(self.args)
         self.child = subprocess.Popen(
             child_argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
@@ -1312,6 +1450,7 @@ class Relay:
         try:
             while True:
                 self.process_sidecars()
+                self._evaluate_shadow()
                 self._release_gate_if_resolved()
                 rlist = [child_out_fd]
                 if self.stdin_open:

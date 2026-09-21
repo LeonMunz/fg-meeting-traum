@@ -942,6 +942,101 @@ diagnostic. A failed finalization
 mapping so a later close (or a manual `agent-observability stop`) can
 re-finalize.
 
+### Live pathological-generation shadow warning (diagnostic only)
+
+While a captured turn is still RUNNING, the relay may detect the
+pathological generation shape established by the forensic replay of
+run-20260921T111009Z (captured conversation
+`01a0c3a6-dd79-7652-bb05-ecb528dd8c5d`: ~1800 s of a single open
+reasoning stream with no tool progression). The detection is a
+**live shadow warning** hosted by the ACP lifecycle relay (no new
+daemon): the relay's existing pump loop drives a rate-limited
+evaluation, and the observable outcome is at most ONE bounded relay
+event — `shadow-warning`.
+
+**Predicate** (all conditions must hold, for the CURRENT captured
+conversation and CURRENT open response segment):
+
+1. open-segment elapsed >= **1800 s** (the relay's authoritative
+   turn/segment timing — the monotonic turn-start and the segment
+   start; duration is NEVER derived from SSE count, file mtime, or
+   token counts — authoritative token counters do not exist during
+   streaming, so NO token thresholds are used);
+2. **zero** `codex.tool_result` records so far for this captured
+   turn;
+3. all observed generation events in the current open segment are
+   `response.reasoning_text.delta` (a `response.output_text.delta` or
+   `response.function_call_arguments.delta` in the open segment
+   clears it; unrelated lifecycle/control SSE kinds —
+   `response.created`, `response.in_progress`, content-part /
+   output-item / reasoning-part events, `*.done` — are not
+   user-visible generation and do not clear it);
+4. `codex.api_request` count so far <= **1**;
+5. the current response segment is still **open** (a segment begins
+   at the turn start, or with the first non-close SSE record after a
+   prior `response.completed`, which closes the open segment).
+
+**Cadence:** at most ONE evaluation every 60 s per open captured
+turn. The relay pump keeps its 200 ms cadence for ACP forwarding;
+raw-telemetry analysis is separately rate-limited and never inspects
+the raw files on the pump cadence.
+
+**Scope:** only records whose `conversation.id` equals the captured
+conversation (the ACP session id) may influence the predicate.
+Foreign telemetry in the same run has NO effect — the incident run
+contained a tool/API-heavy foreign conversation that would completely
+mask the pathological captured conversation under run-wide metrics.
+
+**One-shot:** maximum one `shadow-warning` per captured turn; after
+firing, the turn never warns again (no re-arm after later response
+segments in this version).
+
+**Event format** (relay event log; bounded identifiers/evidence only):
+
+```text
+shadow-warning session=<uuid> run=<run-id> elapsed_s=<int>
+    sse_events=<int> all_reasoning=true tools=0 api=<int>
+```
+
+(`all_reasoning` / `tools` are constants of the predicate: the
+warning fires only when both hold. Never persisted or logged: prompt
+content, reasoning content, output text, tool commands/arguments,
+raw SSE payload text, or file content.)
+
+**Incremental raw-telemetry reader.** Each captured turn's tracker
+reads only NEW bytes of the run's `raw/logs.jsonl` (plus the
+collector's rotated `logs-<ts>-{size,age}.jsonl` files) at evaluation
+time: byte offsets are tracked per file IDENTITY (`st_dev`,`st_ino`),
+so a file renamed by rotation keeps its consumed offset (no
+double-counting), a fresh active file starts at 0 (no omission),
+deleted rotated backups contribute nothing, and an incomplete
+trailing line stays unconsumed until its newline arrives. State is
+in-memory per turn only (bounded; no persistent database or state
+file). The reader consumes complete JSONL records only and never
+parses or logs model text.
+
+**No behavioral effect (invariant).** The warning does not delay,
+modify, or cancel the ACP stream; it does not terminate or signal any
+process, does not stop the collector, does not change reasoning
+effort, model configuration, or token budgets, and is never an
+intervention point. Detection and intervention are separate
+decisions; this slice implements detection only.
+
+**Fail open.** A read/parse anomaly degrades to "the turn continues
+normally" (ACP and collector untouched), with at most ONE bounded
+`shadow-warning-read-error` event per turn/error state (a successful
+evaluation clears the state, so a later new anomaly is reported
+once). A malformed or transiently unreadable telemetry file can
+never crash the relay.
+
+**Boundary with the Run Ledger.** The ledger's v4
+`diagnostics.pathological_run` is the POST-RUN, normalized-metrics
+diagnostic (it needs the final `response.completed` token counters
+and the finalized manifest, so it cannot warn during streaming). The
+shadow warning is the LIVE relay/runtime event over raw streaming
+structure; it is not a ledger-contract change and does not alter the
+ledger's thresholds, schema, or captured-conversation attribution.
+
 ### Process failure fallback
 
 ACP server process/transport exit is **only a fallback cleanup
@@ -1094,7 +1189,12 @@ request id, run id, stop status), `close-pending` / `close-launched`
 (session id, stop status, run id, mapping outcome), `frame-skipped`
 (direction + `reason=line-oversized`; one per line beyond the
 per-line observation bound — observation resumes on the next line,
-the stream is never disabled), `observe-error` — and never prompts,
+the stream is never disabled), `shadow-warning` (session id, run id,
+bounded integer counters `elapsed_s` / `sse_events` / `api` — the
+one-shot live pathological-generation warning; see "Live
+pathological-generation shadow warning" above), `shadow-warning-read-error`
+(session id, run id, bounded error class name — at most one per
+turn/error state), `observe-error` — and never prompts,
 content blocks, tool arguments or results, auth material, environment
 dumps, or ACP bodies.
 

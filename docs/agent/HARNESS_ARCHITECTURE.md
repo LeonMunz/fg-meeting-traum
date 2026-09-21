@@ -1308,7 +1308,13 @@ reads, per-line skip boundary, CRLF, blank lines, and long lines.
   (+`-pending` / `-unmatched` /
   `-late` / `-norun`), `turn-finalize` (+`-during-start` / `-ignored`),
   `close-pending` / `close-launched` / `close-ignored` / `close-unknown` /
-  `session-closed`, `stop-result`, `frame-skipped`, `observe-error`.
+  `session-closed`, `stop-result`, `frame-skipped`,
+  `shadow-warning` (session id, run id, bounded integer counters
+  `elapsed_s` / `sse_events` / `api` — the one-shot live
+  pathological-generation warning; diagnostic only, see §17.2 and
+  OBSERVABILITY.md "Live pathological-generation shadow warning"),
+  `shadow-warning-read-error` (session id, run id, bounded error
+  class name — at most one per turn/error state), `observe-error`.
   Never: prompts, content blocks, tool arguments/results, auth material,
   environment dumps, or ACP bodies.
 - Because the first line of every relay lifetime is `relay-started`, the
@@ -1380,6 +1386,25 @@ Opens track session **identity only** — they start no run.
   run: `agent-observability stop --stop-status graceful`. From that
   response the relay reads only the correlation and `stopReason` (a
   bounded enum string) — never the result content.
+
+- **Live shadow warning (diagnostic only, no intervention).** While a
+  captured turn is still running, the relay evaluates a bounded live
+  pathological-generation predicate at most once every 60 s (the raw
+  telemetry is read incrementally — only newly appended complete
+  records of the captured conversation, rotation-aware): open-segment
+  elapsed >= 1800 s AND zero `codex.tool_result` for the turn AND all
+  observed generation in the open segment is
+  `response.reasoning_text.delta` AND `codex.api_request` <= 1 AND the
+  segment is still open. When it fires, the relay appends EXACTLY ONE
+  bounded `shadow-warning` event for the turn (one-shot; no re-arm).
+  It never delays, modifies, or cancels the ACP stream, never signals
+  a process, and never changes reasoning effort, model configuration,
+  or token budgets; read/parse anomalies fail open with at most one
+  bounded `shadow-warning-read-error` per turn/error state. Full
+  contract: OBSERVABILITY.md, "Live pathological-generation shadow
+  warning". This is distinct from the ledger's v4 post-run
+  `diagnostics.pathological_run` (which needs the final token
+  counters and cannot warn during streaming).
 - `session/close` / `session/delete` are **cleanup only**: they finalize an
   unexpectedly open turn (response never arrived) as `interrupted` and
   release the session state. A close of a session with no active turn
