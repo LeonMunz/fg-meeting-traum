@@ -1162,6 +1162,264 @@ test('My Work Projects multiselect filters, persists, restores, and narrows with
   })
 })
 
+test('My Work Work Item Types multiselect filters, persists, restores, and combines with Research Groups', async ({ page }, testInfo) => {
+  const myWorkRequests: string[] = []
+  page.on('request', (request) => {
+    if (request.url().includes('/api/me/work-items/')) {
+      myWorkRequests.push(request.url())
+    }
+  })
+
+  await login(page, 'alex')
+
+  // Canonical server-side baseline BEFORE the UI change (Board view,
+  // no filter) — independent of earlier tests or their leftover
+  // in-flight saves.
+  const persisted = await setMyWorkPreferences(
+    page,
+    MY_WORK_PREFERENCES_BASELINE,
+  )
+  expect(
+    sameMyWorkPreferences(
+      persisted,
+      MY_WORK_PREFERENCES_BASELINE,
+    ),
+  ).toBe(true)
+
+  // The complete-snapshot PATCH carries relational IDs — resolve
+  // the seeded group's ID from the canonical list endpoint.
+  const fgExampleId = await getResearchGroupId(
+    page,
+    'FG Example',
+  )
+
+  await page.goto('/my-work')
+
+  // Functionally ready: baseline applied (Board, no filter) and both
+  // seeded Work Items rendered. Seed kinds: "First Draft Complete"
+  // is the canonical Milestone kind, "E2E Analyze robot data" the
+  // canonical Task kind.
+  await expectMyWorkReady(page, {
+    viewMode: 'board',
+    visibleTitles: [
+      'First Draft Complete',
+      'E2E Analyze robot data',
+    ],
+  })
+
+  const firstDraftCard = page.getByRole('button', {
+    name: 'Open First Draft Complete',
+  })
+  const robotCard = page.getByRole('button', {
+    name: 'Open E2E Analyze robot data',
+  })
+
+  // The Work Item Types multiselect toggle is visible in the
+  // toolbar (no active filter in the baseline).
+  const typeToggle = page.getByRole('button', {
+    name: 'Work item types, none selected',
+  })
+  await expect(typeToggle).toBeVisible()
+
+  const requestCountBeforeFilterChange =
+    myWorkRequests.length
+  expect(requestCountBeforeFilterChange).toBeGreaterThanOrEqual(
+    1,
+  )
+
+  // The option set is the CLOSED canonical set of semantic kinds —
+  // exactly four, in canonical order, no Other/Unknown category.
+  await typeToggle.click()
+  const typeDialog = page.getByRole('dialog', {
+    name: 'Work item types',
+  })
+  await expect(
+    typeDialog.getByRole('checkbox'),
+  ).toHaveCount(4)
+  const typeOptions = typeDialog.locator('label')
+  expect(
+    (
+      await typeOptions.allTextContents()
+    ).map((text) => text.trim()),
+  ).toEqual([
+    'Task',
+    'Epic',
+    'Milestone',
+    'Deliverable',
+  ])
+
+  // Select "Milestone": only its seeded item remains, without a
+  // refetch of the personal endpoint.
+  const typeSaveFlushed = expectMyWorkPreferenceSave(
+    page,
+    {
+      ...MY_WORK_PREFERENCES_BASELINE,
+      workItemTypes: ['milestone'],
+    },
+  )
+
+  await typeDialog
+    .getByRole('checkbox', { name: 'Milestone' })
+    .check()
+
+  await expect(robotCard).toBeHidden()
+  await expect(firstDraftCard).toBeVisible()
+  expect(myWorkRequests.length).toBe(
+    requestCountBeforeFilterChange,
+  )
+
+  // The active filter is visible: count badge, "WT: ..." chip, and
+  // the filtered result count.
+  await expect(
+    page.getByRole('button', {
+      name: 'Work item types, 1 selected',
+    }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole('button', {
+      name: 'Remove Work Item Type filter Milestone',
+    }),
+  ).toBeVisible()
+  await expect(
+    page.getByText('1 work item'),
+  ).toBeVisible()
+
+  // The applied filter survives a full reload (server-side
+  // preference restore) — the verified save must have landed first.
+  await typeSaveFlushed
+  await page.reload()
+  await expectMyWorkReady(page, {
+    viewMode: 'board',
+    visibleTitles: ['First Draft Complete'],
+    hiddenTitles: ['E2E Analyze robot data'],
+  })
+  await expect(
+    page.getByRole('button', {
+      name: 'Work item types, 1 selected',
+    }),
+  ).toBeVisible()
+
+  // OR within the category: adding "Task" brings the second seeded
+  // item back (both canonical kinds are selected now).
+  const orSaveFlushed = expectMyWorkPreferenceSave(
+    page,
+    {
+      ...MY_WORK_PREFERENCES_BASELINE,
+      workItemTypes: ['task', 'milestone'],
+    },
+  )
+  await page
+    .getByRole('button', {
+      name: 'Work item types, 1 selected',
+    })
+    .click()
+  await typeDialog
+    .getByRole('checkbox', { name: 'Task' })
+    .check()
+  await expect(robotCard).toBeVisible()
+  await expect(firstDraftCard).toBeVisible()
+  await expect(
+    page.getByText('2 work items'),
+  ).toBeVisible()
+  await orSaveFlushed
+
+  // Categories combine RESTRICTIVELY: with FG Example selected, the
+  // robotics-lab item is excluded even though its kind (task) is
+  // selected.
+  const combinedSaveFlushed = expectMyWorkPreferenceSave(
+    page,
+    {
+      ...MY_WORK_PREFERENCES_BASELINE,
+      researchGroupIds: [fgExampleId],
+      workItemTypes: ['task', 'milestone'],
+    },
+  )
+  await page
+    .getByRole('button', {
+      name: 'Research groups, none selected',
+    })
+    .click()
+  await page
+    .getByRole('checkbox', { name: 'FG Example' })
+    .check()
+  await expect(robotCard).toBeHidden()
+  await expect(firstDraftCard).toBeVisible()
+  expect(myWorkRequests.length).toBe(
+    requestCountBeforeFilterChange,
+  )
+  await combinedSaveFlushed
+
+  // Board -> List keeps the SAME effective filtered set (one row
+  // only), and back to Board. The coalesced view-mode save is
+  // verified event-based (registered BEFORE the switch).
+  const viewModeSaveFlushed = expectMyWorkPreferenceSave(
+    page,
+    {
+      ...MY_WORK_PREFERENCES_BASELINE,
+      researchGroupIds: [fgExampleId],
+      workItemTypes: ['task', 'milestone'],
+    },
+  )
+  await page
+    .getByRole('button', { name: 'List' })
+    .click()
+  await expect(
+    page.getByRole('button', {
+      name: 'Open First Draft Complete',
+    }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole('button', {
+      name: 'Open E2E Analyze robot data',
+    }),
+  ).toHaveCount(0)
+  await page
+    .getByRole('button', { name: 'Board' })
+    .click()
+  await viewModeSaveFlushed
+
+  // Global "Clear filters" clears ALL THREE categories in one
+  // complete snapshot (viewMode preserved) and returns to baseline.
+  const clearedSave = expectMyWorkPreferenceSave(
+    page,
+    MY_WORK_PREFERENCES_BASELINE,
+  )
+  await page
+    .getByRole('button', { name: 'Clear filters' })
+    .click()
+  await expect(firstDraftCard).toBeVisible()
+  await expect(robotCard).toBeVisible()
+  await expect(
+    page.getByRole('button', {
+      name: 'Work item types, none selected',
+    }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole('button', {
+      name: 'Research groups, none selected',
+    }),
+  ).toBeVisible()
+
+  // The persisted state is the canonical baseline again, so the
+  // later specs start clean without depending on this test's
+  // execution order or an in-flight save.
+  await clearedSave
+  const serverState = await getMyWorkPreferences(page)
+  expect(
+    sameMyWorkPreferences(
+      serverState,
+      MY_WORK_PREFERENCES_BASELINE,
+    ),
+  ).toBe(true)
+
+  await page.screenshot({
+    path: testInfo.outputPath(
+      'my-work-work-item-type-filter.png',
+    ),
+    fullPage: true,
+  })
+})
+
 test('My Work Kanban drag: cross-category drop mutates the canonical status from statusTargets and refetches My Work', async ({ page }, testInfo) => {
   // Capture the wire contract: exactly one canonical status-only
   // transition (POST /api/work-items/{id}/transition-status/

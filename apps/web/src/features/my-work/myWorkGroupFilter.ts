@@ -51,15 +51,19 @@ export interface ResearchGroupChip {
   name: string
 }
 
-export interface CollapsedResearchGroupChips {
+/** The density-collapsed applied-chip result for one filter category. */
+export interface CollapsedChips<TChip> {
   /** The individual chips to render (always in selection order). */
-  chips: ResearchGroupChip[]
+  chips: TChip[]
   /**
    * The number of selected values hidden behind the "+N" summary, or
    * `null` when every selection fits as an individual chip.
    */
   overflowCount: number | null
 }
+
+/** The density-collapsed Research Group chips (the established shape). */
+export type CollapsedResearchGroupChips = CollapsedChips<ResearchGroupChip>
 
 /**
  * The approved chip-density rule for the applied-filters row.
@@ -71,13 +75,13 @@ export interface CollapsedResearchGroupChips {
  *   "+N" summary (`overflowCount` = total - 2), so an arbitrary
  *   number of selections can never explode the row's height.
  */
-export function collapseResearchGroupChips(
-  selected: readonly ResearchGroupChip[],
+export function collapseResearchGroupChips<TChip>(
+  selected: readonly TChip[],
   options?: {
     maxChips?: number
     collapsedChips?: number
   },
-): CollapsedResearchGroupChips {
+): CollapsedChips<TChip> {
   const maxChips = options?.maxChips ?? 6
   const collapsedChips = options?.collapsedChips ?? 2
 

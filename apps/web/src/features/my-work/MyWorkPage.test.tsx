@@ -5767,10 +5767,17 @@ describe('My Work — Research Group multi-select filter', () => {
     ).toBeInTheDocument()
   })
 
-  it('Clear filters clears the RG + Project selections without touching viewMode / workItemTypes', async () => {
+  it('Clear filters clears all three filter categories without touching viewMode', async () => {
     mockGroups = TWO_GROUPS
+    // The Group A items carry a canonical task kind so the active
+    // type selection is a real (non-empty) restriction on load.
     vi.mocked(listMyWork).mockResolvedValue(
-      groupItems(),
+      groupItems().map(
+        (entry) =>
+          entry.researchGroupId === GROUP_A
+            ? { ...entry, typeKind: 'task' as const }
+            : entry,
+      ),
     )
     vi.mocked(fetchMyWorkPreferences).mockResolvedValue(
       makePreferences({
@@ -5780,13 +5787,20 @@ describe('My Work — Research Group multi-select filter', () => {
       }),
     )
 
-    const { getByRole } = renderPage()
+    const { container, getByRole } = renderPage()
 
     await waitFor(() => {
       expect(
         getByRole('button', { name: 'Clear filters' }),
       ).toBeInTheDocument()
     })
+    // All three categories active on load (Group A + Project Alpha
+    // + Task → the two Group A task items).
+    expect(
+      container.querySelectorAll(
+        '[data-work-item-id]',
+      ).length,
+    ).toBe(2)
 
     vi.useFakeTimers()
     try {
@@ -5802,9 +5816,17 @@ describe('My Work — Research Group multi-select filter', () => {
       vi.useRealTimers()
     }
 
-    // The snapshot sent clears BOTH implemented filter categories
-    // (researchGroupIds + projectIds); `viewMode` and the not-yet-
-    // active `workItemTypes` are preserved untouched.
+    // Every item (including the unclassified ones) is visible
+    // again.
+    expect(
+      container.querySelectorAll(
+        '[data-work-item-id]',
+      ).length,
+    ).toBe(3)
+
+    // The snapshot sent clears ALL THREE implemented filter
+    // categories in one complete snapshot; `viewMode` is preserved
+    // untouched.
     expect(
       vi.mocked(updateMyWorkPreferences)
         .mock.calls[0][0],
@@ -5812,7 +5834,7 @@ describe('My Work — Research Group multi-select filter', () => {
       viewMode: 'board',
       researchGroupIds: [],
       projectIds: [],
-      workItemTypes: ['task'],
+      workItemTypes: [],
     })
   })
 
@@ -7134,10 +7156,18 @@ describe('My Work — Project multi-select filter', () => {
     ).toBeInTheDocument()
   })
 
-  it('Clear filters clears both implemented categories and preserves unrelated preferences', async () => {
+  it('Clear filters clears all three implemented categories and preserves viewMode', async () => {
     mockGroups = TWO_GROUPS
+    // The Project Alpha items carry a canonical task kind so the
+    // active type selection is a real (non-empty) restriction on
+    // load.
     vi.mocked(listMyWork).mockResolvedValue(
-      projectItems(),
+      projectItems().map(
+        (entry) =>
+          entry.projectId === PROJECT_A
+            ? { ...entry, typeKind: 'task' as const }
+            : entry,
+      ),
     )
     vi.mocked(fetchMyWorkPreferences).mockResolvedValue(
       makePreferences({
@@ -7149,8 +7179,8 @@ describe('My Work — Project multi-select filter', () => {
 
     const { container, getByRole } = renderPage()
 
-    // Both categories active on load (Group A + Project Alpha →
-    // items 1, 3).
+    // All three categories active on load (Group A + Project Alpha
+    // + Task → items 1, 3).
     await waitFor(() => {
       expect(
         container.querySelectorAll(
@@ -7180,8 +7210,8 @@ describe('My Work — Project multi-select filter', () => {
       ).length,
     ).toBe(4)
 
-    // The snapshot sent clears BOTH filter categories; `viewMode`
-    // and the not-yet-active `workItemTypes` are preserved untouched.
+    // The snapshot sent clears ALL THREE filter categories in one
+    // complete snapshot; `viewMode` is preserved untouched.
     expect(
       vi.mocked(updateMyWorkPreferences)
         .mock.calls[0][0],
@@ -7189,7 +7219,7 @@ describe('My Work — Project multi-select filter', () => {
       viewMode: 'board',
       researchGroupIds: [],
       projectIds: [],
-      workItemTypes: ['task'],
+      workItemTypes: [],
     })
   })
 
@@ -7254,5 +7284,892 @@ describe('My Work — Project multi-select filter', () => {
     ).not.toContain(
       'No work items match these filters.',
     )
+  })
+})
+
+describe('My Work — Work Item Type multi-select filter', () => {
+  const TWO_GROUPS = [
+    { id: GROUP_A, name: 'Research Group A' },
+    { id: GROUP_B, name: 'Research Group B' },
+  ]
+
+  // One item per canonical kind (display names matching their
+  // kinds, as the canonical defaults carry) plus a custom /
+  // unclassified item whose display name mimics a canonical kind —
+  // typeKind null is authoritative (the anti-inference fixture).
+  function typeItems() {
+    return [
+      makeItem({
+        id: 1,
+        title: 'Kind task',
+        typeKind: 'task',
+        typeName: 'Task',
+        statusCategory: 'todo',
+      }),
+      makeItem({
+        id: 2,
+        title: 'Kind epic',
+        typeKind: 'epic',
+        typeName: 'Epic',
+        statusCategory: 'todo',
+      }),
+      makeItem({
+        id: 3,
+        title: 'Kind milestone',
+        typeKind: 'milestone',
+        typeName: 'Milestone',
+        statusCategory: 'in_progress',
+      }),
+      makeItem({
+        id: 4,
+        title: 'Kind deliverable',
+        typeKind: 'deliverable',
+        typeName: 'Deliverable',
+        statusCategory: 'review',
+      }),
+      makeItem({
+        id: 5,
+        title: 'Custom looks like task',
+        typeKind: null,
+        typeName: 'Task',
+        statusCategory: 'todo',
+      }),
+    ]
+  }
+
+  // Open the Work item types popover once (idempotent guard) and
+  // toggle the named kind's checkbox. The menu stays open after a
+  // selection, so this can be called repeatedly within one open
+  // popover.
+  async function toggleType(
+    util: {
+      queryByRole: (
+        role: string,
+        options?: { name?: string | RegExp },
+      ) => HTMLElement | null
+      getByRole: (
+        role: string,
+        options?: { name?: string | RegExp },
+      ) => HTMLElement
+    },
+    kindLabel: string,
+  ) {
+    const dialogOpen = () =>
+      util.queryByRole('dialog', {
+        name: 'Work item types',
+      }) != null
+
+    if (!dialogOpen()) {
+      await act(async () => {
+        fireEvent.click(
+          util.getByRole('button', {
+            name: /Work item types,/,
+          }),
+        )
+      })
+    }
+
+    await act(async () => {
+      fireEvent.click(
+        util.getByRole('checkbox', {
+          name: kindLabel,
+        }),
+      )
+    })
+  }
+
+  it('shows every assigned Work Item when no Work Item Type is selected (unclassified types included)', async () => {
+    vi.mocked(listMyWork).mockResolvedValue(
+      typeItems(),
+    )
+
+    const { container } = renderPage()
+
+    await waitFor(() => {
+      expect(
+        container.querySelectorAll(
+          '[data-work-item-id]',
+        ).length,
+      ).toBe(5)
+    })
+  })
+
+  it('renders the Work item types toolbar toggle with an inactive accessible name', async () => {
+    vi.mocked(listMyWork).mockResolvedValue(
+      typeItems(),
+    )
+
+    const { getByRole, queryByRole } =
+      renderPage()
+
+    await waitFor(() => {
+      expect(
+        getByRole('button', {
+          name: 'Work item types, none selected',
+        }),
+      ).toBeInTheDocument()
+    })
+    // No dialog until the toggle is opened.
+    expect(
+      queryByRole('dialog', {
+        name: 'Work item types',
+      }),
+    ).toBeNull()
+  })
+
+  it('exposes exactly the four canonical kinds in canonical order with canonical labels', async () => {
+    vi.mocked(listMyWork).mockResolvedValue(
+      typeItems(),
+    )
+
+    const { getByRole, queryByRole } =
+      renderPage()
+
+    await waitFor(() => {
+      expect(
+        getByRole('button', {
+          name: 'Work item types, none selected',
+        }),
+      ).toBeInTheDocument()
+    })
+
+    await act(async () => {
+      fireEvent.click(
+        getByRole('button', {
+          name: 'Work item types, none selected',
+        }),
+      )
+    })
+
+    const dialog = queryByRole('dialog', {
+      name: 'Work item types',
+    }) as HTMLElement
+    const checkboxes = within(dialog).getAllByRole(
+      'checkbox',
+    ) as HTMLInputElement[]
+
+    // Exactly the closed canonical set — no Other / Unknown /
+    // Custom category — in canonical order, all initially
+    // unchecked.
+    expect(
+      checkboxes.map((box) =>
+        (
+          box.closest('label')
+            ?.textContent ?? ''
+        ).trim(),
+      ),
+    ).toEqual([
+      'Task',
+      'Epic',
+      'Milestone',
+      'Deliverable',
+    ])
+    expect(
+      checkboxes.every(
+        (box) => box.checked === false,
+      ),
+    ).toBe(true)
+  })
+
+  it('shows only the items of one selected Work Item Type (matched by typeKind, never typeName)', async () => {
+    vi.mocked(listMyWork).mockResolvedValue(
+      typeItems(),
+    )
+
+    const { container, getByRole, queryByRole } =
+      renderPage()
+
+    await waitFor(() => {
+      expect(
+        container.querySelectorAll(
+          '[data-work-item-id]',
+        ).length,
+      ).toBe(5)
+    })
+
+    await toggleType(
+      { getByRole, queryByRole },
+      'Task',
+    )
+
+    // Item 1 (typeKind task) remains; item 5 has the DISPLAY
+    // NAME "Task" but typeKind null — it must stay hidden (no
+    // name inference).
+    await waitFor(() => {
+      expect(
+        container.querySelectorAll(
+          '[data-work-item-id]',
+        ).length,
+      ).toBe(1)
+    })
+    expect(
+      container.querySelector(
+        '[data-work-item-id="1"]',
+      ),
+    ).not.toBeNull()
+    expect(
+      container.querySelector(
+        '[data-work-item-id="5"]',
+      ),
+    ).toBeNull()
+  })
+
+  it('uses OR semantics across multiple selected Work Item Types', async () => {
+    vi.mocked(listMyWork).mockResolvedValue(
+      typeItems(),
+    )
+
+    const { container, getByRole, queryByRole } =
+      renderPage()
+
+    await waitFor(() => {
+      expect(
+        container.querySelectorAll(
+          '[data-work-item-id]',
+        ).length,
+      ).toBe(5)
+    })
+
+    await toggleType(
+      { getByRole, queryByRole },
+      'Task',
+    )
+    await toggleType(
+      { getByRole, queryByRole },
+      'Milestone',
+    )
+
+    await waitFor(() => {
+      expect(
+        container.querySelectorAll(
+          '[data-work-item-id]',
+        ).length,
+      ).toBe(2)
+    })
+    expect(
+      container.querySelector(
+        '[data-work-item-id="1"]',
+      ),
+    ).not.toBeNull()
+    expect(
+      container.querySelector(
+        '[data-work-item-id="3"]',
+      ),
+    ).not.toBeNull()
+  })
+
+  it('hides custom / unclassified types (typeKind null) whenever any kind is selected, and restores them when none is selected', async () => {
+    vi.mocked(listMyWork).mockResolvedValue(
+      typeItems(),
+    )
+
+    const { container, getByRole, queryByRole } =
+      renderPage()
+
+    await waitFor(() => {
+      expect(
+        container.querySelectorAll(
+          '[data-work-item-id]',
+        ).length,
+      ).toBe(5)
+    })
+
+    // Any active kind selection excludes the unclassified item
+    // (id 5).
+    await toggleType(
+      { getByRole, queryByRole },
+      'Epic',
+    )
+    await waitFor(() => {
+      expect(
+        container.querySelectorAll(
+          '[data-work-item-id]',
+        ).length,
+      ).toBe(1)
+    })
+    expect(
+      container.querySelector(
+        '[data-work-item-id="2"]',
+      ),
+    ).not.toBeNull()
+
+    // Clearing the selection (popover Clear) restores the
+    // unclassified item.
+    await act(async () => {
+      fireEvent.click(
+        getByRole('button', { name: 'Clear' }),
+      )
+    })
+    await waitFor(() => {
+      expect(
+        container.querySelectorAll(
+          '[data-work-item-id]',
+        ).length,
+      ).toBe(5)
+    })
+  })
+
+  it('derives the Board column counts from the filtered set (grouping stays statusCategory-only)', async () => {
+    vi.mocked(listMyWork).mockResolvedValue(
+      typeItems(),
+    )
+
+    const { container, getByRole, queryByRole } =
+      renderPage()
+
+    await waitFor(() => {
+      expect(
+        container.querySelectorAll(
+          '[data-work-item-id]',
+        ).length,
+      ).toBe(5)
+    })
+
+    await toggleType(
+      { getByRole, queryByRole },
+      'Task',
+    )
+    await toggleType(
+      { getByRole, queryByRole },
+      'Milestone',
+    )
+    await toggleType(
+      { getByRole, queryByRole },
+      'Deliverable',
+    )
+
+    await waitFor(() => {
+      expect(
+        container.querySelectorAll(
+          '[data-work-item-id]',
+        ).length,
+      ).toBe(3)
+    })
+
+    // The four semantic columns are unchanged (statusCategory
+    // grouping); only the card presence is filtered.
+    expect(
+      columnHeadingLabels(container),
+    ).toEqual([
+      'Todo',
+      'In progress',
+      'Review',
+      'Done',
+    ])
+    expect(
+      columnCardIds(container, 'todo'),
+    ).toEqual(['1'])
+    expect(
+      columnCardIds(container, 'in_progress'),
+    ).toEqual(['3'])
+    expect(
+      columnCardIds(container, 'review'),
+    ).toEqual(['4'])
+    expect(
+      columnCardIds(container, 'done'),
+    ).toEqual([])
+  })
+
+  it('renders the identical filtered result in the List (same effective set)', async () => {
+    vi.mocked(listMyWork).mockResolvedValue(
+      typeItems(),
+    )
+
+    const { container, getByRole, queryByRole } =
+      renderPage()
+
+    await waitFor(() => {
+      expect(
+        container.querySelectorAll(
+          '[data-work-item-id]',
+        ).length,
+      ).toBe(5)
+    })
+
+    await toggleType(
+      { getByRole, queryByRole },
+      'Milestone',
+    )
+    await waitFor(() => {
+      expect(
+        container.querySelectorAll(
+          '[data-work-item-id]',
+        ).length,
+      ).toBe(1)
+    })
+
+    await switchView({ getByRole }, 'List')
+    await waitFor(() => {
+      expect(
+        container.querySelectorAll(
+          '[data-work-item-id]',
+        ).length,
+      ).toBe(1)
+    })
+    expect(
+      container.querySelector(
+        '[data-work-item-id="3"]',
+      ),
+    ).not.toBeNull()
+
+    await switchView({ getByRole }, 'Board')
+    await waitFor(() => {
+      expect(
+        container.querySelectorAll(
+          '[data-work-item-id]',
+        ).length,
+      ).toBe(1)
+    })
+  })
+
+  it('does not refetch /api/me/work-items/ when the Work Item Type filter changes', async () => {
+    vi.mocked(listMyWork).mockResolvedValue(
+      typeItems(),
+    )
+
+    const { getByRole, queryByRole } =
+      renderPage()
+
+    await waitFor(() => {
+      expect(
+        getByRole('button', {
+          name: 'Work item types, none selected',
+        }),
+      ).toBeInTheDocument()
+    })
+    const callsBefore =
+      vi.mocked(listMyWork).mock
+        .calls.length
+
+    await toggleType(
+      { getByRole, queryByRole },
+      'Task',
+    )
+    await toggleType(
+      { getByRole, queryByRole },
+      'Epic',
+    )
+
+    await waitFor(() => {
+      expect(
+        getByRole('button', {
+          name: 'Work item types, 2 selected',
+        }),
+      ).toBeInTheDocument()
+    })
+
+    expect(
+      vi.mocked(listMyWork).mock
+        .calls.length,
+    ).toBe(callsBefore)
+  })
+
+  it('PATCHes the COMPLETE snapshot and preserves viewMode / researchGroupIds / projectIds on a type change', async () => {
+    mockGroups = TWO_GROUPS
+    vi.mocked(listMyWork).mockResolvedValue(
+      typeItems(),
+    )
+    vi.mocked(fetchMyWorkPreferences).mockResolvedValue(
+      makePreferences({
+        researchGroupIds: [GROUP_A],
+        projectIds: [PROJECT_A],
+      }),
+    )
+
+    const { getByRole, queryByRole } =
+      renderPage()
+
+    await waitFor(() => {
+      expect(
+        getByRole('button', { name: 'Board' }),
+      ).toHaveAttribute('aria-pressed', 'true')
+    })
+
+    vi.useFakeTimers()
+    try {
+      await toggleType(
+        { getByRole, queryByRole },
+        'Task',
+      )
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(300)
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+
+    expect(
+      updateMyWorkPreferences,
+    ).toHaveBeenCalledTimes(1)
+    expect(
+      vi.mocked(updateMyWorkPreferences)
+        .mock.calls[0][0],
+    ).toEqual({
+      viewMode: 'board',
+      researchGroupIds: [GROUP_A],
+      projectIds: [PROJECT_A],
+      workItemTypes: ['task'],
+    })
+  })
+
+  it('applies persisted workItemTypes on the first final render', async () => {
+    vi.mocked(listMyWork).mockResolvedValue(
+      typeItems(),
+    )
+    vi.mocked(fetchMyWorkPreferences).mockResolvedValue(
+      makePreferences({
+        workItemTypes: ['epic'],
+      }),
+    )
+
+    const { container } = renderPage()
+
+    // The persisted selection is active from the first final
+    // render (no unfiltered flash).
+    await waitFor(() => {
+      expect(
+        container.querySelectorAll(
+          '[data-work-item-id]',
+        ).length,
+      ).toBe(1)
+    })
+    expect(
+      container.querySelector(
+        '[data-work-item-id="2"]',
+      ),
+    ).not.toBeNull()
+  })
+
+  it('renders a visible applied chip per selected Work Item Type', async () => {
+    vi.mocked(listMyWork).mockResolvedValue(
+      typeItems(),
+    )
+    vi.mocked(fetchMyWorkPreferences).mockResolvedValue(
+      makePreferences({
+        workItemTypes: ['task', 'milestone'],
+      }),
+    )
+
+    const { getByRole, getByText } =
+      renderPage()
+
+    await waitFor(() => {
+      expect(
+        getByRole('button', {
+          name: 'Remove Work Item Type filter Task',
+        }),
+      ).toBeInTheDocument()
+    })
+    expect(
+      getByRole('button', {
+        name: 'Remove Work Item Type filter Milestone',
+      }),
+    ).toBeInTheDocument()
+    // Canonical kind labels in the row and the filtered result
+    // count after all active categories.
+    expect(getByText('WT: Task')).toBeInTheDocument()
+    expect(getByText('WT: Milestone')).toBeInTheDocument()
+    expect(getByText('2 work items')).toBeInTheDocument()
+  })
+
+  it('shows the applied row while only the Work Item Type filter is active', async () => {
+    vi.mocked(listMyWork).mockResolvedValue(
+      typeItems(),
+    )
+    vi.mocked(fetchMyWorkPreferences).mockResolvedValue(
+      makePreferences({
+        workItemTypes: ['task'],
+      }),
+    )
+
+    const { getByRole, getByText } =
+      renderPage()
+
+    await waitFor(() => {
+      expect(
+        getByText('WT: Task'),
+      ).toBeInTheDocument()
+    })
+    // The other categories stay inactive.
+    expect(
+      getByRole('button', {
+        name: 'Research groups, none selected',
+      }),
+    ).toBeInTheDocument()
+    expect(
+      getByRole('button', {
+        name: 'Projects, none selected',
+      }),
+    ).toBeInTheDocument()
+    expect(
+      getByText('1 work item'),
+    ).toBeInTheDocument()
+  })
+
+  it('removes only the targeted Work Item Type when a chip is removed', async () => {
+    vi.mocked(listMyWork).mockResolvedValue(
+      typeItems(),
+    )
+    vi.mocked(fetchMyWorkPreferences).mockResolvedValue(
+      makePreferences({
+        workItemTypes: ['task', 'epic'],
+      }),
+    )
+
+    const { container, getByRole } =
+      renderPage()
+
+    await waitFor(() => {
+      expect(
+        container.querySelectorAll(
+          '[data-work-item-id]',
+        ).length,
+      ).toBe(2)
+    })
+
+    vi.useFakeTimers()
+    try {
+      await act(async () => {
+        fireEvent.click(
+          getByRole('button', {
+            name: 'Remove Work Item Type filter Task',
+          }),
+        )
+      })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(300)
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+
+    // Only the targeted kind is removed: the epic item remains,
+    // the task item is hidden again.
+    expect(
+      container.querySelector(
+        '[data-work-item-id="1"]',
+      ),
+    ).toBeNull()
+    expect(
+      container.querySelector(
+        '[data-work-item-id="2"]',
+      ),
+    ).not.toBeNull()
+
+    expect(
+      vi.mocked(updateMyWorkPreferences)
+        .mock.calls[0][0],
+    ).toMatchObject({
+      workItemTypes: ['epic'],
+    })
+  })
+
+  it('clears all selected Work Item Types from the popover Clear action (only workItemTypes)', async () => {
+    mockGroups = TWO_GROUPS
+    vi.mocked(listMyWork).mockResolvedValue(
+      typeItems(),
+    )
+    vi.mocked(fetchMyWorkPreferences).mockResolvedValue(
+      makePreferences({
+        researchGroupIds: [GROUP_A],
+        workItemTypes: ['task', 'epic'],
+      }),
+    )
+
+    const { container, getByRole, queryByRole } =
+      renderPage()
+
+    await waitFor(() => {
+      expect(
+        container.querySelectorAll(
+          '[data-work-item-id]',
+        ).length,
+      ).toBe(2)
+    })
+
+    vi.useFakeTimers()
+    try {
+      await act(async () => {
+        fireEvent.click(
+          getByRole('button', {
+            name: /Work item types,/,
+          }),
+        )
+      })
+      await act(async () => {
+        fireEvent.click(
+          within(
+            queryByRole('dialog', {
+              name: 'Work item types',
+            }) as HTMLElement,
+          ).getByRole('button', { name: 'Clear' }),
+        )
+      })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(300)
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+
+    // All items (including unclassified) are visible again; the
+    // Research Group selection is untouched.
+    expect(
+      container.querySelectorAll(
+        '[data-work-item-id]',
+      ).length,
+    ).toBe(5)
+
+    expect(
+      vi.mocked(updateMyWorkPreferences)
+        .mock.calls[0][0],
+    ).toEqual({
+      viewMode: 'board',
+      researchGroupIds: [GROUP_A],
+      projectIds: [],
+      workItemTypes: [],
+    })
+  })
+
+  it('shows the filtered-empty state for a zero-result Work Item Type selection and restores on Clear filters', async () => {
+    vi.mocked(listMyWork).mockResolvedValue(
+      typeItems().filter(
+        (entry) =>
+          entry.id === 1 || entry.id === 5,
+      ),
+    )
+    // No item of kind `milestone` is assigned: a valid
+    // filtered-empty state for the category alone.
+    vi.mocked(fetchMyWorkPreferences).mockResolvedValue(
+      makePreferences({
+        workItemTypes: ['milestone'],
+      }),
+    )
+
+    const { container, getByRole } =
+      renderPage()
+
+    await waitFor(() => {
+      expect(
+        document.body.textContent,
+      ).toContain(
+        'No work items match these filters.',
+      )
+    })
+    expect(
+      container.querySelectorAll(
+        '[data-work-item-id]',
+      ).length,
+    ).toBe(0)
+    // The active filter is never hidden: the count shows the
+    // final visible set (zero).
+    expect(
+      document.body.textContent,
+    ).toContain('0 work items')
+
+    // Clear filters (inside the filtered-empty state) restores.
+    const emptyStateHeading = getByRole('heading', {
+      name: 'No work items match these filters.',
+    })
+    await act(async () => {
+      fireEvent.click(
+        within(
+          emptyStateHeading.parentElement as HTMLElement,
+        )
+          .getByRole('button', {
+            name: 'Clear filters',
+          }),
+      )
+    })
+
+    await waitFor(() => {
+      expect(
+        container.querySelectorAll(
+          '[data-work-item-id]',
+        ).length,
+      ).toBe(2)
+    })
+    expect(
+      document.body.textContent,
+    ).not.toContain(
+      'No work items match these filters.',
+    )
+  })
+
+  it('combines Research Group, Project, and Work Item Type selections restrictively', async () => {
+    mockGroups = TWO_GROUPS
+    const combined = [
+      makeItem({
+        id: 1,
+        title: 'A task',
+        projectId: PROJECT_A,
+        projectName: 'Project Alpha',
+        researchGroupId: GROUP_A,
+        researchGroupName: 'Research Group A',
+        typeKind: 'task',
+        typeName: 'Task',
+        statusCategory: 'todo',
+      }),
+      makeItem({
+        id: 2,
+        title: 'A epic',
+        projectId: PROJECT_A,
+        projectName: 'Project Alpha',
+        researchGroupId: GROUP_A,
+        researchGroupName: 'Research Group A',
+        typeKind: 'epic',
+        typeName: 'Epic',
+        statusCategory: 'todo',
+      }),
+      makeItem({
+        id: 3,
+        title: 'B task',
+        projectId: PROJECT_B,
+        projectName: 'Project Beta',
+        researchGroupId: GROUP_B,
+        researchGroupName: 'Research Group B',
+        typeKind: 'task',
+        typeName: 'Task',
+        statusCategory: 'todo',
+      }),
+      makeItem({
+        id: 4,
+        title: 'B milestone',
+        projectId: PROJECT_B,
+        projectName: 'Project Beta',
+        researchGroupId: GROUP_B,
+        researchGroupName: 'Research Group B',
+        typeKind: 'milestone',
+        typeName: 'Milestone',
+        statusCategory: 'todo',
+      }),
+    ]
+    vi.mocked(listMyWork).mockResolvedValue(
+      combined,
+    )
+    // All three categories active on load: only item 1 satisfies
+    // ALL of them (Group A AND Project Alpha AND task).
+    vi.mocked(fetchMyWorkPreferences).mockResolvedValue(
+      makePreferences({
+        researchGroupIds: [GROUP_A],
+        projectIds: [PROJECT_A],
+        workItemTypes: ['task'],
+      }),
+    )
+
+    const { container } = renderPage()
+
+    await waitFor(() => {
+      expect(
+        container.querySelectorAll(
+          '[data-work-item-id]',
+        ).length,
+      ).toBe(1)
+    })
+    expect(
+      container.querySelector(
+        '[data-work-item-id="1"]',
+      ),
+    ).not.toBeNull()
   })
 })

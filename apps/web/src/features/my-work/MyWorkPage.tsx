@@ -52,6 +52,12 @@ import {
   formatWorkItemResultCount,
 } from './myWorkGroupFilter'
 import {
+  filterMyWorkItemsByWorkItemType,
+  sortWorkItemTypes,
+  workItemTypeChips,
+  WORK_ITEM_TYPE_FILTER_OPTIONS,
+} from './myWorkTypeFilter'
+import {
   deriveMyWorkProjectOptions,
   filterMyWorkItemsByProject,
   normalizeMyWorkProjectIdsForGroupScope,
@@ -62,12 +68,16 @@ import {
 import {
   MyWorkResearchGroupFilter,
 } from './MyWorkResearchGroupFilter'
+import {
+  MyWorkTypesFilter,
+} from './MyWorkTypesFilter'
 
 // Stable empty references so a null preference snapshot never
 // allocates a fresh array each render (keeps the filter memos
 // stable).
 const EMPTY_RESEARCH_GROUP_IDS: readonly number[] = []
 const EMPTY_PROJECT_IDS: readonly number[] = []
+const EMPTY_WORK_ITEM_TYPES: readonly ApiWorkItemTypeKind[] = []
 
 /**
  * Personal cross-project My Work (List + Kanban).
@@ -132,7 +142,7 @@ const EMPTY_PROJECT_IDS: readonly number[] = []
  * viewMode decides Board vs List, so a persisted List preference
  * can never flash through a default Board first. Changing
  * Board/List updates the complete preference snapshot locally
- * (the not-yet-applied filter arrays are retained untouched) and
+ * (the filter arrays are retained untouched) and
  * persists the COMPLETE snapshot after a short debounce; the
  * normalized server response is authoritative and replaces the
  * local snapshot. A failed save keeps the locally chosen mode and
@@ -569,10 +579,11 @@ const GLOBAL_STATUS_COLUMNS: Array<{
 
 /**
  * The restrained filtered-empty state: assigned work EXISTS, but the
- * active Research Group filter yields zero results. Deliberately
+ * active filter categories yield zero results. Deliberately
  * distinct from the "Nothing assigned to you" unfiltered empty state
  * (no illustration). "Clear filters" removes the active Research
- * Group and Project selections (the implemented filter categories).
+ * Group, Project, and Work Item Type selections (the implemented
+ * filter categories).
  */
 function FilteredEmptyState({
   onClear,
@@ -635,15 +646,23 @@ export function MyWorkPage() {
     HTMLButtonElement | null
   >(null)
 
+  // Work Item Type multi-select filter (third implemented filter
+  // category): the SAME single-source-of-truth rule — the persisted
+  // `preferences.workItemTypes` — with the popover open/closed state
+  // lifted for the applied-row "+N" summary.
+  const [typeFilterOpen, setTypeFilterOpen] =
+    useState(false)
+  const typeFilterTriggerRef = useRef<
+    HTMLButtonElement | null
+  >(null)
+
   // The COMPLETE persisted My Work preference snapshot (the server
   // is the source of truth). `null` until the initial GET has
   // resolved — the final view is unknown until then, so the page
   // stays in its loading skeleton: a persisted List preference can
   // never flash through a default Board first. The viewMode plus
-  // the two implemented filter categories (researchGroupIds,
-  // projectIds) are actively consumed; `workItemTypes` is retained
-  // in the snapshot (not yet applied to filtering) and must survive
-  // every save untouched.
+  // the three implemented filter categories (researchGroupIds,
+  // projectIds, workItemTypes) are actively consumed.
   const [preferences, setPreferences] = useState<
     ApiMyWorkPreferences | null
   >(null)
@@ -766,7 +785,7 @@ export function MyWorkPage() {
   // Board/List switch: update the COMPLETE preference snapshot
   // locally — only `viewMode` changes, the three filter arrays are
   // retained untouched (the implemented categories keep their
-  // selections; `workItemTypes` is not yet applied) — and owe a
+  // selections) — and owe a
   // debounced save
   // of the complete snapshot (the effect below). Purely
   // presentational for the Work Item data: no /api/me/work-items/
@@ -1377,11 +1396,11 @@ export function MyWorkPage() {
   // The single established presentation rule: completed items render
   // last — a stable partition, so backend relative order is
   // preserved within each group.
-  // ── Persisted filter categories (Research Group + Project) ──
-  // The single source of truth for both selections is the persisted
-  // preference snapshot (`researchGroupIds` / `projectIds`).
-  // `workItemTypes` remains preserved in the snapshot but is NOT yet
-  // applied to Work Item visibility (its UI slice comes later).
+  // ── Persisted filter categories (Research Group + Project +
+  // Work Item Type) ──
+  // The single source of truth for all three selections is the
+  // persisted preference snapshot (`researchGroupIds` /
+  // `projectIds` / `workItemTypes`).
   const selectedGroupIds =
     preferences?.researchGroupIds ??
     EMPTY_RESEARCH_GROUP_IDS
@@ -1394,8 +1413,14 @@ export function MyWorkPage() {
   const hasProjectFilter =
     selectedProjectIds.length > 0
 
+  const selectedTypeKinds =
+    preferences?.workItemTypes ??
+    EMPTY_WORK_ITEM_TYPES
+  const hasTypeFilter =
+    selectedTypeKinds.length > 0
+
   const hasActiveFilter =
-    hasGroupFilter || hasProjectFilter
+    hasGroupFilter || hasProjectFilter || hasTypeFilter
 
   // The canonical accessible Research Group id → name map, used to
   // label applied chips (NEVER derived from Work Items — a selected
@@ -1437,22 +1462,30 @@ export function MyWorkPage() {
 
   // PRESENTATION-ONLY category filters over the canonical payload —
   // never a refetch of /api/me/work-items/. Within each category the
-  // selections combine OR; the two active categories combine
-  // RESTRICTIVELY (an item must satisfy both). Empty selection = no
-  // restriction (the exact reference is preserved for memo stability).
+  // selections combine OR; the active categories combine
+  // RESTRICTIVELY (an item must satisfy every active category).
+  // Empty selection = no restriction (the exact reference is
+  // preserved for memo stability). The Work Item Type category
+  // matches the machine-readable `typeKind` only — a custom type's
+  // display name is never consulted, and a `typeKind` of `null`
+  // (custom / unclassified) never matches any selected kind.
   const filteredItems = useMemo(
     () =>
-      filterMyWorkItemsByProject(
-        filterMyWorkItemsByResearchGroup(
-          items,
-          selectedGroupIds,
+      filterMyWorkItemsByWorkItemType(
+        filterMyWorkItemsByProject(
+          filterMyWorkItemsByResearchGroup(
+            items,
+            selectedGroupIds,
+          ),
+          selectedProjectIds,
         ),
-        selectedProjectIds,
+        selectedTypeKinds,
       ),
     [
       items,
       selectedGroupIds,
       selectedProjectIds,
+      selectedTypeKinds,
     ],
   )
 
@@ -1498,6 +1531,18 @@ export function MyWorkPage() {
   // a "+N" summary) bounds the applied row in BOTH categories.
   const collapsedProjectChips =
     collapseResearchGroupChips(selectedProjectChips)
+
+  // The selected Work Item Types resolved to renderable chips
+  // (canonical label per kind, canonical kind order — never
+  // derived from a Work Item's typeName), bounded by the SAME
+  // approved chip-density rule.
+  const selectedTypeChips = useMemo(
+    () => workItemTypeChips(selectedTypeKinds),
+    [selectedTypeKinds],
+  )
+
+  const collapsedTypeChips =
+    collapseResearchGroupChips(selectedTypeChips)
 
   const resultCount = formatWorkItemResultCount(
     filteredItems.length,
@@ -1581,10 +1626,10 @@ export function MyWorkPage() {
     })
   }, [preferences])
 
-  // "Clear filters" (applied row + filtered-empty state) clears BOTH
-  // implemented filter categories — Research Groups and Projects.
-  // Unrelated preference fields (`viewMode`, the not-yet-applied
-  // `workItemTypes` snapshot) are preserved untouched.
+  // "Clear filters" (applied row + filtered-empty state) clears ALL
+  // THREE implemented filter categories — Research Groups, Projects,
+  // and Work Item Types — in one complete snapshot. Unrelated
+  // preference fields (`viewMode`) are preserved untouched.
   const handleClearFilters = useCallback(() => {
     if (preferences == null) {
       return
@@ -1594,6 +1639,57 @@ export function MyWorkPage() {
       ...preferences,
       researchGroupIds: [],
       projectIds: [],
+      workItemTypes: [],
+    })
+  }, [preferences])
+
+  // Toggle one Work Item Type in the persisted selection (canonical
+  // kind order, the deterministic treatment the RG / Project
+  // selections get from their ascending-ID order).
+  const handleTypeToggle = useCallback(
+    (kind: ApiWorkItemTypeKind, checked: boolean) => {
+      if (preferences == null) {
+        return
+      }
+
+      const selected = new Set(
+        preferences.workItemTypes,
+      )
+
+      if (checked) {
+        selected.add(kind)
+      } else {
+        selected.delete(kind)
+      }
+
+      setPreferences({
+        ...preferences,
+        workItemTypes: sortWorkItemTypes(
+          Array.from(selected),
+        ),
+      })
+    },
+    [preferences],
+  )
+
+  const handleRemoveTypeChip = useCallback(
+    (kind: ApiWorkItemTypeKind) => {
+      handleTypeToggle(kind, false)
+    },
+    [handleTypeToggle],
+  )
+
+  // The Work Item Types popover "Clear" clears ONLY the Work Item
+  // Type selection (`workItemTypes`) — the Research Group and
+  // Project selections are untouched.
+  const handleClearTypeFilter = useCallback(() => {
+    if (preferences == null) {
+      return
+    }
+
+    setPreferences({
+      ...preferences,
+      workItemTypes: [],
     })
   }, [preferences])
 
@@ -1642,6 +1738,12 @@ export function MyWorkPage() {
   const openProjectFilter = useCallback(() => {
     setProjectFilterOpen(true)
     projectFilterTriggerRef.current?.focus()
+  }, [])
+
+  // The applied-row "+N" summary opens AND focuses the toggle.
+  const openTypeFilter = useCallback(() => {
+    setTypeFilterOpen(true)
+    typeFilterTriggerRef.current?.focus()
   }, [])
 
   const orderedItems = useMemo(() => {
@@ -1762,12 +1864,11 @@ export function MyWorkPage() {
           </div>
         </header>
 
-        {/* Filter toolbar row: the two implemented filter
-         * categories (Research Groups + Projects) on the left; the
-         * Work Item Type category is added by its own slice (no fake
-         * / disabled controls here). Board/List stays on the right,
-         * unchanged. flex-wrap keeps the row usable in the narrow
-         * column without forcing document horizontal overflow. */}
+        {/* Filter toolbar row: the three implemented filter
+         * categories (Research Groups + Projects + Work Item Types)
+         * on the left. Board/List stays on the right, unchanged.
+         * flex-wrap keeps the row usable in the narrow column
+         * without forcing document horizontal overflow. */}
         <div
           className="mt-5 flex w-full flex-wrap items-center justify-between gap-2"
         >
@@ -1790,6 +1891,16 @@ export function MyWorkPage() {
               onOpenChange={setProjectFilterOpen}
               onToggle={handleProjectToggle}
               onClear={handleClearProjectFilter}
+            />
+
+            <MyWorkTypesFilter
+              ref={typeFilterTriggerRef}
+              options={WORK_ITEM_TYPE_FILTER_OPTIONS}
+              selectedKinds={selectedTypeKinds}
+              open={typeFilterOpen}
+              onOpenChange={setTypeFilterOpen}
+              onToggle={handleTypeToggle}
+              onClear={handleClearTypeFilter}
             />
           </div>
 
@@ -1857,9 +1968,10 @@ export function MyWorkPage() {
          * implemented filter category is active (an active filter
          * must never be invisible). Shows the current filtered
          * result count (after ALL active categories), the
-         * selected-group chips then the selected-Project chips
-         * (each density-collapsed), and a "Clear filters" action
-         * that clears BOTH implemented categories. */}
+         * selected-group chips, then the selected-Project chips,
+         * then the selected-Work-Item-Type chips (each
+         * density-collapsed), and a "Clear filters" action that
+         * clears ALL THREE implemented categories. */}
         {hasActiveFilter && (
           <div className="mt-2 flex w-full flex-wrap items-center gap-x-3 gap-y-2">
             <span className="shrink-0 text-[11px] leading-4 text-text-tertiary">
@@ -1948,6 +2060,47 @@ export function MyWorkPage() {
                   className="flex h-6 min-w-0 max-w-full items-center overflow-hidden text-ellipsis whitespace-nowrap rounded border border-border-subtle bg-surface-muted px-2 text-[11px] font-medium leading-4 text-text transition hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline focus-visible:outline-focus"
                 >
                   Projects: +{collapsedProjectChips.overflowCount}
+                </button>
+              )}
+
+              {collapsedTypeChips.chips.map((chip) => (
+                <span
+                  key={`type-${chip.kind}`}
+                  title={`WT: ${chip.label}`}
+                  className="flex h-6 max-w-[220px] items-center gap-1.5 rounded border border-border-subtle bg-surface-muted pl-2 pr-[7px]"
+                >
+                  <span className="min-w-0 truncate text-[11px] font-medium leading-4 text-text">
+                    WT: {chip.label}
+                  </span>
+
+                  <button
+                    type="button"
+                    aria-label={`Remove Work Item Type filter ${chip.label}`}
+                    onClick={() =>
+                      handleRemoveTypeChip(chip.kind)
+                    }
+                    className="shrink-0 rounded text-text-tertiary transition hover:text-text focus-visible:outline-2 focus-visible:outline focus-visible:outline-focus"
+                  >
+                    <span
+                      aria-hidden="true"
+                      className="material-symbols-outlined icon-stable text-[12px]"
+                    >
+                      close
+                    </span>
+                  </button>
+                </span>
+              ))}
+
+              {collapsedTypeChips.overflowCount != null && (
+                // Shrinkable (label truncates) so the summary chip
+                // cannot push the applied row past the narrow column
+                // width and overflow the document.
+                <button
+                  type="button"
+                  onClick={openTypeFilter}
+                  className="flex h-6 min-w-0 max-w-full items-center overflow-hidden text-ellipsis whitespace-nowrap rounded border border-border-subtle bg-surface-muted px-2 text-[11px] font-medium leading-4 text-text transition hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline focus-visible:outline-focus"
+                >
+                  Work item types: +{collapsedTypeChips.overflowCount}
                 </button>
               )}
             </div>
