@@ -554,6 +554,11 @@ prune_retention() {
   done
 }
 
+# Harness/status surface only: version of the Codex reachable from THIS
+# shell (explicit CODEX_PATH, else `codex` on PATH). It is the
+# controller/standalone Codex on a product host and is informational
+# diagnostics — it must NEVER be seeded into capture manifests as the
+# product Codex version (the ledger attributes that from telemetry).
 codex_version() {
   local out=""
   if [ -n "${CODEX_PATH:-}" ] && [ -x "${CODEX_PATH:-}" ]; then
@@ -1091,8 +1096,13 @@ cmd_start() {
   run_dir="$RUNS_DIR/$run_id"
   mkdir -p "$run_dir/raw"
 
+  # NOTE: no FG_OBS_CODEX_VERSION seed here. The capture manifest must not
+  # carry the controller/standalone `codex` on PATH (or CODEX_PATH) version
+  # as if it were the product Codex: the ledger derives runtime.codex_version
+  # from the telemetry app.version the captured Codex process itself
+  # emitted. Capture-time manifests keep the field null (explicit unknown);
+  # the standalone version stays available via `status` (informational).
   FG_OBS_REPO_ROOT="$REPO_ROOT" \
-  FG_OBS_CODEX_VERSION="$(codex_version)" \
   FG_OBS_CODEX_ACP_VERSION="$(codex_acp_version)" \
   FG_OBS_COLLECTOR_VERSION="$(collector_version_of "$COLLECTOR")" \
   FG_OBS_OTEL_ENDPOINT="http://127.0.0.1:$PORT" \

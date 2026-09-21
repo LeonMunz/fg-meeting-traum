@@ -293,6 +293,10 @@ if collector_present; then
     [ -f "$man" ] && ok "t05m manifest exists after stop" || bad "t05m manifest exists after stop"
     mstat="$("$PY" -c 'import json,sys; print(json.load(open(sys.argv[1]))["stop_status"])' "$man" 2>/dev/null || true)"
     expect_eq "t05n manifest stop_status is graceful" "graceful" "$mstat"
+    # the capture manifest must not carry a seed-time codex version from the
+    # controller PATH (explicit null; the ledger attributes it from telemetry)
+    mver="$("$PY" -c 'import json,sys; print(json.load(open(sys.argv[1]))["codex_version"])' "$man" 2>/dev/null || true)"
+    expect_eq "t05n1 capture manifest codex_version is null (no controller PATH seeding)" "None" "$mver"
     led="$REPO_ROOT/.artifacts/agent-runs/$latest/run-ledger.json"
     [ -f "$led" ] && ok "t05n2 run-ledger.json auto-generated at stop" || bad "t05n2 run-ledger.json auto-generated at stop"
     "$PY" -c 'import json,sys
@@ -514,7 +518,7 @@ mkdir -p "$T12/repo"
   git commit -qm base )
 RUNA="$T12/runs/run-20260101T000000Z"
 mkdir -p "$RUNA/raw"
-MENV2="FG_OBS_REPO_ROOT=$T12/repo FG_OBS_CODEX_VERSION=0.148.0 FG_OBS_CODEX_ACP_VERSION=1.7.0 FG_OBS_COLLECTOR_VERSION=0.161.0 FG_OBS_OTEL_ENDPOINT=http://127.0.0.1:4318 FG_OBS_PRIVACY_MODE=trace-safe-sanitized"
+MENV2="FG_OBS_REPO_ROOT=$T12/repo FG_OBS_CODEX_VERSION=0.139.0 FG_OBS_CODEX_ACP_VERSION=1.7.0 FG_OBS_COLLECTOR_VERSION=0.161.0 FG_OBS_OTEL_ENDPOINT=http://127.0.0.1:4318 FG_OBS_PRIVACY_MODE=trace-safe-sanitized"
 run_cmd env $MENV2 "$PY" "$MANIFEST_PY" seed "$RUNA" run-20260101T000000Z capture
 expect_rc "t12a fixture run manifest seed exits 0" 0 "$RC"
 printf 'more\n' >> "$T12/repo/a.txt"   # working tree becomes dirty after seed
@@ -586,7 +590,14 @@ assert i["duration_s"] is not None
 assert i["stop_status"] == "graceful"
 r = d["runtime"]
 assert r["models"] == ["ledger-model"]
-assert r["codex_acp_version"] == "1.7.0"
+# product Codex version is attributed from the telemetry app.version the
+# Codex process itself emitted (0.148.0), never from the seed-time /
+# controller discovery (manifest codex_version="0.139.0")
+assert r["codex_version"] == "0.148.0"
+assert r["app_versions"] == ["0.148.0"]
+assert "codex_version_unresolved" not in d["evidence_gaps"]
+assert d["comparability"]["dimensions"]["codex_version"] is True
+assert r["codex_acp_version"] == "1.7.0"  # independent of codex version
 assert r["privacy_mode"] == "trace-safe-sanitized"
 # native run-level config: only what the fixture event actually carries
 assert r["reasoning_effort"] == "low"
@@ -760,7 +771,7 @@ cat > "$RUNC/capture-manifest.json" <<'MANJSON'
   "end_ts": "2026-01-01T00:00:02Z", "stop_status": "graceful",
   "repo_root": null, "branch": null, "starting_head": null,
   "starting_tree": null,
-  "codex_version": "codex-cli 0.148.0", "codex_acp_version": "1.7.0",
+  "codex_version": "codex-cli 0.139.0", "codex_acp_version": "1.7.0",
   "collector_version": "0.161.0", "otel_endpoint": "http://127.0.0.1:4318",
   "privacy_mode": "trace-safe-sanitized",
   "raw_trace_files": [], "conversation_ids": [], "event_counts": {},
@@ -815,8 +826,58 @@ assert d["runtime"]["sandbox_mode"] is None
 assert d["runtime"]["approval_policy"] is None
 assert d["comparability"]["dimensions"]["reasoning_effort"] is False
 assert "reasoning_effort" in d["comparability"]["missing"]
+# no product app.version in telemetry -> codex_version stays explicitly
+# unresolved; the manifest's controller discovery (0.139.0) never leaks in
+assert d["runtime"]["codex_version"] is None
+assert d["runtime"]["app_versions"] == []
+assert "codex_version_unresolved" in gaps
+assert d["comparability"]["dimensions"]["codex_version"] is False
+assert "codex_version" in d["comparability"]["missing"]
 PYCHK
 expect_rc "t12ac missing telemetry yields null + gap codes (no inference)" 0 "$RC"
+# multiple distinct product app.version values in one run: all are
+# preserved in app_versions, codex_version stays unresolved (never guessed),
+# and controller discovery is still not substituted
+RUNF="$T12/runs/run-20260101T000004Z"
+mkdir -p "$RUNF/raw"
+cp "$RUNE/capture-manifest.json" "$RUNF/capture-manifest.json"
+"$PY" - "$RUNF/capture-manifest.json" run-20260101T000004Z <<'FIXPY4'
+import json, sys
+d = json.load(open(sys.argv[1]))
+d["run_id"] = sys.argv[2]
+d["app_versions"] = ["0.148.0", "0.149.0"]  # post-finalize scan state
+json.dump(d, open(sys.argv[1], "w"), indent=2, sort_keys=True)
+FIXPY4
+"$PY" - "$RUNF/raw/logs.jsonl" <<'FIXLOG4'
+import json, sys
+def rec(ts, ver):
+    attrs = {"event.timestamp": ts, "event.name": "codex.sse_event",
+             "conversation.id": "conv-multi-1",
+             "app.version": ver, "event.kind": "response.completed"}
+    return {"resourceLogs": [{"resource": {"attributes": []}, "scopeLogs": [
+        {"logRecords": [{"severityNumber": 9,
+                         "attributes": [{"key": k, "value": {"stringValue": str(v)}} for k, v in sorted(attrs.items())]}]}]}]}
+lines = [rec("2026-01-01T00:00:00.000Z", "0.148.0"),
+         rec("2026-01-01T00:00:01.000Z", "0.149.0")]
+with open(sys.argv[1], "w") as fh:
+    for l in lines:
+        fh.write(json.dumps(l, sort_keys=True) + "\n")
+FIXLOG4
+run_cmd "$PY" "$LEDGER_PY" normalize "$RUNF"
+expect_rc "t12ac2 normalize with multiple app versions exits 0" 0 "$RC"
+run_cmd "$PY" - "$RUNF/run-ledger.json" <<'PYCHK'
+import json, sys
+d = json.load(open(sys.argv[1]))
+r = d["runtime"]
+assert r["app_versions"] == ["0.148.0", "0.149.0"]  # all values preserved
+assert r["codex_version"] is None  # not guessed
+assert r["codex_acp_version"] == "1.7.0"  # independent field
+assert "codex_version_unresolved" in d["evidence_gaps"]
+assert "no_telemetry" not in d["evidence_gaps"]
+assert d["comparability"]["dimensions"]["codex_version"] is False
+assert "codex_version" in d["comparability"]["missing"]
+PYCHK
+expect_rc "t12ac3 multiple app versions: preserved, unresolved, no guess" 0 "$RC"
 
 # run context in the ledger: explicit, bounded, idempotent, no inference
 RUNCONTEXT_PY="$REPO_ROOT/scripts/observability/runcontext.py"

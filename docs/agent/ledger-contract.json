@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "name": "fg-agent-run-ledger-record",
-  "description": "Versioned schema of the normalized Agent Run Ledger record. The ledger is the normalization boundary between captured evidence and later Harness analysis: analytics must consume ledger records, not raw Codex OTel field names. Schema v2 adds the bounded structured run context, native run-level runtime configuration (reasoning effort / sandbox mode / approval policy where the native event provides them) and the deterministic comparability section; see \"compatibility\".",
+  "description": "Versioned schema of the normalized Agent Run Ledger record. The ledger is the normalization boundary between captured evidence and later Harness analysis: analytics must consume ledger records, not raw Codex OTel field names. Schema v2 adds the bounded structured run context, native run-level runtime configuration (reasoning effort / sandbox mode / approval policy where the native event provides them) and the deterministic comparability section; see \"compatibility\". runtime.codex_version is attributed from the telemetry app.version emitted by the Codex process itself (one distinct value is authoritative; otherwise null) and never from controller PATH discovery.",
   "boundary": {
     "inputs": [
       "raw sanitized OTel (raw/logs*.jsonl, raw/traces*.jsonl, raw/metrics*.jsonl) — only trace-contract-named attributes are read (docs/agent/trace-contract.json)",
@@ -41,13 +41,13 @@
       "stop_status": "\"graceful\" | \"interrupted\" | \"collector_forced\" | \"running\" | null"
     },
     "runtime": {
-      "codex_version": "string | null",
+      "codex_version": "string | null — the Codex version that actually executed the captured turn, derived exclusively from the telemetry `app.version` attribute the Codex process itself emitted (the values of runtime.app_versions): exactly one distinct non-empty value observed in the run -> that value; zero or several distinct values -> null (explicitly unresolved, listed in evidence_gaps as codex_version_unresolved). Never derived from the controller/standalone `codex` on PATH or from capture-time (manifest) discovery; no prefixing/formatting is applied beyond the emitted value",
       "codex_acp_version": "string | null",
       "models": "string[] — model identifiers observed in telemetry",
       "collector_version": "string | null",
       "originators": "string[] — sanitized originator strings",
       "privacy_mode": "string | null",
-      "app_versions": "string[] — app.version values observed in telemetry",
+      "app_versions": "string[] — app.version values observed in telemetry; when exactly one distinct value is present it is the authoritative product Codex version (runtime.codex_version); several values are all preserved and codex_version stays null (no inference)",
       "reasoning_effort": "string | null — from the first codex.conversation_starts event when the native event carries reasoning_effort (0.148.0 emits it only when an effort is set; e.g. absent for default/auto runs). Null + a comparability gap otherwise; never inferred",
       "sandbox_mode": "string | null — from the first codex.conversation_starts event's sandbox_policy attribute (e.g. \"read-only\", \"workspace-write\"); null + gap when absent",
       "approval_policy": "string | null — from the first codex.conversation_starts event's approval_policy attribute (e.g. \"on-request\"); null + gap when absent"
@@ -109,7 +109,7 @@
       "categories": "string[] — sorted unique annotation categories",
       "annotations": "[{ ts, correction: yes|no, category, note (max 280 chars) | null, classification | null, applies_to | null }]"
     },
-    "evidence_gaps": "string[] — stable codes for missing optional evidence, sorted: no_telemetry, no_metrics_file, token_usage_unavailable, no_end_git_evidence, no_verification_evidence, no_doctor_evidence, no_annotations, no_run_context",
+    "evidence_gaps": "string[] — stable codes for missing optional evidence, sorted: no_telemetry, codex_version_unresolved, no_metrics_file, token_usage_unavailable, no_end_git_evidence, no_verification_evidence, no_doctor_evidence, no_annotations, no_run_context",
     "context": {
       "task_type": "string | null — closed enum: Bug | Vertical Slice | Domain | Stabilization | Documentation (the repository's orchestration contract). null until explicitly attached via the context command; never inferred from prompt text",
       "session_mode": "string | null — closed enum: CURRENT | NEW. null until explicitly attached; never inferred",

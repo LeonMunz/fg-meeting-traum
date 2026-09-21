@@ -790,10 +790,12 @@ def load_manifest(run_dir, run_id):
 
 
 def list_gaps(manifest, events, profiles, doctor, obs_doctor, annotations,
-              token, has_run_context):
+              token, has_run_context, codex_version=None):
     gaps = []
     if not any(e["name"].startswith("codex.") for e in events):
         gaps.append("no_telemetry")
+    if codex_version is None:
+        gaps.append("codex_version_unresolved")
     if not has_run_context:
         gaps.append("no_run_context")
     if not raw_jsonl_files(os.environ.get("LEDGER_RUN_DIR", ""), "metrics"):
@@ -809,6 +811,21 @@ def list_gaps(manifest, events, profiles, doctor, obs_doctor, annotations,
     if not annotations:
         gaps.append("no_annotations")
     return sorted(gaps)
+
+
+def product_codex_version(app_versions):
+    """The Codex version that actually executed the captured turn.
+
+    The Codex process emits its own version as the ``app.version``
+    attribute in the captured OTel records (the values that form
+    ``runtime.app_versions``), so exactly one distinct non-empty value is
+    the authoritative product version for the run. Zero or several
+    distinct values leave the version unresolved (None): the
+    controller/standalone ``codex`` on PATH and any capture-time
+    (manifest) discovery are never substituted for it.
+    """
+    distinct = sorted({v for v in app_versions if isinstance(v, str) and v})
+    return distinct[0] if len(distinct) == 1 else None
 
 
 def build_record(run_dir):
@@ -851,14 +868,23 @@ def build_record(run_dir):
         "duration_s": duration,
         "stop_status": manifest.get("stop_status") if isinstance(manifest.get("stop_status"), str) else None,
     }
+    # Product Codex version attribution: derived exclusively from the
+    # telemetry app.version values the Codex process itself emitted (the
+    # values forming app_versions). Exactly one distinct value is
+    # authoritative; zero or several leave the version unresolved. The
+    # controller/standalone codex on PATH (the old capture-manifest
+    # "codex_version" seed) is never substituted for it.
+    app_versions = slist("app_versions")
+    codex_version = product_codex_version(app_versions)
+
     runtime = {
-        "codex_version": manifest.get("codex_version") if isinstance(manifest.get("codex_version"), str) else None,
+        "codex_version": codex_version,
         "codex_acp_version": manifest.get("codex_acp_version") if isinstance(manifest.get("codex_acp_version"), str) else None,
         "models": slist("models"),
         "collector_version": manifest.get("collector_version") if isinstance(manifest.get("collector_version"), str) else None,
         "originators": slist("originators"),
         "privacy_mode": manifest.get("privacy_mode") if isinstance(manifest.get("privacy_mode"), str) else None,
-        "app_versions": slist("app_versions"),
+        "app_versions": app_versions,
         # Native run-level configuration (codex.conversation_starts, first
         # event). Absent on 0.148.0 events or on historical captures ->
         # null + explicit comparability gap, never inferred.
@@ -894,7 +920,8 @@ def build_record(run_dir):
         "evidence_gaps": list_gaps(manifest, events, profiles or [], doctor,
                                    obs_doctor, annotations,
                                    activity["token_usage"],
-                                   run_context is not None),
+                                   run_context is not None,
+                                   codex_version),
     }
     return record
 
@@ -976,7 +1003,8 @@ def print_human(r):
         na(g["starting_tree"]), na(g["ending_tree"]),
         na(g["changed_file_count"]), na(g["lines_added"]), na(g["lines_deleted"])))
     print("  runtime:    codex=%s codex-acp=%s collector=%s" % (
-        rt["codex_version"], rt["codex_acp_version"], rt["collector_version"]))
+        na(rt["codex_version"]), na(rt["codex_acp_version"]),
+        na(rt["collector_version"])))
     print("  run config: effort=%s sandbox=%s approval=%s" % (
         rt.get("reasoning_effort") or "n/a",
         rt.get("sandbox_mode") or "n/a",

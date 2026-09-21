@@ -217,14 +217,22 @@ Notes:
   `absent` / `not_checked`), a separately-labeled **controller**
   (generic/standalone) Codex home that is informational only and never used
   for product telemetry, whether the calling shell is itself a product-agent
-  session (`CODEX_SESSION_ID`), and Codex/codex-acp/collector versions.
+  session (`CODEX_SESSION_ID`), and harness-local Codex/codex-acp/collector
+  versions (`versions`; the `codex` entry is the calling shell's own
+  discovery — informational, never capture metadata; the product Codex
+  version is attributed by the ledger from telemetry).
 - `start` — starts only the local collector for a **product run**
   (`run-<UTC ts>`, kind `capture`). Idempotent; refuses a conflicting
   listener on the OTLP port; records PID/state; captures the initial Git
   state; collects a read-only `agent-doctor.sh --json` snapshot into the
   run directory (a DEGRADED result is stored as evidence, a failed doctor
   leaves no file — capture never aborts on the doctor); never touches
-  product services.
+  product services. The capture manifest does **not** record a seed-time
+  Codex version (its `codex_version` field stays null): attributing the
+  product Codex version from the collector shell's `codex` on `PATH` would
+  conflate the standalone controller Codex with the captured product Codex —
+  the ledger derives `runtime.codex_version` from telemetry instead (see the
+  ledger's Codex version attribution bullet).
   - `--json` (machine-readable contract): stdout is exactly one JSON
     document — `{"schema_version": 1, "tool": "agent-observability",
     "status": "started" | "already_running", "run_id": "...", "run_dir":
@@ -502,6 +510,19 @@ raw sanitized OTel (logs/traces/metrics)  — only trace-contract fields
   verification evidence, doctor/environment evidence, explicit harness
   variant) plus a sorted `missing` list. The section answers only whether
   evidence exists — it is not a quality score and never ranks runs.
+- **Codex version attribution (telemetry, not PATH).** `runtime.codex_version`
+  is the Codex version that actually executed the captured turn, derived
+  exclusively from the telemetry `app.version` attribute the Codex process
+  itself emitted (the values of `runtime.app_versions`): exactly one distinct
+  non-empty value observed in the run -> that value (no prefixing beyond the
+  emitted value); zero or several distinct values -> `null` plus the stable
+  gap code `codex_version_unresolved` (all observed values stay preserved in
+  `app_versions`; nothing is guessed). The controller/standalone `codex` on
+  `PATH` is never substituted: capture manifests no longer seed a codex
+  version from the collector shell at all (the field stays `null` in
+  captures; only `native-probe` records the exact binary the probe ran), and
+  the standalone version remains available via `status`
+  (`controller_codex_version`, informational only).
 - **Historical captures.** v1 ledger records remain valid v1 documents and
   are never rewritten in place by any tooling. Captures made before v2
   normalize to v2 with null context/runtime values plus explicit

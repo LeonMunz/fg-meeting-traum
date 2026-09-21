@@ -303,7 +303,12 @@ def base_manifest(run_id, kind, run_dir):
         "lines_added": None,
         "lines_deleted": None,
         "commit_created": None,
-        "codex_version": env_str("FG_OBS_CODEX_VERSION"),
+        # Capture-time Codex discovery is NOT the product Codex version:
+        # the ledger derives runtime.codex_version from the telemetry
+        # app.version the Codex process itself emitted. Captures leave
+        # this null (explicit unknown); only the native probe records
+        # the exact binary it ran.
+        "codex_version": os.environ.get("FG_OBS_CODEX_VERSION", "").strip() or None,
         "codex_acp_version": env_str("FG_OBS_CODEX_ACP_VERSION"),
         "collector_version": env_str("FG_OBS_COLLECTOR_VERSION"),
         "otel_endpoint": env_str("FG_OBS_OTEL_ENDPOINT"),
