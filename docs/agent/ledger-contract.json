@@ -1,7 +1,7 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "name": "fg-agent-run-ledger-record",
-  "description": "Versioned schema of the normalized Agent Run Ledger record. The ledger is the normalization boundary between captured evidence and later Harness analysis: analytics must consume ledger records, not raw Codex OTel field names. Schema v2 adds the bounded structured run context, native run-level runtime configuration (reasoning effort / sandbox mode / approval policy where the native event provides them) and the deterministic comparability section; see \"compatibility\". runtime.codex_version is attributed from the telemetry app.version emitted by the Codex process itself (one distinct value is authoritative; otherwise null) and never from controller PATH discovery.",
+  "description": "Versioned schema of the normalized Agent Run Ledger record. The ledger is the normalization boundary between captured evidence and later Harness analysis: analytics must consume ledger records, not raw Codex OTel field names. Schema v2 adds the bounded structured run context, native run-level runtime configuration (reasoning effort / sandbox mode / approval policy where the native event provides them) and the deterministic comparability section. Schema v3 persists the captured conversation identity (identity.captured_conversation_id, from the capture manifest): the primary activity / failure / token metrics are scoped to that captured conversation, and foreign telemetry from other conversations in the same raw run is reported explicitly via activity.foreign instead of being merged into the captured turn's metrics. See \"compatibility\". runtime.codex_version is attributed from the telemetry app.version emitted by the Codex process itself (one distinct value is authoritative; otherwise null) and never from controller PATH discovery.",
   "boundary": {
     "inputs": [
       "raw sanitized OTel (raw/logs*.jsonl, raw/traces*.jsonl, raw/metrics*.jsonl) — only trace-contract-named attributes are read (docs/agent/trace-contract.json)",
@@ -25,11 +25,12 @@
     "never": "no timestamp-nearest correlation is performed anywhere"
   },
   "record": {
-    "schema_version": "integer, currently 1",
+    "schema_version": "integer, currently 3",
     "record_name": "\"fg-agent-run-ledger\"",
     "run_id": "string — the captured run id",
     "identity": {
       "conversation_ids": "string[] — native Codex conversation/session ids observed in the capture (empty when none)",
+      "captured_conversation_id": "string | null — the native Codex conversation of the ACP session/prompt that caused this run, persisted into the capture manifest by the ACP lifecycle relay at start time; it survives finalization and the release of the transient session/run mapping. Null for historical captures, manual starts and probes — nothing is ever derived or back-filled (token counts, event majorities and timestamps are never used to guess it)",
       "capture_kind": "\"capture\" | \"probe-native\" | null",
       "repo_root": "string | null",
       "branch": "string | null",
@@ -86,7 +87,8 @@
       "turn_count": "integer | null — user prompts observed",
       "time_to_first_tool_action_ms": "integer | null — first tool result minus first prompt (or conversation start)",
       "time_to_first_failure_ms": "integer | null — first failed tool call / API request minus the same baseline; null when no failure",
-      "time_to_final_response_ms": "integer | null — last response completion (or last API request) minus the baseline"
+      "time_to_final_response_ms": "integer | null — last response completion (or last API request) minus the baseline",
+      "foreign": "{ present: boolean, conversation_count: integer, conversation_ids: string[] (sorted), api_request_count: integer, failed_api_requests: integer, tool_call_count: integer, failed_tool_calls: integer, turn_count: integer, token_usage_total: integer | null } — bounded compact aggregate of telemetry from conversations OTHER than identity.captured_conversation_id in the same raw run (present/counts true only when such telemetry exists). Present only when identity.captured_conversation_id is non-null — without a persisted captured identity, 'foreign' is undefined and the captured_conversation_unknown evidence gap represents the case. It is a diagnostic, not a full secondary ledger; run-level infrastructure facts (git_wip, duration, runtime versions, stop status, runtime.models / app_versions, identity.conversation_ids) are deliberately NOT scoped and remain run-wide"
     },
     "verification": {
       "doctor": "{ status, capabilities: [{name,status}], source } | null — from an agent-doctor.sh --json file in the run directory",
@@ -109,7 +111,7 @@
       "categories": "string[] — sorted unique annotation categories",
       "annotations": "[{ ts, correction: yes|no, category, note (max 280 chars) | null, classification | null, applies_to | null }]"
     },
-    "evidence_gaps": "string[] — stable codes for missing optional evidence, sorted: no_telemetry, codex_version_unresolved, no_metrics_file, token_usage_unavailable, no_end_git_evidence, no_verification_evidence, no_doctor_evidence, no_annotations, no_run_context",
+    "evidence_gaps": "string[] — stable codes for missing optional evidence, sorted: no_telemetry, codex_version_unresolved, no_metrics_file, token_usage_unavailable, no_end_git_evidence, no_verification_evidence, no_doctor_evidence, no_annotations, no_run_context, captured_conversation_unknown (telemetry from at least one conversation is present but the run carries no persisted captured conversation identity: the primary activity is the run-wide aggregate and MUST NOT be read as the captured turn's activity — never guessed)",
     "context": {
       "task_type": "string | null — closed enum: Bug | Vertical Slice | Domain | Stabilization | Documentation (the repository's orchestration contract). null until explicitly attached via the context command; never inferred from prompt text",
       "session_mode": "string | null — closed enum: CURRENT | NEW. null until explicitly attached; never inferred",
@@ -139,8 +141,8 @@
   },
   "privacy": "the ledger copies only contract-named, already-sanitized, bounded fields (counts, statuses, durations, ids, file paths). It never contains raw prompt text, hidden reasoning, auth/token contents, shell stdout/stderr, source diffs, environment dumps, or raw tool arguments. The run context is bounded and low-cardinality by construction: closed enums plus 1-128 character slugs; task titles, descriptions, user messages, arbitrary labels, usernames and machine identity can never be stored (rejected fail-closed at write time).",
   "compatibility": {
-    "v1Records": "Records with schema_version 1 remain valid v1 documents. They are never rewritten in place by any tooling: re-normalization is an explicit per-run command (./scripts/agent-observability ledger <run-id>) and emits a v2 record for that run's stored evidence.",
-    "historicalCaptures": "Captures made before v2 (no run-context.json, or native events without reasoning_effort/sandbox_policy/approval_policy) normalize to v2 with null context/runtime values plus explicit evidence_gaps (no_run_context) and comparability.missing entries. Nothing is guessed or back-filled.",
-    "consumers": "Consumers must branch on schema_version. v2 is a strict field superset of v1 (no v1 field changed meaning); the comparability section and context section are additive."
+    "v1Records": "Records with schema_version 1 remain valid v1 documents. They are never rewritten in place by any tooling: re-normalization is an explicit per-run command (./scripts/agent-observability ledger <run-id>) and emits a v3 record for that run's stored evidence.",
+    "historicalCaptures": "Captures made before v2 (no run-context.json, or native events without reasoning_effort/sandbox_policy/approval_policy) normalize to v3 with null context/runtime values plus explicit evidence_gaps (no_run_context) and comparability.missing entries. Captures made before v3 (no captured_conversation_id in the manifest) normalize to v3 with identity.captured_conversation_id null and activity.foreign null: the primary activity is the run-wide aggregate, and whenever at least one conversation was observed the captured_conversation_unknown gap is present. Nothing is guessed or back-filled.",
+    "consumers": "Consumers must branch on schema_version. v2 is a strict field superset of v1 (no v1 field changed meaning); the comparability section and context section are additive. v3 is a strict field superset of v2 EXCEPT that, when a captured conversation identity is present, the activity / failures / token-usage fields changed meaning: they describe the captured turn only, and foreign telemetry is reported via activity.foreign instead of being merged into them."
   }
 }

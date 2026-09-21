@@ -220,6 +220,7 @@
       "schema_version",
       "run_id",
       "kind",
+      "captured_conversation_id",
       "start_ts",
       "end_ts",
       "stop_status",
@@ -260,11 +261,11 @@
       "root cause",
       "verification outcome"
     ],
-    "note": "human corrections are captured out-of-band by the Run Ledger via explicit annotations (./scripts/agent-observability annotate), never inferred from telemetry. ending_* / changed_* / lines_* / commit_created are recorded once at capture finalize so later normalization stays reproducible."
+    "note": "human corrections are captured out-of-band by the Run Ledger via explicit annotations (./scripts/agent-observability annotate), never inferred from telemetry. ending_* / changed_* / lines_* / commit_created are recorded once at capture finalize so later normalization stays reproducible. captured_conversation_id is persisted at seed time by the ACP lifecycle relay (the native Codex conversation of the ACP session/prompt that caused the run) so the identity survives finalization and the release of the transient session/run mapping; it is null for manual starts and probes."
   },
   "runLedger": {
     "file": "docs/agent/ledger-contract.json",
-    "schemaVersion": 1,
+    "schemaVersion": 3,
     "note": "versioned normalized Run Ledger record; later analytics must consume it, not raw OTel"
   }
 }

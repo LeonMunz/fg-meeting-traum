@@ -1102,7 +1102,12 @@ cmd_start() {
   # from the telemetry app.version the captured Codex process itself
   # emitted. Capture-time manifests keep the field null (explicit unknown);
   # the standalone version stays available via `status` (informational).
+  # FG_OBS_CAPTURED_CONVERSATION_ID (set by the ACP lifecycle relay for
+  # prompt-turn runs): the native Codex conversation of the ACP
+  # session/prompt that caused this run, persisted into the manifest at
+  # seed time. Absent for manual starts and probes (null, explicit).
   FG_OBS_REPO_ROOT="$REPO_ROOT" \
+  FG_OBS_CAPTURED_CONVERSATION_ID="${FG_OBS_CAPTURED_CONVERSATION_ID:-}" \
   FG_OBS_CODEX_ACP_VERSION="$(codex_acp_version)" \
   FG_OBS_COLLECTOR_VERSION="$(collector_version_of "$COLLECTOR")" \
   FG_OBS_OTEL_ENDPOINT="http://127.0.0.1:$PORT" \
@@ -1765,6 +1770,10 @@ Environment overrides:
   .artifacts/agent-observability/session-runs — testability),
   FG_OTELCOL (explicit collector binary), CODEX_ACP_ADAPTER (adapter path),
   FG_OBS_PROBE_TIMEOUT (ms, native-probe),
+  FG_OBS_CAPTURED_CONVERSATION_ID (bounded conversation identifier; set by
+  the ACP lifecycle relay when it starts a prompt-turn run, so the
+  manifest persists the captured conversation identity at seed time;
+  manual starts and probes leave it unset -> null),
   FG_PRODUCT_CODEX_HOME (explicit product Codex home override - highest
   product-identity precedence),
   FG_PRODUCT_RUNTIME_FILE (product-runtime registration artifact; default

@@ -56,6 +56,12 @@ Run finalization statuses:
 Identity:
   * the ACP sessionId IS the native Codex thread/conversation id (the
     codex-acp adapter returns Codex `thread.id` as `sessionId`);
+  * that captured conversation identity is persisted into the run's
+    capture manifest at start time (FG_OBS_CAPTURED_CONVERSATION_ID,
+    seeded as `captured_conversation_id`): it is durable run metadata —
+    it survives finalization and the release of the transient mapping,
+    and the Run Ledger uses it to attribute primary activity to the
+    captured turn while reporting foreign telemetry explicitly;
   * the mapping file <MAP_DIR>/<sessionId> holds exactly one line: the
     run id of the session's ACTIVE prompt turn (git-ignored, bounded
     identifiers, atomic writes). It is written when the turn's run comes
@@ -413,20 +419,33 @@ class StartSidecar:
     The contract lands on the sidecar's stdout as soon as the collector is
     confirmed listening; the sidecar process may then keep running briefly
     (read-only doctor snapshot) and must not be waited on for the contract.
+
+    `captured_conversation_id` is the ACP sessionId that caused this run
+    (the native Codex conversation; validated by the caller against the
+    relay's bounded identifier shape). It is passed to the sidecar as
+    FG_OBS_CAPTURED_CONVERSATION_ID so the run manifest persists the
+    captured conversation identity at seed time — durably, before any
+    finalization and independent of the transient session/run mapping
+    (which is released when the turn ends).
     """
 
-    def __init__(self):
+    def __init__(self, captured_conversation_id=None):
         self.out_file = tempfile.mktemp(prefix="fg-relay-start-out.")
         self.err_file = tempfile.mktemp(prefix="fg-relay-start-err.")
         self.owned_port = probe_running_state() != "running"
         self.proc = None
         self.contract = None   # (status, run_id, run_dir) | ("error", rc, None)
         self.exited_rc = None
+        env = None
+        if captured_conversation_id:
+            env = dict(os.environ)
+            env["FG_OBS_CAPTURED_CONVERSATION_ID"] = captured_conversation_id
         try:
             with open(self.out_file, "wb") as of, open(self.err_file, "wb") as ef:
                 self.proc = subprocess.Popen(
                     [OBSCTL, "start", "--json"],
-                    stdin=subprocess.DEVNULL, stdout=of, stderr=ef)
+                    stdin=subprocess.DEVNULL, stdout=of, stderr=ef,
+                    env=env)
         except Exception as exc:
             # A spawn failure must NOT escape the observer callback (that
             # would be swallowed silently and leave a session uncaptured
@@ -766,7 +785,11 @@ class Relay:
         st["state"] = "pending"
         st["turn_id"] = mid
         st["run_id"] = None
-        st["start"] = StartSidecar()
+        # sid is the native Codex conversation id (validated above). It is
+        # persisted into the run manifest by the start sidecar at seed
+        # time, so the captured conversation identity is durable even
+        # after the transient mapping is released.
+        st["start"] = StartSidecar(sid)
         st["stop"] = None
         st["stop_status"] = None
         st["closed"] = False

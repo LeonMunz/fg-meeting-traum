@@ -14,6 +14,8 @@
 #   * collector config template: sanitization statements + loopback-only
 #   * pins.json integrity (version + sha256 per platform)
 #   * manifest.py: seed/finalize/summary, interrupted-run safety
+#     + captured conversation identity (persisted at seed time; fail-safe
+#     null for manual starts and invalid values; survives finalize)
 #   * probe client usage contract
 #   * CODEX_HOME/CODEX_PATH resolution: unset-env discovery, explicit
 #     authority, invalid/ambiguous fail-closed (deterministic, sandbox-safe)
@@ -30,7 +32,13 @@
 #     (agentRunId match/mismatch), doctor evidence, human annotations,
 #     privacy (dropped-key values never reach the ledger), dedup identity
 #     (distinct paired records kept, exact copies collapsed), missing
-#     telemetry -> null + gap codes, malformed manifest -> clear failure
+#     telemetry -> null + gap codes, malformed manifest -> clear failure,
+#     captured conversation identity (schema v3): clean single-conversation
+#     run unchanged (Case A), captured + foreign scoping with explicit
+#     activity.foreign reporting (Cases B/C incl. metrics datapoint
+#     attribution), missing identity -> aggregate + explicit
+#     captured_conversation_unknown gap (Case D), historical incident
+#     reconstruction (Case F)
 #
 set -Eeuo pipefail
 
@@ -302,9 +310,9 @@ if collector_present; then
     [ -f "$led" ] && ok "t05n2 run-ledger.json auto-generated at stop" || bad "t05n2 run-ledger.json auto-generated at stop"
     "$PY" -c 'import json,sys
 d = json.load(open(sys.argv[1]))
-assert d["schema_version"] == 2 and d["run_id"] == sys.argv[2]
+assert d["schema_version"] == 3 and d["run_id"] == sys.argv[2]
 assert "context" in d and "comparability" in d' "$led" "$latest" \
-      && ok "t05n3 auto ledger is a valid v2 record for the run" || bad "t05n3 auto ledger is a valid v2 record for the run"
+      && ok "t05n3 auto ledger is a valid v3 record for the run" || bad "t05n3 auto ledger is a valid v3 record for the run"
     doc="$(cd "$REPO_ROOT/.artifacts/agent-runs" && readlink latest)/agent-doctor-start.json"
     [ -f "$REPO_ROOT/.artifacts/agent-runs/$doc" ] && ok "t05n4 doctor snapshot stored in the run dir at start" || bad "t05n4 doctor snapshot stored in the run dir at start"
     "$PY" -c 'import json,sys
@@ -399,6 +407,25 @@ expect_rc "t08j interrupted run finalizes" 0 "$RC"
 expect_eq "t08k prior run raw file untouched" "$(cat "$MTMP/run-a-raw-before")" "$(cat "$MTMP/run-a/raw/logs.jsonl")"
 bstat="$("$PY" "$MANIFEST_PY" summary "$MTMP/run-b" | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["stop_status"])')"
 expect_eq "t08l interrupted run recorded as interrupted" "interrupted" "$bstat"
+# Captured conversation identity (relay path): persisted at seed time;
+# manual starts leave it null; an invalid (non-identifier) value is
+# refused fail-safe as null (never prompt-shaped text).
+run_cmd env $MENV FG_OBS_CAPTURED_CONVERSATION_ID=conv-test-123 "$PY" "$MANIFEST_PY" seed "$MTMP/run-c" "run-c" "capture"
+expect_rc "t08m manifest seed with captured conversation id exits 0" 0 "$RC"
+mout2="$("$PY" "$MANIFEST_PY" summary "$MTMP/run-c")"
+expect_contains "t08n manifest persists captured conversation id" "$mout2" '"captured_conversation_id": "conv-test-123"'
+run_cmd env $MENV FG_OBS_CAPTURED_CONVERSATION_ID="" "$PY" "$MANIFEST_PY" seed "$MTMP/run-d" "run-d" "capture"
+expect_rc "t08o manifest seed without identity exits 0" 0 "$RC"
+mout3="$("$PY" "$MANIFEST_PY" summary "$MTMP/run-d")"
+expect_contains "t08p manual start leaves captured conversation id null" "$mout3" '"captured_conversation_id": null'
+run_cmd env $MENV FG_OBS_CAPTURED_CONVERSATION_ID="my prompt text" "$PY" "$MANIFEST_PY" seed "$MTMP/run-e" "run-e" "capture"
+expect_rc "t08q manifest seed with invalid identity exits 0" 0 "$RC"
+mout4="$("$PY" "$MANIFEST_PY" summary "$MTMP/run-e")"
+expect_contains "t08r invalid identity refused fail-safe as null" "$mout4" '"captured_conversation_id": null'
+run_cmd env $MENV FG_OBS_CAPTURED_CONVERSATION_ID=conv-test-123 "$PY" "$MANIFEST_PY" finalize "$MTMP/run-c" --stop-status graceful
+expect_rc "t08s finalize keeps the seeded identity" 0 "$RC"
+mout5="$("$PY" "$MANIFEST_PY" summary "$MTMP/run-c")"
+expect_contains "t08t identity survives finalize" "$mout5" '"captured_conversation_id": "conv-test-123"'
 rm -rf "$MTMP"
 
 # --------------------------------------------------------- t09 probe client --
@@ -517,9 +544,12 @@ mkdir -p "$T12/repo"
 ( cd "$T12/repo" && git init -q . && git config user.email ledger@test && \
   git config user.name ledger && printf 'base\n' > a.txt && git add a.txt && \
   git commit -qm base )
+# MENV2 carries the captured conversation identity (the relay path): the
+# fixture's single conversation (conv-ledger-42) IS the captured one —
+# Case A, the clean single-conversation run.
 RUNA="$T12/runs/run-20260101T000000Z"
 mkdir -p "$RUNA/raw"
-MENV2="FG_OBS_REPO_ROOT=$T12/repo FG_OBS_CODEX_VERSION=0.139.0 FG_OBS_CODEX_ACP_VERSION=1.7.0 FG_OBS_COLLECTOR_VERSION=0.161.0 FG_OBS_OTEL_ENDPOINT=http://127.0.0.1:4318 FG_OBS_PRIVACY_MODE=trace-safe-sanitized"
+MENV2="FG_OBS_REPO_ROOT=$T12/repo FG_OBS_CODEX_VERSION=0.139.0 FG_OBS_CODEX_ACP_VERSION=1.7.0 FG_OBS_COLLECTOR_VERSION=0.161.0 FG_OBS_OTEL_ENDPOINT=http://127.0.0.1:4318 FG_OBS_PRIVACY_MODE=trace-safe-sanitized FG_OBS_CAPTURED_CONVERSATION_ID=conv-ledger-42"
 run_cmd env $MENV2 "$PY" "$MANIFEST_PY" seed "$RUNA" run-20260101T000000Z capture
 expect_rc "t12a fixture run manifest seed exits 0" 0 "$RC"
 printf 'more\n' >> "$T12/repo/a.txt"   # working tree becomes dirty after seed
@@ -576,7 +606,7 @@ expect_file "t12d ledger record written" "$LED"
 run_cmd "$PY" - "$LED" <<'PYCHK'
 import json, sys
 d = json.load(open(sys.argv[1]))
-assert d["schema_version"] == 2
+assert d["schema_version"] == 3
 assert d["record_name"] == "fg-agent-run-ledger"
 assert d["run_id"] == "run-20260101T000000Z"
 assert set(d) == {"schema_version", "record_name", "run_id", "identity",
@@ -585,6 +615,17 @@ assert set(d) == {"schema_version", "record_name", "run_id", "identity",
                   "evidence_gaps"}
 i = d["identity"]
 assert i["conversation_ids"] == ["conv-ledger-42"]
+# Case A: the persisted captured identity names the single observed
+# conversation; primary metrics are unchanged (clean run stays clean)
+# and NO foreign-telemetry diagnostic is emitted.
+assert i["captured_conversation_id"] == "conv-ledger-42"
+f = d["activity"]["foreign"]
+assert f["present"] is False and f["conversation_count"] == 0
+assert f["conversation_ids"] == []
+assert f["api_request_count"] == 0 and f["failed_api_requests"] == 0
+assert f["tool_call_count"] == 0 and f["failed_tool_calls"] == 0
+assert f["turn_count"] == 0 and f["token_usage_total"] is None
+assert "captured_conversation_unknown" not in d["evidence_gaps"]
 assert i["capture_kind"] == "capture"
 assert isinstance(i["start_ts"], str) and isinstance(i["end_ts"], str)
 assert i["duration_s"] is not None
@@ -618,7 +659,7 @@ assert comp["dimensions"]["session_mode"] is False
 assert comp["missing"] == sorted(comp["missing"])
 assert "task_type" in comp["missing"] and "session_mode" in comp["missing"]
 PYCHK
-expect_rc "t12e ledger v2 schema + identity/runtime/context/comparability valid" 0 "$RC"
+expect_rc "t12e ledger v3 schema + identity/runtime/context/comparability valid" 0 "$RC"
 
 run_cmd cp "$LED" "$T12/ledger-first.json"
 run_cmd "$PY" "$LEDGER_PY" normalize "$RUNA"
@@ -985,6 +1026,342 @@ expect_rc "t12dedup5 dedup fixture re-normalize exits 0" 0 "$RC"
 run_cmd cmp -s "$RUND/run-ledger.json" "$T12/dedup-first.json"
 expect_rc "t12dedup6 dedup fixture ledger byte-identical across generations" 0 "$RC"
 
+# ------------------------------------- captured conversation identity (v3) -
+# The persisted captured conversation identity (manifest
+# captured_conversation_id, relay path) scopes the primary activity /
+# failure / token metrics to the captured conversation; foreign telemetry
+# in the same raw run is reported explicitly via activity.foreign (never
+# merged); a missing identity preserves the run-wide aggregate plus the
+# explicit captured_conversation_unknown gap (never a heuristic pick).
+
+# Case B — captured conversation A + foreign conversation B
+RUNXB="$T12/runs/run-20260101T000010Z"
+mkdir -p "$RUNXB/raw"
+run_cmd env $MENV2 FG_OBS_CAPTURED_CONVERSATION_ID=conv-a "$PY" "$MANIFEST_PY" seed "$RUNXB" run-20260101T000010Z capture
+expect_rc "t12capB0 captured+foreign fixture seed exits 0" 0 "$RC"
+"$PY" - "$RUNXB/raw/logs.jsonl" <<'FIXLOGB'
+import json, sys
+def rec(ts, conv, name, **kw):
+    attrs = {"event.timestamp": ts, "event.name": name,
+             "conversation.id": conv, "app.version": "0.148.0"}
+    attrs.update(kw)
+    return {"resourceLogs": [{"resource": {"attributes": []}, "scopeLogs": [
+        {"logRecords": [{"severityNumber": 9,
+                         "attributes": [{"key": k, "value": {"stringValue": str(v)}} for k, v in sorted(attrs.items())]}]}]}]}
+# captured conversation A: 1 API request, 0 tools, known token counters
+lines = [
+    rec("2026-01-01T00:00:00.000Z", "conv-a", "codex.conversation_starts"),
+    rec("2026-01-01T00:00:01.000Z", "conv-a", "codex.user_prompt", prompt_length="10"),
+    rec("2026-01-01T00:00:02.000Z", "conv-a", "codex.api_request", attempt="0",
+        **{"http.response.status_code": "200", "duration_ms": "100"}),
+    rec("2026-01-01T00:00:05.000Z", "conv-a", "codex.sse_event",
+        **{"event.kind": "response.completed", "input_token_count": "100",
+           "output_token_count": "20", "cached_token_count": "30",
+           "cache_write_token_count": "0", "reasoning_token_count": "5"}),
+    # foreign conversation B: multiple API requests (one failed),
+    # multiple tools (one failed), failures, large token counters
+    rec("2026-01-01T00:00:01.000Z", "conv-b", "codex.user_prompt", prompt_length="99"),
+    rec("2026-01-01T00:00:02.000Z", "conv-b", "codex.api_request", attempt="0",
+        **{"http.response.status_code": "200", "duration_ms": "120"}),
+    rec("2026-01-01T00:00:03.000Z", "conv-b", "codex.api_request", attempt="1",
+        **{"http.response.status_code": "500", "duration_ms": "80"}),
+    rec("2026-01-01T00:00:04.000Z", "conv-b", "codex.api_request", attempt="2",
+        **{"http.response.status_code": "200", "duration_ms": "110"}),
+    rec("2026-01-01T00:00:06.000Z", "conv-b", "codex.tool_result",
+        tool_name="exec_command", call_id="b1", success="false", duration_ms="40"),
+    rec("2026-01-01T00:00:07.000Z", "conv-b", "codex.tool_result",
+        tool_name="apply_patch", call_id="b2", success="true", duration_ms="60"),
+    rec("2026-01-01T00:00:08.000Z", "conv-b", "codex.sse_event",
+        **{"event.kind": "response.completed", "input_token_count": "1000",
+           "output_token_count": "500", "cached_token_count": "100",
+           "cache_write_token_count": "10", "reasoning_token_count": "50"}),
+]
+with open(sys.argv[1], "w") as fh:
+    for l in lines:
+        fh.write(json.dumps(l, sort_keys=True) + "\n")
+FIXLOGB
+run_cmd env $MENV2 FG_OBS_CAPTURED_CONVERSATION_ID=conv-a "$PY" "$MANIFEST_PY" finalize "$RUNXB" --stop-status graceful
+expect_rc "t12capB1 fixture finalize exits 0" 0 "$RC"
+run_cmd "$PY" "$LEDGER_PY" normalize "$RUNXB"
+expect_rc "t12capB2 normalize exits 0" 0 "$RC"
+run_cmd "$PY" - "$RUNXB/run-ledger.json" <<'PYCHK'
+import json, sys
+d = json.load(open(sys.argv[1]))
+i = d["identity"]
+a = d["activity"]
+# primary metrics: ONLY the captured conversation A
+assert i["captured_conversation_id"] == "conv-a"
+assert i["conversation_ids"] == ["conv-a", "conv-b"]
+assert a["api_request_count"] == 1 and a["failed_api_requests"] == 0
+assert a["tool_call_count"] == 0 and a["successful_tool_calls"] == 0
+assert a["failed_tool_calls"] == 0 and a["shell_command_count"] == 0
+assert a["file_activity_count"] == 0 and a["tool_calls_by_type"] == {}
+assert a["turn_count"] == 1
+t = a["token_usage"]
+assert t["source"] == "sse-events"
+assert (t["input"], t["output"], t["cached"], t["cache_write"],
+        t["reasoning"], t["total"]) == (100, 20, 30, 0, 5, 155)
+# B's failures must NOT reach the captured turn's failure records
+assert d["failures"] == [], d["failures"]
+# foreign telemetry from B is reported explicitly, never merged
+f = a["foreign"]
+assert f["present"] is True and f["conversation_count"] == 1
+assert f["conversation_ids"] == ["conv-b"]
+assert f["api_request_count"] == 3 and f["failed_api_requests"] == 1
+assert f["tool_call_count"] == 2 and f["failed_tool_calls"] == 1
+assert f["turn_count"] == 1 and f["token_usage_total"] == 1660
+assert "captured_conversation_unknown" not in d["evidence_gaps"]
+PYCHK
+expect_rc "t12capB3 primary scoped to A, foreign B reported explicitly" 0 "$RC"
+
+# Case C — captured A + foreign B AND C (deterministic ordering) +
+# metrics-sourced tokens with per-conversation datapoint attribution
+# (a datapoint without a conversation.id is attributed to NOBODY)
+RUNXC="$T12/runs/run-20260101T000011Z"
+mkdir -p "$RUNXC/raw"
+cat > "$RUNXC/capture-manifest.json" <<'MANJSON'
+{
+  "schema_version": 1, "run_id": "run-20260101T000011Z",
+  "kind": "capture", "captured_conversation_id": "conv-a",
+  "start_ts": "2026-01-01T00:00:00Z", "end_ts": "2026-01-01T00:01:00Z",
+  "stop_status": "graceful",
+  "repo_root": null, "branch": null, "starting_head": null,
+  "starting_tree": null,
+  "codex_version": null, "codex_acp_version": "1.7.0",
+  "collector_version": "0.161.0", "otel_endpoint": "http://127.0.0.1:4318",
+  "privacy_mode": "trace-safe-sanitized",
+  "raw_trace_files": [], "conversation_ids": ["conv-a", "conv-b", "conv-c"],
+  "event_counts": {}, "app_versions": ["0.148.0"], "models": [],
+  "originators": [], "span_counts": {}, "metric_names": {},
+  "log_record_count": 0, "span_count": 0, "metric_series_count": 3
+}
+MANJSON
+"$PY" - "$RUNXC/raw/logs.jsonl" <<'FIXLOGC'
+import json, sys
+def rec(ts, conv, name, **kw):
+    attrs = {"event.timestamp": ts, "event.name": name,
+             "conversation.id": conv, "app.version": "0.148.0"}
+    attrs.update(kw)
+    return {"resourceLogs": [{"resource": {"attributes": []}, "scopeLogs": [
+        {"logRecords": [{"severityNumber": 9,
+                         "attributes": [{"key": k, "value": {"stringValue": str(v)}} for k, v in sorted(attrs.items())]}]}]}]}
+lines = [
+    rec("2026-01-01T00:00:02.000Z", "conv-a", "codex.api_request", attempt="0",
+        **{"http.response.status_code": "200"}),
+    rec("2026-01-01T00:00:03.000Z", "conv-b", "codex.api_request", attempt="0",
+        **{"http.response.status_code": "200"}),
+    rec("2026-01-01T00:00:04.000Z", "conv-b", "codex.tool_result",
+        tool_name="grep", call_id="b1", success="true", duration_ms="10"),
+    rec("2026-01-01T00:00:05.000Z", "conv-c", "codex.api_request", attempt="0",
+        **{"http.response.status_code": "404"}),
+]
+with open(sys.argv[1], "w") as fh:
+    for l in lines:
+        fh.write(json.dumps(l, sort_keys=True) + "\n")
+FIXLOGC
+# metrics datapoints tagged by conversation.id; the third one carries NO
+# conversation.id and must be attributed to nobody.
+"$PY" - "$RUNXC/raw/metrics.jsonl" <<'METRICS'
+import json, sys
+def dp(val, conv=None):
+    attrs = []
+    if conv is not None:
+        attrs = [{"key": "conversation.id", "value": {"stringValue": conv}}]
+    return {"asInt": val, "attributes": attrs}
+with open(sys.argv[1], "w") as fh:
+    for val, conv in ((111, "conv-a"), (999, "conv-b"), (555, None)):
+        payload = {"resourceMetrics": [{"scopeMetrics": [
+            {"metrics": [{"name": "codex.turn.token_usage",
+                          "sum": {"dataPoints": [dp(val, conv)]}}]}]}]}
+        fh.write(json.dumps(payload, sort_keys=True) + "\n")
+METRICS
+run_cmd "$PY" "$LEDGER_PY" normalize "$RUNXC"
+expect_rc "t12capC0 normalize exits 0" 0 "$RC"
+run_cmd "$PY" - "$RUNXC/run-ledger.json" <<'PYCHK'
+import json, sys
+d = json.load(open(sys.argv[1]))
+i = d["identity"]
+a = d["activity"]
+f = a["foreign"]
+assert i["captured_conversation_id"] == "conv-a"
+# primary: A only — 1 API request, 0 tools, metrics-sourced tokens from
+# A's datapoint ONLY (111; the 555 datapoint without a conversation id
+# and the foreign 999 are not attributed to the captured turn)
+assert a["api_request_count"] == 1 and a["failed_api_requests"] == 0
+assert a["tool_call_count"] == 0 and a["failed_tool_calls"] == 0
+t = a["token_usage"]
+assert t["source"] == "metrics" and t["total"] == 111
+# foreign: two conversations, deterministic (sorted) identities
+assert f["present"] is True and f["conversation_count"] == 2
+assert f["conversation_ids"] == ["conv-b", "conv-c"]
+assert f["api_request_count"] == 2 and f["failed_api_requests"] == 1
+assert f["tool_call_count"] == 1 and f["failed_tool_calls"] == 0
+assert f["token_usage_total"] == 999
+assert "captured_conversation_unknown" not in d["evidence_gaps"]
+PYCHK
+expect_rc "t12capC1 two foreign conversations, deterministic, no cross-attribution" 0 "$RC"
+
+# Case D — mixed telemetry, NO persisted captured identity: the run-wide
+# aggregate is preserved (backward compatible), NO conversation is
+# heuristically selected, and the explicit gap is present
+RUNXD="$T12/runs/run-20260101T000012Z"
+mkdir -p "$RUNXD/raw"
+cat > "$RUNXD/capture-manifest.json" <<'MANJSON'
+{
+  "schema_version": 1, "run_id": "run-20260101T000012Z",
+  "kind": "capture", "captured_conversation_id": null,
+  "start_ts": "2026-01-01T00:00:00Z", "end_ts": "2026-01-01T00:01:00Z",
+  "stop_status": "graceful",
+  "repo_root": null, "branch": null, "starting_head": null,
+  "starting_tree": null,
+  "codex_version": null, "codex_acp_version": "1.7.0",
+  "collector_version": "0.161.0", "otel_endpoint": "http://127.0.0.1:4318",
+  "privacy_mode": "trace-safe-sanitized",
+  "raw_trace_files": [], "conversation_ids": ["conv-a", "conv-b"],
+  "event_counts": {}, "app_versions": ["0.148.0"], "models": [],
+  "originators": [], "span_counts": {}, "metric_names": {},
+  "log_record_count": 0, "span_count": 0, "metric_series_count": 0
+}
+MANJSON
+cp "$RUNXB/raw/logs.jsonl" "$RUNXD/raw/logs.jsonl"
+run_cmd "$PY" "$LEDGER_PY" normalize "$RUNXD"
+expect_rc "t12capD0 normalize exits 0" 0 "$RC"
+run_cmd "$PY" - "$RUNXD/run-ledger.json" <<'PYCHK'
+import json, sys
+d = json.load(open(sys.argv[1]))
+i = d["identity"]
+a = d["activity"]
+assert i["captured_conversation_id"] is None
+# backward-compatible aggregate (both conversations), no heuristic pick
+assert a["api_request_count"] == 4 and a["failed_api_requests"] == 1
+assert a["tool_call_count"] == 2 and a["failed_tool_calls"] == 1
+assert a["turn_count"] == 2
+t = a["token_usage"]
+assert t["source"] == "sse-events" and t["total"] == 1815
+# 'foreign' is undefined without a captured reference — the explicit gap
+# carries the attribution statement instead
+assert a["foreign"] is None
+assert "captured_conversation_unknown" in d["evidence_gaps"]
+PYCHK
+expect_rc "t12capD1 missing identity: aggregate kept + explicit gap, no guessing" 0 "$RC"
+
+# Case F — historical incident reconstruction (run-20260921T111009Z):
+# the captured ACP session 01a0c3a6-dd79-7652-bb05-ecb528dd8c5d
+# (prompt request id 14) emitted one model/API stream (the paired
+# response.completed — one record without token counters, one with —
+# and zero tools; its codex.api_request/user_prompt events rotated out
+# of the raw capture before finalize). Foreign conversation
+# 01a0c317-53f2-75c3-94cd-5c55f1905890 (a different, simultaneously
+# active Codex session) landed 67 API requests, 72 tool results and
+# 19M tokens into the same raw run. The real stored run cannot be
+# retrofitted with the new persistent field without inference (its relay
+# event log is a rotating shared diagnostic, not per-run durable
+# metadata); this fixture mirrors its surviving evidence shape with the
+# authoritative relay-log attribution applied to the fixture manifest.
+RUNXF="$T12/runs/run-20260101T000013Z"
+mkdir -p "$RUNXF/raw"
+cat > "$RUNXF/capture-manifest.json" <<'MANJSON'
+{
+  "schema_version": 1, "run_id": "run-20260101T000013Z",
+  "kind": "capture",
+  "captured_conversation_id": "01a0c3a6-dd79-7652-bb05-ecb528dd8c5d",
+  "start_ts": "2026-01-01T00:00:00Z", "end_ts": "2026-01-01T00:01:00Z",
+  "stop_status": "graceful",
+  "repo_root": null, "branch": null, "starting_head": null,
+  "starting_tree": null,
+  "codex_version": null, "codex_acp_version": "1.7.0",
+  "collector_version": "0.161.0", "otel_endpoint": "http://127.0.0.1:4318",
+  "privacy_mode": "trace-safe-sanitized",
+  "raw_trace_files": [],
+  "conversation_ids": ["01a0c317-53f2-75c3-94cd-5c55f1905890",
+                        "01a0c3a6-dd79-7652-bb05-ecb528dd8c5d"],
+  "event_counts": {}, "app_versions": ["0.148.0"], "models": [],
+  "originators": [], "span_counts": {}, "metric_names": {},
+  "log_record_count": 0, "span_count": 0, "metric_series_count": 0
+}
+MANJSON
+"$PY" - "$RUNXF/raw/logs.jsonl" <<'FIXLOGF'
+import json, sys
+def rec(ts, conv, name, **kw):
+    attrs = {"event.timestamp": ts, "event.name": name,
+             "conversation.id": conv, "app.version": "0.148.0"}
+    attrs.update(kw)
+    return {"resourceLogs": [{"resource": {"attributes": []}, "scopeLogs": [
+        {"logRecords": [{"severityNumber": 9,
+                         "attributes": [{"key": k, "value": {"stringValue": str(v)}} for k, v in sorted(attrs.items())]}]}]}]}
+CAP = "01a0c3a6-dd79-7652-bb05-ecb528dd8c5d"   # captured ACP session
+FORE = "01a0c317-53f2-75c3-94cd-5c55f1905890"  # foreign session
+lines = [
+    # captured conversation: the surviving pair of response.completed for
+    # its single model stream (no counters / with counters, same ms)
+    rec("2026-01-01T00:00:05.000Z", CAP, "codex.sse_event",
+        **{"event.kind": "response.completed", "duration_ms": "1611"}),
+    rec("2026-01-01T00:00:05.001Z", CAP, "codex.sse_event",
+        **{"event.kind": "response.completed", "input_token_count": "41016",
+           "output_token_count": "221128", "cached_token_count": "36800",
+           "cache_write_token_count": "0", "reasoning_token_count": "221128"}),
+    # foreign conversation: active agent work in the same window
+    rec("2026-01-01T00:00:01.000Z", FORE, "codex.user_prompt", prompt_length="64"),
+    rec("2026-01-01T00:00:02.000Z", FORE, "codex.api_request", attempt="0",
+        **{"http.response.status_code": "200"}),
+    rec("2026-01-01T00:00:03.000Z", FORE, "codex.api_request", attempt="1",
+        **{"http.response.status_code": "200"}),
+    rec("2026-01-01T00:00:04.000Z", FORE, "codex.tool_result",
+        tool_name="mcp__pycharmapply_patch", call_id="f1",
+        success="false", duration_ms="100"),
+    rec("2026-01-01T00:00:04.500Z", FORE, "codex.tool_result",
+        tool_name="exec_command", call_id="f2", success="true", duration_ms="50"),
+    rec("2026-01-01T00:00:06.000Z", FORE, "codex.sse_event",
+        **{"event.kind": "response.completed", "input_token_count": "100000",
+           "output_token_count": "1000", "cached_token_count": "50000",
+           "cache_write_token_count": "0", "reasoning_token_count": "100"}),
+]
+with open(sys.argv[1], "w") as fh:
+    for l in lines:
+        fh.write(json.dumps(l, sort_keys=True) + "\n")
+FIXLOGF
+run_cmd "$PY" "$LEDGER_PY" normalize "$RUNXF"
+expect_rc "t12capF0 normalize exits 0" 0 "$RC"
+run_cmd "$PY" - "$RUNXF/run-ledger.json" <<'PYCHK'
+import json, sys
+d = json.load(open(sys.argv[1]))
+i = d["identity"]
+a = d["activity"]
+f = a["foreign"]
+CAP = "01a0c3a6-dd79-7652-bb05-ecb528dd8c5d"
+FORE = "01a0c317-53f2-75c3-94cd-5c55f1905890"
+assert i["captured_conversation_id"] == CAP
+# primary captured metrics: 0 tools, 0 failed tools, captured-conversation
+# tokens only (the foreign 151100 tokens never reach the primary record)
+assert a["tool_call_count"] == 0 and a["failed_tool_calls"] == 0
+assert a["api_request_count"] == 0 and a["failed_api_requests"] == 0
+assert a["turn_count"] == 0  # user_prompt rotated out of the raw capture
+t = a["token_usage"]
+assert t["source"] == "sse-events"
+assert (t["input"], t["output"], t["cached"], t["cache_write"],
+        t["reasoning"], t["total"]) == (41016, 221128, 36800, 0, 221128, 520072)
+assert d["failures"] == []  # the foreign failure is not the captured turn's
+# foreign conversation detected + compact aggregate
+assert f["present"] is True and f["conversation_count"] == 1
+assert f["conversation_ids"] == [FORE]
+assert f["api_request_count"] == 2 and f["failed_api_requests"] == 0
+assert f["tool_call_count"] == 2 and f["failed_tool_calls"] == 1
+assert f["turn_count"] == 1 and f["token_usage_total"] == 151100
+assert "captured_conversation_unknown" not in d["evidence_gaps"]
+PYCHK
+expect_rc "t12capF1 incident reconstruction: captured turn scoped, foreign detected" 0 "$RC"
+
+# determinism of the scoped normalization (byte-identical re-normalization)
+run_cmd cp "$RUNXB/run-ledger.json" "$T12/capb-first.json"
+run_cmd cp "$RUNXF/run-ledger.json" "$T12/capf-first.json"
+run_cmd "$PY" "$LEDGER_PY" normalize "$RUNXB"
+expect_rc "t12capX0 re-normalize B exits 0" 0 "$RC"
+run_cmd cmp -s "$RUNXB/run-ledger.json" "$T12/capb-first.json"
+expect_rc "t12capX1 re-normalization of B is byte-identical" 0 "$RC"
+run_cmd "$PY" "$LEDGER_PY" normalize "$RUNXF"
+run_cmd cmp -s "$RUNXF/run-ledger.json" "$T12/capf-first.json"
+expect_rc "t12capX2 re-normalization of F is byte-identical" 0 "$RC"
+
 # run context in the ledger: explicit, bounded, idempotent, no inference
 RUNCONTEXT_PY="$REPO_ROOT/scripts/observability/runcontext.py"
 run_cmd "$PY" "$RUNCONTEXT_PY" set "$RUNA" --task-type "Vertical Slice" --session NEW --task-key "task-slice-01"
@@ -1079,8 +1456,8 @@ expect_rc "t12ad wrapper ledger (latest) exits 0" 0 "$RC"
 expect_contains "t12ae wrapper human output names the run" "$CAP_OUT" "run-20260101T000000Z"
 run_cmd env FG_OBS_RUNS_DIR="$T12/runs" bash "$OBS" ledger run-20260101T000000Z --json
 expect_rc "t12af wrapper ledger --json exits 0" 0 "$RC"
-"$PY" -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["run_id"]=="run-20260101T000000Z" and d["schema_version"]==2 and "comparability" in d' "$CAP_OUT" \
-  && ok "t12ag wrapper --json emits the v2 record" || bad "t12ag wrapper --json emits the v2 record"
+"$PY" -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["run_id"]=="run-20260101T000000Z" and d["schema_version"]==3 and "comparability" in d' "$CAP_OUT" \
+  && ok "t12ag wrapper --json emits the v3 record" || bad "t12ag wrapper --json emits the v3 record"
 run_cmd env FG_OBS_RUNS_DIR="$T12/runs" bash "$OBS" ledger "bad id"
 expect_rc "t12ah wrapper rejects invalid run id (exit 2)" 2 "$RC"
 run_cmd env FG_OBS_RUNS_DIR="$T12/runs" bash "$OBS" ledger no-such-run

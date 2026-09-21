@@ -419,7 +419,10 @@ turn timing (`codex.turn_ttft`, spans), and bounded diagnostic counts
   native Codex conversation/session ID, which for ACP sessions matches
   `CODEX_SESSION_ID`). Tool invocations and results correlate by
   `call_id`; API requests correlate by `attempt` within the conversation.
-  The manifest records the set of observed conversation IDs per run.
+  The manifest records the set of observed conversation IDs per run — and,
+  for prompt-turn runs created by the ACP lifecycle relay, the persisted
+  captured conversation identity (`captured_conversation_id`, the session
+  that caused the run), which is authoritative for ledger attribution.
 - Interruption safety: raw files are JSON lines (one self-contained OTLP
   payload per line); an interrupted run leaves at worst a truncated final
   line, which the manifest scan skips; prior runs are never rewritten or
@@ -445,7 +448,7 @@ raw sanitized OTel (logs/traces/metrics)  — only trace-contract fields
 + annotations.json                         — explicit human annotations
   ↓
 .artifacts/agent-runs/<run-id>/run-ledger.json   (versioned record, schema
-  docs/agent/ledger-contract.json — currently schemaVersion 2)
+  docs/agent/ledger-contract.json — currently schemaVersion 3)
 ```
 
 - `./scripts/agent-observability ledger [run-id] [--json]` normalizes one
@@ -472,6 +475,22 @@ raw sanitized OTel (logs/traces/metrics)  — only trace-contract fields
   nothing is guessed. Malformed required data (missing/mismatched capture
   manifest, foreign verification attribution, malformed run-context) fails
   with a nonzero exit code.
+- **Captured conversation identity (schema v3).** The ACP lifecycle relay
+  persists the native Codex conversation of the ACP session/prompt that
+  caused a prompt-turn run into the capture manifest at start time
+  (`captured_conversation_id`); the identity survives finalization and the
+  release of the transient session/run mapping. When it is present, the
+  primary `activity`, `failures` and token-usage metrics describe that
+  captured turn ONLY: events and token datapoints from other conversations
+  in the same raw run are reported explicitly in `activity.foreign`
+  (bounded aggregate: foreign ids, request/tool counts, failures, token
+  total) and never merged into the captured turn's metrics. Run-level
+  infrastructure facts (`git_wip`, duration, runtime versions, stop
+  status, `runtime.models` / `app_versions`, `identity.conversation_ids`)
+  are deliberately not scoped. Without a persisted identity (historical or
+  manual runs) the run-wide aggregate is preserved (backward compatible)
+  and the explicit `captured_conversation_unknown` gap is recorded — no
+  conversation is ever heuristically selected.
 - **Verification correlation is explicit, never timestamp-guessed.**
   Explicit: `FG_AGENT_RUN_ID=<run-id> ./scripts/agent-verify.sh
   --summary-json .artifacts/agent-runs/<run-id>/verify-<profile>.json
@@ -536,10 +555,15 @@ raw sanitized OTel (logs/traces/metrics)  — only trace-contract fields
   captures; only `native-probe` records the exact binary the probe ran), and
   the standalone version remains available via `status`
   (`controller_codex_version`, informational only).
-- **Historical captures.** v1 ledger records remain valid v1 documents and
+- **Historical captures.** v1/v2 ledger records remain valid documents and
   are never rewritten in place by any tooling. Captures made before v2
-  normalize to v2 with null context/runtime values plus explicit
-  evidence/comparability gaps; nothing is back-filled.
+  normalize to v3 with null context/runtime values plus explicit
+  evidence/comparability gaps. Captures made before v3 (no persisted
+  captured conversation identity) normalize to v3 with
+  `identity.captured_conversation_id` null: the primary activity is the
+  run-wide aggregate, represented explicitly by the
+  `captured_conversation_unknown` gap whenever at least one conversation
+  was observed; nothing is guessed or back-filled.
 - **Human intervention is never inferred.** `annotate` records, after the
   fact: whether a human correction occurred (`--correction yes|no`), a
   bounded category (required with `yes`), an optional note (≤ 280 chars),
@@ -737,6 +761,13 @@ The relay's only protocol role is observation:
   is written when the turn's run comes up and released when the turn
   finalizes; between turns the session has no mapping, and nothing
   resolves to a finished run.
+- When the turn's run comes up, the relay persists the session's native
+  Codex conversation id into the run's capture manifest
+  (`captured_conversation_id`, at seed time). Unlike the mapping, that
+  identity is durable run metadata: it survives finalization and the
+  mapping release, and it is what the Run Ledger uses to attribute the
+  primary activity to the captured turn (foreign telemetry in the same
+  raw run is reported explicitly, never merged).
 - One turn at a time per session (ACP serializes prompts per session):
   a prompt while a turn is in progress is not captured (one bounded
   record, stream untouched). A prompt to a closed session is a
@@ -779,7 +810,9 @@ session/prompt request (client → server)
    → start sidecar: agent-observability start --json
         started           → mapping written, turn run OPEN (doctor
                             snapshot + start Git evidence recorded by
-                            start)
+                            start; the session's native Codex
+                            conversation id persisted into the run
+                            manifest as captured_conversation_id)
         already_running   → turn uncaptured (one observed turn at a
                             time — never attached, never merged)
         error / timeout   → fail open: turn uncaptured, one bounded
@@ -883,9 +916,13 @@ response finalized, or a prompt on any other session) fails open with
 a bounded warning naming the active run; it is never attached,
 overwritten, or merged into the first turn's capture, and no evidence
 is attributed across turns. Documented limitation of the pre-existing
-single-endpoint architecture: a concurrent turn's OTLP (if any) may
-still land in the first run's raw capture. Multi-turn routing is out
-of scope until observed normal usage requires parallel turns.
+single-endpoint architecture: a concurrent or foreign turn's OTLP (if
+any) may still land in the first run's raw capture; the Run Ledger
+scoping (schema v3) makes that explicit instead of merging it: the
+primary activity is scoped to the persisted captured conversation
+identity, and the foreign conversations are reported via
+`activity.foreign`. Multi-turn routing is out of scope until observed
+normal usage requires parallel turns.
 
 ### Opt-out (one session)
 
@@ -999,6 +1036,7 @@ Because the first line of every relay process lifetime is
 |---|---|
 | `FG_AGENT_OBSERVABILITY` | Session opt-out (`0/off/false/no/disabled`) |
 | `FG_AGENT_RUN_ID` | Manual/debug override only; the automatic path never sets it (inherited values are dropped) |
+| `FG_OBS_CAPTURED_CONVERSATION_ID` | Internal (relay-set): the session's native Codex conversation id, passed by the ACP lifecycle relay when it starts a prompt-turn run so the manifest persists it as `captured_conversation_id`; manual starts and probes leave it unset (null) |
 | `CODEX_SESSION_ID` | Native session id (set by Codex, read-only); the automatic active-turn correlation key |
 | `FG_PRODUCT_LAUNCH_STATE_DIR` | Install state dir (test override) |
 | `FG_PRODUCT_LAUNCH_ENTRYPOINT` | Launcher path to wrap (test override) |

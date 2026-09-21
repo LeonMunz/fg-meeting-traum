@@ -19,8 +19,14 @@ Normalization boundary:
   + explicit human annotations
 + run-context.json (structured, bounded run context)
   -> versioned normalized Run Ledger record (docs/agent/ledger-contract.json,
-     schema v2: adds context, native run-config runtime fields and the
-     comparability section)
+     schema v3: adds the bounded structured run context, native
+     run-config runtime fields, the comparability section, and — since
+     v3 — the persisted captured conversation identity
+     (identity.captured_conversation_id): the primary activity / failure /
+     token metrics are scoped to that captured conversation, and foreign
+     telemetry (other conversation ids in the same raw run) is reported
+     explicitly via activity.foreign instead of being merged into the
+     captured turn's metrics)
 
 Rules:
   * deterministic: the record is a pure function of the stored evidence
@@ -53,7 +59,7 @@ except ImportError:  # pragma: no cover - same-directory import fallback
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import runcontext
 
-LEDGER_SCHEMA_VERSION = 2
+LEDGER_SCHEMA_VERSION = 3
 RECORD_NAME = "fg-agent-run-ledger"
 LEDGER_FILE = "run-ledger.json"
 ANNOTATIONS_FILE = "annotations.json"
@@ -439,8 +445,22 @@ def conversation_config(events):
     }
 
 
-def token_usage_from_metrics(run_dir):
-    """Sum codex.turn.token_usage datapoints; None when unavailable."""
+def _datapoint_conversation(attrs):
+    c = attr_dict(attrs).get("conversation.id")
+    return c if isinstance(c, str) and c else None
+
+
+def token_usage_from_metrics(run_dir, conv=None, conv_set=None):
+    """Sum codex.turn.token_usage datapoints attributable to a conversation.
+
+    conv (single identity): only datapoints whose conversation.id attribute
+    EQUALS conv count; a datapoint without a conversation.id — or with a
+    different one — is never attributed to the captured turn.
+    conv_set (foreign set): membership mode for the foreign diagnostic.
+    Neither (historical aggregate mode): all datapoints count, as before.
+    Returns (total, found): found is True when at least one datapoint was
+    attributed (total may legitimately be 0).
+    """
     total = 0
     found = False
     for path in raw_jsonl_files(run_dir, "metrics"):
@@ -473,6 +493,14 @@ def token_usage_from_metrics(run_dir):
                                 for point in data.get("dataPoints") or []:
                                     if not isinstance(point, dict):
                                         continue
+                                    c = _datapoint_conversation(
+                                        point.get("attributes"))
+                                    if conv is not None:
+                                        if c != conv:
+                                            continue
+                                    elif conv_set is not None:
+                                        if c not in conv_set:
+                                            continue
                                     val = point.get("asInt")
                                     if val is None:
                                         val = point.get("asDouble")
@@ -480,7 +508,24 @@ def token_usage_from_metrics(run_dir):
                                     if n is not None:
                                         total += n
                                         found = True
-    return total if found else None
+    return total, found
+
+
+def sse_token_sums(sse_events):
+    """Per-field sums of the contract-named SSE token counters."""
+    sums = {}
+    for ev in sse_events:
+        for key in SSE_TOKEN_KEYS:
+            n = as_int(ev["attrs"].get(key))
+            if n is not None:
+                sums[key] = sums.get(key, 0) + n
+    return sums
+
+
+def _api_request_failed(ev):
+    ok = as_bool(ev["attrs"].get("success"))
+    status = as_int(ev["attrs"].get("http.response.status_code"))
+    return ok is False or (status is not None and status >= 400)
 
 
 # ------------------------------------------------------------- verification --
@@ -622,7 +667,17 @@ def git_wip_section(manifest):
     }
 
 
-def activity_section(events, run_dir):
+def activity_section(events, run_dir, captured_conversation_id=None):
+    """Activity metrics of the observed turn.
+
+    The caller passes events already scoped to the captured conversation
+    (all events when no captured identity is persisted — historical
+    aggregate behavior, represented by the explicit
+    captured_conversation_unknown gap instead of a silent claim).
+    Token accounting honors the same scoping: metrics datapoints only
+    count when attributable to the captured conversation, and the SSE
+    fallback sums that conversation's response.completed counters.
+    """
     tool_results = [e for e in events if e["name"] == "codex.tool_result"]
     api_requests = [e for e in events if e["name"] == "codex.api_request"]
     prompts = [e for e in events if e["name"] == "codex.user_prompt"]
@@ -660,29 +715,20 @@ def activity_section(events, run_dir):
             if ttype == "shell":
                 shell_failed += 1
 
-    api_failed = 0
-    for ev in api_requests:
-        ok = as_bool(ev["attrs"].get("success"))
-        status = as_int(ev["attrs"].get("http.response.status_code"))
-        if ok is False or (status is not None and status >= 400):
-            api_failed += 1
+    api_failed = sum(1 for ev in api_requests if _api_request_failed(ev))
 
     # token usage: metrics signal first, sse event counters as documented
     # fallback, else unavailable.
     token = {"input": None, "output": None, "cached": None,
              "cache_write": None, "reasoning": None, "total": None,
              "source": None}
-    metrics_total = token_usage_from_metrics(run_dir)
-    if metrics_total is not None:
+    metrics_total, metrics_found = token_usage_from_metrics(
+        run_dir, conv=captured_conversation_id)
+    if metrics_found:
         token["total"] = metrics_total
         token["source"] = "metrics"
     else:
-        sse_sums = {}
-        for ev in sse:
-            for key in SSE_TOKEN_KEYS:
-                n = as_int(ev["attrs"].get(key))
-                if n is not None:
-                    sse_sums[key] = sse_sums.get(key, 0) + n
+        sse_sums = sse_token_sums(sse)
         if sse_sums:
             for key, field in TOKEN_FIELD_MAP.items():
                 token[field] = sse_sums.get(key)
@@ -713,9 +759,7 @@ def activity_section(events, run_dir):
         if as_bool(ev["attrs"].get("success")) is False and ev["ts"]:
             failures_ts.append(ev["ts"])
     for ev in api_requests:
-        ok = as_bool(ev["attrs"].get("success"))
-        status = as_int(ev["attrs"].get("http.response.status_code"))
-        if ev["ts"] and (ok is False or (status is not None and status >= 400)):
+        if ev["ts"] and _api_request_failed(ev):
             failures_ts.append(ev["ts"])
 
     return {
@@ -734,6 +778,59 @@ def activity_section(events, run_dir):
         "time_to_first_failure_ms": ms(base_ts, min(failures_ts) if failures_ts else None),
         "time_to_final_response_ms": ms(base_ts, final_ts),
     }
+
+
+def foreign_section(captured, observed_ids, events, run_dir):
+    """Bounded diagnostic for FOREIGN telemetry in the same raw run.
+
+    The single-endpoint capture can contain OTLP from other Codex
+    conversations that happened to be active in the same window. The
+    primary activity above is scoped to the captured conversation; this
+    section makes the contamination explicit instead of silently merging
+    or discarding it. It is a compact aggregate (identities + a handful
+    of counts), not a full secondary ledger per foreign conversation.
+
+    Returns None when no captured identity is persisted: 'foreign' is
+    undefined without a captured reference, and the explicit
+    captured_conversation_unknown gap represents that case instead.
+    """
+    if captured is None:
+        return None
+    foreign_ids = sorted({c for c in observed_ids if c != captured})
+    section = {
+        "present": bool(foreign_ids),
+        "conversation_count": len(foreign_ids),
+        "conversation_ids": foreign_ids,
+        "api_request_count": 0,
+        "failed_api_requests": 0,
+        "tool_call_count": 0,
+        "failed_tool_calls": 0,
+        "turn_count": 0,
+        "token_usage_total": None,
+    }
+    if not foreign_ids:
+        return section
+    fset = set(foreign_ids)
+    fev = [e for e in events if e.get("conv") in fset]
+    api = [e for e in fev if e["name"] == "codex.api_request"]
+    tools = [e for e in fev if e["name"] == "codex.tool_result"]
+    call_ids = {e["ref"] or ("__noref_%d__" % id(e)) for e in tools}
+    section["api_request_count"] = len(api)
+    section["failed_api_requests"] = sum(1 for e in api
+                                         if _api_request_failed(e))
+    section["tool_call_count"] = len(call_ids)
+    section["failed_tool_calls"] = sum(
+        1 for e in tools if as_bool(e["attrs"].get("success")) is False)
+    section["turn_count"] = sum(1 for e in fev
+                                if e["name"] == "codex.user_prompt")
+    mtotal, mfound = token_usage_from_metrics(run_dir, conv_set=fset)
+    if mfound:
+        section["token_usage_total"] = mtotal
+    else:
+        ssums = sse_token_sums([e for e in fev
+                                if e["name"] == "codex.sse_event"])
+        section["token_usage_total"] = sum(ssums.values()) if ssums else None
+    return section
 
 
 def failures_section(events, profiles):
@@ -844,10 +941,17 @@ def load_manifest(run_dir, run_id):
 
 
 def list_gaps(manifest, events, profiles, doctor, obs_doctor, annotations,
-              token, has_run_context, codex_version=None):
+              token, has_run_context, codex_version=None,
+              captured_conversation_id=None, observed_conversation_ids=()):
     gaps = []
     if not any(e["name"].startswith("codex.") for e in events):
         gaps.append("no_telemetry")
+    if captured_conversation_id is None and observed_conversation_ids:
+        # Telemetry from at least one conversation is present, but the run
+        # carries no persisted captured conversation identity: the primary
+        # metrics are the run-wide aggregate and MUST NOT be read as the
+        # captured turn's activity. Nothing is guessed.
+        gaps.append("captured_conversation_unknown")
     if codex_version is None:
         gaps.append("codex_version_unresolved")
     if not has_run_context:
@@ -891,6 +995,12 @@ def build_record(run_dir):
     annotations = load_annotations(run_dir)
     run_context = load_run_context(run_dir)
 
+    # The persisted captured conversation identity (the ACP session/prompt
+    # that caused this run, recorded into the manifest by the lifecycle
+    # relay at start). Nothing is inferred: a missing/invalid value means
+    # the run carries no captured identity (historical or manual run).
+    captured_raw = manifest.get("captured_conversation_id")
+    captured = captured_raw if isinstance(captured_raw, str) and captured_raw else None
     start_ts = manifest.get("start_ts") if isinstance(manifest.get("start_ts"), str) else None
     end_ts = manifest.get("end_ts") if isinstance(manifest.get("end_ts"), str) else None
     duration = None
@@ -904,14 +1014,26 @@ def build_record(run_dir):
             return [v for v in val if isinstance(v, str)]
         return []
 
+    observed_ids = slist("conversation_ids")
+    # Primary activity attribution: when the run carries a persisted
+    # captured conversation identity, the captured turn's metrics come
+    # from that conversation's events only. Without it (historical or
+    # manual run) the run-wide aggregate is preserved (backward
+    # compatible) and represented explicitly by the
+    # captured_conversation_unknown gap — never a heuristic pick.
+    if captured is None:
+        scoped_events = events
+    else:
+        scoped_events = [e for e in events if e.get("conv") == captured]
     git_wip = git_wip_section(manifest)
-    activity = activity_section(events, run_dir)
-    failures = failures_section(events, profiles)
+    activity = activity_section(scoped_events, run_dir, captured)
+    failures = failures_section(scoped_events, profiles)
     attach_classifications(failures, annotations)
-    conv_cfg = conversation_config(events)
+    conv_cfg = conversation_config(scoped_events)
 
     identity = {
-        "conversation_ids": slist("conversation_ids"),
+        "conversation_ids": observed_ids,
+        "captured_conversation_id": captured,
         "capture_kind": manifest.get("kind") if isinstance(manifest.get("kind"), str) else None,
         "repo_root": manifest.get("repo_root") if isinstance(manifest.get("repo_root"), str) else None,
         "branch": manifest.get("branch") if isinstance(manifest.get("branch"), str) else None,
@@ -946,6 +1068,7 @@ def build_record(run_dir):
         "sandbox_mode": conv_cfg["sandbox_mode"],
         "approval_policy": conv_cfg["approval_policy"],
     }
+    activity["foreign"] = foreign_section(captured, observed_ids, events, run_dir)
     ctx = empty_context()
     if run_context is not None:
         for f in ("task_type", "session_mode", "task_key", "harness_variant"):
@@ -975,7 +1098,8 @@ def build_record(run_dir):
                                    obs_doctor, annotations,
                                    activity["token_usage"],
                                    run_context is not None,
-                                   codex_version),
+                                   codex_version,
+                                   captured, observed_ids),
     }
     return record
 
@@ -1047,6 +1171,19 @@ def print_human(r):
     print("run ledger: %s (schema v%s)" % (r["run_id"], r["schema_version"]))
     print("  capture:    kind=%s stop=%s conversations=%s" % (
         ident["capture_kind"], ident["stop_status"], len(ident["conversation_ids"])))
+    ccid = ident.get("captured_conversation_id")
+    if ccid:
+        print("  captured:   conversation=%s" % ccid)
+    else:
+        print("  captured:   conversation=unknown (no persisted identity — "
+              "activity is the run-wide aggregate, see evidence_gaps)")
+    foreign = a.get("foreign")
+    if foreign is not None and foreign.get("present"):
+        print("  foreign:    %d other conversation(s) in this raw run: %s "
+              "(api=%s tools=%s) — NOT part of the captured turn metrics"
+              % (foreign["conversation_count"],
+                 ", ".join(foreign["conversation_ids"]) or "-",
+                 foreign["api_request_count"], foreign["tool_call_count"]))
     print("  window:     %s -> %s (duration %s)" % (
         ident["start_ts"], ident["end_ts"],
         "%ss" % ident["duration_s"] if ident["duration_s"] is not None else "n/a"))

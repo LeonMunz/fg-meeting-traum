@@ -42,7 +42,10 @@
 #   * run identity: inherited stale FG_AGENT_RUN_ID dropped; the
 #     active-turn mapping (CODEX_SESSION_ID) resolves exactly the
 #     turn's run — including over a newer live run (no newest-run
-#     guessing); explicit FG_AGENT_RUN_ID still overrides
+#     guessing); explicit FG_AGENT_RUN_ID still overrides; the captured
+#     conversation identity (ACP session id = native Codex conversation
+#     id) is persisted into the run manifest at start time and survives
+#     finalization + mapping release (ledger carries it)
 #   * verification correlation: agent-verify --summary-json attributes
 #     to the ACTIVE TURN's run via the mapping; the turn-finalization
 #     ledger consumes the correlated summary

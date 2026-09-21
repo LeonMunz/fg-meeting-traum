@@ -20,6 +20,27 @@ import time
 SCHEMA_VERSION = 1
 RAW_GLOBS = ("logs.jsonl", "traces.jsonl", "metrics.jsonl")
 
+# Bounded identifier shape for the captured conversation id (the native
+# Codex conversation/session id; the relay passes it from the ACP session
+# id, which is already validated against the same shape).
+CAPTURED_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+
+
+def captured_conversation_id_from_env():
+    """The authoritative captured conversation identity, or None.
+
+    Set by the lifecycle relay (which created the run for one ACP
+    session/prompt) via FG_OBS_CAPTURED_CONVERSATION_ID. It is persisted
+    into the manifest at seed time so it survives finalization and the
+    release of the transient session/run mapping. Nothing is ever derived
+    or back-filled later: manual starts and probes leave it null, and an
+    invalid (non-identifier) value is refused fail-safe as null.
+    """
+    v = os.environ.get("FG_OBS_CAPTURED_CONVERSATION_ID", "").strip()
+    if v and CAPTURED_ID_RE.match(v):
+        return v
+    return None
+
 
 def now_iso():
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -284,6 +305,10 @@ def base_manifest(run_id, kind, run_dir):
         "schema_version": SCHEMA_VERSION,
         "run_id": run_id,
         "kind": kind,
+        # The native Codex conversation of the ACP session/prompt that
+        # caused this run (null when the run was not created by the
+        # lifecycle relay, or on historical captures).
+        "captured_conversation_id": captured_conversation_id_from_env(),
         "start_ts": now_iso(),
         "end_ts": None,
         "stop_status": "running",
