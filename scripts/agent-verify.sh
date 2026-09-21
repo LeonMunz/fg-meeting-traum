@@ -216,19 +216,28 @@ Environment variables:
                          captured run. Always correct, and the reliable path
                          across the controller/agent identity boundary.
                          Never guessed by timestamp.
-                         When unset, a summary best-effort auto-correlates
-                         to the single active local product capture via a
-                         builtins-only `kill -0` liveness probe (zero
-                         captures -> null; multiple -> refused). That probe
-                         cannot signal a controller-owned collector (EPERM),
-                         so auto-correlation is same-identity only and must
-                         not be relied on across the identity boundary.
-                         To correlate reliably, resolve the run id with
-                         `./scripts/agent-observability current-run` and set
-                         this variable. Always overrides auto-correlation.
+                         When unset, correlation resolves in two tiers:
+                         (1) the ACP session mapping — when CODEX_SESSION_ID
+                         (the native session id the product runtime exports
+                         into tool shells) has a stored session/run mapping,
+                         that mapped run is used (deterministic, exact);
+                         (2) best-effort auto-correlation to the single
+                         active local product capture via a builtins-only
+                         `kill -0` liveness probe (zero captures -> null;
+                         multiple -> refused). Tier 2 cannot signal a
+                         controller-owned collector (EPERM), so it is
+                         same-identity only. To correlate reliably, resolve
+                         the run id with `./scripts/agent-observability
+                         current-run` (session-aware) and set this variable.
+                         Always overrides auto-correlation.
   FG_OBS_RUNS_DIR=<dir>  Runs root for the auto-correlation discovery
                          (default <repo>/.artifacts/agent-runs; same
                          override the agent-observability scripts use).
+  FG_PRODUCT_SESSION_MAP_DIR=<dir>
+                         Session/run mapping dir (default <repo>/.artifacts/
+                         agent-observability/session-runs; same override the
+                         agent-observability scripts and the product-session
+                         relay use).
   POSTGRES_HOST / POSTGRES_PORT / POSTGRES_DB / POSTGRES_USER /
   POSTGRES_PASSWORD      Django database configuration overrides
                          (defaults match the local development database).
@@ -635,9 +644,53 @@ trap 'on_signal TERM' TERM
 # reliable cross-identity correlation, resolve the run id with
 # `./scripts/agent-observability current-run` (canonical EPERM->alive
 # liveness) and set FG_AGENT_RUN_ID explicitly.
-auto_correlate_agent_run() {
-  local runs_dir
+# --- Session/run mapping resolution (automatic product-session lifecycle) --
+#
+# When CODEX_SESSION_ID is set (the native ACP/Codex session id the product
+# runtime exports into tool shells) and the repository's session/run
+# mapping stores a run for it, that run is THIS session's run — exact,
+# deterministic, never a liveness scan or a timestamp-nearest guess. This
+# is the automatic correlation tier for product sessions; the active-
+# capture scan below remains the fallback for manual start/stop flows.
+#
+# Builtins-only (read/case/test), same decoupling rules as the scan: works
+# under any restricted PATH and silently no-ops when observability is not
+# installed (a missing mapping file or run dir yields no resolution).
+resolve_session_mapped_run() {
+  # Intentional non-zero returns (no id, no mapping, unknown run) must not
+  # fire the ERR trap inside this function's command-substitution subshell.
+  trap - ERR
+  local sid="${CODEX_SESSION_ID:-}"
+  [ -n "$sid" ] || return 1
+  case "$sid" in
+    *[!A-Za-z0-9._-]*) return 1 ;;
+  esac
+  [ "${#sid}" -le 128 ] || return 1
+  local map_dir f run_id runs_dir
+  map_dir="${FG_PRODUCT_SESSION_MAP_DIR:-$REPO_ROOT/.artifacts/agent-observability/session-runs}"
+  f="$map_dir/$sid"
+  [ -f "$f" ] || return 1
+  run_id=""
+  IFS= read -r run_id < "$f" 2>/dev/null || true
+  case "$run_id" in
+    ''|*[!A-Za-z0-9._-]*) return 1 ;;
+  esac
+  [ "${#run_id}" -le 128 ] || return 1
   runs_dir="${FG_OBS_RUNS_DIR:-$REPO_ROOT/.artifacts/agent-runs}"
+  [ -d "$runs_dir/$run_id" ] || return 1
+  printf '%s' "$run_id"
+  return 0
+}
+
+auto_correlate_agent_run() {
+  local runs_dir mapped
+  runs_dir="${FG_OBS_RUNS_DIR:-$REPO_ROOT/.artifacts/agent-runs}"
+  if mapped="$(resolve_session_mapped_run)"; then
+    AGENT_RUN_ID="$mapped"
+    printf 'agent-verify: no FG_AGENT_RUN_ID set; resolved the active prompt-turn run for this ACP session to %s from the session mapping (CODEX_SESSION_ID; set FG_AGENT_RUN_ID to override)\n' \
+      "$AGENT_RUN_ID" >&2
+    return 0
+  fi
   [ -d "$runs_dir" ] || return 0
   local d name pidfile pid manifest content
   local candidates=()

@@ -99,6 +99,16 @@ expect_no_file() { # expect_no_file <name> <path>
 
 BASH_BIN="$(command -v bash)"
 
+# --------------------------------------------------- hermetic environment --
+# The suite may itself run inside a real product session, whose
+# environment carries a stale FG_AGENT_RUN_ID (process-global export of
+# the legacy wrapper model), a CODEX_SESSION_ID, and possibly session
+# mapping / runs-dir overrides. The correlation tests assert exact
+# semantics for explicit, unset, and auto-discovered ids, so strip the
+# ambient identity here; individual tests set what they need explicitly.
+unset FG_AGENT_RUN_ID CODEX_SESSION_ID FG_PRODUCT_SESSION_MAP_DIR \
+      FG_OBS_RUNS_DIR 2>/dev/null || true
+
 # The quick profile's phases in canonical order (mirrored from the profile
 # functions of agent-verify.sh, used only for assertions).
 EXPECTED_PHASES="repo: hygiene|frontend: typecheck|frontend: lint|backend: django check|backend: migration drift"

@@ -3,7 +3,9 @@
 # FG Workspace — local agent observability control surface.
 #
 #   ./scripts/agent-observability status [--json]   read-only state
-#   ./scripts/agent-observability start             idempotently start the local collector
+#   ./scripts/agent-observability start [--json]    idempotently start the local collector
+#                                               (--json: machine-readable
+#                                               start contract on stdout)
 #   ./scripts/agent-observability stop              gracefully stop + finalize the run
 #   ./scripts/agent-observability doctor [--json]   end-to-end local OTLP capability probe
 #   ./scripts/agent-observability config            print the Codex user-level [otel] config
@@ -284,14 +286,58 @@ live_product_runs() { # prints run ids, one per line
   return 0
 }
 
-# Resolve the single live product capture to its run dir (deterministic;
-# the canonical liveness semantic; no timestamp-nearest guessing). Sets the
-# global CURRENT_RUN_DIR on success and exits 10 (zero live captures) or
-# 11 (several). Must be called in the current shell, never inside a command
-# substitution (die() exits). Reused by `context current` and `current-run`.
+# Session/run mapping (automatic product-session lifecycle):
+# <MAP_DIR>/<sessionId> holds exactly one line — the run id mapped from a
+# root ACP session (its native id is CODEX_SESSION_ID in the product agent).
+# The lookup is deterministic by construction: exact session id -> exact
+# run id. No liveness scan, no timestamp-nearest, no newest-run guessing.
+# The mapping dir defaults under the git-ignored .artifacts tree and is
+# overridable for tests (FG_PRODUCT_SESSION_MAP_DIR).
+session_map_dir() {
+  printf '%s' "${FG_PRODUCT_SESSION_MAP_DIR:-$OBS_DIR/session-runs}"
+}
+
+# Print the run dir mapped from CODEX_SESSION_ID (this session's run).
+# Fails closed on an unset/malformed session id, a malformed stored run id,
+# or a missing run dir (e.g. pruned). Never invents a mapping.
+session_mapped_run_dir() {
+  local sid="${CODEX_SESSION_ID:-}"
+  [ -n "$sid" ] || return 1
+  case "$sid" in
+    *[!A-Za-z0-9._-]*) return 1 ;;
+  esac
+  [ "${#sid}" -le 128 ] || return 1
+  local f run_id
+  f="$(session_map_dir)/$sid"
+  [ -f "$f" ] || return 1
+  run_id="$(cat "$f" 2>/dev/null | tr -d '[:space:]')"
+  case "$run_id" in
+    ''|*[!A-Za-z0-9._-]*) return 1 ;;
+  esac
+  [ "${#run_id}" -le 128 ] || return 1
+  local d="$RUNS_DIR/$run_id"
+  [ -d "$d" ] || return 1
+  printf '%s' "$d"
+  return 0
+}
+
+# Resolve the current run to its run dir (deterministic; no
+# timestamp-nearest guessing anywhere). Two tiers, in order:
+#   1) the ACP session mapping — when CODEX_SESSION_ID names a session that
+#      has a stored run mapping, that run is THIS session's run (exact,
+#      even after the run stopped);
+#   2) the single live product capture (canonical liveness semantic).
+# Sets the global CURRENT_RUN_DIR on success; tier 2 exits 10 (zero live
+# captures) or 11 (several). Must be called in the current shell, never
+# inside a command substitution (die() exits). Reused by `context current`
+# and `current-run`.
 resolve_current_run_dir() {
-  local live=() r
+  local live=() r mapped
   CURRENT_RUN_DIR=""
+  if mapped="$(session_mapped_run_dir)"; then
+    CURRENT_RUN_DIR="$mapped"
+    return 0
+  fi
   while IFS= read -r r; do
     [ -n "$r" ] && live+=("$r")
   done < <(live_product_runs)
@@ -434,6 +480,11 @@ start_collector() { # start_collector <run_dir> ; sets COLLECTOR_PID
   render_config "$run_dir" "$cfg"
   run_tolerated "$COLLECTOR" validate --config "$cfg"
   if [ "$TOL_RC" -ne 0 ]; then
+    # Same contract as the port-wait path below: the run dir was created
+    # by this very start call (fresh run id); a collector that never
+    # starts must not leave a half-created run behind (fail-open callers
+    # must find a clean runs root).
+    rm -rf "$run_dir"
     die "collector config failed validation: $(printf '%s' "$TOL_OUT" | head -c 400)" 1
   fi
   nohup "$COLLECTOR" --config "$cfg" > "$run_dir/collector.log" 2>&1 &
@@ -442,7 +493,12 @@ start_collector() { # start_collector <run_dir> ; sets COLLECTOR_PID
   if ! wait_port_listening 15000; then
     kill "$COLLECTOR_PID" 2>/dev/null || true
     wait "$COLLECTOR_PID" 2>/dev/null || true
-    die "collector did not start listening on 127.0.0.1:$PORT (see $run_dir/collector.log)" 1
+    # The run dir was created by this very start call (fresh run id); a
+    # collector that never listens leaves only debris — remove it so a
+    # failed start never leaves a half-created run behind (fail-open
+    # callers must find a clean runs root).
+    rm -rf "$run_dir"
+    die "collector did not start listening on 127.0.0.1:$PORT" 1
   fi
 }
 
@@ -967,7 +1023,38 @@ print(s.get("overall") if isinstance(s, dict) and isinstance(s.get("overall"), s
 
 # ------------------------------------------------------------------- start --
 
+# Machine-readable start contract (`start --json`): stdout is exactly one
+# JSON document (schema_version 1, tool "agent-observability"):
+#   status: "started" — a new product run was created. This is the only
+#           status a caller may adopt as its own.
+#           "already_running" — a collector already owns the port; the
+#           reported run belongs to ITS owner and a caller must NOT adopt
+#           it (never attach, never overwrite).
+#   run_id / run_dir / pid: of the reported run; endpoint: the loopback
+#           OTLP endpoint.
+# The JSON is emitted as soon as the collector is confirmed listening
+# (the run is then live and functional); the read-only doctor snapshot,
+# when it runs, only appends auxiliary evidence and its diagnostics go to
+# stderr, so stdout stays a single JSON document. On failure no JSON is
+# written to stdout; errors go to stderr and the human exit codes
+# (1 generic / 3 collector missing / 4 port conflict) are preserved.
+emit_start_json() { # emit_start_json <status> <run_id> <run_dir> <pid>
+  # The document is built and written with a SINGLE printf (one write):
+  # callers (e.g. the product-launch wrapper) poll for "status" and then
+  # re-read the whole file — a multi-write emission could be observed
+  # mid-write and misparsed as an invalid contract.
+  local json
+  json=$(printf '{\n  "schema_version": 1,\n  "tool": "agent-observability",\n  "status": "%s",\n  "run_id": "%s",\n  "run_dir": "%s",\n  "pid": %s,\n  "endpoint": "http://127.0.0.1:%s"\n}\n' \
+    "$1" "$(json_escape "$2")" "$(json_escape "$3")" "$4" "$PORT")
+  printf '%s' "$json"
+}
+
 cmd_start() {
+  local as_json="${1:-}"
+  case "$as_json" in
+    ""|--json) ;;
+    *) die "unknown option for start: $as_json (usage: agent-observability start [--json])" 2 ;;
+  esac
   local collector
   collector="$(resolve_collector)"
   [ -n "$collector" ] || die "collector binary not found — run ./scripts/agent-observability install" 3
@@ -976,8 +1063,12 @@ cmd_start() {
   local runline
   runline="$(running_run)"
   if [ -n "$runline" ]; then
-    printf 'agent-observability: already running (run %s, pid %s) — nothing to do\n' \
-      "${runline%|*}" "${runline#*|}"
+    if [ "$as_json" = "--json" ]; then
+      emit_start_json "already_running" "${runline%|*}" "$RUNS_DIR/${runline%|*}" "${runline#*|}"
+    else
+      printf 'agent-observability: already running (run %s, pid %s) — nothing to do\n' \
+        "${runline%|*}" "${runline#*|}"
+    fi
     return 0
   fi
 
@@ -1013,22 +1104,38 @@ cmd_start() {
 
   start_collector "$run_dir"
   ln -sfn "$run_id" "$RUNS_DIR/latest"
-  printf 'agent-observability: started local collector\n'
-  printf '  run:      %s\n' "$run_dir"
-  printf '  endpoint: http://127.0.0.1:%s (loopback only)\n' "$PORT"
-  printf '  pid:      %s\n' "$COLLECTOR_PID"
-  printf '  traces:   %s/raw/\n' "$run_dir"
-  local sp_line sp_state sp_path
-  sp_line="$(resolve_product_home)"
-  sp_state="${sp_line%%|*}"
-  sp_path="${sp_line#*|}"
-  printf '  product home: %s — %s\n' "$sp_state" "${sp_path:-<none>}"
-  printf '  note:     Codex sessions emit telemetry here only while the user-level [otel] config is active (see: ./scripts/agent-observability config)\n'
-  case "$sp_state" in
-    not_registered) printf '  note:     product Codex home not registered — from a product-agent session run: ./scripts/agent-observability product-runtime register\n' ;;
-    corrupt)        printf '  note:     product-runtime registration is corrupt — re-run: ./scripts/agent-observability product-runtime register\n' ;;
-  esac
-  doctor_snapshot "$run_dir"
+  if [ "$as_json" = "--json" ]; then
+    # Machine-readable mode: emit the contract first (the run is live now
+    # that the collector is confirmed listening), then the read-only
+    # doctor snapshot as a sidecar (diagnostics to stderr).
+    emit_start_json "started" "$run_id" "$run_dir" "$COLLECTOR_PID"
+    if [ "${FG_OBS_NO_DOCTOR_SNAPSHOT:-0}" = "1" ]; then
+      printf 'doctor snapshot: skipped (FG_OBS_NO_DOCTOR_SNAPSHOT=1)\n' >&2
+    else
+      doctor_snapshot "$run_dir" >&2
+    fi
+  else
+    printf 'agent-observability: started local collector\n'
+    printf '  run:      %s\n' "$run_dir"
+    printf '  endpoint: http://127.0.0.1:%s (loopback only)\n' "$PORT"
+    printf '  pid:      %s\n' "$COLLECTOR_PID"
+    printf '  traces:   %s/raw/\n' "$run_dir"
+    local sp_line sp_state sp_path
+    sp_line="$(resolve_product_home)"
+    sp_state="${sp_line%%|*}"
+    sp_path="${sp_line#*|}"
+    printf '  product home: %s — %s\n' "$sp_state" "${sp_path:-<none>}"
+    printf '  note:     Codex sessions emit telemetry here only while the user-level [otel] config is active (see: ./scripts/agent-observability config)\n'
+    case "$sp_state" in
+      not_registered) printf '  note:     product Codex home not registered — from a product-agent session run: ./scripts/agent-observability product-runtime register\n' ;;
+      corrupt)        printf '  note:     product-runtime registration is corrupt — re-run: ./scripts/agent-observability product-runtime register\n' ;;
+    esac
+    if [ "${FG_OBS_NO_DOCTOR_SNAPSHOT:-0}" = "1" ]; then
+      printf '  doctor:     snapshot skipped (FG_OBS_NO_DOCTOR_SNAPSHOT=1)\n'
+    else
+      doctor_snapshot "$run_dir"
+    fi
+  fi
   return 0
 }
 
@@ -1066,6 +1173,23 @@ except Exception:
 # -------------------------------------------------------------------- stop --
 
 cmd_stop() {
+  local final_status="graceful"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --stop-status)
+        [ $# -ge 2 ] || die "stop: --stop-status requires a value (graceful | interrupted)" 2
+        final_status="$2"
+        shift 2
+        ;;
+      *)
+        die "unknown option for stop: $1 (usage: agent-observability stop [--stop-status graceful|interrupted])" 2
+        ;;
+    esac
+  done
+  case "$final_status" in
+    graceful|interrupted) ;;
+    *) die "stop: invalid --stop-status value: $final_status (allowed: graceful, interrupted)" 2 ;;
+  esac
   local runline run_dir
   runline="$(running_run)"
   if [ -z "$runline" ]; then
@@ -1104,8 +1228,14 @@ cmd_stop() {
   pid="${runline#*|}"
   COLLECTOR="${collector:-otelcol}"
   stop_collector "$run_dir"
-  finalize_run "$run_dir" "$STOP_STATUS"
-  printf 'agent-observability: stopped (status %s)\n' "$STOP_STATUS"
+  # A requested "interrupted" finalization (the product-session lifecycle
+  # fallback: the ACP connection/process died with the session still open)
+  # takes precedence over the collector-shutdown detail; a requested
+  # "graceful" keeps the pre-existing collector-shutdown status.
+  local stop_status="$final_status"
+  if [ "$stop_status" = "graceful" ]; then stop_status="$STOP_STATUS"; fi
+  finalize_run "$run_dir" "$stop_status"
+  printf 'agent-observability: stopped (status %s)\n' "$stop_status"
   printf '  run:      %s (trace history kept)\n' "$run_dir"
   printf '  manifest: %s/capture-manifest.json\n' "$run_dir"
   auto_ledger "$run_dir"
@@ -1521,8 +1651,19 @@ usage() {
   cat <<EOF
 Usage:
   ./scripts/agent-observability status [--json]
-  ./scripts/agent-observability start
-  ./scripts/agent-observability stop
+  ./scripts/agent-observability start [--json]
+      [--json] machine-readable start contract: stdout is exactly one
+      JSON document {schema_version, tool, status: "started" |
+      "already_running", run_id, run_dir, pid, endpoint}. "started"
+      is the only status a caller may adopt; "already_running" means
+      the reported run belongs to another session. Failures: no JSON
+      on stdout, error on stderr, human exit codes preserved.
+  ./scripts/agent-observability stop [--stop-status graceful|interrupted]
+      [--stop-status interrupted] finalizes the run as an interrupted
+      session close (the product-session lifecycle fallback: the ACP
+      connection/process died with the session still open) instead of a
+      graceful close. The collector is still stopped gracefully and all
+      raw evidence is preserved.
   ./scripts/agent-observability doctor [--json]
   ./scripts/agent-observability config
   ./scripts/agent-observability install
@@ -1536,10 +1677,14 @@ Usage:
       attach the bounded structured run context to the current product
       capture (or an explicit <run-id> instead of 'current')
   ./scripts/agent-observability current-run
-      print the id of the single live product capture. Read-only,
-      deterministic resolver (same liveness as status / context current);
-      exit 10 if none, 11 if several. Feed it to agent-verify as
-      FG_AGENT_RUN_ID for reliable cross-identity correlation.
+      print the id of this session's product run. Read-only,
+      deterministic, two tiers: (1) when CODEX_SESSION_ID names an ACP
+      session with a stored session/run mapping (the automatic
+      product-session lifecycle), the mapped run id — exact, no liveness
+      or timestamp guessing; (2) otherwise the single live product
+      capture (same liveness as status / context current); exit 10 if
+      none, 11 if several. Feed it to agent-verify as FG_AGENT_RUN_ID for
+      reliable cross-identity correlation.
   ./scripts/agent-observability product-runtime register|show
       register/show the product-agent runtime identity (the product
       CODEX_HOME) used to resolve where product telemetry is configured.
@@ -1603,7 +1748,11 @@ Product runtime identity (product Codex home):
 Environment overrides:
   FG_OBS_PORT (default 4318), FG_OBS_RETENTION_DAYS (14),
   FG_OBS_MAX_MB (32), FG_OBS_MAX_BACKUPS (10),
+  FG_OBS_NO_DOCTOR_SNAPSHOT (1 = start skips the read-only doctor
+  snapshot stored in the run dir; ledger records a doctor gap),
   FG_OBS_RUNS_DIR (runs root; default .artifacts/agent-runs — testability),
+  FG_PRODUCT_SESSION_MAP_DIR (session/run mapping dir; default
+  .artifacts/agent-observability/session-runs — testability),
   FG_OTELCOL (explicit collector binary), CODEX_ACP_ADAPTER (adapter path),
   FG_OBS_PROBE_TIMEOUT (ms, native-probe),
   FG_PRODUCT_CODEX_HOME (explicit product Codex home override - highest
@@ -1636,8 +1785,8 @@ main() {
   shift || true
   case "$cmd" in
     status) [ $# -le 1 ] || { usage >&2; exit 2; }; cmd_status "${1:-}" ;;
-    start) [ $# -eq 0 ] || { usage >&2; exit 2; }; cmd_start ;;
-    stop) [ $# -eq 0 ] || { usage >&2; exit 2; }; cmd_stop ;;
+    start) [ $# -le 1 ] || { usage >&2; exit 2; }; cmd_start "${1:-}" ;;
+    stop) [ $# -le 2 ] || { usage >&2; exit 2; }; cmd_stop "$@" ;;
     doctor) [ $# -le 1 ] || { usage >&2; exit 2; }; cmd_doctor "${1:-}" ;;
     config) [ $# -eq 0 ] || { usage >&2; exit 2; }; cmd_config ;;
     install) [ $# -eq 0 ] || { usage >&2; exit 2; }; cmd_install ;;

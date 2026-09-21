@@ -1,0 +1,644 @@
+#!/usr/bin/env bash
+#
+# FG Workspace — automatic product-session observability lifecycle.
+#
+# One repository-owned script with two jobs:
+#
+#   launch    (default) Surround the existing product launcher with the
+#                       per-prompt-turn observability lifecycle: exec the
+#                       transparent ACP prompt-turn relay, which pumps the
+#                       ACP stdio stream byte-transparently and maps each
+#                       session/prompt TURN to exactly one observability
+#                       run (session/prompt request -> run start; the
+#                       matching session/prompt response with its
+#                       stopReason -> run finalization). The ACP session
+#                       is a persistent grouping dimension, not a run
+#                       boundary: Lucid keeps sessions alive indefinitely,
+#                       so session/close and session/delete are cleanup
+#                       only (an unexpectedly open turn finalizes as
+#                       interrupted) and every prompt turn of a session
+#                       gets its own distinct run. ACP process exit with
+#                       an active turn is only a fallback cleanup boundary
+#                       (the turn finalizes as interrupted).
+#   install   (one-time) Back up the user-level launcher to a stable
+#                        path and replace it with a trampoline that
+#                        calls this wrapper. Idempotent, reversible via
+#                        `uninstall`. Never touches auth, never embeds
+#                        secrets, never hardcodes temporary paths.
+#   status    Read-only report of the integration state.
+#   uninstall Restore the original launcher exactly.
+#   help      Usage.
+#
+# Process model (prompt-turn lifetime, not session or process lifetime):
+#
+#   Lucid host
+#     -> ~/.local/bin/lucid-codex-acp (installed trampoline)
+#        -> this wrapper (launch) — guards, opt-out, delegate resolution
+#           -> exec scripts/observability/acp-lifecycle-relay.py
+#              -> pumps ACP stdin/stdout byte-transparently (stderr kept)
+#              -> session open (new/load/resume/fork): identity tracking
+#                 only (no run starts here)
+#              -> session/prompt request: agent-observability start
+#                 + <sessionId> -> <run-id> mapping (git-ignored)
+#              -> matching session/prompt response (stopReason):
+#                 agent-observability stop (graceful) + mapping release;
+#                 the ACP session stays open
+#              -> session close (close/delete): cleanup only — an
+#                 unexpectedly open turn stops (interrupted), session
+#                 state released
+#              -> child exit with an active turn: stop (interrupted)
+#              -> original launcher, unchanged (moved to
+#                 ~/.local/share/lucid-codex-acp/lucid-codex-acp.impl)
+#                 -> @agentclientprotocol/codex-acp
+#                    -> codex-policy-guard.py -> bundled Codex
+#
+# Why the lifecycle owner sits OUTSIDE the agent process:
+#   By the time the coding agent reads AGENTS.md its Codex prompt turn
+#   is already running; a turn-started `agent-observability start` would
+#   lose the beginning of the turn. The relay observes the ACP lifecycle
+#   from the launcher path, one level below the client, so every prompt
+#   turn is captured from its first event.
+#
+# Run identity semantics (turn-scoped, never process-global):
+#   The ACP sessionId IS the native Codex thread/conversation id, which
+#   Codex also exports into tool shells as CODEX_SESSION_ID. The relay
+#   persists a bounded local mapping (sessionId -> run id, git-ignored)
+#   for the session's ACTIVE prompt turn only: it is written when the
+#   turn's run comes up and released when the turn finalizes, so
+#   verification and context inside a turn resolve EXACTLY that turn's
+#   run — deterministic, no timestamp-nearest matching, no newest-run
+#   guessing, no process-global stale FG_AGENT_RUN_ID.
+#   FG_AGENT_RUN_ID is always dropped by the wrapper (inherited values
+#   are stale by definition once the ACP process is long-lived) and is
+#   only meaningful as an explicit manual/debug override.
+#
+# Fail-open policy (observability is optional supporting infrastructure):
+#   any observability-specific failure (missing control surface, missing
+#   collector, port conflict, script error, timeout) prints ONE bounded
+#   warning to stderr and the ACP stream keeps flowing — the session
+#   simply runs unobserved. No retries, no auto-install, no silent
+#   failure. If a live capture already exists, the turn is never
+#   attached to it, never overwritten and never guessed — one observed
+#   prompt turn at a time (single loopback collector); additional
+#   concurrent turns fail open.
+#
+# Signals:
+#   The relay forwards INT/TERM/HUP to the product launcher (forwarded
+#   signals are not re-sent) and exits with the launcher's real exit
+#   status (128+sig when the child died by signal). Finalization is
+#   exactly once per run; SIGKILL/INT cannot be trapped, and runs
+#   orphaned that way are reconciled as "interrupted" on the next
+#   start/stop (a pre-existing control-surface property).
+#
+# Privacy:
+#   * the relay never modifies protocol payloads, never persists prompts
+#     or content blocks, never writes to stdout on the launch path
+#     (ACP stream purity), and never logs the environment
+#   * the capture pipeline's existing sanitization is untouched
+#
+# Canonical documentation: docs/agent/OBSERVABILITY.md
+#   ("Automatic product-session lifecycle").
+
+set -Eeuo pipefail
+
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+case "$SCRIPT_PATH" in
+  */*) REPO_ROOT="$(cd "${SCRIPT_PATH%/*}/.." && pwd)" ;;
+  *)   REPO_ROOT="$(cd .. && pwd)" ;;
+esac
+
+OBSCTL="$REPO_ROOT/scripts/agent-observability"
+SELF="$REPO_ROOT/scripts/agent-product-launch"
+
+# Integration paths (user-level; overridable for tests).
+STATE_DIR="${FG_PRODUCT_LAUNCH_STATE_DIR:-$HOME/.local/share/lucid-codex-acp}"
+CONFIG_FILE="$STATE_DIR/agent-product-launch.json"
+IMPL_FILE="$STATE_DIR/lucid-codex-acp.impl"
+ENTRYPOINT="${FG_PRODUCT_LAUNCH_ENTRYPOINT:-$HOME/.local/bin/lucid-codex-acp}"
+TRAMPOLINE_MARKER="# BEGIN fg-meeting-traum agent-product-launch trampoline"
+CONFIG_SCHEMA_VERSION=1
+
+# Internal recursion guard: exported to the child; if the delegate were
+# (mis)configured to run the wrapper again, the inner invocation sees
+# this and fails closed (exit 125) instead of recursing.
+GUARD_VAR="FG_PRODUCT_OBS_IN_WRAPPER"
+
+# Bounded waits (seconds).
+START_JSON_DEADLINE=60     # collector listen (15s internal cap) + margin
+START_POLL=0.1
+
+# Resets SIGINT to the OS default and execs the product launcher under
+# the same pid, argv, and environment. Why: bash (non-interactive shell,
+# job control off) sets SIGINT to SIG_IGN for asynchronous (background)
+# jobs, and a signal that is ignored on entry to a process can never be
+# trapped. The wrapper runs the child as a background job (so it can
+# respond to signals itself), which would otherwise leave the product
+# process unable to see terminal Ctrl-C or the wrapper's INT forwarding.
+# Empirically verified on bash 3.2 (macOS default). If no python3 is
+# available the child is launched directly (degraded: it cannot trap
+# SIGINT; TERM/HUP forwarding and group-signal semantics are unchanged).
+INTRESET_PY_CODE='import os, signal, sys
+signal.signal(signal.SIGINT, signal.SIG_DFL)
+try:
+    os.execvpe(sys.argv[1], sys.argv[1:], os.environ)
+except Exception as exc:
+    sys.stderr.write("agent-product-launch: ERROR: cannot exec delegate (%s: %s)\n"
+                     % (exc.__class__.__name__, exc))
+    sys.exit(127)
+'
+
+# ---------------------------------------------------------------- helpers --
+
+die() {
+  printf 'agent-product-launch: ERROR: %s\n' "$1" >&2
+  exit "${2:-1}"
+}
+
+probe_python() {
+  if [ -x "$REPO_ROOT/apps/api/.venv/bin/python" ]; then
+    printf '%s' "$REPO_ROOT/apps/api/.venv/bin/python"
+  elif command -v python3 >/dev/null 2>&1; then
+    printf '%s' "python3"
+  else
+    printf '%s' ""
+  fi
+}
+
+real_path() { # <path> — best-effort canonical path
+  local p
+  p="$(realpath "$1" 2>/dev/null || true)"
+  [ -n "$p" ] && { printf '%s' "$p"; return 0; }
+  printf '%s' "$1"
+}
+
+# FG_AGENT_OBSERVABILITY opt-out: 0/off/false/no/disabled (any case).
+obs_disabled() {
+  local v
+  v="$(printf '%s' "${FG_AGENT_OBSERVABILITY:-}" | tr '[:upper:]' '[:lower:]')"
+  case "$v" in
+    0|off|false|no|disabled) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# safe_json_path <path> — die unless the path is JSON-embeddable as-is
+# (absolute, no quotes/backslashes/control chars).
+safe_json_path() {
+  local v="${1:-}"
+  case "$v" in
+    /*) ;;
+    *) die "path is not absolute: $v" 1 ;;
+  esac
+  case "$v" in
+    *\"*|*\\*|*$'\n'*) die "path contains characters that cannot be embedded: $v" 1 ;;
+  esac
+}
+
+# ----------------------------------------------------------- launch path --
+
+# probe_running_state — running | stopped | unknown (best-effort, via the
+# control surface's own JSON status; never a signal-based guess).
+probe_running_state() {
+  local py out=""
+  py="$(probe_python)"
+  [ -n "$py" ] || { printf 'unknown'; return 0; }
+  [ -x "$OBSCTL" ] || { printf 'unknown'; return 0; }
+  set +Ee
+  out="$("$OBSCTL" status --json 2>/dev/null | "$py" -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print("unknown"); sys.exit(0)
+r = d.get("running")
+print(r.get("state", "unknown") if isinstance(r, dict) else "unknown")' 2>/dev/null)"
+  set -Ee
+  printf '%s' "${out:-unknown}"
+}
+
+# resolve_delegate — prints the original launcher path (env override,
+# then the install config). Exits 1 when unresolvable (cmd_launch dies).
+resolve_delegate() {
+  if [ -n "${FG_PRODUCT_LAUNCH_DELEGATE:-}" ]; then
+    case "${FG_PRODUCT_LAUNCH_DELEGATE}" in
+      /*) ;;
+      *) die "FG_PRODUCT_LAUNCH_DELEGATE must be an absolute path" 2 ;;
+    esac
+    [ -f "${FG_PRODUCT_LAUNCH_DELEGATE}" ] || die "delegate launcher not found: ${FG_PRODUCT_LAUNCH_DELEGATE}" 2
+    [ -x "${FG_PRODUCT_LAUNCH_DELEGATE}" ] || die "delegate launcher not executable: ${FG_PRODUCT_LAUNCH_DELEGATE}" 2
+    printf '%s' "${FG_PRODUCT_LAUNCH_DELEGATE}"
+    return 0
+  fi
+  [ -f "$CONFIG_FILE" ] || return 1
+  local py
+  py="$(probe_python)"
+  [ -n "$py" ] || return 1
+  local out rc=0
+  set +Ee
+  out="$("$py" -c '
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(3)
+if not isinstance(d, dict) or d.get("schema_version") != 1:
+    sys.exit(3)
+dep = d.get("delegate")
+if not isinstance(dep, str) or not dep.startswith("/"):
+    sys.exit(3)
+sys.stdout.write(dep)
+' "$CONFIG_FILE" 2>/dev/null)" || rc=$?
+  set -Ee
+  [ "$rc" -eq 0 ] && [ -n "$out" ] || return 1
+  printf '%s' "$out"
+}
+
+cmd_launch() { # $@ = the original launcher's arguments (forwarded verbatim)
+  if [ -n "${FG_PRODUCT_OBS_IN_WRAPPER:-}" ]; then
+    die "recursion guard: already inside the product-launch wrapper — the delegate must be the ORIGINAL launcher, not the trampoline or the wrapper itself" 125
+  fi
+  local delegate
+  if ! delegate="$(resolve_delegate)"; then
+    die "no product-launch delegate configured — run the one-time install: $SELF install (see docs/agent/OBSERVABILITY.md)" 2
+  fi
+  # Recursion guards (fail closed BEFORE anything is started).
+  if [ "$(real_path "$SELF")" = "$(real_path "$delegate")" ]; then
+    die "recursion guard: delegate resolves to this wrapper itself — repair the install: $SELF uninstall && $SELF install" 125
+  fi
+  case "$(head -c 512 "$delegate" 2>/dev/null || true)" in
+    *"$TRAMPOLINE_MARKER"*)
+      die "recursion guard: delegate is a trampoline, not the original launcher — repair the install: $SELF uninstall && $SELF install" 125
+      ;;
+  esac
+
+  if obs_disabled; then
+    # Explicit local opt-out: exec the original launcher directly. No
+    # relay, no collector, no run, no ledger, no diagnostics. The
+    # (possibly inherited) run id is dropped: the wrapper is the only
+    # authority for FG_AGENT_RUN_ID.
+    unset FG_AGENT_RUN_ID
+    exec "$delegate" "$@"
+  fi
+
+  # Observability-enabled path. The wrapper is REPLACED (exec) by the
+  # transparent ACP prompt-turn relay: same pid, same stdio, same
+  # environment. The relay owns the per-turn capture lifecycle and
+  # writes nothing to stdout (ACP stream purity). An inherited
+  # (possibly stale) FG_AGENT_RUN_ID is always dropped: with a
+  # long-lived ACP process a process-global run id cannot be right —
+  # the active-turn mapping (CODEX_SESSION_ID -> run id) is the
+  # automatic correlation layer.
+  unset FG_AGENT_RUN_ID
+  export FG_PRODUCT_OBS_IN_WRAPPER=1
+  local py
+  py="$(probe_python)"
+  if [ -n "$py" ]; then
+    exec "$py" "$REPO_ROOT/scripts/observability/acp-lifecycle-relay.py" --delegate "$delegate" "$@"
+  fi
+  # No python3: no relay, no capture — degraded transparent direct exec
+  # (the product launcher keeps its original semantics exactly).
+  exec "$delegate" "$@"
+}
+
+# ------------------------------------------------------ install surface --
+
+write_trampoline() { # write_trampoline <out-file>
+  cat > "$1" <<EOF
+#!/bin/sh
+$TRAMPOLINE_MARKER (schema_version $CONFIG_SCHEMA_VERSION)
+# Installed by: $REPO_ROOT/scripts/agent-product-launch install
+# (one-time, idempotent, reversible via 'uninstall').
+# Original launcher preserved at: $IMPL_FILE
+# This trampoline forwards to the repository-owned product lifecycle
+# wrapper, which starts/finalizes the local observability run around
+# this process and then executes the original launcher unchanged.
+# Bypass capture for one session: FG_AGENT_OBSERVABILITY=0
+FG_PRODUCT_LAUNCH_DELEGATE="$IMPL_FILE"
+export FG_PRODUCT_LAUNCH_DELEGATE
+if [ -x "$REPO_ROOT/scripts/agent-product-launch" ]; then
+  exec "$REPO_ROOT/scripts/agent-product-launch" launch "\$@"
+fi
+echo "agent-product-launch: wrapper missing at $REPO_ROOT - falling back to the original launcher" >&2
+exec "$IMPL_FILE" "\$@"
+# END fg-meeting-traum agent-product-launch trampoline
+EOF
+}
+
+write_config() { # write_config <out-file>
+  {
+    printf '{\n'
+    printf '  "schema_version": %d,\n' "$CONFIG_SCHEMA_VERSION"
+    printf '  "repo_root": "%s",\n' "$REPO_ROOT"
+    printf '  "entrypoint": "%s",\n' "$ENTRYPOINT"
+    printf '  "delegate": "%s"\n' "$IMPL_FILE"
+    printf '}\n'
+  } > "$1"
+}
+
+is_trampoline() { # is_trampoline <file>
+  [ -f "$1" ] || return 1
+  case "$(head -c 512 "$1" 2>/dev/null || true)" in
+    *"$TRAMPOLINE_MARKER"*) return 0 ;;
+  esac
+  return 1
+}
+
+verify_install_consistency() {
+  [ -f "$CONFIG_FILE" ] || return 1
+  [ -f "$IMPL_FILE" ] || return 1
+  [ -x "$IMPL_FILE" ] || return 1
+  is_trampoline "$ENTRYPOINT" || return 1
+  local py
+  py="$(probe_python)"
+  [ -n "$py" ] || return 1
+  "$py" -c '
+import json, sys
+d = json.load(open(sys.argv[1]))
+ok = (isinstance(d, dict)
+      and d.get("schema_version") == 1
+      and d.get("repo_root") == sys.argv[2]
+      and d.get("entrypoint") == sys.argv[3]
+      and d.get("delegate") == sys.argv[4])
+sys.exit(0 if ok else 1)
+' "$CONFIG_FILE" "$REPO_ROOT" "$ENTRYPOINT" "$IMPL_FILE" 2>/dev/null || return 1
+  case "$(cat "$ENTRYPOINT" 2>/dev/null || true)" in
+    *"$REPO_ROOT/scripts/agent-product-launch"*) ;;
+    *) return 1 ;;
+  esac
+  return 0
+}
+
+# install_fail <msg> <rc> — clean up partial install temporaries and die.
+INSTALL_TMP_FILES=""
+install_fail() {
+  rm -f $INSTALL_TMP_FILES 2>/dev/null || true
+  die "$1" "${2:-1}"
+}
+
+cmd_install() {
+  [ -x "$OBSCTL" ] || die "repository control surface missing: $OBSCTL (wrong repository?)" 1
+  [ -n "${HOME:-}" ] || die "HOME is not set" 1
+  safe_json_path "$ENTRYPOINT"
+  safe_json_path "$IMPL_FILE"
+  safe_json_path "$REPO_ROOT"
+  [ -f "$ENTRYPOINT" ] || die "original product launcher not found: $ENTRYPOINT (expected the Lucid ACP launcher; set FG_PRODUCT_LAUNCH_ENTRYPOINT if it lives elsewhere)" 6
+  [ -x "$ENTRYPOINT" ] || die "launcher is not executable: $ENTRYPOINT" 6
+
+  if is_trampoline "$ENTRYPOINT"; then
+    if verify_install_consistency; then
+      printf 'agent-product-launch: already installed (verified) — nothing to do\n'
+      printf '  entrypoint: %s (trampoline)\n' "$ENTRYPOINT"
+      printf '  delegate:   %s (original launcher)\n' "$IMPL_FILE"
+      return 0
+    fi
+    die "entrypoint is a trampoline but the install state is inconsistent (config/impl/delegate mismatch) — inspect with: $SELF status; do not re-install over an inconsistent state" 8
+  fi
+  if [ -f "$IMPL_FILE" ] && [ ! -f "$CONFIG_FILE" ]; then
+    die "impl present without config (ambiguous state): $IMPL_FILE — resolve manually before installing" 8
+  fi
+
+  mkdir -p "$STATE_DIR"
+  INSTALL_TMP_FILES="$IMPL_FILE.tmp.$$ $ENTRYPOINT.tmp.$$ $CONFIG_FILE.tmp.$$"
+
+  # 1) back up the original launcher (byte-identical copy, mode kept)
+  cp -p "$ENTRYPOINT" "$IMPL_FILE.tmp.$$" || install_fail "backup copy failed" 1
+  cmp -s "$ENTRYPOINT" "$IMPL_FILE.tmp.$$" || install_fail "backup verification failed (source changed during install?)" 1
+  mv "$IMPL_FILE.tmp.$$" "$IMPL_FILE"
+
+  # 2) replace the entrypoint with the trampoline (atomic rename)
+  write_trampoline "$ENTRYPOINT.tmp.$$" || install_fail "trampoline generation failed" 1
+  chmod 755 "$ENTRYPOINT.tmp.$$"
+  mv "$ENTRYPOINT.tmp.$$" "$ENTRYPOINT"
+
+  # 3) record the integration (atomic rename)
+  write_config "$CONFIG_FILE.tmp.$$" || install_fail "config generation failed" 1
+  mv "$CONFIG_FILE.tmp.$$" "$CONFIG_FILE"
+
+  # 4) verify
+  [ -x "$ENTRYPOINT" ] || install_fail "post-install verification failed (entrypoint not executable)" 1
+  [ -x "$IMPL_FILE" ] || install_fail "post-install verification failed (delegate not executable)" 1
+  verify_install_consistency || install_fail "post-install consistency check failed" 8
+
+  printf 'agent-product-launch: installed\n'
+  printf '  entrypoint: %s (trampoline)\n' "$ENTRYPOINT"
+  printf '  delegate:   %s (original launcher, byte-identical backup)\n' "$IMPL_FILE"
+  printf '  config:     %s\n' "$CONFIG_FILE"
+  printf 'next normal prompt turn is automatically observed; per-turn lifecycle commands are not needed.\n'
+  printf 'bypass for one session: FG_AGENT_OBSERVABILITY=0\n'
+  printf 'remove: %s uninstall\n' "$SELF"
+  return 0
+}
+
+cmd_status() {
+  if [ ! -f "$CONFIG_FILE" ]; then
+    printf 'agent-product-launch: not installed (no config at %s)\n' "$CONFIG_FILE"
+    printf 'install (one-time): %s install\n' "$SELF"
+    exit 7
+  fi
+  local py
+  py="$(probe_python)"
+  local c_repo="" c_entry="" c_impl=""
+  if [ -n "$py" ]; then
+    c_repo="$("$py" -c 'import json,sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(1)
+if not isinstance(d, dict) or d.get("schema_version") != 1:
+    sys.exit(1)
+for k in ("repo_root", "entrypoint", "delegate"):
+    v = d.get(k)
+    if not isinstance(v, str) or not v:
+        sys.exit(1)
+    sys.stdout.write(v + "\n")
+' "$CONFIG_FILE" 2>/dev/null)" || c_repo=""
+  fi
+  if [ -z "$c_repo" ]; then
+    printf 'agent-product-launch: INCONSISTENT — config unreadable or unsupported schema: %s\n' "$CONFIG_FILE"
+    exit 8
+  fi
+  c_impl="$(printf '%s\n' "$c_repo" | sed -n '3p')"
+  c_entry="$(printf '%s\n' "$c_repo" | sed -n '2p')"
+  c_repo="$(printf '%s\n' "$c_repo" | sed -n '1p')"
+
+  local problems=0
+  printf 'agent-product-launch status\n'
+  printf '  config:     %s (schema %s)\n' "$CONFIG_FILE" "$CONFIG_SCHEMA_VERSION"
+  printf '  repo root:  %s' "$c_repo"
+  [ -x "$c_repo/scripts/agent-product-launch" ] && printf ' (wrapper present)' || { printf ' (wrapper MISSING)'; problems=$((problems + 1)); }
+  printf '\n'
+  [ "$c_repo" = "$REPO_ROOT" ] || printf '  note:       status was run from a different checkout (%s)\n' "$REPO_ROOT"
+  printf '  entrypoint: %s' "$c_entry"
+  if is_trampoline "$c_entry"; then
+    case "$(cat "$c_entry" 2>/dev/null || true)" in
+      *"$c_repo/scripts/agent-product-launch"*"$c_impl"*) printf ' (trampoline, references wrapper + delegate)' ;;
+      *) printf ' (trampoline INCOMPLETE — wrong references)'; problems=$((problems + 1)) ;;
+    esac
+  else
+    printf ' (NOT a trampoline — was the entrypoint replaced manually?)'; problems=$((problems + 1))
+  fi
+  printf '\n'
+  printf '  delegate:   %s' "$c_impl"
+  if [ -f "$c_impl" ] && [ -x "$c_impl" ]; then
+    printf ' (original launcher, executable)'
+  else
+    printf ' (MISSING or not executable)'; problems=$((problems + 1))
+  fi
+  printf '\n'
+  printf '  opt-out:    FG_AGENT_OBSERVABILITY=%s (%s)\n' \
+    "${FG_AGENT_OBSERVABILITY:-<unset>}" \
+    "$(obs_disabled && printf 'disabled for this shell' || printf 'capture enabled for this shell')"
+  local runst
+  runst="$(probe_running_state)"
+  printf '  capture:    %s\n' "$runst"
+  if [ "$problems" -gt 0 ]; then
+    printf 'state: INCONSISTENT — run: %s uninstall (then re-install if desired)\n' "$SELF"
+    exit 8
+  fi
+  printf 'state: installed and consistent\n'
+  exit 0
+}
+
+cmd_uninstall() {
+  if [ ! -f "$CONFIG_FILE" ]; then
+    if is_trampoline "$ENTRYPOINT"; then
+      die "trampoline present but no config at $CONFIG_FILE — cannot uninstall safely. The original launcher backup is at $IMPL_FILE; restore it manually (mv $IMPL_FILE $ENTRYPOINT)" 8
+    fi
+    printf 'agent-product-launch: not installed — nothing to do\n'
+    return 0
+  fi
+  local py
+  py="$(probe_python)"
+  [ -n "$py" ] || die "python3 required to read the install config" 1
+  local c_repo c_entry c_impl
+  c_repo="$("$py" -c 'import json,sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(1)
+if not isinstance(d, dict) or d.get("schema_version") != 1:
+    sys.exit(1)
+for k in ("repo_root", "entrypoint", "delegate"):
+    v = d.get(k)
+    if not isinstance(v, str) or not v:
+        sys.exit(1)
+    sys.stdout.write(v + "\n")
+' "$CONFIG_FILE" 2>/dev/null)" || die "install config unreadable — restore manually (backup: $IMPL_FILE)" 8
+  c_impl="$(printf '%s\n' "$c_repo" | sed -n '3p')"
+  c_entry="$(printf '%s\n' "$c_repo" | sed -n '2p')"
+  c_repo="$(printf '%s\n' "$c_repo" | sed -n '1p')"
+
+  is_trampoline "$c_entry" || die "entrypoint $c_entry is not the installed trampoline — refusing to touch it" 8
+  [ -f "$c_impl" ] || die "original launcher backup missing: $c_impl — cannot restore" 8
+
+  local tmp="$c_entry.tmp.$$"
+  cp -p "$c_impl" "$tmp" || { rm -f "$tmp"; die "restore copy failed" 1; }
+  cmp -s "$c_impl" "$tmp" || { rm -f "$tmp"; die "restore verification failed" 1; }
+  mv "$tmp" "$c_entry"
+  [ -x "$c_entry" ] || die "restored launcher is not executable" 1
+  rm -f "$CONFIG_FILE" "$c_impl"
+  rmdir "$(dirname "$CONFIG_FILE")" 2>/dev/null || true
+
+  printf 'agent-product-launch: uninstalled — original launcher restored to %s\n' "$c_entry"
+  printf 'capture state (if any) was left as-is: %s\n' "$(probe_running_state)"
+  return 0
+}
+
+usage() {
+  cat <<EOF
+Usage:
+  $SELF [launch] [launcher-args...]   (default: launch)
+      Surround the original product launcher with the per-prompt-turn
+      observability lifecycle: exec the transparent ACP prompt-turn
+      relay, which pumps the ACP stdio stream byte-transparently and
+      maps each session/prompt TURN to exactly one observability run
+      (session/prompt request -> run starts; the matching
+      session/prompt response with its stopReason -> run finalizes,
+      and the ACP session stays open). The ACP sessionId is a
+      persistent grouping dimension: session/new, session/load,
+      session/resume and session/fork are tracked for identity but
+      start no run. session/close or session/delete is cleanup only
+      (an unexpectedly open turn finalizes as interrupted); ACP
+      process exit with an active turn -> the turn finalizes as
+      interrupted. The relay never writes to stdout on this path (ACP
+      JSON-RPC safety) and never modifies protocol payloads. Exit
+      status: the original launcher's.
+  $SELF install
+      One-time, idempotent host integration: back up the original
+      launcher to ~/.local/share/lucid-codex-acp/lucid-codex-acp.impl
+      and replace ~/.local/bin/lucid-codex-acp with a trampoline that
+      calls this wrapper. Never touches auth, never embeds secrets.
+  $SELF status
+      Read-only integration report. Exit 0 consistent, 7 not
+      installed, 8 inconsistent.
+  $SELF uninstall
+      Restore the original launcher exactly (reversible one-time
+      action). Idempotent.
+  $SELF help
+
+Delegate resolution (launch): FG_PRODUCT_LAUNCH_DELEGATE (absolute
+path; set by the installed trampoline), then the install config
+~/.local/share/lucid-codex-acp/agent-product-launch.json.
+
+Opt-out (one session): FG_AGENT_OBSERVABILITY=0 (also: off/false/no/
+disabled). Direct launcher execution; no relay, collector, run or
+ledger.
+
+Concurrency: one automatically observed prompt turn at a time (single
+loopback collector). A concurrent turn (any session) fails open
+without capture and is never attached to the first run.
+
+Run identity: turn-scoped, never process-global. The ACP sessionId IS
+the native Codex thread/conversation id (CODEX_SESSION_ID in tool
+shells); the relay persists a git-ignored sessionId -> run id mapping
+(.artifacts/agent-observability/session-runs/) for the session's
+ACTIVE prompt turn only (released when the turn finalizes) so
+verification and context inside a turn resolve exactly that turn's
+run. Inherited FG_AGENT_RUN_ID is always dropped; it remains valid
+only as an explicit manual/debug override.
+
+Signals: INT/TERM/HUP forwarded to the product launcher by the relay;
+finalization is exactly-once per run; the launch path exits with the
+launcher's exit status (128+signal when the child died by signal).
+
+Environment overrides (mainly for tests): FG_PRODUCT_LAUNCH_STATE_DIR,
+FG_PRODUCT_LAUNCH_ENTRYPOINT, FG_PRODUCT_LAUNCH_DELEGATE,
+FG_PRODUCT_OBS_IN_WRAPPER (internal recursion guard),
+FG_PRODUCT_SESSION_MAP_DIR, FG_PRODUCT_RELAY_OBSCTL,
+FG_PRODUCT_RELAY_START_DEADLINE, FG_PRODUCT_RELAY_STOP_WAIT.
+
+Exit codes:
+  0    ok
+  1    generic failure
+  2    usage error / no delegate configured
+  6    original launcher not found (install)
+  7    not installed (status)
+  8    inconsistent install state
+  125  recursion guard (the wrapper must never wrap itself)
+
+Canonical documentation: docs/agent/OBSERVABILITY.md
+EOF
+}
+
+main() {
+  local cmd="${1:-launch}"
+  case "$cmd" in
+    install|status|uninstall)
+      shift
+      [ $# -eq 0 ] || { usage >&2; exit 2; }
+      case "$cmd" in
+        install) cmd_install ;;
+        status) cmd_status ;;
+        uninstall) cmd_uninstall ;;
+      esac
+      ;;
+    help|--help|-h) usage ;;
+    launch)
+      shift
+      cmd_launch "$@"
+      ;;
+    *) cmd_launch "$@" ;;
+  esac
+}
+
+main "$@"

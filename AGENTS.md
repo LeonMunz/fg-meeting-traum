@@ -33,6 +33,7 @@ Do not change these choices without an explicit architecture decision.
 - `scripts/agent-verify.sh` — repository verification helper (profiles: `quick`, `frontend`, `backend`, `core`, `e2e`, `full`)
 - `scripts/agent-doctor.sh` — read-only environment capability doctor (human + JSON)
 - `scripts/agent-observability` — local native-Codex trace capture control surface (status/start/stop/doctor/config/install/native-probe); docs in `docs/agent/OBSERVABILITY.md`
+- `scripts/agent-product-launch` — automatic product-session observability lifecycle wrapper (launch/install/status/uninstall); docs in `docs/agent/OBSERVABILITY.md` ("Automatic product-session lifecycle")
 - `scripts/tests/agent-doctor.test.sh` — doctor tests (formats, exit codes, simulated blockers)
 - `scripts/tests/agent-verify.test.sh` — agent-verify harness tests (usage, plan mode, `--summary-json` contract)
 - `scripts/tests/core-workflow.test.sh` — CI core workflow contract tests
@@ -198,16 +199,45 @@ Do not invent a new testing framework merely to complete a task.
 ## Structured run context (optional)
 
 Observability remains optional to product development: if it is unavailable
-or no capture is active, product work proceeds normally. When exactly one
-local product capture is active, attach the task's already-given **Task
-type** and **Session** to that run exactly once, using the canonical
-command (details and the full command surface in
-`docs/agent/OBSERVABILITY.md`):
+or no capture is active, product work proceeds normally. When a local
+product capture is active, attach the task's already-given **Task type**
+and **Session** to that run exactly once (details and the full command
+surface in `docs/agent/OBSERVABILITY.md`), resolving the target run as:
 
-```bash
-./scripts/agent-observability context current \
-  --task-type "<Task type>" --session "<Session>"
-```
+- **Normal automatically observed product session** — the product
+  session relay maps each session/prompt turn deterministically to its
+  own run (the native `CODEX_SESSION_ID` is the ACP session id; the
+  automatic path does NOT export `FG_AGENT_RUN_ID`, because one
+  persistent ACP process serves many sessions; between turns the
+  session has no mapping). Attach via the canonical resolver, which
+  selects the active turn's run from the session/run mapping:
+
+  ```bash
+  ./scripts/agent-observability context current \
+    --task-type "<Task type>" --session "<Session>"
+  ```
+
+  Verification needs no manual export: `agent-verify --summary-json`
+  resolves the same session/run mapping automatically (no liveness
+  discovery, no timestamp matching).
+- **Manual capture** (`FG_AGENT_RUN_ID` unset, no session mapping,
+  exactly one live capture from `agent-observability start`): the same
+  `context current` resolver selects it; for verification,
+  `RUN_ID=$(./scripts/agent-observability current-run)` then
+  `FG_AGENT_RUN_ID="$RUN_ID" ./scripts/agent-verify.sh --summary-json
+  .artifacts/agent-runs/$RUN_ID/verify-quick.json quick` is the reliable
+  path (it also covers the controller/agent identity boundary — with
+  `FG_AGENT_RUN_ID` unset, `agent-verify --summary-json` best-effort
+  auto-correlates to a single same-identity active capture, refusing
+  ambiguity, but does not detect a controller-owned capture the agent
+  cannot signal).
+- **`FG_AGENT_RUN_ID` is set in the session environment** — explicit
+  manual/debug override: it is authoritative. Attach by explicit id:
+  `./scripts/agent-observability context "$FG_AGENT_RUN_ID" --task-type
+  "<Task type>" --session "<Session>"`; verification inherits it from
+  the environment.
+- **No mapping, no live capture, no explicit id**: no correlation; work
+  proceeds normally.
 
 - Do not invent a `task_key` or `harness_variant`; pass them only when the
   task explicitly supplies one.
@@ -217,14 +247,6 @@ command (details and the full command surface in
   runtime identity (`product-runtime register`) idempotently, so the
   controller shell can later resolve the product `CODEX_HOME` — do it once
   per session, not per tool call; observability stays optional.
-- To correlate verification evidence to that capture, resolve the run id
-  with `./scripts/agent-observability current-run` and pass it as an
-  explicit `FG_AGENT_RUN_ID` (always wins; the reliable path across the
-  controller/agent identity boundary). `agent-verify --summary-json` with
-  `FG_AGENT_RUN_ID` unset best-effort auto-correlates to a single
-  same-identity active capture (refusing ambiguity) but does not detect a
-  controller-owned capture the agent cannot signal, so prefer the explicit
-  id.
 
 ## Scope control
 
