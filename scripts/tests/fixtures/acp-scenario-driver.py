@@ -76,6 +76,22 @@ failure):
                    line only (bounded diagnostic, no payload leakage,
                    observation resumes); a malformed line forwarded
                    without killing observation.
+  ready-ordering   the collector-readiness ordering contract (Cases A/F/G):
+                   collector accepting AT prompt receipt (runtime
+                   observation), prompt bytes forwarded unchanged
+                   (sha256 of the exact wire line), exactly-once, and the
+                   child's first-request telemetry (fake OTLP POST at
+                   prompt receipt) CAPTURED by the real collector.
+  ready-delayed    Case B: a deliberately delayed collector (wrapper that
+                   sleeps before binding) — the prompt stays unforwarded
+                   for the whole delay window, then forwards exactly once
+                   with the endpoint already accepting.
+  ready-fail-exit  Case C: collector exits before readiness — bounded fast
+                   failure, fail-open forwarding, no run, no mapping,
+                   failure surfaced via the start contract.
+  ready-fail-timeout Case D: collector alive but never ready — the bounded
+                   startup budget fails the start, fail-open forwarding,
+                   no orphaned run, no stale mapping.
 
 All runtime artifacts stay in the --workdir temp dir; the real
 .artifacts/agent-runs and product registration are never touched.
@@ -517,6 +533,38 @@ def has_event(workdir, fragment):
     return any(fragment in l for l in relay_events(workdir))
 
 
+def prompt_receipts(fake_log):
+    """The fake server's prompt-receipt observation lines, parsed:
+    [{'n': int, 'ts': float, 'bytes': int, 'sha256': str,
+      'port_listening': 'yes'|'no'|'n/a'}, ...] — one per session/prompt
+    line the (fake) Codex child actually received."""
+    out = []
+    try:
+        with open(fake_log) as f:
+            for l in f.read().splitlines():
+                if not l.startswith("prompt-received "):
+                    continue
+                d = {}
+                for tok in l.split()[1:]:
+                    k, _, v = tok.partition("=")
+                    d[k] = v
+                out.append(d)
+    except OSError:
+        pass
+    return out
+
+
+def fake_first_event_posted(fake_log):
+    try:
+        with open(fake_log) as f:
+            for l in f.read().splitlines():
+                if l.startswith("first-event-posted="):
+                    return l.split("=", 1)[1]
+    except OSError:
+        pass
+    return None
+
+
 def obsctl_env(workdir, repo, scenario, session_id):
     """Environment for running the control surface against the scenario's
     isolated runs/mapping as the session's agent side (CODEX_SESSION_ID)."""
@@ -867,7 +915,10 @@ def scenario_concurrency(repo, workdir, fake_bin=None, launcher=None, largs=None
     # sidecar (the foreign capture resolves the first one as
     # already_running; after the foreign run ends, the second prompt's
     # run must be observable before its response finalizes it).
-    proc, err_path = launch(repo, workdir, s, extra={"FAKE_PROMPT_DELAY": "6"})
+    fake_log = os.path.join(workdir, "conc.fake.log")
+    proc, err_path = launch(repo, workdir, s,
+                            extra={"FAKE_PROMPT_DELAY": "6",
+                                   "FAKE_LOG": fake_log})
     try:
         c = Client(proc)
         c.wait_response(c.request("initialize"), 30)
@@ -887,7 +938,11 @@ def scenario_concurrency(repo, workdir, fake_bin=None, launcher=None, largs=None
                                       read_mapping(workdir, sid)))
         if not sid:
             return
-        # a prompt turn while a foreign capture is live: fails open
+        # a prompt turn while a foreign capture is live: fails open. The
+        # prompt must NOT wait for readiness of the collector it does not
+        # own: the already_running contract resolves fast and the prompt
+        # forwards without a startup-delay window.
+        t_send = time.time()
         mid = send_prompt(c, sid)
         resp = c.wait_response(mid, 30)
         time.sleep(3.0)  # give the (impossible) capture a chance
@@ -899,6 +954,10 @@ def scenario_concurrency(repo, workdir, fake_bin=None, launcher=None, largs=None
         check("t60d fail-open warning on stderr",
               "not captured" in open(err_path).read())
         check("t60e ACP stream fully functional while uncaptured", c.wait_pong())
+        receipts = prompt_receipts(fake_log)
+        check("t60l already_running prompt forwarded without a readiness wait",
+              len(receipts) == 1 and (float(receipts[0]["ts"]) - t_send) < 5.0,
+              "receipts=%s" % receipts)
         stop_capture_manual(repo, workdir)
         check("t60f foreign run finalized",
               wait_for(lambda: not collector_alive(workdir, run_foreign), 60, None)
@@ -1596,6 +1655,281 @@ def scenario_ndjson_wire(repo, workdir, fake_bin=None, launcher=None, largs=None
         shutdown(proc)
 
 
+def scenario_ready_ordering(repo, workdir, fake_bin=None,
+                            launcher=None, largs=None):
+    """Case A + F + G — the collector-readiness ordering contract,
+    observed at RUNTIME (not by source inspection):
+
+    For a capturable prompt the collector must be CONFIRMED ACCEPTING on
+    its loopback OTLP endpoint BEFORE the prompt bytes reach the Codex
+    child. The fake server records, at the exact moment it receives the
+    session/prompt wire line, whether the endpoint already accepted a TCP
+    connection, the sha256 of the EXACT wire bytes (integrity), and the
+    receipt count (exactly-once). With FAKE_PROMPT_OTLP it also emits its
+    "first request" telemetry at prompt receipt — capturable by the real
+    collector only if readiness genuinely precedes forwarding (the
+    historical failure was precisely this first event being lost)."""
+    s = "readyord"
+    fake_log = os.path.join(workdir, "readyord.fake.log")
+    proc, err_path = launch(repo, workdir, s,
+                            extra={"FAKE_PROMPT_DELAY": "2",
+                                   "FAKE_PROMPT_OTLP": "1",
+                                   "FAKE_LOG": fake_log})
+    try:
+        c = Client(proc)
+        c.wait_response(c.request("initialize"), 30)
+        mid = c.request("session/new", {"cwd": "/tmp"})
+        msg = c.wait_response(mid)
+        sid = (msg or {}).get("result", {}).get("sessionId")
+        if not isinstance(sid, str) or not sid:
+            bad("tR0a ready-ordering: session open")
+            return
+        import hashlib
+        params = {"sessionId": sid,
+                  "prompt": [{"type": "text",
+                              "text": "FG_READY_ORDER_MARKER_%d" % os.getpid()}]}
+        body = frame({"jsonrpc": "2.0", "id": c.next_id + 1,
+                      "method": "session/prompt", "params": params})
+        mid_p = c.next_id + 1
+        c.send_raw(body)
+        t_send = time.time()
+        rid, live = wait_run_live(workdir, sid, timeout=60)
+        check("tR0b prompt turn's run live (mapping + collector)",
+              rid is not None and live, "mapping=%r" % rid)
+        resp = c.wait_response(mid_p, 60)
+        check("tR0c prompt response received (stopReason)",
+              bool(resp) and (resp.get("result") or {}).get("stopReason") == "end_turn")
+        receipts = prompt_receipts(fake_log)
+        check("tR0d prompt line forwarded exactly once (no duplication)",
+              len(receipts) == 1, "receipts=%s" % receipts)
+        if receipts:
+            r = receipts[0]
+            check("tR0e collector accepting AT prompt receipt "
+                  "(readiness strictly precedes forwarding)",
+                  r.get("port_listening") == "yes",
+                  "port_listening=%r" % r.get("port_listening"))
+            expect_sha = hashlib.sha256(body[:-1]).hexdigest()
+            check("tR0f prompt bytes forwarded unchanged (byte integrity)",
+                  r.get("sha256") == expect_sha
+                  and int(r.get("bytes", -1)) == len(body) - 1,
+                  "got=%r expected=%r bytes=%s"
+                  % (r.get("sha256"), expect_sha, r.get("bytes")))
+            check("tR0g receipt not before the send (sanity)",
+                  float(r.get("ts", 0)) >= t_send - 0.5,
+                  "ts=%r t_send=%r" % (r.get("ts"), t_send))
+        check("tR0h first-request telemetry POST succeeded at prompt receipt",
+              fake_first_event_posted(fake_log) == "yes",
+              "posted=%r" % fake_first_event_posted(fake_log))
+        raw_logs = os.path.join(run_dir(workdir, rid), "raw", "logs.jsonl") if rid else ""
+
+        def _first_event_captured():
+            try:
+                with open(raw_logs, "rb") as f:
+                    return b"fg_first_event" in f.read()
+            except OSError:
+                return False
+        check("tR0i first request's telemetry CAPTURED by the real collector "
+              "(historical regression criterion: the initial request is not lost)",
+              bool(rid) and wait_for(_first_event_captured, 30, None),
+              "raw=%s" % raw_logs)
+        if rid:
+            check_turn_finalized(workdir, sid, rid, "tR0j prompt response",
+                                 "graceful")
+        check("tR0k relay log: gate released after the started contract",
+              has_event(workdir, "start-result session=%s status=started" % sid)
+              and has_event(workdir, "gate-released session=%s" % sid),
+              "events=%s" % " | ".join(relay_events(workdir)[-12:]))
+        proc.stdin.close()
+        rc = proc.wait(timeout=60)
+        check("tR0l launch path exits 0", rc == 0, "rc=%s" % rc)
+    finally:
+        shutdown(proc)
+
+
+def scenario_ready_delayed(repo, workdir, fake_bin=None, launcher=None,
+                           largs=None):
+    """Case B — bounded startup delay: the collector needs a deliberate,
+    bounded time to become ready. The prompt must remain UNFORWARDED
+    during that entire window (observed: receipt happens no earlier than
+    the delay budget minus slack, and the endpoint is already accepting
+    at receipt), and once readiness is signaled the prompt forwards
+    exactly once."""
+    s = "readydly"
+    slow = os.environ.get("FG_PL_SLOW_OTELCOL", "")
+    real = os.environ.get("FG_PL_REAL_OTELCOL", "")
+    delay = float(os.environ.get("FG_PL_SLOW_DELAY", "3"))
+    if not (slow and real and os.path.exists(slow) and os.path.exists(real)):
+        bad("tS00 ready-delayed requires FG_PL_SLOW_OTELCOL + FG_PL_REAL_OTELCOL")
+        return
+    fake_log = os.path.join(workdir, "readydly.fake.log")
+    proc, err_path = launch(repo, workdir, s, extra={
+        "FAKE_PROMPT_DELAY": "2",
+        "FG_OTELCOL": slow,
+        "SLOW_REAL": real,
+        "SLOW_COLLECTOR_DELAY": str(delay),
+        "FAKE_LOG": fake_log,
+    })
+    try:
+        c = Client(proc)
+        c.wait_response(c.request("initialize"), 30)
+        mid = c.request("session/new", {"cwd": "/tmp"})
+        msg = c.wait_response(mid)
+        sid = (msg or {}).get("result", {}).get("sessionId")
+        if not isinstance(sid, str) or not sid:
+            bad("tS01 ready-delayed: session open")
+            return
+        t_send = time.time()
+        mid_p = send_prompt(c, sid)
+        rid, live = wait_run_live(workdir, sid, timeout=90)
+        check("tS02 delayed run live", rid is not None and live,
+              "mapping=%r" % rid)
+        resp = c.wait_response(mid_p, 90)
+        check("tS03 prompt response received",
+              bool(resp) and (resp.get("result") or {}).get("stopReason") == "end_turn")
+        receipts = prompt_receipts(fake_log)
+        check("tS04 prompt forwarded exactly once (no duplication)",
+              len(receipts) == 1, "receipts=%s" % receipts)
+        if receipts:
+            gap = float(receipts[0]["ts"]) - t_send
+            check("tS05 prompt UNFORWARDED during the startup delay window",
+                  gap >= delay - 1.0,
+                  "receipt_gap=%.2fs delay=%.1fs" % (gap, delay))
+            check("tS06 collector accepting AT prompt receipt",
+                  receipts[0].get("port_listening") == "yes",
+                  "port_listening=%r" % receipts[0].get("port_listening"))
+        if rid:
+            check_turn_finalized(workdir, sid, rid, "tS07 prompt response",
+                                 "graceful")
+        proc.stdin.close()
+        rc = proc.wait(timeout=60)
+        check("tS08 launch path exits 0", rc == 0, "rc=%s" % rc)
+    finally:
+        shutdown(proc)
+
+
+def scenario_ready_fail_exit(repo, workdir, fake_bin=None, launcher=None,
+                             largs=None):
+    """Case C — the collector process EXITS before readiness (validate
+    passes, the process dies without ever binding the port). Derived
+    policy (from the existing fail-open semantics): the turn is
+    uncaptured, the failure is surfaced through the start sidecar's
+    error contract (bounded warning + start-error event), no run dir and
+    no mapping are left behind, and the prompt STILL forwards
+    (fail-open; the child may proceed without a collector). The wait is
+    bounded: a collector that is already dead cannot hold the prompt
+    until the full startup budget."""
+    s = "readyfx"
+    broken = os.environ.get("FG_PL_FAILEXIT_OTELCOL", "")
+    if not broken or not os.path.exists(broken):
+        bad("tU00 ready-fail-exit requires FG_PL_FAILEXIT_OTELCOL")
+        return
+    fake_log = os.path.join(workdir, "readyfx.fake.log")
+    proc, err_path = launch(repo, workdir, s, extra={
+        "FAKE_PROMPT_DELAY": "2",
+        "FG_OTELCOL": broken,
+        "FAKE_LOG": fake_log,
+    })
+    try:
+        c = Client(proc)
+        c.wait_response(c.request("initialize"), 30)
+        mid = c.request("session/new", {"cwd": "/tmp"})
+        msg = c.wait_response(mid)
+        sid = (msg or {}).get("result", {}).get("sessionId")
+        if not isinstance(sid, str) or not sid:
+            bad("tU01 ready-fail-exit: session open")
+            return
+        t_send = time.time()
+        mid_p = send_prompt(c, sid)
+        resp = c.wait_response(mid_p, 60)
+        t_resp = time.time()
+        check("tU02 prompt response received (fail-open, stream intact)",
+              bool(resp) and (resp.get("result") or {}).get("stopReason") == "end_turn")
+        check("tU03 no indefinite wait: failure surfaced fast",
+              (t_resp - t_send) < 20, "elapsed=%.1fs" % (t_resp - t_send))
+        time.sleep(2.0)
+        check("tU04 no run left behind (failed start cleaned up)",
+              list_runs(workdir) == [], "runs=%s" % list_runs(workdir))
+        check("tU05 no stale mapping", read_mapping(workdir, sid) is None,
+              "mapping=%r" % read_mapping(workdir, sid))
+        receipts = prompt_receipts(fake_log)
+        check("tU06 prompt forwarded exactly once",
+              len(receipts) == 1, "receipts=%s" % receipts)
+        if receipts:
+            check("tU07 fail-open: forwarded without readiness (no collector)",
+                  receipts[0].get("port_listening") == "no",
+                  "port_listening=%r" % receipts[0].get("port_listening"))
+        err = open(err_path).read()
+        check("tU08 failure surfaced through the harness result mechanism",
+              "not captured" in err, "stderr tail=%r" % err[-300:])
+        check("tU09 relay recorded the start error",
+              has_event(workdir, "start-error session=%s" % sid),
+              "events=%s" % " | ".join(relay_events(workdir)[-8:]))
+        check("tU10 ACP stream fully functional while uncaptured", c.wait_pong())
+        proc.stdin.close()
+        rc = proc.wait(timeout=60)
+        check("tU11 launch path exits 0 (fail-open never breaks the session)",
+              rc == 0, "rc=%s" % rc)
+    finally:
+        shutdown(proc)
+
+
+def scenario_ready_fail_timeout(repo, workdir, fake_bin=None, launcher=None,
+                                largs=None):
+    """Case D — the collector process stays ALIVE but never becomes
+    ready (never binds the port). The control surface's bounded startup
+    budget (15s) must fail the start: kill + cleanup + explicit error.
+    The relay must not hang, must leave no run and no mapping, and must
+    still forward the prompt (fail-open)."""
+    s = "readyft"
+    never = os.environ.get("FG_PL_NEVERREADY_OTELCOL", "")
+    if not never or not os.path.exists(never):
+        bad("tV00 ready-fail-timeout requires FG_PL_NEVERREADY_OTELCOL")
+        return
+    fake_log = os.path.join(workdir, "readyft.fake.log")
+    proc, err_path = launch(repo, workdir, s, extra={
+        "FAKE_PROMPT_DELAY": "2",
+        "FG_OTELCOL": never,
+        "FAKE_LOG": fake_log,
+    })
+    try:
+        c = Client(proc)
+        c.wait_response(c.request("initialize"), 30)
+        mid = c.request("session/new", {"cwd": "/tmp"})
+        msg = c.wait_response(mid)
+        sid = (msg or {}).get("result", {}).get("sessionId")
+        if not isinstance(sid, str) or not sid:
+            bad("tV01 ready-fail-timeout: session open")
+            return
+        t_send = time.time()
+        mid_p = send_prompt(c, sid)
+        resp = c.wait_response(mid_p, 90)
+        t_resp = time.time()
+        check("tV02 bounded startup timeout: prompt forwarded within budget",
+              resp is not None and (t_resp - t_send) < 35,
+              "elapsed=%.1fs" % (t_resp - t_send))
+        time.sleep(3.0)
+        check("tV03 no orphaned owned capture",
+              list_runs(workdir) == [], "runs=%s" % list_runs(workdir))
+        check("tV04 no stale mapping", read_mapping(workdir, sid) is None,
+              "mapping=%r" % read_mapping(workdir, sid))
+        receipts = prompt_receipts(fake_log)
+        check("tV05 prompt forwarded exactly once, without readiness",
+              len(receipts) == 1
+              and receipts[0].get("port_listening") == "no",
+              "receipts=%s" % receipts)
+        check("tV06 relay recorded the start error (startup budget failed)",
+              has_event(workdir, "start-error session=%s" % sid),
+              "events=%s" % " | ".join(relay_events(workdir)[-8:]))
+        check("tV07 failure surfaced (turn not captured)",
+              "not captured" in open(err_path).read())
+        check("tV08 ACP stream fully functional while uncaptured", c.wait_pong())
+        proc.stdin.close()
+        rc = proc.wait(timeout=60)
+        check("tV09 launch path exits 0", rc == 0, "rc=%s" % rc)
+    finally:
+        shutdown(proc)
+
+
 SCENARIOS = {
     "prompt-turn": scenario_prompt_turn,
     "id-correlation": scenario_id_correlation,
@@ -1616,6 +1950,10 @@ SCENARIOS = {
     "session-reopen": scenario_session_reopen,
     "map-fail": scenario_map_fail,
     "ndjson-wire": scenario_ndjson_wire,
+    "ready-ordering": scenario_ready_ordering,
+    "ready-delayed": scenario_ready_delayed,
+    "ready-fail-exit": scenario_ready_fail_exit,
+    "ready-fail-timeout": scenario_ready_fail_timeout,
 }
 
 

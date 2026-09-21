@@ -450,11 +450,13 @@ render_config() { # render_config <run_dir> <out_file>
       "$TEMPLATE" > "$2"
 }
 
-wait_port_listening() { # wait_port_listening <timeout_ms>; 0 when listening
-  local py deadline now
+wait_port_listening() { # wait_port_listening <timeout_ms> [pid]; 0 when listening
+  local py deadline now reason
   py="$(probe_python)"
   [ -n "$py" ] || return 1
   deadline=$(( $(date +%s) * 1000 + ${1:-10000} ))
+  local pid="${2:-}"
+  reason="did not start listening"
   while :; do
     if "$py" - "$PORT" <<'PY' >/dev/null 2>&1
 import socket, sys
@@ -468,8 +470,17 @@ except Exception:
     sys.exit(1)
 PY
     then return 0; fi
+    # A collector that EXITED before it could bind the port can never
+    # become ready: fail fast instead of spending the whole budget
+    # (same failure contract; the caller kills/cleans up and dies).
+    if [ -n "$pid" ] && ! pid_alive "$pid"; then
+      reason="exited before listening"
+      return 1
+    fi
     now=$(( $(date +%s) * 1000 ))
-    [ "$now" -ge "$deadline" ] && return 1
+    if [ "$now" -ge "$deadline" ]; then
+      return 1
+    fi
     sleep 0.2
   done
 }
@@ -490,7 +501,7 @@ start_collector() { # start_collector <run_dir> ; sets COLLECTOR_PID
   nohup "$COLLECTOR" --config "$cfg" > "$run_dir/collector.log" 2>&1 &
   COLLECTOR_PID=$!
   printf '%s' "$COLLECTOR_PID" > "$run_dir/collector.pid"
-  if ! wait_port_listening 15000; then
+  if ! wait_port_listening 15000 "$COLLECTOR_PID"; then
     kill "$COLLECTOR_PID" 2>/dev/null || true
     wait "$COLLECTOR_PID" 2>/dev/null || true
     # The run dir was created by this very start call (fresh run id); a
@@ -498,7 +509,7 @@ start_collector() { # start_collector <run_dir> ; sets COLLECTOR_PID
     # failed start never leaves a half-created run behind (fail-open
     # callers must find a clean runs root).
     rm -rf "$run_dir"
-    die "collector did not start listening on 127.0.0.1:$PORT" 1
+    die "collector $reason on 127.0.0.1:$PORT" 1
   fi
 }
 

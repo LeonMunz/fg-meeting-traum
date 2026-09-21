@@ -38,7 +38,15 @@
 #     turn)
 #   * concurrency: a foreign live capture -> the prompt turn fails
 #     open (never attached); after the foreign run ends, the SAME
-#     session's next prompt is captured (distinct run)
+#     session's next prompt is captured (distinct run); the
+#     already_running prompt does NOT wait for a readiness it does
+#     not own
+#   * collector readiness ordering (t18): for a capturable prompt the
+#     collector is confirmed accepting OTLP BEFORE the prompt bytes are
+#     forwarded (runtime observation at prompt receipt: port-accepting
+#     probe + exact wire-bytes hash + exactly-once); bounded startup
+#     delay holds the prompt until readiness; collector exit-before-ready
+#     and alive-never-ready fail bounded, fail-open, no run, no mapping
 #   * run identity: inherited stale FG_AGENT_RUN_ID dropped; the
 #     active-turn mapping (CODEX_SESSION_ID) resolves exactly the
 #     turn's run — including over a newer live run (no newest-run
@@ -303,6 +311,63 @@ fi
 # (framer-bypass … headers-oversized) and never saw session/new.
 if [ "$E2E_AVAILABLE" -eq 1 ]; then
   run_scenario "t16" ndjson-wire
+fi
+
+# ------------------------------------- t18 collector readiness ordering --
+# The ordering invariant: for a capturable prompt, the collector is
+# CONFIRMED ACCEPTING on its loopback OTLP endpoint BEFORE the prompt
+# bytes are forwarded to the Codex child. The fake server observes the
+# runtime order directly (live port-accepting probe at prompt receipt,
+# sha256 of the exact wire line, exactly-once receipt, and a
+# first-request OTLP event that is only capturable if readiness
+# genuinely precedes forwarding — see the scenario docstrings in
+# acp-scenario-driver.py, ready-ordering / ready-delayed /
+# ready-fail-exit / ready-fail-timeout).
+if [ "$E2E_AVAILABLE" -eq 1 ]; then
+  REAL_OTELCOL=""
+  if command -v otelcol >/dev/null 2>&1; then
+    REAL_OTELCOL="$(command -v otelcol)"
+  else
+    REAL_OTELCOL="$(ls "$REPO_ROOT/.artifacts/agent-observability/otelcol"/*/otelcol 2>/dev/null | head -n1)"
+  fi
+  if [ -n "$REAL_OTELCOL" ] && [ -x "$REAL_OTELCOL" ]; then
+    # Slow collector: a bounded, deliberate delay before the real
+    # collector binds the port (Case B).
+    SLOW_OTELCOL="$T/slow-otelcol"
+    {
+      printf '#!/bin/sh\n'
+      printf 'if [ "$1" = "validate" ]; then exit 0; fi\n'
+      printf 'if [ "$1" = "--version" ]; then exec "$SLOW_REAL" --version; fi\n'
+      printf 'sleep "${SLOW_COLLECTOR_DELAY:-3}"\n'
+      printf 'exec "$SLOW_REAL" "$@"\n'
+    } > "$SLOW_OTELCOL"
+    chmod 755 "$SLOW_OTELCOL"
+    # Collector that passes validate but EXITS before readiness (Case C).
+    FAILEXIT_OTELCOL="$T/fail-exit-otelcol"
+    {
+      printf '#!/bin/sh\n'
+      printf 'if [ "$1" = "validate" ]; then exit 0; fi\n'
+      printf 'if [ "$1" = "--version" ]; then exit 1; fi\n'
+      printf 'sleep 0.3\n'
+      printf 'exit 7\n'
+    } > "$FAILEXIT_OTELCOL"
+    chmod 755 "$FAILEXIT_OTELCOL"
+    # Collector that stays ALIVE but never binds the port (Case D).
+    NEVERREADY_OTELCOL="$T/never-ready-otelcol"
+    {
+      printf '#!/bin/sh\n'
+      printf 'if [ "$1" = "validate" ]; then exit 0; fi\n'
+      printf 'if [ "$1" = "--version" ]; then exit 1; fi\n'
+      printf 'sleep 300\n'
+    } > "$NEVERREADY_OTELCOL"
+    chmod 755 "$NEVERREADY_OTELCOL"
+
+    run_scenario "t18" ready-ordering
+    FG_PL_SLOW_OTELCOL="$SLOW_OTELCOL" FG_PL_REAL_OTELCOL="$REAL_OTELCOL" \
+      FG_PL_SLOW_DELAY=3 run_scenario "t18" ready-delayed
+    FG_PL_FAILEXIT_OTELCOL="$FAILEXIT_OTELCOL" run_scenario "t18" ready-fail-exit
+    FG_PL_NEVERREADY_OTELCOL="$NEVERREADY_OTELCOL" run_scenario "t18" ready-fail-timeout
+  fi
 fi
 
 # ------------------------------------------------- t17 framer unit tests --

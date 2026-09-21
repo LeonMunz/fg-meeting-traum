@@ -254,12 +254,15 @@ scripts/agent-product-launch launch (recursion guard, opt-out, delegate)
         |
         v
 scripts/observability/acp-lifecycle-relay.py
-   (byte-transparent NDJSON stdio relay; observes session/prompt turns)
+   (byte-transparent NDJSON stdio relay; observes session/prompt turns;
+    holds a capturable prompt line until the collector is confirmed
+    accepting — readiness ordering)
         |
         v
 Original launcher (delegate) -> codex-acp -> policy guard -> Codex
         |
-        |  per prompt turn:  request -> agent-observability start --json
+        |  per prompt turn:  request -> start --json (held until the
+        |                   collector is accepting) -> prompt forwarded
         |                   response(stopReason) -> stop --stop-status graceful
         v
 otelcol-contrib 0.161.0 (loopback-only OTLP/HTTP JSON, 127.0.0.1:4318)
@@ -1252,6 +1255,12 @@ second repository's integration would clobber the first — see §33
   stdout → client stdout **byte-for-byte**, preserving framing and
   backpressure. `stdout` carries ACP bytes only; every diagnostic goes to
   stderr.
+  Exactly one ordering exception: the bytes of a CAPTURABLE
+  `session/prompt` line are HELD (never modified, never dropped) from
+  turn start until the turn's start contract confirms the collector is
+  accepting OTLP — `started`, or the fail-open outcomes
+  (`already_running` / error / timeout) — and are then forwarded
+  unchanged; no other ACP message is held (§17.2, readiness ordering).
 - *Fragmentation*: bytes arrive in arbitrary chunks; the wire observer
   (`NdjsonFramer`) reassembles lines across chunk boundaries.
 - *Multi-line reads*: several JSON-RPC lines in one read are all observed.
@@ -1294,7 +1303,9 @@ reads, per-line skip boundary, CRLF, blank lines, and long lines.
   / `session-seen`, `open-ignored` / `open-no-session-id` /
   `open-response-incomplete`, `turn-start` / `turn-uncaptured` /
   `prompt-ignored`, `start-result` / `start-error`, `mapping-written` /
-  `mapping-write-failed`, `turn-response` (+`-pending` / `-unmatched` /
+  `mapping-write-failed`, `gate-released` (session id + held byte
+  count — the held prompt bytes are forwarded now), `turn-response`
+  (+`-pending` / `-unmatched` /
   `-late` / `-norun`), `turn-finalize` (+`-during-start` / `-ignored`),
   `close-pending` / `close-launched` / `close-ignored` / `close-unknown` /
   `session-closed`, `stop-result`, `frame-skipped`, `observe-error`.
@@ -1346,7 +1357,19 @@ Opens track session **identity only** — they start no run.
   `agent-observability start --json` as a short-lived sidecar
   (`started` → mapping written, turn run OPEN; `already_running` → turn
   uncaptured, one at a time; error/timeout → fail open, one bounded
-  warning, stream intact). The sidecar also persists `params.sessionId`
+  warning, stream intact). **Readiness ordering (invariant):** the
+  collector must be CONFIRMED ACCEPTING on its loopback OTLP endpoint
+  BEFORE a captured prompt's bytes are forwarded to the Codex child.
+  The `started` contract IS that confirmation — the control surface
+  emits it only once the collector's OTLP port is confirmed listening
+  (bounded local TCP probe; bounded startup budget; explicit failure
+  on exit-before-ready or timeout) — so the relay HOLDS the capturable
+  prompt line (byte-intact) from turn start until the contract
+  resolves, and forwards it unchanged only then. The turn's first
+  telemetry events therefore cannot be lost to collector startup.
+  `already_running` and the failure outcomes fail open WITHOUT a
+  readiness wait: an uncaptured prompt never waits for a collector it
+  does not own. The sidecar also persists `params.sessionId`
   (the native Codex conversation of the ACP session) into the run's
   capture manifest as `captured_conversation_id` at seed time — durable
   run metadata that survives finalization and the release of the

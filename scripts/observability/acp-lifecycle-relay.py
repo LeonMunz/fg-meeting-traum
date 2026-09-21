@@ -71,6 +71,21 @@ Identity:
     session id that Codex exports into tool shells) + this mapping —
     deterministic, never timestamp-nearest, never newest-run guessing.
 
+Readiness ordering (captured prompts):
+  * the collector must be confirmed ACCEPTING on its loopback OTLP
+    endpoint BEFORE a captured prompt's bytes reach the Codex child —
+    otherwise the turn's first telemetry events are lost to collector
+    startup. A capturable session/prompt line is therefore HELD by the
+    pump (never modified, never dropped) from the moment its turn's
+    start sidecar begins, until the start contract resolves:
+    "started" (collector confirmed listening on its OTLP endpoint), or
+    the fail-open outcomes "already_running" / error / timeout (the
+    prompt then proceeds uncaptured). The held bytes — the prompt line
+    plus any lines that arrived while it was held — are then forwarded
+    UNCHANGED, in the client's original order. No other ACP message is
+    held: everything before the prompt line, and everything after the
+    release, passes through immediately.
+
 Privacy / protocol safety:
   * never modifies or re-serializes protocol payloads (bytes are
     forwarded as-is; only method/id/sessionId fields are observed);
@@ -299,10 +314,12 @@ class NdjsonFramer:
 
     MAX_LINE = 262144  # per-line observation bound (256 KiB)
 
-    def __init__(self, on_message, on_error=None, on_skipped=None):
+    def __init__(self, on_message, on_error=None, on_skipped=None,
+                 on_hold=None):
         self.on_message = on_message
         self.on_error = on_error       # callback(str) — bounded diagnostics
         self.on_skipped = on_skipped   # callback() — once per skipped line
+        self.on_hold = on_hold         # callback(bytes) — hold this line
         self.buf = b""
         self.skipping = False
 
@@ -355,6 +372,7 @@ class NdjsonFramer:
             self._skipped()
 
     def _deliver(self, line):
+        raw = line  # as received (keeps a CRLF \r): the hold contract
         if line.endswith(b"\r"):
             line = line[:-1]
         if not line.strip():
@@ -369,12 +387,22 @@ class NdjsonFramer:
             return
         if isinstance(msg, dict):
             try:
-                self.on_message(msg)
+                result = self.on_message(msg)
             except Exception:
                 # An observer failure must never be silent (it used to be
                 # swallowed here, hiding lifecycle failures with zero
                 # trace) and must never break the stream.
                 self._observe_error("observer: %s" % _short_exc())
+                return
+            if result == "HOLD" and self.on_hold:
+                # The observer started a new capture turn for this line:
+                # hand the EXACT wire bytes (terminator included) to the
+                # pump, which must not forward them until the turn's
+                # start contract confirms collector readiness.
+                try:
+                    self.on_hold(raw + b"\n")
+                except Exception:
+                    pass
 
 
 def _short_exc():
@@ -608,6 +636,27 @@ class Relay:
         self._pending_prompts = {}   # prompt request id -> session id
         self._prompt_ids = {}        # recently seen prompt ids (bounded)
         self._events = EventLog(RELAY_LOG)
+        # Prompt-readiness gate (see module docstring, "Readiness
+        # ordering"): a capturable session/prompt line is HELD — never
+        # modified, never dropped — until its start contract confirms
+        # the collector is accepting OTLP. _gate_sid names the deciding
+        # session (None = stream open); _held_prefix is the gating line
+        # (already observed at hold time); _held_buf holds the raw bytes
+        # that arrived while the gate was engaged (unobserved — they
+        # re-enter the normal line path on release).
+        self._gate_sid = None
+        self._held_prefix = b""
+        self._held_buf = b""
+        self._hold_requested = False
+        self._hold_line = b""
+        # Pump-side line reassembly (client direction). The bound is the
+        # framer's MAX_LINE: a line beyond it is streamed through
+        # unobserved — never observed, never captured, never gated —
+        # exactly like the framer's oversized-line skip.
+        self._cl_buf = b""
+        self._cl_skip = False
+        self._framer_in = None
+        self.child_in_fd = None
         # Route the module-level log() through the same bounded sink so
         # every diagnostic lands on stderr AND in the git-ignored file.
         global _EVENT_LOG
@@ -639,7 +688,13 @@ class Relay:
             if valid_id(sid):
                 self.close_session(sid)
         elif method == PROMPT_METHOD:
-            self.on_prompt_request(sid, msg.get("id"))
+            if self.on_prompt_request(sid, msg.get("id")):
+                # A NEW capture turn started for this line: the collector
+                # must be confirmed accepting OTLP BEFORE the line's bytes
+                # reach the Codex child (ordering invariant). Signal the
+                # pump to hold the line until the start contract resolves.
+                self._gate_sid = sid
+                return "HOLD"
 
     def on_server_message(self, msg):
         if "method" in msg:
@@ -738,18 +793,22 @@ class Relay:
                            % (sid, via))
 
     def on_prompt_request(self, sid, mid):
+        """Observe one session/prompt request. Returns True iff a NEW
+        capture turn was started for it — the pump then holds the line:
+        the collector must be confirmed accepting before the prompt
+        bytes reach the Codex child (readiness ordering)."""
         if mid is None:
             # A prompt without a request id cannot be correlated to its
             # response: never start a run for it (bounded record only —
             # the prompt body itself is never read).
             self._events.write("prompt-ignored session=%s reason=no-id"
                                % (sid if valid_id(sid) else "none"))
-            return
+            return False
         if not valid_id(sid):
             self._events.write("prompt-ignored id=%s reason=bad-session-id"
                                % _fmt_id(mid))
-            return
-        self.start_turn(sid, mid)
+            return False
+        return self.start_turn(sid, mid)
 
     def start_turn(self, sid, mid):
         st = self.sessions.get(sid)
@@ -766,21 +825,21 @@ class Relay:
             self._events.write("prompt-ignored session=%s id=%s "
                                "reason=turn-in-progress state=%s"
                                % (sid, _fmt_id(mid), st["state"]))
-            return
+            return False
         if st["state"] == "closed":
             # A prompt to a closed session is a protocol violation:
             # never resurrect a run.
             self._events.write("prompt-ignored session=%s id=%s "
                                "reason=session-closed"
                                % (sid, _fmt_id(mid)))
-            return
+            return False
         # state is "idle" or "uncaptured": a new prompt turn.
         if not self.capture_available:
             st["state"] = "uncaptured"
             self._events.write("turn-uncaptured session=%s id=%s "
                                "reason=control-surface-unavailable"
                                % (sid, _fmt_id(mid)))
-            return
+            return False
         self._remember_pending_prompt(mid, sid)
         st["state"] = "pending"
         st["turn_id"] = mid
@@ -794,6 +853,7 @@ class Relay:
         st["stop_status"] = None
         st["closed"] = False
         self._events.write("turn-start session=%s id=%s" % (sid, _fmt_id(mid)))
+        return True
 
     def on_prompt_response(self, sid, mid, msg):
         st = self.sessions.get(sid)
@@ -1101,6 +1161,121 @@ class Relay:
         except Exception:
             pass
 
+    # ----- prompt-readiness gate (collector accepting before forwarding) --
+
+    def _on_client_hold(self, raw_line):
+        # The framer's hold signal: the just-observed line started a new
+        # capture turn. The pump queues the EXACT wire bytes (they are
+        # NOT forwarded until the gate releases).
+        self._hold_requested = True
+        self._hold_line = raw_line
+
+    def _forward_or_hold(self, line):
+        if self._gate_sid is not None:
+            self._held_buf += line
+        else:
+            self._write_all(self.child_in_fd, line)
+
+    def _emit_client_line(self, line):
+        # One COMPLETE client line (terminator included, within the
+        # observation bound): observe it, then forward — UNLESS the
+        # observation engaged the gate (a new capture turn started for
+        # this line): then the line itself is held until the start
+        # contract confirms collector readiness.
+        self._hold_requested = False
+        self._hold_line = b""
+        self._framer_in.feed(line)
+        if self._hold_requested and self._gate_sid is not None:
+            self._hold_requested = False
+            self._held_prefix += self._hold_line
+            return
+        self._forward_or_hold(line)
+
+    def _feed_client(self, data):
+        # Client stdin → child stdin, line-aware and gate-aware, but
+        # BYTE-TRANSPARENT: every byte is forwarded exactly once, in
+        # order. Only a capturable prompt line (and the lines behind it)
+        # may be DELAYED by the readiness gate — never dropped, never
+        # modified.
+        if self._gate_sid is not None:
+            # Gate engaged: hold everything; on release the held bytes
+            # re-enter this same path (line splitting + per-line
+            # decision), preserving the client's original order.
+            self._held_buf += data
+            return
+        if self._cl_skip:
+            # Inside an oversized line (beyond the observation bound):
+            # stream the bytes through until its terminating newline.
+            i = data.find(b"\n")
+            if i < 0:
+                self._write_all(self.child_in_fd, data)
+                return
+            head, data = data[:i + 1], data[i + 1:]
+            self._cl_skip = False
+            self._write_all(self.child_in_fd, head)
+            if not data:
+                return
+        self._cl_buf += data
+        maxline = NdjsonFramer.MAX_LINE
+        while True:
+            if self._gate_sid is not None:
+                # A line earlier in this chunk engaged the gate: hold
+                # the rest of the stream (order is preserved on release).
+                self._held_buf += self._cl_buf
+                self._cl_buf = b""
+                return
+            i = self._cl_buf.find(b"\n")
+            if i < 0:
+                break
+            line = self._cl_buf[:i + 1]
+            self._cl_buf = self._cl_buf[i + 1:]
+            if len(line) > maxline + 1:
+                # Complete line beyond the observation bound (the framer
+                # would skip it: never observed, never captured, never
+                # gated): forward as-is + the one bounded diagnostic.
+                if self._framer_in.on_skipped:
+                    self._framer_in.on_skipped()
+                self._write_all(self.child_in_fd, line)
+                continue
+            self._emit_client_line(line)
+        if len(self._cl_buf) > maxline:
+            # The unterminated line is already beyond the observation
+            # bound: it can no longer be observed; stream it through and
+            # skip until its terminator (observation resumes there).
+            if self._framer_in.on_skipped:
+                self._framer_in.on_skipped()
+            self._write_all(self.child_in_fd, self._cl_buf)
+            self._cl_buf = b""
+            self._cl_skip = True
+
+    def _release_gate_if_resolved(self):
+        # Called each pump tick after process_sidecars(): when the
+        # gating turn's start sidecar has a FINAL contract (started /
+        # already_running / error / timeout — consumed by
+        # process_sidecars, which wrote the mapping for a "started"
+        # turn), the gate is released: the held bytes go to the child
+        # NOW, in order. Fail-open by construction: every terminal
+        # outcome releases; the gate only ever DELAYS, never drops.
+        sid = self._gate_sid
+        if sid is None:
+            return
+        st = self.sessions.get(sid)
+        if st is not None and st.get("start") is not None:
+            return  # the start contract is not final yet
+        self._gate_sid = None
+        held = len(self._held_prefix) + len(self._held_buf)
+        self._events.write("gate-released session=%s held_bytes=%d"
+                           % (sid, held))
+        prefix, buf = self._held_prefix, self._held_buf
+        self._held_prefix = b""
+        self._held_buf = b""
+        if prefix:
+            # The gating line was already observed at hold time: forward
+            # it as-is (observing it again would double-log the turn).
+            self._write_all(self.child_in_fd, prefix)
+        if buf:
+            self._feed_client(buf)
+
     # ----- main pump ---------------------------------------------------------
 
     def run(self):
@@ -1123,17 +1298,21 @@ class Relay:
 
         framer_in = NdjsonFramer(self.on_client_message,
                                  on_error=self._framer_error("in"),
-                                 on_skipped=self._framer_skipped("in"))
+                                 on_skipped=self._framer_skipped("in"),
+                                 on_hold=self._on_client_hold)
         framer_out = NdjsonFramer(self.on_server_message,
                                   on_error=self._framer_error("out"),
                                   on_skipped=self._framer_skipped("out"))
         child_in_fd = self.child.stdin.fileno()
         child_out_fd = self.child.stdout.fileno()
         out_fd = sys.stdout.fileno()
+        self._framer_in = framer_in
+        self.child_in_fd = child_in_fd
 
         try:
             while True:
                 self.process_sidecars()
+                self._release_gate_if_resolved()
                 rlist = [child_out_fd]
                 if self.stdin_open:
                     rlist.insert(0, 0)
@@ -1141,8 +1320,7 @@ class Relay:
                 if 0 in r and self.stdin_open:
                     data = os.read(0, CHUNK)
                     if data:
-                        self._write_all(child_in_fd, data)
-                        framer_in.feed(data)
+                        self._feed_client(data)
                     else:
                         # Client closed the stream: half-close the child's
                         # stdin (the ACP server sees EOF and will exit).

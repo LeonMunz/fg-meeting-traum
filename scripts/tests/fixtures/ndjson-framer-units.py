@@ -18,6 +18,10 @@ Coverage (the exact real-failure regression at unit level):
   * CRLF line endings are tolerated; blank lines are ignored;
   * the old failure cannot recur: a long line without any CRLF header
     terminator is just a (long) line — no stream-wide bypass exists.
+  * the observer HOLD contract: an observer may return "HOLD" and the
+    framer hands the EXACT wire bytes of that line (terminator
+    included) to the on_hold callback (the pump's prompt-readiness
+    gate holds capturable prompts until collector readiness).
 """
 
 import importlib.util
@@ -182,6 +186,29 @@ def main():
     check("u15 long-but-valid line observed (no headers-oversized bypass)",
           len(msgs) == 1 and msgs[0]["id"] == 7 and not skipped,
           "skipped=%s errors=%s" % (skipped, errors))
+
+    # 8) observer HOLD contract (the pump's prompt-readiness gate): an
+    #    observer that returns "HOLD" receives the EXACT wire bytes of
+    #    the signaled line (terminator included; CRLF preserved) via
+    #    on_hold, so the pump can keep a capturable prompt unforwarded
+    #    until the collector is confirmed accepting.
+    holds = []
+    fr = Framer(lambda m: "HOLD", on_hold=holds.append)
+    crlf_line = (json.dumps({"jsonrpc": "2.0", "id": 8,
+                             "method": "session/prompt",
+                             "params": {"sessionId": "s5"}}) + "\r\n").encode()
+    fr.feed(crlf_line)
+    check("u16 HOLD: exact wire bytes (terminator included) handed to on_hold",
+          holds == [crlf_line], "holds=%s" % holds)
+    second = (json.dumps({"jsonrpc": "2.0", "id": 9,
+                          "method": "test/ping"}) + "\n").encode()
+    fr.feed(second)
+    check("u17 HOLD: one signal per observed line, exact bytes",
+          len(holds) == 2 and holds[1] == second, "holds=%s" % holds)
+    holds2 = []
+    fr2 = Framer(lambda m: None, on_hold=holds2.append)
+    fr2.feed(crlf_line + second)
+    check("u18 no HOLD return: on_hold never called", holds2 == [])
 
     print("ndjson framer units: %d passed, %d failed" % (PASSES, len(FAILURES)))
     return 1 if FAILURES else 0

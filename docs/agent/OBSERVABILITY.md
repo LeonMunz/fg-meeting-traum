@@ -237,8 +237,15 @@ Notes:
     document — `{"schema_version": 1, "tool": "agent-observability",
     "status": "started" | "already_running", "run_id": "...", "run_dir":
     "...", "pid": <int>, "endpoint": "http://127.0.0.1:<port>"}` —
-    emitted as a single write as soon as the collector is confirmed
-    listening (pollers can never observe a partial document).
+    emitted as a single write as soon as the collector is CONFIRMED
+    ACCEPTING on its loopback OTLP endpoint — a bounded local
+    TCP-connect probe of the OTLP port (the OTLP/HTTP listener IS the
+    endpoint; no telemetry is consumed or altered by the probe) — so
+    pollers can never observe a partial document, and `started` never
+    precedes the point at which the endpoint accepts. A collector
+    that exits before it can bind fails fast instead of spending the
+    whole startup budget (the failure contract is unchanged: no JSON
+    on stdout, explicit stderr error, cleanup, exit 1).
     `started` is the only status a caller may adopt as its own;
     `already_running` reports the run owned by ITS owner — a caller must
     never adopt it. On failure no JSON is written to stdout; errors go
@@ -707,7 +714,14 @@ The relay's only protocol role is observation:
 - It forwards client stdin → child stdin and child stdout → client
   stdout byte-for-byte (preserving the newline-delimited JSON-RPC line
   framing and backpressure). `stdout` stays ACP-only; every diagnostic
-  goes to stderr. Malformed lines are forwarded unchanged.
+  goes to stderr. Malformed lines are forwarded unchanged. There is
+  exactly one ORDERING exception: the bytes of a CAPTURABLE
+  `session/prompt` line are HELD (never modified, never dropped) from
+  the moment its turn's start sidecar begins until the start contract
+  confirms the collector is accepting OTLP — `started`, or the
+  fail-open outcomes (`already_running` / error / timeout) — and are
+  then forwarded unchanged; no other ACP message is held (see
+  "Per-turn lifecycle", readiness ordering).
 - It parses only enough of each line to read `method`, `id`, and
   `sessionId` (in `params`, or the `session/new` / `session/fork`
   `result`) for lifecycle methods. It never inspects, modifies, logs,
@@ -807,16 +821,33 @@ session open (any of: session/new, session/load, session/resume,
 session/fork — see "Process model" for where the sessionId travels)
    → identity tracking only (state "idle"); NO run starts
 session/prompt request (client → server)
+   → the prompt line is HELD at the relay (byte-intact; NOT yet
+     forwarded to the Codex child) — for a captured prompt, collector
+     readiness MUST precede the prompt's first bytes, so the turn's
+     initial telemetry events cannot be lost to collector startup
    → start sidecar: agent-observability start --json
-        started           → mapping written, turn run OPEN (doctor
-                            snapshot + start Git evidence recorded by
-                            start; the session's native Codex
-                            conversation id persisted into the run
-                            manifest as captured_conversation_id)
+        started           → the collector is CONFIRMED ACCEPTING on its
+                            loopback OTLP endpoint (the "started"
+                            contract is only emitted once it is); the
+                            mapping is written, the turn run is OPEN
+                            (doctor snapshot + start Git evidence
+                            recorded by start; the session's native
+                            Codex conversation id persisted into the
+                            run manifest as captured_conversation_id),
+                            and the held prompt bytes are NOW forwarded
+                            to the Codex child — readiness strictly
+                            precedes the captured prompt's first byte
         already_running   → turn uncaptured (one observed turn at a
-                            time — never attached, never merged)
+                            time — never attached, never merged); the
+                            prompt is forwarded immediately — a turn
+                            never waits for readiness of a collector
+                            it does not own
         error / timeout   → fail open: turn uncaptured, one bounded
-                            warning, stream intact
+                            warning, stream intact; the prompt is
+                            forwarded (the hold is bounded by the
+                            control surface's startup budget, never an
+                            indefinite wait; a collector that exited
+                            before binding fails fast)
    → prompt while a turn is in progress: not captured (bounded
      record; ACP serializes prompts per session)
 matching session/prompt response (carries stopReason)
@@ -842,13 +873,18 @@ child exit with an active prompt turn
      (fallback boundary, never the normal close)
 ```
 
-A prompt response that arrives before the start sidecar resolves
-finalizes the run with that status as soon as it comes up
-(first-to-decide wins: a session close that already arrived is kept
-as `interrupted`). A failed mapping write fails open: the run starts
-and is live, the turn is simply not captured (no mapping), the stream
-stays intact, and the prompt response STILL finalizes the run — with
-a bounded `mapping-write-failed` diagnostic. A failed finalization
+(readiness ordering: the prompt bytes are not forwarded to the Codex
+child before the start contract resolves, so a prompt response or a
+session close for the held turn cannot precede it in the normal flow;
+the first-to-decide rule below is retained as the defensive contract
+for the paths that can still interleave). A prompt response that
+arrives before the start sidecar resolves finalizes the run with that
+status as soon as it comes up (first-to-decide wins: a session close
+that already arrived is kept as `interrupted`). A failed mapping write
+fails open: the run starts and is live, the turn is simply not
+captured (no mapping), the stream stays intact, and the prompt
+response STILL finalizes the run — with a bounded `mapping-write-failed`
+diagnostic. A failed finalization
 (stop non-zero) leaves the raw evidence untouched and keeps the
 mapping so a later close (or a manual `agent-observability stop`) can
 re-finalize.
@@ -993,7 +1029,9 @@ high-volume `session/update` stream is suppressed), `server-error`
 `open-response-incomplete` (method), `turn-start` / `turn-uncaptured`
 / `prompt-ignored` (session id, request id, bounded reason),
 `start-result` / `start-error` (run id + bounded reason),
-`mapping-written` / `mapping-write-failed`, `turn-response` /
+`mapping-written` / `mapping-write-failed`, `gate-released` (session
+id, held byte count — the readiness gate released and the held prompt
+bytes are forwarded to the Codex child now), `turn-response` /
 `turn-response-pending` / `turn-response-unmatched` /
 `turn-response-late` / `turn-response-norun` (session id, request id,
 stopReason — never the result body), `turn-finalize` /
