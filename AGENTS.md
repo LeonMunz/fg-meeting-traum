@@ -34,6 +34,7 @@ Do not change these choices without an explicit architecture decision.
 - `scripts/agent-doctor.sh` — read-only environment capability doctor (human + JSON)
 - `scripts/agent-observability` — local native-Codex trace capture control surface (status/start/stop/doctor/config/install/native-probe); docs in `docs/agent/OBSERVABILITY.md`
 - `scripts/agent-product-launch` — automatic product-session observability lifecycle wrapper (launch/install/status/uninstall); docs in `docs/agent/OBSERVABILITY.md` ("Automatic product-session lifecycle")
+- `docs/agent/HARNESS_ARCHITECTURE.md` — canonical agent-harness architecture & portability specification (harness contracts, observability, multi-repository transfer)
 - `scripts/tests/agent-doctor.test.sh` — doctor tests (formats, exit codes, simulated blockers)
 - `scripts/tests/agent-verify.test.sh` — agent-verify harness tests (usage, plan mode, `--summary-json` contract)
 - `scripts/tests/core-workflow.test.sh` — CI core workflow contract tests
@@ -53,6 +54,7 @@ Read only the documentation relevant to the requested change:
 - Current implemented vs. not-yet-implemented checkpoint → `docs/CURRENT_STATE.md`
 - Tests, seed/reset, deployment, privacy, Living Lab → `docs/living-lab.md`
 - Agent runtime contract, per-run runtime/eval metadata → `docs/agent/RUNTIME.md`
+- Agent-harness architecture, portability, and adopting the harness in another repository → `docs/agent/HARNESS_ARCHITECTURE.md`
 - Unsure where to look → `docs/README.md`
 
 For UI implementation, inspect only the relevant Stitch screen. Do not scan all Stitch exports.

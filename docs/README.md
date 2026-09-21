@@ -23,6 +23,7 @@ The documentation is intentionally split by concern so humans and coding agents 
 | Canonical agent execution flow, debugging budget, evidence contract, verification boundary | `agent/WORKFLOW.md` |
 | Canonical agent runtime contract (canonical harness, runtime layers, per-run eval metadata) | `agent/RUNTIME.md` |
 | Local native-Codex trace capture (collector, privacy model, command surface, trace contract) | `agent/OBSERVABILITY.md` (+ `agent/trace-contract.json`) |
+| Canonical agent-harness architecture & portability specification (harness contracts, observability, multi-repo transfer) | `agent/HARNESS_ARCHITECTURE.md` |
 | UI appearance | relevant file under `stitch_examples/` |
 | Color tokens, palette, design tokens | `design/tokens.md` |
 
@@ -44,6 +45,7 @@ Each kind of truth has one canonical owner:
 - **Agent evidence contract (verification claims, blocker classification, completion reports)** → `agent/WORKFLOW.md`
 - **Agent runtime contract (canonical harness, runtime layers, per-run eval metadata, secret boundaries)** → `agent/RUNTIME.md`
 - **Local agent observability (native Codex OTel capture, privacy model, trace contract)** → `agent/OBSERVABILITY.md`
+- **Agent-harness architecture & portability (harness contracts, observability specification, multi-repository transfer)** → `agent/HARNESS_ARCHITECTURE.md`
 - **Implemented persistence** → Django models + migrations
 - **Implemented API contract** → DRF serializers/endpoints
 - **Frontend contract representation** → TypeScript API/domain types
