@@ -1,23 +1,41 @@
 """Tests for MeetingRecurrence: V1 recurring-meeting schedules and bounded
-occurrence expansion (domain layer; no API/UI in this slice)."""
+occurrence expansion, and occurrence → concrete Meeting materialization
+(domain layer; no API/UI in this slice)."""
 
+import threading
+import time as time_module
+from dataclasses import replace
 from datetime import date, datetime, time, timezone as dt_timezone
-from uuid import UUID
+from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
+from audit_history.models import AuditEvent
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.db import IntegrityError, connection as db_connection, transaction
+from django.test import TestCase, TransactionTestCase
 
 from projects.models import ProjectMembership
-from projects.services import add_project_membership, create_project
+from projects.services import (
+    add_project_membership,
+    archive_project,
+    create_project,
+)
 from research_groups.models import ResearchGroup, ResearchGroupMembership
 
-from .models import Meeting, MeetingRecurrence
-from .recurrence import derive_occurrence_identity
+from .models import (
+    Meeting,
+    MeetingParticipant,
+    MeetingRecurrence,
+    MeetingSection,
+)
+from .recurrence import MeetingRecurrenceOccurrence, derive_occurrence_identity
 from .services import (
     MeetingDomainError,
+    create_meeting,
     create_meeting_recurrence,
     expand_meeting_recurrence_occurrences,
+    materialize_meeting_recurrence_occurrence,
+    update_meeting,
 )
 
 
@@ -922,3 +940,610 @@ class MeetingRecurrenceOccurrenceIdentityTest(MeetingRecurrenceBase):
             [o.occurrence_id for o in occurrences_a],
             [o.occurrence_id for o in occurrences_b],
         )
+
+
+# ── Materialization ──────────────────────────────────────────────
+
+
+class MeetingRecurrenceMaterializationTest(MeetingRecurrenceBase):
+    """Occurrence → concrete Meeting materialization (domain layer)."""
+
+    def _first_occurrence(self, recurrence):
+        (occurrence,) = self._expand(
+            recurrence, _utc(2026, 1, 5), _utc(2026, 1, 6),
+        )
+        return occurrence
+
+    def _materialize(
+        self, recurrence, occurrence, *, actor=None, title="Materialized",
+    ):
+        return materialize_meeting_recurrence_occurrence(
+            recurrence=recurrence,
+            occurrence=occurrence,
+            actor=actor if actor is not None else self.alex,
+            title=title,
+        )
+
+    def _synthetic_occurrence(self, recurrence, original_local):
+        """A well-formed occurrence VALUE for a date/time of our choice.
+
+        The identity is the canonical one derived for this recurrence, so
+        identity checks pass and rule membership (not identity) decides.
+        """
+        return MeetingRecurrenceOccurrence(
+            occurrence_id=derive_occurrence_identity(
+                recurrence_id=recurrence.pk,
+                original_local=original_local,
+                timezone_name=recurrence.timezone_name,
+            ),
+            original_local=original_local,
+            original_start=original_local.replace(tzinfo=BERLIN),
+        )
+
+    # 1. A valid calculated occurrence materializes into a concrete Meeting.
+
+    def test_materialize_creates_a_concrete_meeting(self):
+        recurrence = self._create_recurrence()
+        occurrence = self._first_occurrence(recurrence)
+
+        meeting = self._materialize(
+            recurrence, occurrence, title="January 5 Standup",
+        )
+
+        self.assertIsInstance(meeting, Meeting)
+        self.assertEqual(meeting.title, "January 5 Standup")
+        self.assertEqual(meeting.scheduled_at, occurrence.original_start)
+        self.assertEqual(meeting.status, Meeting.Status.UPCOMING)
+        self.assertEqual(meeting.created_by_id, self.alex.pk)
+        self.assertEqual(meeting.research_group_id, self.group.pk)
+        self.assertEqual(meeting.scope, Meeting.Scope.GROUP)
+        self.assertIsNone(meeting.project)
+        # A usable standalone-style structure and the creator as the
+        # first participant.
+        section = meeting.meeting_sections.get()
+        self.assertEqual(section.name, "Agenda")
+        self.assertEqual(
+            [p.user_id for p in meeting.participant_relations.all()],
+            [self.alex.pk],
+        )
+        # One canonical meeting.created Activity event, no more.
+        self.assertEqual(
+            AuditEvent.objects.filter(
+                meeting=meeting,
+                event_type="meeting.created",
+            ).count(),
+            1,
+        )
+
+    # 2. The resulting Meeting is linked to its MeetingRecurrence.
+
+    def test_materialized_meeting_is_linked_to_its_recurrence(self):
+        recurrence = self._create_recurrence()
+        meeting = self._materialize(
+            recurrence, self._first_occurrence(recurrence),
+        )
+
+        self.assertEqual(meeting.recurrence, recurrence)
+        self.assertEqual(
+            list(recurrence.materialized_meetings.all()), [meeting],
+        )
+
+    # 3. The Meeting persists the original occurrence identity/start.
+
+    def test_materialized_meeting_persists_original_occurrence_identity(self):
+        recurrence = self._create_recurrence()
+        occurrence = self._first_occurrence(recurrence)
+        meeting = self._materialize(recurrence, occurrence)
+
+        self.assertEqual(
+            meeting.original_scheduled_at, occurrence.original_start,
+        )
+        stored_local = meeting.original_scheduled_at.astimezone(
+            BERLIN,
+        ).replace(tzinfo=None)
+        self.assertEqual(stored_local, occurrence.original_local)
+        # The canonical Slice-1 occurrence identity is still derivable
+        # from the persisted state alone.
+        self.assertEqual(
+            derive_occurrence_identity(
+                recurrence_id=meeting.recurrence_id,
+                original_local=stored_local,
+                timezone_name=recurrence.timezone_name,
+            ),
+            occurrence.occurrence_id,
+        )
+
+    # 4. Non-recurring Meetings are unchanged (no recurrence metadata).
+
+    def test_non_recurring_meetings_work_without_recurrence_metadata(self):
+        plain = create_meeting(
+            research_group=self.group,
+            actor=self.alex,
+            title="Plain meeting",
+            scheduled_at=_utc(2026, 2, 1, 12, 0),
+        )
+        self.assertIsNone(plain.recurrence)
+        self.assertIsNone(plain.original_scheduled_at)
+
+        recurrence = self._create_recurrence()
+        meeting = self._materialize(
+            recurrence, self._first_occurrence(recurrence),
+        )
+        self.assertIsNotNone(meeting.recurrence)
+        self.assertIsNotNone(meeting.original_scheduled_at)
+        self.assertEqual(Meeting.objects.count(), 2)
+
+    # 5. Repeated materialization reuses exactly one Meeting row.
+
+    def test_materializing_the_same_occurrence_twice_reuses_one_meeting(self):
+        recurrence = self._create_recurrence()
+        occurrence = self._first_occurrence(recurrence)
+
+        first = self._materialize(recurrence, occurrence, title="First title")
+        second = self._materialize(
+            recurrence, occurrence, title="Second title",
+        )
+
+        self.assertEqual(first.pk, second.pk)
+        self.assertEqual(Meeting.objects.count(), 1)
+        # The first creation's state wins; no duplicate structure.
+        self.assertEqual(Meeting.objects.get(pk=first.pk).title, "First title")
+        self.assertEqual(first.meeting_sections.count(), 1)
+        self.assertEqual(
+            MeetingParticipant.objects.filter(meeting=first).count(), 1,
+        )
+        self.assertEqual(
+            AuditEvent.objects.filter(
+                meeting=first, event_type="meeting.created",
+            ).count(),
+            1,
+        )
+
+    # 6. The database constraint stops duplicates even when the service
+    #    level protection is bypassed.
+
+    def test_db_unique_constraint_prevents_duplicate_occurrence_meetings(self):
+        recurrence = self._create_recurrence()
+        occurrence = self._first_occurrence(recurrence)
+        self._materialize(recurrence, occurrence)
+
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Meeting.objects.create(
+                research_group=self.group,
+                scope=Meeting.Scope.GROUP,
+                title="Bypass",
+                scheduled_at=occurrence.original_start,
+                recurrence=recurrence,
+                original_scheduled_at=occurrence.original_start,
+                created_by=self.alex,
+            )
+        self.assertEqual(Meeting.objects.count(), 1)
+
+    def test_db_check_constraint_requires_paired_provenance_fields(self):
+        recurrence = self._create_recurrence()
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Meeting.objects.create(
+                research_group=self.group,
+                scope=Meeting.Scope.GROUP,
+                title="Unpaired",
+                scheduled_at=_utc(2026, 1, 5, 9, 30),
+                recurrence=recurrence,
+                # original_scheduled_at intentionally missing.
+                created_by=self.alex,
+            )
+        # ... and an orphan original start on a non-recurring Meeting.
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Meeting.objects.create(
+                research_group=self.group,
+                scope=Meeting.Scope.GROUP,
+                title="Orphan original",
+                scheduled_at=_utc(2026, 1, 5, 9, 30),
+                original_scheduled_at=_utc(2026, 1, 5, 9, 30),
+                created_by=self.alex,
+            )
+
+    # 7. Two different occurrences materialize into separate Meetings.
+
+    def test_distinct_occurrences_materialize_distinct_meetings(self):
+        recurrence = self._create_recurrence()
+        first, second = self._expand(
+            recurrence, _utc(2026, 1, 5), _utc(2026, 1, 7),
+        )
+
+        meeting_a = self._materialize(recurrence, first, title="A")
+        meeting_b = self._materialize(recurrence, second, title="B")
+
+        self.assertNotEqual(meeting_a.pk, meeting_b.pk)
+        self.assertEqual(Meeting.objects.count(), 2)
+        self.assertEqual(
+            meeting_a.recurrence_id, meeting_b.recurrence_id,
+        )
+        self.assertNotEqual(
+            meeting_a.original_scheduled_at,
+            meeting_b.original_scheduled_at,
+        )
+
+    # 8. Occurrences from different recurrences never collide, even for
+    #    identical scheduled timestamps.
+
+    def test_identical_timestamps_across_recurrences_do_not_collide(self):
+        first = self._create_recurrence()
+        second = self._create_recurrence()
+        occurrence_a = self._first_occurrence(first)
+        occurrence_b = self._first_occurrence(second)
+
+        self.assertEqual(
+            occurrence_a.original_start, occurrence_b.original_start,
+        )
+        self.assertNotEqual(
+            occurrence_a.occurrence_id, occurrence_b.occurrence_id,
+        )
+
+        meeting_a = self._materialize(first, occurrence_a)
+        meeting_b = self._materialize(second, occurrence_b)
+
+        self.assertEqual(Meeting.objects.count(), 2)
+        self.assertNotEqual(meeting_a.pk, meeting_b.pk)
+        self.assertEqual(
+            meeting_a.original_scheduled_at,
+            meeting_b.original_scheduled_at,
+        )
+
+    # 9. Forged or foreign occurrences are rejected.
+
+    def test_occurrence_from_another_recurrence_is_rejected(self):
+        a = self._create_recurrence()
+        b = self._create_recurrence()
+        foreign = self._first_occurrence(b)
+
+        with self.assertRaises(MeetingDomainError):
+            self._materialize(a, foreign)
+        self.assertEqual(Meeting.objects.count(), 0)
+
+    def test_occurrence_with_forged_identity_is_rejected(self):
+        recurrence = self._create_recurrence()
+        occurrence = self._first_occurrence(recurrence)
+        forged = replace(occurrence, occurrence_id=uuid4())
+
+        with self.assertRaises(MeetingDomainError):
+            self._materialize(recurrence, forged)
+        self.assertEqual(Meeting.objects.count(), 0)
+
+    def test_occurrence_at_a_time_the_rule_never_produces_is_rejected(self):
+        recurrence = self._create_recurrence()  # daily at 09:30 Berlin
+        occurrence = self._first_occurrence(recurrence)
+        fake_local = occurrence.original_local.replace(hour=10, minute=0)
+        fake = self._synthetic_occurrence(recurrence, fake_local)
+
+        with self.assertRaises(MeetingDomainError):
+            self._materialize(recurrence, fake)
+        self.assertEqual(Meeting.objects.count(), 0)
+
+    def test_occurrence_before_the_first_occurrence_is_rejected(self):
+        recurrence = self._create_recurrence()  # first occurrence Jan 5
+        fake = self._synthetic_occurrence(
+            recurrence, datetime(2026, 1, 4, 9, 30),
+        )
+
+        with self.assertRaises(MeetingDomainError):
+            self._materialize(recurrence, fake)
+        self.assertEqual(Meeting.objects.count(), 0)
+
+    # 10. Occurrences outside the end / count contract are rejected.
+
+    def test_occurrence_beyond_the_count_contract_is_rejected(self):
+        recurrence = self._create_recurrence(
+            frequency="daily", interval=1,
+            end_mode="count", occurrence_count=3,
+        )
+        # The rule's three occurrences are Jan 5/6/7; Jan 8 is outside.
+        with self.assertRaises(MeetingDomainError):
+            self._materialize(
+                recurrence,
+                self._synthetic_occurrence(
+                    recurrence, datetime(2026, 1, 8, 9, 30),
+                ),
+            )
+        self.assertEqual(Meeting.objects.count(), 0)
+
+        # The last allowed (third) occurrence materializes fine.
+        meeting = self._materialize(
+            recurrence,
+            self._synthetic_occurrence(
+                recurrence, datetime(2026, 1, 7, 9, 30),
+            ),
+        )
+        self.assertIsNotNone(meeting.pk)
+
+    def test_occurrence_beyond_the_end_date_contract_is_rejected(self):
+        recurrence = self._create_recurrence(
+            frequency="daily", interval=1,
+            end_mode="end_date", end_date=date(2026, 1, 6),
+        )
+        with self.assertRaises(MeetingDomainError):
+            self._materialize(
+                recurrence,
+                self._synthetic_occurrence(
+                    recurrence, datetime(2026, 1, 7, 9, 30),
+                ),
+            )
+        self.assertEqual(Meeting.objects.count(), 0)
+
+    # 11. Canonical scoped write/authorization rules apply.
+
+    def test_materialization_requires_scoped_write_access(self):
+        recurrence = self._create_recurrence()
+        occurrence = self._first_occurrence(recurrence)
+
+        # An outsider (not a Research Group member) cannot materialize.
+        with self.assertRaises(MeetingDomainError):
+            self._materialize(recurrence, occurrence, actor=self.maria)
+        self.assertEqual(Meeting.objects.count(), 0)
+
+        # A Research Group member can.
+        self.assertIsNotNone(
+            self._materialize(
+                recurrence, occurrence, actor=self.chris,
+            ).pk,
+        )
+
+    def test_project_scoped_materialization_uses_project_write_rule(self):
+        recurrence = self._create_recurrence(
+            scope=MeetingRecurrence.Scope.PROJECT, project=self.project,
+        )
+        occurrence = self._first_occurrence(recurrence)
+
+        # A Project viewer cannot materialize.
+        with self.assertRaises(MeetingDomainError):
+            self._materialize(recurrence, occurrence, actor=self.laura)
+        self.assertEqual(Meeting.objects.count(), 0)
+
+        # A Project member can, and the Meeting inherits the Project.
+        meeting = self._materialize(recurrence, occurrence, actor=self.chris)
+        self.assertEqual(meeting.scope, Meeting.Scope.PROJECT)
+        self.assertEqual(meeting.project_id, self.project.pk)
+        self.assertEqual(meeting.research_group_id, self.group.pk)
+
+    def test_materialization_rejected_for_archived_project(self):
+        recurrence = self._create_recurrence(
+            scope=MeetingRecurrence.Scope.PROJECT, project=self.project,
+        )
+        archive_project(project=self.project, actor=self.alex)
+        # Re-load the recurrence as a real request would: the creation
+        # return value still caches the pre-archive Project instance.
+        recurrence = MeetingRecurrence.objects.get(pk=recurrence.pk)
+        occurrence = self._first_occurrence(recurrence)
+
+        with self.assertRaises(MeetingDomainError):
+            self._materialize(recurrence, occurrence, actor=self.chris)
+        self.assertEqual(Meeting.objects.count(), 0)
+
+    # 12./13. No eager materialization anywhere else.
+
+    def test_recurrence_creation_creates_no_meeting_rows(self):
+        self._create_recurrence()
+        self._create_recurrence(
+            scope=MeetingRecurrence.Scope.PROJECT, project=self.project,
+        )
+        self.assertEqual(Meeting.objects.count(), 0)
+
+    def test_expansion_still_creates_no_meeting_rows(self):
+        recurrence = self._create_recurrence()
+        self._expand(recurrence, _utc(2026, 1, 1), _utc(2026, 12, 31))
+        self.assertEqual(Meeting.objects.count(), 0)
+
+    # 14. scheduled_at and the original occurrence identity are
+    #     independent: a later move changes the former only.
+
+    def test_original_identity_is_independent_of_scheduled_time(self):
+        recurrence = self._create_recurrence()
+        occurrence = self._first_occurrence(recurrence)
+        meeting = self._materialize(recurrence, occurrence)
+        original = meeting.original_scheduled_at
+
+        # Simulate a later override moving the concrete Meeting.
+        moved = _utc(2026, 1, 12, 14, 0)
+        update_meeting(meeting=meeting, actor=self.alex, scheduled_at=moved)
+        meeting.refresh_from_db()
+
+        self.assertEqual(meeting.scheduled_at, moved)
+        self.assertEqual(meeting.original_scheduled_at, original)
+        self.assertEqual(meeting.recurrence_id, recurrence.pk)
+        stored_local = meeting.original_scheduled_at.astimezone(
+            BERLIN,
+        ).replace(tzinfo=None)
+        self.assertEqual(
+            derive_occurrence_identity(
+                recurrence_id=meeting.recurrence_id,
+                original_local=stored_local,
+                timezone_name=recurrence.timezone_name,
+            ),
+            occurrence.occurrence_id,
+        )
+
+        # Re-materializing after the move still reuses the same row.
+        again = self._materialize(recurrence, occurrence)
+        self.assertEqual(again.pk, meeting.pk)
+        self.assertEqual(Meeting.objects.count(), 1)
+        self.assertEqual(again.scheduled_at, moved)
+
+    # 15. Template behavior: Recurrences have no Template association in
+    #     V1, so materialization initializes standalone-style and the
+    #     materialized Meeting owns its own persistent state.
+
+    def test_materialized_meeting_is_initialized_standalone_style(self):
+        recurrence = self._create_recurrence()
+        occurrence = self._first_occurrence(recurrence)
+        meeting = self._materialize(recurrence, occurrence)
+
+        self.assertIsNone(meeting.series)
+        sections = list(meeting.meeting_sections.order_by("position"))
+        self.assertEqual([s.name for s in sections], ["Agenda"])
+        self.assertEqual(sections[0].position, 0)
+        self.assertTrue(sections[0].is_visible)
+        self.assertIsNone(sections[0].source_series_section)
+
+        # The concrete Meeting owns its state: mutating it is ordinary
+        # Meeting editing (no Template involved, nothing to cascade).
+        update_meeting(
+            meeting=meeting, actor=self.alex, title="Renamed occurrence",
+        )
+        self.assertEqual(Meeting.objects.get(pk=meeting.pk).title,
+                         "Renamed occurrence")
+
+
+class MeetingRecurrenceMaterializationConcurrencyTest(TransactionTestCase):
+    """Concurrent materialization of one occurrence (real PostgreSQL).
+
+    Repository concurrency harness: threaded service calls, a barrier to
+    align the racers, and the unique
+    ``(recurrence, original_scheduled_at)`` constraint as the last line
+    of defense — exactly one Meeting row may survive.
+    """
+
+    def setUp(self):
+        self.alex = User.objects.create_user(
+            username="recrace-alex", password="Pass1!",
+        )
+        self.group = ResearchGroup.objects.create(
+            name="Race Group", created_by=self.alex,
+        )
+        ResearchGroupMembership.objects.create(
+            research_group=self.group,
+            user=self.alex,
+            role=ResearchGroupMembership.Role.ADMIN,
+        )
+        self.recurrence = create_meeting_recurrence(
+            research_group=self.group,
+            actor=self.alex,
+            frequency="daily",
+            interval=1,
+            start_date=date(2026, 1, 5),
+            local_time=time(9, 30),
+            timezone_name="Europe/Berlin",
+        )
+        (self.occurrence,) = expand_meeting_recurrence_occurrences(
+            meeting_recurrence=self.recurrence,
+            range_start=_utc(2026, 1, 5),
+            range_end=_utc(2026, 1, 6),
+        )
+
+    def _materialize_in_thread(self, name, results, errors, barrier):
+        def worker():
+            barrier.wait()
+            try:
+                results[name] = materialize_meeting_recurrence_occurrence(
+                    recurrence=self.recurrence,
+                    occurrence=self.occurrence,
+                    actor=self.alex,
+                    title="Raced",
+                )
+            except Exception as exc:
+                errors[name] = exc
+            finally:
+                db_connection.close()
+
+        return worker
+
+    def test_concurrent_materialization_creates_exactly_one_meeting(self):
+        results, errors = {}, {}
+        barrier = threading.Barrier(2)
+        threads = [
+            threading.Thread(
+                target=self._materialize_in_thread(
+                    name, results, errors, barrier,
+                ),
+            )
+            for name in ("a", "b")
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        self.assertEqual(errors, {})
+        meeting_a, meeting_b = results["a"], results["b"]
+        self.assertEqual(meeting_a.pk, meeting_b.pk)
+        self.assertEqual(Meeting.objects.count(), 1)
+        meeting = Meeting.objects.first()
+        self.assertEqual(meeting.title, "Raced")
+        self.assertEqual(meeting.meeting_sections.count(), 1)
+        self.assertEqual(
+            MeetingParticipant.objects.filter(meeting=meeting).count(), 1,
+        )
+        # The losing racer (if any) rolled its transaction back: exactly
+        # one meeting.created event survives.
+        self.assertEqual(
+            AuditEvent.objects.filter(
+                meeting=meeting, event_type="meeting.created",
+            ).count(),
+            1,
+        )
+
+    def test_losing_racer_reuses_the_winner_row(self):
+        """Deterministic race: a concurrent raw insert holds the
+        occurrence's unique key until after the service call reaches its
+        own insert, so the service must hit the constraint and return
+        the winner's row instead of failing or duplicating.
+        """
+        winner_pk = {}
+        winner_inserted = threading.Event()
+        release_winner = threading.Event()
+
+        def winner():
+            # A concurrent duplicate insert that bypasses the service
+            # (simulating the other racer's in-flight transaction).
+            with transaction.atomic():
+                meeting = Meeting.objects.create(
+                    research_group=self.group,
+                    scope=Meeting.Scope.GROUP,
+                    title="Winner",
+                    scheduled_at=self.occurrence.original_start,
+                    recurrence=self.recurrence,
+                    original_scheduled_at=self.occurrence.original_start,
+                    status=Meeting.Status.UPCOMING,
+                    created_by=self.alex,
+                )
+                winner_pk["pk"] = meeting.pk
+                winner_inserted.set()
+                release_winner.wait(timeout=30)
+            db_connection.close()
+
+        loser_result = {}
+        loser_errors = {}
+
+        def loser():
+            try:
+                loser_result["meeting"] = (
+                    materialize_meeting_recurrence_occurrence(
+                        recurrence=self.recurrence,
+                        occurrence=self.occurrence,
+                        actor=self.alex,
+                        title="Loser",
+                    )
+                )
+            except Exception as exc:
+                loser_errors["error"] = exc
+            finally:
+                db_connection.close()
+
+        winner_thread = threading.Thread(target=winner)
+        winner_thread.start()
+        self.assertTrue(winner_inserted.wait(timeout=30))
+
+        loser_thread = threading.Thread(target=loser)
+        loser_thread.start()
+        # Give the loser time to reach its insert while the winner's
+        # transaction is still open (its unique key is then held).
+        time_module.sleep(0.25)
+        release_winner.set()
+        loser_thread.join()
+        winner_thread.join()
+        db_connection.close()
+
+        self.assertEqual(loser_errors, {})
+        self.assertEqual(
+            loser_result["meeting"].pk, winner_pk["pk"],
+        )
+        self.assertEqual(Meeting.objects.count(), 1)
+        self.assertEqual(Meeting.objects.first().title, "Winner")

@@ -283,8 +283,28 @@ class Meeting(models.Model):
         null=True,
         blank=True,
     )
+    # The MeetingRecurrence this meeting was materialized from (None for
+    # standalone and Template-created Meetings). RESTRICT: a recurrence
+    # with materialized Meetings cannot be deleted.
+    recurrence = models.ForeignKey(
+        MeetingRecurrence,
+        on_delete=models.RESTRICT,
+        related_name="materialized_meetings",
+        null=True,
+        blank=True,
+    )
     title = models.CharField(max_length=255)
     scheduled_at = models.DateTimeField()
+    # For materialized occurrence Meetings: the IMMUTABLE original
+    # scheduled start of the recurrence occurrence (timezone-aware
+    # instant; in the recurrence's stored timezone it is the original
+    # wall-clock start). Independent of ``scheduled_at``, which is the
+    # Meeting's own editable planned time and may later be moved by an
+    # override without touching this original identity.
+    original_scheduled_at = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
     status = models.CharField(
         max_length=16,
         choices=Status.choices,
@@ -322,7 +342,30 @@ class Meeting(models.Model):
                     | models.Q(scope="project", project__isnull=False)
                 ),
                 name="meetings_meeting_scope_project_consistent",
-            )
+            ),
+            # Recurrence provenance fields are paired: a materialized
+            # occurrence Meeting has BOTH; an ordinary Meeting has NEITHER.
+            models.CheckConstraint(
+                condition=(
+                    models.Q(
+                        recurrence__isnull=True,
+                        original_scheduled_at__isnull=True,
+                    )
+                    | models.Q(
+                        recurrence__isnull=False,
+                        original_scheduled_at__isnull=False,
+                    )
+                ),
+                name="meetings_meeting_recurrence_original_paired",
+            ),
+            # One concrete Meeting per occurrence per recurrence: the
+            # immutable original occurrence start uniquely identifies the
+            # occurrence within its recurrence. NULL recurrence (ordinary
+            # Meetings) is unconstrained.
+            models.UniqueConstraint(
+                fields=["recurrence", "original_scheduled_at"],
+                name="meetings_meeting_unique_recurrence_occurrence",
+            ),
         ]
 
     def __str__(self):

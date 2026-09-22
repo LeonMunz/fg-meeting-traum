@@ -1,4 +1,6 @@
-from datetime import timezone as dt_timezone
+from datetime import datetime as dt_datetime, timezone as dt_timezone
+
+from zoneinfo import ZoneInfo
 
 from django.db import IntegrityError, models, transaction
 from django.utils import timezone
@@ -33,7 +35,9 @@ from .models import (
 )
 from .recurrence import (
     RecurrenceError,
+    MeetingRecurrenceOccurrence,
     calculate_recurrence_occurrences,
+    derive_occurrence_identity,
     validate_recurrence_definition,
 )
 
@@ -503,6 +507,213 @@ def expand_meeting_recurrence_occurrences(
         )
     except RecurrenceError as exc:
         raise MeetingDomainError(str(exc)) from exc
+
+
+def _require_valid_recurrence_occurrence(*, recurrence, occurrence):
+    """Reject any value that is not a genuine occurrence of the recurrence.
+
+    The candidate must be a calculated ``MeetingRecurrenceOccurrence`` and:
+
+    - carry the canonical identity for exactly this schedule
+      (``derive_occurrence_identity`` over the recurrence id, the
+      original local wall-clock start, and the stored timezone) — a
+      forged or foreign occurrence identity is rejected;
+    - actually be produced by the recurrence rule: membership is proven
+      by re-expanding the rule over the bounded window from the first
+      occurrence to the candidate's original start (inclusive) and
+      requiring the candidate to be the LAST occurrence of that
+      expansion. That single check rejects occurrences whose wall-clock
+      time or date the rule never produces and occurrences beyond the
+      end-date / count contract (occurrences before the window consume
+      the count too).
+
+    The validation cost is bounded by the number of occurrences up to the
+    candidate — the same work as the equivalent bounded expansion.
+    """
+    if not isinstance(occurrence, MeetingRecurrenceOccurrence):
+        raise MeetingDomainError(
+            "Materialization requires a calculated recurrence occurrence."
+        )
+    if occurrence.original_local.tzinfo is not None:
+        raise MeetingDomainError(
+            "The occurrence's original local start must be a naive "
+            "wall-clock datetime."
+        )
+    if occurrence.original_start.tzinfo is None:
+        raise MeetingDomainError(
+            "The occurrence's original start must be timezone-aware."
+        )
+
+    if occurrence.occurrence_id != derive_occurrence_identity(
+        recurrence_id=recurrence.pk,
+        original_local=occurrence.original_local,
+        timezone_name=recurrence.timezone_name,
+    ):
+        raise MeetingDomainError(
+            "The occurrence's identity does not belong to this recurrence."
+        )
+
+    tz = ZoneInfo(recurrence.timezone_name)
+    window_start = dt_datetime.combine(
+        recurrence.start_date, recurrence.local_time,
+    ).replace(tzinfo=tz)
+
+    if occurrence.original_start < window_start:
+        raise MeetingDomainError(
+            "The occurrence is before the recurrence's first occurrence."
+        )
+
+    try:
+        occurrences = expand_meeting_recurrence_occurrences(
+            meeting_recurrence=recurrence,
+            range_start=window_start,
+            range_end=occurrence.original_start,
+        )
+    except MeetingDomainError as exc:
+        raise MeetingDomainError(
+            "The provided occurrence is not a valid occurrence of this "
+            "recurrence."
+        ) from exc
+
+    if not occurrences or occurrences[-1] != occurrence:
+        raise MeetingDomainError(
+            "The provided occurrence is not a valid occurrence of this "
+            "recurrence."
+        )
+
+
+def materialize_meeting_recurrence_occurrence(
+    *,
+    recurrence,
+    occurrence,
+    actor,
+    title,
+):
+    """Materialize one calculated occurrence into a concrete Meeting.
+
+    A calculated occurrence stays virtual until persistent meeting state
+    is required; this is the ONLY operation that creates a concrete
+    ``Meeting`` for a recurrence occurrence (creating or expanding a
+    recurrence never creates Meeting rows).
+
+    The operation is IDEMPOTENT: the first call creates the Meeting and
+    repeated calls for the same recurrence occurrence return the
+    already-materialized Meeting without creating duplicates. The unique
+    ``(recurrence, original_scheduled_at)`` constraint makes duplicates
+    impossible even when two materializations race: the loser of the
+    race has its transaction rolled back and returns the winner's row.
+
+    The materialized Meeting is a normal concrete FG Meeting (no parallel
+    recurrence-specific Meeting type): it inherits the recurrence's
+    Research Group / scope / Project, starts as ``upcoming``, is created
+    by ``actor``, and is initialized standalone-style with a single
+    default ``Agenda`` section and the creator as participant.
+    (Recurrences have no Meeting Template association in V1, so there is
+    no Template to snapshot; Template initialization remains tied to a
+    future, explicitly documented Recurrence→Template decision.)
+
+    The Meeting persists its immutable occurrence provenance:
+
+    - ``recurrence`` — the MeetingRecurrence that produced it;
+    - ``original_scheduled_at`` — the occurrence's original scheduled
+      start (the same instant the expansion returned). The canonical
+      occurrence identity is the Slice-1 UUIDv5 derived from the
+      recurrence id, this original start in the stored timezone, and the
+      timezone name — it never depends on ``scheduled_at``.
+
+    ``scheduled_at`` is initialized to the occurrence's original start
+    but is the Meeting's OWN editable planned time: a later override may
+    move it without redefining the original occurrence identity.
+
+    The candidate occurrence is validated against the recurrence before
+    anything is persisted (``_require_valid_recurrence_occurrence``):
+    callers cannot invent arbitrary recurrence ids or original starts to
+    create recurring Meetings outside the recurrence rule.
+
+    Authorization reuses the canonical scoped Meeting write rule (group
+    scope → group read members; project scope → Project owner/member,
+    non-archived Projects only), exactly like Meeting creation.
+    """
+    if recurrence.pk is None:
+        raise MeetingDomainError(
+            "Only persisted recurrences can be materialized: stable "
+            "occurrence identities require a schedule id."
+        )
+
+    _require_scoped_write_access(
+        research_group=recurrence.research_group,
+        scope=recurrence.scope,
+        project=recurrence.project,
+        user=actor,
+    )
+
+    title = str(title or "").strip()
+    if not title:
+        raise MeetingDomainError("Meeting title is required.")
+
+    _require_valid_recurrence_occurrence(
+        recurrence=recurrence,
+        occurrence=occurrence,
+    )
+
+    try:
+        with transaction.atomic():
+            existing = Meeting.objects.filter(
+                recurrence=recurrence,
+                original_scheduled_at=occurrence.original_start,
+            ).first()
+            if existing is not None:
+                return existing
+
+            meeting = Meeting.objects.create(
+                research_group=recurrence.research_group,
+                scope=recurrence.scope,
+                project=recurrence.project,
+                recurrence=recurrence,
+                original_scheduled_at=occurrence.original_start,
+                title=title,
+                scheduled_at=occurrence.original_start,
+                status=Meeting.Status.UPCOMING,
+                created_by=actor,
+            )
+
+            # The default section is internal structure of the creation
+            # operation, not an agenda mutation: it produces no separate
+            # event.
+            MeetingSection.objects.create(
+                meeting=meeting,
+                name="Agenda",
+                description="",
+                position=0,
+                is_visible=True,
+            )
+
+            _create_initial_meeting_participants(
+                meeting=meeting,
+                actor=actor,
+                participants=(),
+            )
+
+            # Recorded inside the same atomic block as the creation: a
+            # rolled-back materialization leaves no AuditEvent behind.
+            record_audit_event(
+                research_group=meeting.research_group,
+                actor=actor,
+                event_type=MeetingAuditEventType.CREATED,
+                project=meeting.project,
+                meeting=meeting,
+                data={},
+            )
+
+        return meeting
+    except IntegrityError:
+        # A concurrent materialization of the same occurrence won the
+        # race: the unique constraint rejected our insert and rolled the
+        # transaction back. The winner's row is the canonical Meeting.
+        return Meeting.objects.get(
+            recurrence=recurrence,
+            original_scheduled_at=occurrence.original_start,
+        )
 
 
 # ── MeetingSeriesSection ─────────────────────────────────────────

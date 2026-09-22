@@ -320,10 +320,12 @@ occurrences are calculated. It is a distinct domain concept from both:
 - the concrete `Meeting` (§11) — one occurrence in time.
 
 A Recurrence never pre-creates `Meeting` rows and is never an
-occurrence itself. In this slice the Recurrence is a persisted
-schedule + a domain-level bounded expansion operation only: there is no
-recurrence API, no UI, and no materialization of occurrences into
-`Meeting` rows (see "Not implemented" at the end of this section).
+occurrence itself. The Recurrence is a persisted schedule + a
+domain-level bounded expansion operation + one explicit materialization
+operation that turns a single calculated occurrence into a concrete
+`Meeting` (see "Materialization" below). There is still no recurrence
+API and no UI; occurrence Meetings are never auto-created outside that
+explicit operation.
 
 ### V1 recurrence language (implemented)
 
@@ -445,18 +447,87 @@ Each returned occurrence is a value (not a model row) carrying:
   original-start identity if a future override moves a materialized
   Meeting.
 
+### Materialization (implemented)
+
+A calculated occurrence remains virtual until persistent meeting state
+is required. The single domain operation
+`meetings.services.materialize_meeting_recurrence_occurrence`
+materializes ONE calculated occurrence into a concrete `Meeting`:
+
+- **Idempotent:** the first call creates the Meeting; repeated calls for
+  the same recurrence occurrence return the already-materialized
+  Meeting without creating duplicates. The unique database constraint
+  `(recurrence, original_scheduled_at)` makes duplicates impossible even
+  when two materializations race (the losing transaction is rolled back
+  and the winner's row is returned).
+- **Validated:** the candidate must be a genuine occurrence of EXACTLY
+  the supplied recurrence — the canonical Slice-1 occurrence identity
+  (`derive_occurrence_identity` over recurrence id + original local
+  start + stored timezone) AND actual rule membership (the rule must
+  produce that occurrence within its end-date / count contract). Forged
+  identities, foreign occurrences, and occurrences the rule never
+  produces (wrong wall-clock time, skipped calendar date, before the
+  first occurrence, beyond the end) are rejected before anything is
+  persisted; callers cannot invent arbitrary recurrence ids or original
+  starts to create recurring Meetings outside the rule.
+- **Authorized:** the canonical scoped Meeting write rule (group scope
+  → group read members; project scope → Project owner/member,
+  non-archived Projects only), exactly like Meeting creation.
+
+The materialized Meeting is a normal concrete FG `Meeting` (no parallel
+recurrence-specific Meeting type). It inherits the recurrence's
+Research Group / scope / Project, starts `upcoming`, is created by the
+actor, and is initialized standalone-style with a single default
+`Agenda` Section and the creator as participant. Recurrences have no
+Meeting Template association in V1 (a Recurrence has no Sections and no
+Template), so there is no Template to snapshot; once materialized, the
+concrete Meeting owns its own persistent state like any other Meeting.
+
+**Persisted invariant.** `Meeting` gains exactly two nullable fields
+(migration `meetings/0015`; ordinary Meetings carry neither and are
+unchanged):
+
+```text
+Meeting.recurrence             FK MeetingRecurrence (RESTRICT), NULLABLE
+Meeting.original_scheduled_at  DATETIME (aware instant), NULLABLE
+```
+
+- `recurrence` — the MeetingRecurrence that produced the Meeting;
+- `original_scheduled_at` — the occurrence's IMMUTABLE original
+  scheduled start (the same aware instant the expansion returned; in
+  the recurrence's stored timezone it is the original wall-clock
+  start). The canonical occurrence identity is the Slice-1 UUIDv5
+  derived from the recurrence id, this original start in the stored
+  timezone, and the timezone name — it never depends on
+  `Meeting.scheduled_at`.
+
+Database constraints: the two fields are paired (both set or both
+NULL), and `(recurrence, original_scheduled_at)` is UNIQUE (a NULL
+recurrence is unconstrained) — one concrete Meeting per occurrence per
+recurrence.
+
+`Meeting.scheduled_at` is initialized to the occurrence's original
+start but is the Meeting's OWN editable planned time: a later override
+slice may move it without redefining the original occurrence identity.
+
+**No eager materialization.** Creating a Recurrence and expanding a
+window still create zero `Meeting` rows; only the explicit operation
+above creates a concrete occurrence Meeting. There is no API endpoint
+and no UI for it yet.
+
 ### Not implemented (deferred)
 
 The following are intentionally out of this slice and remain
 unimplemented:
 
 - any recurrence API endpoint, client, or UI (creation, editing,
-  occurrence preview, list/detail views);
-- lazy materialization of calculated occurrences into concrete
-  `Meeting` rows (no auto-creation, ever, outside an explicit future
-  operation);
+  occurrence preview, list/detail views) — the materialization
+  operation is domain-only so far;
 - individual occurrence editing/moving, exclusions/cancellations,
-  "only this meeting", "this and following";
+  "only this meeting", "this and following" (the persistence contract
+  for moving is in place: `Meeting.scheduled_at` may change while
+  `Meeting.original_scheduled_at` stays the immutable original
+  identity);
 - whole-series (whole-recurrence) editing semantics and schedule
   revisions/segments;
 - template-delete behavior for Templates referenced by an active
@@ -696,12 +767,19 @@ After creation, the user edits the simple Section list.
 
 ### Creating a Meeting (implemented)
 
-A Meeting is created in one of two ways:
+A Meeting is created in one of three ways:
 
 - **Standalone** (`create_meeting`): no Template. The Meeting receives a real,
   occurrence-level default Section named `Agenda` (position 0).
 - **From a Template** (`create_meeting_from_series`): the Template's active
   Sections are snapshotted into the new occurrence.
+- **Materialized recurrence occurrence**
+  (`materialize_meeting_recurrence_occurrence`, domain-only so far): one
+  validated calculated occurrence of a `MeetingRecurrence` becomes a
+  concrete Meeting initialized standalone-style (default `Agenda`
+  Section) with its immutable recurrence provenance persisted (§5a,
+  Materialization). Recurrences have no Template in V1, so nothing is
+  snapshotted from a Template.
 
 Creation requires a Research Group. The Project is optional; the Meeting
 Template is optional.
@@ -726,6 +804,8 @@ research_group_id
 scope
 project_id NULLABLE
 series_id NULLABLE          # internal MeetingSeries (Meeting Template)
+recurrence_id NULLABLE      # MeetingRecurrence that materialized this occurrence
+original_scheduled_at NULLABLE  # immutable original occurrence start (aware)
 title
 status
 current_meeting_item_id NULLABLE
@@ -735,6 +815,13 @@ created_by_id
 created_at
 updated_at
 ```
+
+`recurrence_id` / `original_scheduled_at` (migration `meetings/0015`)
+are set ONLY on Meetings materialized from a `MeetingRecurrence`
+occurrence (§5a, Materialization): together they persist the immutable
+occurrence provenance (unique per recurrence; paired — both set or both
+NULL). For every ordinary Meeting both are NULL, and the model, API,
+and behavior of non-recurring Meetings are unchanged.
 
 `current_meeting_item_id` (exposed in the API as
 `currentMeetingItemId`) is the Meeting's persisted **current item**:
