@@ -335,13 +335,195 @@ describe('CreateMeetingDialog participant picker', () => {
     searchFor('external')
 
     await waitFor(() => {
-      expect(
-        meetingsApi.searchStandaloneMeetingParticipantCandidates,
-      ).toHaveBeenCalledWith(1, {
-        query: 'external',
-        scope: 'project',
-        projectId: 9,
-      })
+    expect(
+      meetingsApi.searchStandaloneMeetingParticipantCandidates,
+    ).toHaveBeenCalledWith(1, {
+      query: 'external',
+      scope: 'project',
+      projectId: 9,
     })
   })
+})
+
+describe('CreateMeetingDialog modal foundation', () => {
+  it('renders the redesigned header with the Research Group as context, without a group field', () => {
+    renderDialog()
+
+    expect(
+      screen.getByRole('heading', { name: 'New meeting', level: 2 }),
+    ).toBeVisible()
+    expect(screen.getByText('Create a meeting in FG.')).toBeVisible()
+    expect(
+      screen.queryByLabelText('Research group'),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByText(
+        'Create a Research Group Meeting or a Project Meeting.',
+      ),
+    ).not.toBeInTheDocument()
+  })
+
+  it('orders the fields Title, Project, Meeting template, Participants, then the Schedule section', () => {
+    renderDialog()
+
+    const title = screen.getByLabelText('Title')
+    const project = screen.getByLabelText('Project')
+    const template = screen.getByLabelText('Meeting template')
+    const participants = screen.getByLabelText('Participants')
+    const schedule = screen.getByRole('heading', { name: 'Schedule' })
+    const dateTime = screen.getByLabelText('Date and time')
+
+    expect(
+      title.compareDocumentPosition(project) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+    expect(
+      project.compareDocumentPosition(template) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+    expect(
+      template.compareDocumentPosition(participants) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+    expect(
+      participants.compareDocumentPosition(schedule) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+
+    // The Schedule section wraps the unchanged Date and time control.
+    expect(schedule.parentElement).toContainElement(dateTime)
+  })
+
+  it('offers the Research group meeting option without null-oriented wording', () => {
+    renderDialog()
+
+    expect(
+      screen.getByRole('option', { name: 'Research group meeting' }),
+    ).toBeVisible()
+    expect(
+      screen.queryByRole('option', { name: /No project/ }),
+    ).not.toBeInTheDocument()
+    expect(screen.queryByText(/No project/i)).not.toBeInTheDocument()
+  })
+
+  it('keeps the default no-project path working: submits a group-scoped meeting', () => {
+    const { onCreate } = renderDialog()
+
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Group standup' },
+    })
+    fireEvent.submit(screen.getByLabelText('Title').closest('form')!)
+
+    expect(onCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        researchGroupId: 1,
+        scope: 'group',
+        projectId: null,
+      }),
+    )
+  })
+
+  it('shows the no-template helper and switches it once a Template is selected', async () => {
+    renderDialog()
+    await screen.findByRole('option', { name: 'Weekly template' })
+
+    expect(
+      screen.getByText(
+        'Choose a template to enable recurring meetings.',
+      ),
+    ).toBeVisible()
+
+    fireEvent.change(screen.getByLabelText('Meeting template'), {
+      target: { value: '7' },
+    })
+
+    expect(
+      screen.queryByText(
+        'Choose a template to enable recurring meetings.',
+      ),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByText(
+        'Uses the template sections as the starting structure.',
+      ),
+    ).toBeVisible()
+  })
+
+  it('keeps the participant helper quiet: no permanent text, one-character hint, search from two characters', async () => {
+    renderDialog()
+
+    expect(
+      screen.getByPlaceholderText('Search participants...'),
+    ).toBeVisible()
+    expect(
+      screen.queryByText(
+        'Search by name or username. Enter at least 2 characters.',
+      ),
+    ).not.toBeInTheDocument()
+
+    await searchFor('c')
+    expect(
+      screen.getByText('Type at least 2 characters.'),
+    ).toBeVisible()
+    expect(
+      meetingsApi.searchStandaloneMeetingParticipantCandidates,
+    ).not.toHaveBeenCalled()
+
+    await searchFor('ch')
+    expect(
+      screen.queryByText('Type at least 2 characters.'),
+    ).not.toBeInTheDocument()
+    await waitFor(() => {
+      expect(
+        meetingsApi.searchStandaloneMeetingParticipantCandidates,
+      ).toHaveBeenCalled()
+    })
+  })
+
+  it('exposes no Repeat/recurrence controls and keeps the Cancel + Create meeting footer', () => {
+    renderDialog()
+
+    expect(
+      screen.queryByText(/repeat meeting/i),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: /create series/i }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Cancel' }),
+    ).toBeEnabled()
+    expect(
+      screen.getByRole('button', { name: /create meeting/i }),
+    ).toBeDisabled()
+  })
+
+  it('prevents duplicate submission while a creation is pending', () => {
+    const onCreate =
+      vi.fn<(input: CreateMeetingInput) => void>()
+
+    render(
+      <CreateMeetingDialog
+        open
+        submitting
+        submitError={null}
+        onClose={() => undefined}
+        onCreate={onCreate}
+      />,
+    )
+
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Pending meeting' },
+    })
+
+    expect(
+      screen.getByRole('button', { name: /creating…/i }),
+    ).toBeDisabled()
+    expect(
+      screen.getByRole('button', { name: 'Cancel' }),
+    ).toBeDisabled()
+    expect(
+      screen.queryByRole('button', { name: /create meeting/i }),
+    ).not.toBeInTheDocument()
+  })
+})
 })

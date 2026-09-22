@@ -69,15 +69,17 @@ export function CreateMeetingDialog({
   onClose,
   onCreate,
 }: CreateMeetingDialogProps) {
-  const {
-    groups,
-    activeResearchGroup,
-  } = useResearchGroup()
+  const { activeResearchGroup } = useResearchGroup()
+
+  // The dialog is opened from the active Research Group's Meetings area, so
+  // the Research Group is context (header), not an editable form value.
+  const researchGroupId = activeResearchGroup
+    ? String(activeResearchGroup.id)
+    : ''
 
   const [title, setTitle] = useState('')
   const [scheduledAt, setScheduledAt] =
     useState(getDefaultDateTimeValue)
-  const [researchGroupId, setResearchGroupId] = useState('')
   const [projects, setProjects] = useState<ApiProject[]>([])
   const [projectId, setProjectId] = useState('')
   const [series, setSeries] = useState<ApiMeetingSeries[]>([])
@@ -105,9 +107,6 @@ export function CreateMeetingDialog({
     if (!open) {
       setTitle('')
       setScheduledAt(getDefaultDateTimeValue())
-      setResearchGroupId(
-        String(activeResearchGroup?.id ?? ''),
-      )
       setProjects([])
       setProjectId('')
       setSeries([])
@@ -120,13 +119,6 @@ export function CreateMeetingDialog({
       participantSearchVersion.current += 1
       return
     }
-
-    if (researchGroupId === '') {
-      setResearchGroupId(
-        String(activeResearchGroup?.id ?? ''),
-      )
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
   // Load the projects available for the selected research group so the
@@ -366,10 +358,13 @@ export function CreateMeetingDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="create-meeting-title"
-        className="max-h-[calc(100vh-2rem)] w-full max-w-lg overflow-y-auto rounded-xl border border-border-default bg-surface shadow-xl"
+        className="flex max-h-[calc(100dvh-3rem)] w-full max-w-[min(32.5rem,calc(100vw-3rem))] flex-col overflow-hidden rounded-xl border border-border-subtle bg-surface shadow-xl"
       >
-        <form onSubmit={handleSubmit}>
-          <div className="border-b border-border-subtle px-6 py-5">
+        <form
+          onSubmit={handleSubmit}
+          className="flex min-h-0 flex-1 flex-col"
+        >
+          <div className="shrink-0 border-b border-border-subtle px-6 py-5">
             <h2
               id="create-meeting-title"
               className="text-lg font-semibold text-text"
@@ -378,35 +373,98 @@ export function CreateMeetingDialog({
             </h2>
 
             <p className="mt-1 text-sm text-text-muted">
-              Create a Research Group Meeting or a Project Meeting.
+              {activeResearchGroup
+                ? `Create a meeting in ${activeResearchGroup.name}.`
+                : 'Create a meeting.'}
             </p>
           </div>
 
-          <div className="space-y-5 px-6 py-5">
+          <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5">
             <label className="block">
               <span className="mb-1.5 block text-sm font-medium text-text">
-                Research group
+                Title
               </span>
 
+              <input
+                autoFocus
+                type="text"
+                value={title}
+                onChange={(event) =>
+                  setTitle(event.target.value)
+                }
+                placeholder="Weekly Sync"
+                className="h-10 w-full rounded-lg border border-border-control bg-surface px-3 text-sm text-text outline-none transition placeholder:text-text-muted/60 focus:border-focus focus:ring-2 focus:ring-focus/15"
+              />
+            </label>
+
+            <div>
+              <label
+                htmlFor="create-meeting-project"
+                className="mb-1.5 block text-sm font-medium text-text"
+              >
+                Project
+              </label>
+
               <select
-                value={researchGroupId}
+                id="create-meeting-project"
+                value={projectId}
                 onChange={(event) => {
-                  setResearchGroupId(event.target.value)
-                  setProjectId('')
+                  setProjectId(event.target.value)
                   setSeriesId('')
                 }}
                 className="h-10 w-full rounded-lg border border-border-control bg-surface px-3 text-sm text-text outline-none focus:border-focus focus:ring-2 focus:ring-focus/15"
               >
-                {groups.map((group) => (
+                <option value="">Research group meeting</option>
+
+                {projects.map((project) => (
                   <option
-                    key={group.id}
-                    value={group.id}
+                    key={project.id}
+                    value={project.id}
                   >
-                    {group.name}
+                    {project.name}
                   </option>
                 ))}
               </select>
-            </label>
+            </div>
+
+            <div>
+              <label
+                htmlFor="create-meeting-template"
+                className="mb-1.5 block text-sm font-medium text-text"
+              >
+                Meeting template
+              </label>
+
+              <select
+                id="create-meeting-template"
+                aria-describedby="create-meeting-template-help"
+                value={seriesId}
+                onChange={(event) =>
+                  setSeriesId(event.target.value)
+                }
+                className="h-10 w-full rounded-lg border border-border-control bg-surface px-3 text-sm text-text outline-none focus:border-focus focus:ring-2 focus:ring-focus/15"
+              >
+                <option value="">No template</option>
+
+                {availableSeries.map((candidate) => (
+                  <option
+                    key={candidate.id}
+                    value={candidate.id}
+                  >
+                    {candidate.title}
+                  </option>
+                ))}
+              </select>
+
+              <p
+                id="create-meeting-template-help"
+                className="mt-1.5 text-xs text-text-muted"
+              >
+                {seriesId === ''
+                  ? 'Choose a template to enable recurring meetings.'
+                  : 'Uses the template sections as the starting structure.'}
+              </p>
+            </div>
 
             <div>
               <label
@@ -430,18 +488,24 @@ export function CreateMeetingDialog({
                   onChange={(event) =>
                     setParticipantQuery(event.target.value)
                   }
-                  placeholder="Search people..."
-                  aria-describedby="create-meeting-participants-help"
+                  placeholder="Search participants..."
+                  aria-describedby={
+                    participantQuery.trim().length === 1
+                      ? 'create-meeting-participants-help'
+                      : undefined
+                  }
                   className="h-10 w-full rounded-lg border border-border-control bg-surface pl-10 pr-3 text-sm text-text outline-none transition placeholder:text-text-muted/60 focus:border-focus focus:ring-2 focus:ring-focus/15"
                 />
               </div>
 
-              <p
-                id="create-meeting-participants-help"
-                className="mt-1.5 text-xs text-text-muted"
-              >
-                Search by name or username. Enter at least 2 characters.
-              </p>
+              {participantQuery.trim().length === 1 && (
+                <p
+                  id="create-meeting-participants-help"
+                  className="mt-1.5 text-xs text-text-muted"
+                >
+                  Type at least 2 characters.
+                </p>
+              )}
 
               {participantQuery.trim().length >= 2 && (
                 <div
@@ -508,7 +572,7 @@ export function CreateMeetingDialog({
                     <span
                       key={participant.id}
                       role="listitem"
-                      className="inline-flex min-w-0 items-center gap-1.5 rounded-full bg-accent-subtle px-3 py-1.5 text-sm text-accent-text"
+                      className="inline-flex min-w-0 items-center gap-1 rounded-full bg-surface-muted px-2.5 py-1 text-xs text-text"
                     >
                       <span className="max-w-40 truncate">
                         {getPersonName(participant)}
@@ -523,7 +587,7 @@ export function CreateMeetingDialog({
                             ),
                           )
                         }
-                        className="-mr-1 flex h-5 w-5 items-center justify-center rounded-full text-accent-text/70 transition hover:bg-accent-text/10 hover:text-accent-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+                        className="-mr-0.5 flex h-5 w-5 items-center justify-center rounded-full text-text-muted transition hover:bg-surface-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
                       >
                         <span
                           aria-hidden="true"
@@ -538,128 +602,38 @@ export function CreateMeetingDialog({
               )}
             </div>
 
-            <div>
-              <label
-                htmlFor="create-meeting-project"
-                className="mb-1.5 block text-sm font-medium text-text"
-              >
-                Project
+            <div className="border-t border-border-subtle pt-5">
+              <h3 className="mb-3 text-sm font-semibold text-text">
+                Schedule
+              </h3>
+
+              <label className="block">
+                <span className="mb-1.5 block text-sm font-medium text-text">
+                  Date and time
+                </span>
+
+                <input
+                  type="datetime-local"
+                  value={scheduledAt}
+                  onChange={(event) =>
+                    setScheduledAt(event.target.value)
+                  }
+                  className="h-10 w-full rounded-lg border border-border-control bg-surface px-3 text-sm text-text outline-none transition focus:border-focus focus:ring-2 focus:ring-focus/15"
+                />
               </label>
-
-              <select
-                id="create-meeting-project"
-                aria-describedby="create-meeting-project-help"
-                value={projectId}
-                onChange={(event) => {
-                  setProjectId(event.target.value)
-                  setSeriesId('')
-                }}
-                className="h-10 w-full rounded-lg border border-border-control bg-surface px-3 text-sm text-text outline-none focus:border-focus focus:ring-2 focus:ring-focus/15"
-              >
-                <option value="">No project (Research Group Meeting)</option>
-
-                {projects.map((project) => (
-                  <option
-                    key={project.id}
-                    value={project.id}
-                  >
-                    {project.name}
-                  </option>
-                ))}
-              </select>
-
-              <p
-                id="create-meeting-project-help"
-                className="mt-1.5 text-xs text-text-muted"
-              >
-                {scope === 'project'
-                  ? 'This will be a Project Meeting.'
-                  : 'This will be a Research Group Meeting.'}
-              </p>
             </div>
-
-            <div>
-              <label
-                htmlFor="create-meeting-template"
-                className="mb-1.5 block text-sm font-medium text-text"
-              >
-                Meeting template
-              </label>
-
-              <select
-                id="create-meeting-template"
-                aria-describedby="create-meeting-template-help"
-                value={seriesId}
-                onChange={(event) =>
-                  setSeriesId(event.target.value)
-                }
-                className="h-10 w-full rounded-lg border border-border-control bg-surface px-3 text-sm text-text outline-none focus:border-focus focus:ring-2 focus:ring-focus/15"
-              >
-                <option value="">No template</option>
-
-                {availableSeries.map((candidate) => (
-                  <option
-                    key={candidate.id}
-                    value={candidate.id}
-                  >
-                    {candidate.title}
-                  </option>
-                ))}
-              </select>
-
-              <p
-                id="create-meeting-template-help"
-                className="mt-1.5 text-xs text-text-muted"
-              >
-                {seriesId === ''
-                  ? 'Creates a standalone meeting.'
-                  : 'Uses the template sections as the starting structure.'}
-              </p>
-            </div>
-
-            <label className="block">
-              <span className="mb-1.5 block text-sm font-medium text-text">
-                Title
-              </span>
-
-              <input
-                autoFocus
-                type="text"
-                value={title}
-                onChange={(event) =>
-                  setTitle(event.target.value)
-                }
-                placeholder="Weekly Sync"
-                className="h-10 w-full rounded-lg border border-border-control bg-surface px-3 text-sm text-text outline-none transition placeholder:text-text-muted/60 focus:border-focus focus:ring-2 focus:ring-focus/15"
-              />
-            </label>
-
-            <label className="block">
-              <span className="mb-1.5 block text-sm font-medium text-text">
-                Date and time
-              </span>
-
-              <input
-                type="datetime-local"
-                value={scheduledAt}
-                onChange={(event) =>
-                  setScheduledAt(event.target.value)
-                }
-                className="h-10 w-full rounded-lg border border-border-control bg-surface px-3 text-sm text-text outline-none transition focus:border-focus focus:ring-2 focus:ring-focus/15"
-              />
-            </label>
           </div>
 
           {submitError && (
             <div
               role="alert"
-              className="border-t border-danger-subtle bg-danger-bg px-6 py-3 text-sm text-danger"
+              className="shrink-0 border-t border-danger-subtle bg-danger-bg px-6 py-3 text-sm text-danger"
             >
               {submitError}
             </div>
           )}
 
-          <div className="flex items-center justify-end gap-3 border-t border-border-subtle bg-surface-hover/30 px-6 py-4">
+          <div className="flex shrink-0 items-center justify-end gap-3 border-t border-border-subtle bg-surface-hover/30 px-6 py-4">
             <button
               type="button"
               disabled={submitting}
