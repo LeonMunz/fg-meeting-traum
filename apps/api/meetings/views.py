@@ -1,3 +1,5 @@
+from zoneinfo import ZoneInfo
+
 from django.contrib.auth import get_user_model
 from django.db.models import Prefetch, Q
 
@@ -31,6 +33,7 @@ from .models import (
     MeetingSeries,
     MeetingSeriesSection,
 )
+from .recurrence import MeetingRecurrenceOccurrence
 from .serializers import (
     CreateMeetingFromSeriesSerializer,
     MeetingCreateSerializer,
@@ -46,6 +49,7 @@ from .serializers import (
     MeetingNoteSerializer,
     MeetingParticipantCandidateContextSerializer,
     MeetingPatchSerializer,
+    MeetingRecurrenceMaterializeSerializer,
     MeetingRecurrenceOccurrenceQuerySerializer,
     MeetingRecurrenceOccurrenceSerializer,
     MeetingSectionCreateSerializer,
@@ -87,6 +91,7 @@ from .services import (
     delete_meeting_note,
     end_meeting,
     expand_meeting_recurrence_occurrences,
+    materialize_meeting_recurrence_occurrence,
     list_meeting_item_notes,
     reopen_meeting,
     reorder_meeting_sections,
@@ -2330,6 +2335,23 @@ def _has_recurrence_read_access(user, recurrence):
     )
 
 
+def _has_recurrence_write_access(user, recurrence):
+    """MeetingRecurrence occurrence materialization is a WRITE
+    operation: the canonical scoped Meeting write rule for the
+    Recurrence's scope (group scope → any current group member;
+    Project scope → ``PROJECT_WORK`` and a non-archived Project),
+    exactly like Meeting creation. Read access
+    (``MEETING_RECURRENCE_READ``) alone is never sufficient: a Project
+    viewer can read occurrences but cannot materialize them. The
+    domain materialization service re-enforces the same rule and
+    remains the final authority before persistence."""
+    if not _has_recurrence_read_access(user, recurrence):
+        return False
+    if recurrence.scope == MeetingRecurrence.Scope.PROJECT:
+        return _has_project_write_access(user, recurrence.project)
+    return True
+
+
 class MeetingRecurrenceOccurrenceListView(APIView):
     """GET /api/meeting-recurrences/{recurrence_id}/occurrences/
 
@@ -2414,4 +2436,90 @@ class MeetingRecurrenceOccurrenceListView(APIView):
                 items,
                 many=True,
             ).data
+        )
+
+
+class MeetingRecurrenceOccurrenceMaterializeView(APIView):
+    """POST /api/meeting-recurrences/{recurrence_id}/occurrences/materialize/
+
+    Materialize ONE calculated occurrence of the Recurrence into a
+    concrete Meeting. The request carries the stable occurrence
+    identity (``occurrenceId``) plus the canonical original scheduled
+    timestamp (``originalScheduledAt``) exactly as reported by the
+    bounded occurrence read API; the identity is an opaque derived
+    UUIDv5 that cannot be inverted, so the original scheduled start is
+    part of the contract. The view only validates request input and
+    reconstructs the canonical occurrence value — recurrence
+    mathematics, occurrence validation (derived identity match AND
+    bounded rule membership), canonical write authorization, and
+    idempotent persistence all stay in the domain materialization
+    service, which remains the final authority. Repeating a valid
+    request returns the already-materialized Meeting and creates no
+    duplicates.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, recurrence_id):
+        recurrence = _require_meeting_recurrence_access(
+            request,
+            recurrence_id,
+        )
+        if recurrence is None:
+            return Response(
+                {"error": "Meeting recurrence not found"},
+                status=404,
+            )
+
+        if not _has_recurrence_write_access(request.user, recurrence):
+            return _mutation_forbidden_response()
+
+        serializer = MeetingRecurrenceMaterializeSerializer(
+            data=request.data,
+        )
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=400)
+
+        data = serializer.validated_data
+
+        # Reconstruct the canonical occurrence value from the pair the
+        # read API reports: the aware instant normalized into the
+        # schedule's stored timezone (wall clock first, then the
+        # DST-correct aware form — the exact construction the domain
+        # expansion uses). Recurrence mathematics stay in the domain
+        # layer: the materialization service revalidates the identity
+        # and rule membership before anything is persisted.
+        tz = ZoneInfo(recurrence.timezone_name)
+        original_local = (
+            data["originalScheduledAt"].astimezone(tz).replace(tzinfo=None)
+        )
+        original_start = original_local.replace(tzinfo=tz)
+        occurrence = MeetingRecurrenceOccurrence(
+            occurrence_id=data["occurrenceId"],
+            original_local=original_local,
+            original_start=original_start,
+        )
+
+        # The status code signals whether THIS request created the
+        # Meeting; the unique-key existence lookup only influences the
+        # code — the domain service (with its unique constraint)
+        # remains the authority on idempotency.
+        created_now = not Meeting.objects.filter(
+            recurrence=recurrence,
+            original_scheduled_at=original_start,
+        ).exists()
+
+        try:
+            meeting = materialize_meeting_recurrence_occurrence(
+                recurrence=recurrence,
+                occurrence=occurrence,
+                actor=request.user,
+                title=data["title"],
+            )
+        except MeetingDomainError as exc:
+            return Response({"error": exc.message}, status=400)
+
+        return Response(
+            MeetingSerializer(meeting).data,
+            status=201 if created_now else 200,
         )

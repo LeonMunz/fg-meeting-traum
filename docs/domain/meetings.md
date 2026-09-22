@@ -325,7 +325,8 @@ domain-level bounded expansion operation + one explicit materialization
 operation that turns a single calculated occurrence into a concrete
 `Meeting` (see "Materialization" below). The Recurrence has a
 read-only bounded occurrence READ API (see "Bounded occurrence read
-API"); recurrence creation/editing and materialization remain
+API") and one explicit idempotent HTTP materialization action (see
+"Occurrence materialization API"); recurrence creation/editing remain
 domain-only operations, and there is no Recurrence UI. Occurrence
 Meetings are never auto-created outside the explicit materialization
 operation.
@@ -571,8 +572,50 @@ slice may move it without redefining the original occurrence identity.
 
 **No eager materialization.** Creating a Recurrence and expanding a
 window still create zero `Meeting` rows; only the explicit operation
-above creates a concrete occurrence Meeting. There is no API endpoint
-and no UI for it yet.
+above creates a concrete occurrence Meeting. The operation is exposed
+through one idempotent HTTP action (see "Occurrence materialization
+API" below); there is no UI for it yet.
+
+### Occurrence materialization API (implemented)
+
+`POST /api/meeting-recurrences/{recurrenceId}/occurrences/materialize/`
+materializes ONE calculated occurrence of one Recurrence into a
+concrete Meeting through the existing idempotent domain operation
+(`materialize_meeting_recurrence_occurrence`); the API layer validates
+request input and delegates occurrence validation, authorization, and
+persistence to the domain service, which remains the final authority.
+
+- **Request:** `occurrenceId` (the stable occurrence identity
+  reported by the bounded occurrence read API),
+  `originalScheduledAt` (the immutable original scheduled start,
+  timezone-aware ISO-8601), and `title` (the concrete Meeting title,
+  required). The occurrence identity is an opaque derived UUIDv5 that
+  cannot be inverted, so the original scheduled start is part of the
+  contract: the server revalidates the pair against the recurrence
+  rule (derived identity match AND bounded rule membership) before
+  anything is persisted — a caller cannot create recurring Meetings
+  by supplying an unchecked datetime or UUID.
+- **Validation:** naive timestamps, invalid UUIDs, missing fields,
+  blank/overlong titles, and pairs the rule never produces (wrong
+  wall-clock time, before the first occurrence, beyond the end-date /
+  count contract, identity of a foreign recurrence) are rejected with
+  `400` and persist nothing.
+- **Authorization:** materialization is a WRITE operation: the
+  canonical scoped Meeting write rule of the Recurrence's scope
+  (group scope → current group members; Project scope → Project
+  owner/member, non-archived Projects only), exactly like Meeting
+  creation. Read access (a Project viewer may read occurrences) is
+  never sufficient: read-allowed, write-unallowed actors answer `403`;
+  inaccessible recurrences answer a non-leaking `404`.
+- **Idempotency:** the first valid request materializes the Meeting
+  and returns the concrete Meeting representation with `201`;
+  repeating a valid request — by the same or another authorized
+  actor, with any offset representation of the same instant — returns
+  the SAME concrete Meeting with `200` and creates no additional
+  Meeting, Section, participant, or `meeting.created` audit event.
+- The materialized occurrence immediately appears as
+  `materialized: true` with its `meetingId` in the bounded occurrence
+  read API. There is no Recurrence UI for this action yet.
 
 ### Not implemented (deferred)
 
@@ -580,10 +623,9 @@ The following are intentionally out of this slice and remain
 unimplemented:
 
 - recurrence creation/editing API, recurrence list/detail views,
-  frontend clients, and Recurrence UI; the HTTP materialization
-  action (the materialization operation is domain-only so far) and
-  the occurrence preview UI; an explicit maximum window size for the
-  bounded occurrence read API (pending product/API decision);
+  frontend clients, and Recurrence UI (including the occurrence
+  preview UI); an explicit maximum window size for the bounded
+  occurrence read API (pending product/API decision);
 - individual occurrence editing/moving, exclusions/cancellations,
   "only this meeting", "this and following" (the persistence contract
   for moving is in place: `Meeting.scheduled_at` may change while

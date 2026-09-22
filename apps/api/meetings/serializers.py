@@ -891,3 +891,26 @@ class MeetingRecurrenceOccurrenceSerializer(serializers.Serializer):
     timezone = serializers.CharField()
     materialized = serializers.BooleanField()
     meetingId = serializers.IntegerField(allow_null=True)
+
+
+class MeetingRecurrenceMaterializeSerializer(serializers.Serializer):
+    """POST body contract for materializing ONE calculated occurrence.
+
+    The request must carry the stable occurrence identity (``occurrenceId``)
+    and the canonical original scheduled timestamp (``originalScheduledAt``)
+    exactly as reported by the bounded occurrence read API, plus the
+    concrete Meeting ``title``. The occurrence identity is an opaque
+    derived UUIDv5 that cannot be inverted, so the original scheduled
+    start is part of the contract: the server revalidates the pair
+    against the recurrence rule (derived identity match AND bounded rule
+    membership) before anything is persisted. ``originalScheduledAt``
+    must be timezone-aware — a naive value is rejected, never silently
+    interpreted in a server timezone.
+    """
+
+    occurrenceId = serializers.UUIDField()
+    originalScheduledAt = _AwareDateTimeField()
+    title = serializers.CharField(
+        max_length=255,
+        allow_blank=False,
+    )
