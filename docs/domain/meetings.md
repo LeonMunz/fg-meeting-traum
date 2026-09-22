@@ -271,6 +271,40 @@ Users with appropriate write access for the Template's scope can change:
 
 This editability is mandatory for real use.
 
+### Deletion (implemented)
+
+A persisted Meeting Template is deletable through
+`DELETE /api/meeting-series/{id}/` (returns `204` when successful).
+
+**Authorization** reuses the exact scoped Template write rule of the
+editability above (the kernel's `MEETING_SERIES_WRITE`): a user who
+cannot manage the Template's scope cannot delete it. A user without
+read access gets the non-leaking `404`; a user who can read but not
+write (e.g. a Project `viewer` on a Project-scoped Template, or any
+user on an archived Project's Templates) gets `403`.
+
+**What deletion removes:** the Template and its editable Sections
+(owned dependents).
+
+**What deletion preserves:** Meeting occurrences created from the
+Template are independent snapshots and are NEVER deleted by a
+Template deletion. The occurrence's provenance reference
+(`Meeting.series`) and the section snapshots' source pointer
+(`MeetingSection.source_series_section`) are cleared (`SET_NULL`);
+every snapshot's own content (names, descriptions, order, items,
+notes) is preserved. Sibling Templates are independent records and
+are never touched.
+
+**User interaction:** the Meeting Templates overview offers the
+destructive "Delete template" action per Template row (three-dot
+"Template actions" menu), and the Template management page offers
+the same action. Both sit behind an explicit confirmation dialog
+that names the exact Template; cancelling leaves the Template
+unchanged, and a failed deletion keeps the Template state and
+surfaces the error. The row menu is rendered only for Templates the
+current user can manage under the rule above (the server remains
+authoritative).
+
 ---
 
 ## 6. Editable Meeting structure (Sections)

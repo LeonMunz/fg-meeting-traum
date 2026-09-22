@@ -1510,6 +1510,258 @@ test(
   },
 )
 
+test(
+  'Delete meeting template requires confirmation and removes the template',
+  async ({ page }) => {
+    await login(page, 'alex')
+
+    // --------------------------------------------------------
+    // 1. Open meeting-template management.
+    // --------------------------------------------------------
+
+    await page
+      .getByRole('link', {
+        name: /Meetings/,
+      })
+      .click()
+
+    await expect(page).toHaveURL(
+      /\/meetings\?group=\d+$/,
+    )
+
+    const meetingsUrl = new URL(page.url())
+    const groupId =
+      meetingsUrl.searchParams.get('group') ?? '1'
+
+    await page.goto(
+      `/meetings/series?group=${groupId}`,
+    )
+
+    // --------------------------------------------------------
+    // 2. Create a disposable template, give it a Section,
+    //    and create a Meeting occurrence from it BEFORE
+    //    deletion: the occurrence must survive deletion.
+    // --------------------------------------------------------
+
+    await page
+      .getByLabel('Name')
+      .fill('E2E Delete Template')
+
+    await page
+      .getByRole('button', {
+        name: /Create template/,
+      })
+      .click()
+
+    // Creation navigates to the new template's detail page.
+    await expect(page).toHaveURL(
+      /\/meetings\/series\/\d+$/,
+    )
+
+    await page
+      .getByLabel('Section name')
+      .fill('Agenda')
+
+    await page
+      .getByRole('button', {
+        name: /Add section/,
+      })
+      .click()
+
+    await expect(
+      page.locator('span.font-semibold', {
+        hasText: /^Agenda$/,
+      }),
+    ).toBeVisible()
+
+    await page
+      .getByLabel('Title')
+      .fill('E2E Template Meeting')
+
+    await page
+      .getByLabel('Date & Time')
+      .fill('2030-04-01T10:00')
+
+    await page
+      .getByRole('button', {
+        name: /Create meeting/,
+      })
+      .click()
+
+    await expect(page).toHaveURL(/\/meetings\/\d+$/)
+
+    // --------------------------------------------------------
+    // 3. Create the second template that must stay
+    //    unaffected.
+    // --------------------------------------------------------
+
+    await page.goto(
+      `/meetings/series?group=${groupId}`,
+    )
+
+    await page
+      .getByLabel('Name')
+      .fill('E2E Keep Template')
+
+    await page
+      .getByRole('button', {
+        name: /Create template/,
+      })
+      .click()
+
+    await expect(page).toHaveURL(
+      /\/meetings\/series\/\d+$/,
+    )
+
+    // --------------------------------------------------------
+    // 4. Back on the Meeting Templates overview: initiate
+    //    Delete from the template row's actions menu, then
+    //    cancel: nothing is deleted before confirmation and
+    //    the row remains.
+    // --------------------------------------------------------
+
+    await page.goto(
+      `/meetings/series?group=${groupId}`,
+    )
+
+    const templateRow = page.getByRole('button', {
+      name: 'Open E2E Delete Template',
+    })
+
+    await expect(templateRow).toBeVisible()
+
+    await templateRow
+      .getByRole('button', {
+        name: 'Template actions',
+      })
+      .click()
+
+    await templateRow
+      .getByRole('menuitem', {
+        name: 'Delete template',
+      })
+      .click()
+
+    const deleteDialog = page.getByRole('dialog', {
+      name: /Delete meeting template\?/,
+    })
+
+    await expect(deleteDialog).toBeVisible()
+
+    // The confirmation names the exact template.
+    await expect(
+      deleteDialog.getByText('E2E Delete Template'),
+    ).toBeVisible()
+
+    await deleteDialog
+      .getByRole('button', {
+        name: 'Cancel',
+        exact: true,
+      })
+      .click()
+
+    await expect(deleteDialog).toHaveCount(0)
+
+    // Cancelled: still on the overview with the row intact.
+    await expect(page).toHaveURL(
+      /\/meetings\/series(\?group=\d+)?$/,
+    )
+    await expect(templateRow).toBeVisible()
+
+    // --------------------------------------------------------
+    // 5. Initiate again from the row menu and confirm the
+    //    deletion.
+    // --------------------------------------------------------
+
+    await templateRow
+      .getByRole('button', {
+        name: 'Template actions',
+      })
+      .click()
+
+    await templateRow
+      .getByRole('menuitem', {
+        name: 'Delete template',
+      })
+      .click()
+
+    const confirmDialog = page.getByRole('dialog', {
+      name: /Delete meeting template\?/,
+    })
+
+    await expect(confirmDialog).toBeVisible()
+
+    await confirmDialog
+      .getByRole('button', {
+        name: 'Delete template',
+        exact: true,
+      })
+      .click()
+
+    // --------------------------------------------------------
+    // 6. Successful deletion keeps the template list in
+    //    place, where the template is absent and the other
+    //    template is unaffected.
+    // --------------------------------------------------------
+
+    await expect(page).toHaveURL(
+      /\/meetings\/series(\?group=\d+)?$/,
+    )
+
+    await expect(
+      page.getByText('E2E Delete Template', {
+        exact: true,
+      }),
+    ).toHaveCount(0)
+
+    await expect(
+      page.getByText('E2E Keep Template', {
+        exact: true,
+      }),
+    ).toBeVisible()
+
+    // --------------------------------------------------------
+    // 7. Refresh/revisit: the deleted template does not
+    //    return.
+    // --------------------------------------------------------
+
+    await page.reload()
+
+    await expect(
+      page.getByText('E2E Delete Template', {
+        exact: true,
+      }),
+    ).toHaveCount(0)
+
+    await expect(
+      page.getByText('E2E Keep Template', {
+        exact: true,
+      }),
+    ).toBeVisible()
+
+    // --------------------------------------------------------
+    // 8. The Meeting created from the deleted template
+    //    survives.
+    // --------------------------------------------------------
+
+    await page
+      .getByRole('link', {
+        name: /Meetings/,
+      })
+      .click()
+
+    await expect(page).toHaveURL(
+      /\/meetings\?group=\d+$/,
+    )
+
+    await expect(
+      page.getByText('E2E Template Meeting', {
+        exact: true,
+      }),
+    ).toBeVisible()
+  },
+)
+
 const NOTE_MEETING_TITLE =
   'E2E Note Persistence Weekly'
 

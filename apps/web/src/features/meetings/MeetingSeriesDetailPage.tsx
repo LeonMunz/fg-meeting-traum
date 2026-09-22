@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useState,
   type FormEvent,
 } from 'react'
@@ -13,16 +14,26 @@ import { ApiError } from '../../api/client'
 import {
   createMeetingFromSeries,
   createMeetingSeriesSection,
+  deleteMeetingSeries,
   getMeetingSeries,
   listMeetingSeriesSections,
   reorderMeetingSeriesSections,
   updateMeetingSeriesSection,
 } from '../../api/meetings'
+import { getProject } from '../../api/projects'
+import { useSession } from '../../api/useSession'
 import type {
   ApiMeetingSeries,
   ApiMeetingSeriesSection,
+  ApiProjectRole,
 } from '../../api/types'
+import { useResearchGroup } from '../research-group/useResearchGroup'
 import { useSyncResearchGroupContext } from '../research-group/useSyncResearchGroupContext'
+import {
+  canManageMeetingSeries,
+  MeetingSeriesDeleteDialog,
+  TemplateActionsMenu,
+} from './meetingSeriesDelete'
 
 function getErrorMessage(
   error: unknown,
@@ -77,6 +88,83 @@ export function MeetingSeriesDetailPage() {
 
   const [actionError, setActionError] =
     useState<string | null>(null)
+
+  // Template deletion
+  const [deleteDialogOpen, setDeleteDialogOpen] =
+    useState(false)
+  const [deletingTemplate, setDeletingTemplate] =
+    useState(false)
+
+  const { user } = useSession()
+  const { activeResearchGroup } = useResearchGroup()
+
+  // The server remains authoritative; this only decides whether
+  // to render the destructive management control.
+  const isGroupAdmin = useMemo(() => {
+    if (user == null) {
+      return false
+    }
+
+    return (
+      activeResearchGroup?.role === 'admin' &&
+      activeResearchGroup.id ===
+        series?.researchGroupId
+    )
+  }, [
+    activeResearchGroup,
+    user,
+    series?.researchGroupId,
+  ])
+
+  // For a Project-scoped Template, resolve the current user's
+  // role from the Project read-model so viewers never see an
+  // enabled destructive control.
+  const [projectRole, setProjectRole] = useState<
+    ApiProjectRole | null
+  >(null)
+
+  useEffect(() => {
+    if (series == null || series.scope !== 'project') {
+      setProjectRole(null)
+      return
+    }
+
+    if (series.projectId == null) {
+      setProjectRole(null)
+      return
+    }
+
+    let cancelled = false
+
+    getProject(series.projectId)
+      .then((project) => {
+        if (!cancelled) {
+          setProjectRole(
+            project.currentUserRole,
+          )
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setProjectRole(null)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [series])
+
+  const canManageTemplate = useMemo(() => {
+    if (series == null) {
+      return false
+    }
+
+    return canManageMeetingSeries(series, {
+      canManageGroupTemplate: isGroupAdmin,
+      projectRole,
+    })
+  }, [series, isGroupAdmin, projectRole])
 
   // Section form
   const [sectionName, setSectionName] =
@@ -389,6 +477,38 @@ export function MeetingSeriesDetailPage() {
     setDraggingId(null)
   }
 
+  const handleDeleteTemplate =
+    async () => {
+      if (
+        seriesId == null ||
+        deletingTemplate
+      ) {
+        return
+      }
+
+      setDeletingTemplate(true)
+      setActionError(null)
+
+      try {
+        await deleteMeetingSeries(seriesId)
+        setDeleteDialogOpen(false)
+        // The list page re-fetches from the server, so the
+        // deleted template is absent from the template list
+        // and from every template picker without a manual
+        // reload.
+        navigate('/meetings/series')
+      } catch (error) {
+        setActionError(
+          getErrorMessage(
+            error,
+            'Meeting template could not be deleted.',
+          ),
+        )
+      } finally {
+        setDeletingTemplate(false)
+      }
+    }
+
   if (loading) {
     return (
       <div className="w-full px-6 py-8 lg:px-8 lg:py-10 xl:px-10">
@@ -468,6 +588,17 @@ export function MeetingSeriesDetailPage() {
                 ? 'Research Group Meeting'
                 : 'Project Meeting'}
             </span>
+          )}
+
+          {canManageTemplate && (
+            <div className="ml-auto">
+              <TemplateActionsMenu
+                onDeleteRequest={() => {
+                  setActionError(null)
+                  setDeleteDialogOpen(true)
+                }}
+              />
+            </div>
           )}
         </div>
 
@@ -870,6 +1001,16 @@ export function MeetingSeriesDetailPage() {
           </div>
         </aside>
       </div>
+
+      {deleteDialogOpen && series && (
+        <MeetingSeriesDeleteDialog
+          title={series.title}
+          deleting={deletingTemplate}
+          error={actionError}
+          onCancel={() => setDeleteDialogOpen(false)}
+          onConfirm={() => void handleDeleteTemplate()}
+        />
+      )}
     </div>
   )
 }

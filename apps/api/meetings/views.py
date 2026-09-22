@@ -66,6 +66,7 @@ from .services import (
     add_meeting_participant,
     create_meeting,
     delete_meeting,
+    delete_meeting_series,
     create_meeting_from_series,
     create_meeting_item,
     create_meeting_note,
@@ -561,6 +562,27 @@ class MeetingSeriesDetailView(APIView):
 
         series.refresh_from_db()
         return Response(MeetingSeriesSerializer(series).data)
+
+    def delete(self, request, series_id):
+        series = _require_meeting_series_access(request, series_id)
+        if series is None:
+            return Response(
+                {"error": "Meeting series not found"},
+                status=404,
+            )
+
+        if not _has_scoped_write_access(request.user, series):
+            return _mutation_forbidden_response()
+
+        try:
+            delete_meeting_series(
+                meeting_series=series,
+                actor=request.user,
+            )
+        except MeetingDomainError as exc:
+            return Response({"error": exc.message}, status=400)
+
+        return Response(status=204)
 
 
 # ── MeetingSeriesSection endpoints ───────────────────────────────

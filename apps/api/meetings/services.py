@@ -315,6 +315,43 @@ def update_meeting_series(
     return meeting_series
 
 
+@transaction.atomic
+def delete_meeting_series(*, meeting_series, actor):
+    """Permanently delete one Meeting Template (MeetingSeries).
+
+    Uses the existing scoped Template write rule (MEETING_SERIES_WRITE
+    via the authorization kernel: group scope → the group's read
+    members; project scope → Project owner/member, non-archived
+    Projects only), so a user who could not manage the Template cannot
+    delete it either.
+
+    Deletes the Template together with its Template-owned Sections
+    through the existing relational CASCADE semantics.
+
+    Existing Meeting occurrences are NOT owned by the Template: they
+    are independent snapshots. Deleting the Template never deletes an
+    occurrence; it only clears the occurrence's provenance reference
+    (``Meeting.series`` is SET_NULL) and the section snapshots' source
+    pointer (``MeetingSection.source_series_section`` is SET_NULL)
+    while every snapshot's own content is preserved. Sibling
+    Templates are independent records and are never touched.
+    """
+    # Serialize against concurrent Template lifecycle operations and
+    # revalidate against the current persisted state (e.g. a Project
+    # archived after the caller loaded the Template): the authorization
+    # decision must never be made on a stale related object.
+    MeetingSeries.objects.select_for_update().get(pk=meeting_series.pk)
+    meeting_series = (
+        MeetingSeries.objects
+        .select_related("research_group", "project")
+        .get(pk=meeting_series.pk)
+    )
+
+    _require_series_write_access(meeting_series=meeting_series, user=actor)
+
+    meeting_series.delete()
+
+
 # ── MeetingSeriesSection ─────────────────────────────────────────
 
 

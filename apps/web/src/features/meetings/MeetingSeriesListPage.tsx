@@ -8,15 +8,22 @@ import { useNavigate } from 'react-router'
 import { ApiError } from '../../api/client'
 import {
   createMeetingSeries,
+  deleteMeetingSeries,
   listMeetingSeries,
 } from '../../api/meetings'
 import { listProjects } from '../../api/projects'
+import { useSession } from '../../api/useSession'
 import type {
   ApiMeetingScope,
   ApiMeetingSeries,
   ApiProject,
 } from '../../api/types'
 import { useResearchGroupListScope } from '../research-group/useResearchGroupListScope'
+import {
+  canManageMeetingSeries,
+  MeetingSeriesDeleteDialog,
+  TemplateActionsMenu,
+} from './meetingSeriesDelete'
 
 function getErrorMessage(
   error: unknown,
@@ -70,6 +77,16 @@ export function MeetingSeriesListPage() {
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] =
     useState<string | null>(null)
+
+  // Template deletion
+  const [deleteTarget, setDeleteTarget] =
+    useState<ApiMeetingSeries | null>(null)
+  const [deletingTemplateId, setDeletingTemplateId] =
+    useState<number | null>(null)
+  const [deleteError, setDeleteError] =
+    useState<string | null>(null)
+
+  const { user } = useSession()
 
   const loadSeries = useCallback(async () => {
     if (activeResearchGroupId == null) {
@@ -167,6 +184,68 @@ export function MeetingSeriesListPage() {
       setCreating(false)
     }
   }
+
+  // Same manage/delete visibility rule as the template
+  // management page. The server remains authoritative; this
+  // only decides whether to render the destructive control.
+  const canManageSeries = (
+    s: ApiMeetingSeries,
+  ): boolean =>
+    canManageMeetingSeries(s, {
+      canManageGroupTemplate:
+        user != null &&
+        activeResearchGroup?.role === 'admin' &&
+        activeResearchGroup.id ===
+          s.researchGroupId,
+      projectRole:
+        s.scope === 'project' &&
+        s.projectId != null
+          ? (projects.find(
+              (project) =>
+                project.id === s.projectId,
+            )?.currentUserRole ??
+            null)
+          : null,
+    })
+
+  const handleConfirmDeleteTemplate =
+    async () => {
+      if (
+        deleteTarget == null ||
+        deletingTemplateId != null
+      ) {
+        return
+      }
+
+      const targetId = deleteTarget.id
+
+      setDeletingTemplateId(targetId)
+      setDeleteError(null)
+
+      try {
+        await deleteMeetingSeries(targetId)
+        setDeleteTarget(null)
+        // Keep the list authoritative on the server: the
+        // removed row is dropped locally, and a reload
+        // re-fetches the list from the backend, so the
+        // deleted template never returns.
+        setSeries((current) =>
+          current.filter(
+            (candidate) =>
+              candidate.id !== targetId,
+          ),
+        )
+      } catch (error) {
+        setDeleteError(
+          getErrorMessage(
+            error,
+            'Meeting template could not be deleted.',
+          ),
+        )
+      } finally {
+        setDeletingTemplateId(null)
+      }
+    }
 
   const pageLoading =
     researchGroupsLoading || loading
@@ -384,7 +463,7 @@ export function MeetingSeriesListPage() {
         </div>
       ) : (
         <section className="mt-8 overflow-hidden rounded-xl border border-border-subtle bg-surface-quiet">
-          <div className="grid grid-cols-[minmax(180px,1fr)_minmax(140px,220px)_1fr_100px] gap-4 border-b border-border-subtle bg-surface-header px-6 py-2.5">
+          <div className="grid grid-cols-[minmax(180px,1fr)_minmax(140px,220px)_1fr_100px_48px] gap-4 border-b border-border-subtle bg-surface-header px-6 py-2.5">
             <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-text-muted">
               Series
             </div>
@@ -400,19 +479,34 @@ export function MeetingSeriesListPage() {
             <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-text-muted">
               Status
             </div>
+
+            <div aria-hidden="true" />
           </div>
 
           <div className="divide-y divide-border-subtle">
             {series.map((s) => (
-              <button
+              <div
                 key={s.id}
-                type="button"
+                role="button"
+                tabIndex={0}
+                aria-label={`Open ${s.title}`}
                 onClick={() =>
                   navigate(
                     `/meetings/series/${s.id}`,
                   )
                 }
-                className="grid w-full grid-cols-[minmax(180px,1fr)_minmax(140px,220px)_1fr_100px] items-center gap-4 px-6 py-4 text-left transition hover:bg-surface-hover"
+                onKeyDown={(event) => {
+                  if (
+                    event.key === 'Enter' ||
+                    event.key === ' '
+                  ) {
+                    event.preventDefault()
+                    navigate(
+                      `/meetings/series/${s.id}`,
+                    )
+                  }
+                }}
+                className="grid w-full cursor-pointer grid-cols-[minmax(180px,1fr)_minmax(140px,220px)_1fr_100px_48px] items-center gap-4 px-6 py-4 text-left transition outline-none hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus"
               >
                 <div className="min-w-0">
                   <div className="truncate text-sm font-semibold text-text">
@@ -441,10 +535,42 @@ export function MeetingSeriesListPage() {
                     </span>
                   )}
                 </div>
-              </button>
+
+                <div className="flex justify-end">
+                  {canManageSeries(s) && (
+                    <div
+                      onClick={(event) =>
+                        event.stopPropagation()
+                      }
+                      onPointerDown={(event) =>
+                        event.stopPropagation()
+                      }
+                    >
+                      <TemplateActionsMenu
+                        onDeleteRequest={() => {
+                          setDeleteError(null)
+                          setDeleteTarget(s)
+                        }}
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
             ))}
           </div>
         </section>
+      )}
+
+      {deleteTarget != null && (
+        <MeetingSeriesDeleteDialog
+          title={deleteTarget.title}
+          deleting={deletingTemplateId != null}
+          error={deleteError}
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={() =>
+            void handleConfirmDeleteTemplate()
+          }
+        />
       )}
     </div>
   )

@@ -301,6 +301,12 @@ export async function updateMeetingSeries(
   )
 }
 
+export async function deleteMeetingSeries(
+  seriesId: number,
+): Promise<void> {
+  return apiDelete<void>(`/api/meeting-series/${seriesId}/`)
+}
+
 /* ── Meeting Series Sections ───────────────────────────────────── */
 
 export async function listMeetingSeriesSections(
