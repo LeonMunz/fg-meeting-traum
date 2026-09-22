@@ -505,8 +505,11 @@ before any row is written:
 `POST /api/meeting-recurrences/` exposes the creation of a recurring
 meeting schedule over HTTP. It is the backend half of the product flow
 “choose a Meeting Template → enter a series title → configure the
-recurrence → create the Recurrence”, and it enables the flow to persist a
-schedule WITHOUT materializing the first Meeting.
+recurrence → create the Recurrence”, and it enables the flow to persist
+a schedule WITHOUT materializing the first Meeting. The frontend client
+foundation for this endpoint (typed request/response contracts plus a
+`createMeetingRecurrence(...)` client) is implemented; the redesigned
+Meeting Create UI that will consume it is DEFERRED (see the note below).
 
 **Request contract:** the body represents the V1 domain directly and does
 NOT carry ownership fields — the selected Meeting Template determines the
@@ -580,6 +583,21 @@ occurrence materialization endpoint. The recurrence created through this
 endpoint immediately works with the existing bounded occurrence read API
 and the existing materialize / reschedule / exclude / cancel endpoints,
 whose contracts are unchanged.
+
+**Frontend (implemented — client foundation only):** the typed
+`ApiCreateMeetingRecurrenceInput` / `ApiMeetingRecurrence` request/response
+contracts (matching this endpoint's contract, with `weekdays` as canonical
+backend ISO integers `0 = Monday .. 6 = Sunday`) and a
+`createMeetingRecurrence(...)` client function on the existing `apiPost`
+convention that targets THIS endpoint. Two isolated, UI-agnostic pure
+helpers are retained for the future recurrence editor:
+`currentIanaTimezone()` (the browser's canonical IANA time zone) and
+`isoWeekdayOfLocalDate(datePart)` (local calendar date → backend ISO
+weekday). No recurrence UI is implemented in the Meeting create dialog by
+this change (a provisional preset select that briefly existed was removed);
+the one-time Meeting-create flow is unchanged. The redesigned Meeting
+Create UI (Modal Foundation, Schedule UX, Recurrence UX, Stabilization) is
+DEFERRED and will consume this client.
 
 ### Bounded occurrence expansion (implemented)
 ### Bounded occurrence expansion (implemented)
@@ -1324,10 +1342,22 @@ cancellation UX exists yet.
 The following are intentionally out of this slice and remain
 unimplemented:
 
-- recurrence creation/editing API, recurrence list/detail views,
-  frontend clients, and Recurrence UI (including the occurrence
-  preview UI); an explicit maximum window size for the bounded
-  occurrence read API (pending product/API decision);
+- recurrence EDITING API, recurrence list/detail views, and Recurrence
+  UI (including the occurrence preview UI); an explicit maximum window
+  size for the bounded occurrence read API (pending product/API
+  decision);
+
+  The creation HTTP API IS implemented (see "Creation HTTP API
+  (implemented)"), and the frontend client foundation for it (typed
+  request/response contracts plus the `createMeetingRecurrence(...)`
+  client; see the "Frontend (implemented — client foundation only)"
+  note in that section) IS implemented. No Recurrence UI is implemented
+  by that checkpoint: the redesigned Meeting Create UI (NEXT: Modal
+  Foundation, Schedule UX, Recurrence UX, Stabilization) and the
+  advanced/custom Recurrence UI (custom interval, multiple weekdays,
+  and end date/count UI) remain unimplemented, along with the
+  occurrence preview UI and the bounded-occurrence maximum window
+  size.
 - restore / reactivate (unexclude) of a cancelled or excluded
   occurrence, and whole-series (whole-recurrence) cancellation /
   termination: the single-occurrence paths are implemented

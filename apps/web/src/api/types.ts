@@ -671,6 +671,43 @@ export interface ApiCreateMeetingFromSeriesInput {
   participantIds?: number[]
 }
 
+/* ── Meeting Recurrence (recurring series schedule) ──────────── */
+
+export type ApiMeetingRecurrenceFrequency =
+  | 'daily'
+  | 'weekly'
+  | 'monthly'
+
+export interface ApiCreateMeetingRecurrenceInput {
+  meetingSeriesId: number
+  title: string
+  frequency: ApiMeetingRecurrenceFrequency
+  interval: number
+  weekdays: number[]
+  startDate: string
+  localTime: string
+  timezone: string
+  endDate?: string | null
+  count?: number | null
+}
+
+export interface ApiMeetingRecurrence {
+  id: number
+  title: string
+  meetingSeriesId: number
+  researchGroupId: number
+  scope: ApiMeetingScope
+  projectId: number | null
+  frequency: ApiMeetingRecurrenceFrequency
+  interval: number
+  weekdays: number[]
+  startDate: string
+  localTime: string
+  timezone: string
+  endDate: string | null
+  count: number | null
+}
+
 
 export interface ApiResearchGroupMembership {
   id: number

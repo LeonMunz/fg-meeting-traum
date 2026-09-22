@@ -15,6 +15,7 @@ import {
   cancelMeetingItemFollowUp,
   createMeeting,
   createMeetingFromSeries,
+  createMeetingRecurrence,
   getMeetingItemFollowUpTargets,
   markMeetingItemFollowUp,
   reopenMeetingItem,
@@ -25,6 +26,8 @@ import {
 
 import type {
   ApiCancelMeetingItemFollowUpResult,
+  ApiCreateMeetingRecurrenceInput,
+  ApiMeetingRecurrence,
   ApiMeetingItem,
   ApiMeetingItemFollowUpSchedule,
   ApiMeetingItemFollowUpTargets,
@@ -298,5 +301,75 @@ describe('Meeting follow-up cancel API client', () => {
       'API error 403',
     )
     await expect(cancelMeetingItemFollowUp(41)).rejects.toEqual(error)
+  })
+})
+
+describe('Meeting recurrence API client', () => {
+  beforeEach(() => {
+    vi.mocked(apiPost).mockReset()
+  })
+
+  it('posts the recurrence rule to the dedicated creation endpoint', async () => {
+    const input: ApiCreateMeetingRecurrenceInput = {
+      meetingSeriesId: 7,
+      title: 'Weekly Sync',
+      frequency: 'weekly',
+      interval: 1,
+      weekdays: [0],
+      startDate: '2030-01-07',
+      localTime: '10:30',
+      timezone: 'Europe/Berlin',
+    }
+    const created: ApiMeetingRecurrence = {
+      id: 500,
+      title: 'Weekly Sync',
+      meetingSeriesId: 7,
+      researchGroupId: 3,
+      scope: 'group',
+      projectId: null,
+      frequency: 'weekly',
+      interval: 1,
+      weekdays: [0],
+      startDate: '2030-01-07',
+      localTime: '10:30',
+      timezone: 'Europe/Berlin',
+      endDate: null,
+      count: null,
+    }
+    vi.mocked(apiPost).mockResolvedValue(created)
+
+    await expect(createMeetingRecurrence(input)).resolves.toEqual(
+      created,
+    )
+    expect(apiPost).toHaveBeenCalledWith(
+      '/api/meeting-recurrences/',
+      input,
+    )
+  })
+
+  it('keeps weekdays as backend ISO integers in the request', async () => {
+    vi.mocked(apiPost).mockResolvedValue(
+      {} as ApiMeetingRecurrence,
+    )
+
+    await createMeetingRecurrence({
+      meetingSeriesId: 7,
+      title: 'Monday + Sunday',
+      frequency: 'weekly',
+      interval: 1,
+      weekdays: [0, 6],
+      startDate: '2030-01-07',
+      localTime: '09:00',
+      timezone: 'Europe/Berlin',
+    })
+
+    expect(apiPost).toHaveBeenCalledWith(
+      '/api/meeting-recurrences/',
+      expect.objectContaining({
+        frequency: 'weekly',
+        interval: 1,
+        weekdays: [0, 6],
+      }),
+    )
   })
 })

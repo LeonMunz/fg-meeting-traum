@@ -10,6 +10,7 @@ import type {
   ApiCreateMeetingFromSeriesInput,
   ApiCreateMeetingInput,
   ApiCreateMeetingItemInput,
+  ApiCreateMeetingRecurrenceInput,
   ApiCreateMeetingSeriesInput,
   ApiCreateMeetingSeriesSectionInput,
   ApiCreateMeetingWorkItemInput,
@@ -21,6 +22,7 @@ import type {
   ApiMeetingNote,
   ApiMeetingParticipant,
   ApiMeetingParticipantCandidate,
+  ApiMeetingRecurrence,
   ApiMeetingSection,
   ApiMeetingSeries,
   ApiMeetingSeriesSection,
@@ -367,6 +369,17 @@ export async function searchMeetingSeriesParticipantCandidates(
 
   return apiGet<ApiMeetingParticipantCandidate[]>(
     `/api/meeting-series/${seriesId}/participant-candidates/?${params.toString()}`,
+  )
+}
+
+/* ── Meeting Recurrence (recurring series schedule) ──────────── */
+
+export async function createMeetingRecurrence(
+  input: ApiCreateMeetingRecurrenceInput,
+): Promise<ApiMeetingRecurrence> {
+  return apiPost<ApiMeetingRecurrence>(
+    '/api/meeting-recurrences/',
+    input,
   )
 }
 
