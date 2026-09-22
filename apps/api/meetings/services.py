@@ -63,6 +63,7 @@ class MeetingAuditEventType:
     CREATED = "meeting.created"
     RESCHEDULED = "meeting.rescheduled"
     COMPLETED = "meeting.completed"
+    CANCELLED = "meeting.cancelled"
     AGENDA_ITEM_ADDED = "meeting.agenda_item_added"
     FOLLOW_UP_SCHEDULED = "meeting.follow_up_scheduled"
 
@@ -848,6 +849,11 @@ def reschedule_meeting_recurrence_occurrence(
       materialization gate (the move would first materialize it):
       nothing is created, moved, or de-excluded, and no
       ``meeting.created`` / ``meeting.rescheduled`` event is recorded;
+    - a CANCELLED already-materialized occurrence is rejected:
+      rescheduling is the only override operation that could move the
+      concrete Meeting, so it must not silently reactivate a cancelled
+      Meeting (the exclusion written by the cancellation stays in
+      place, and the ``original_scheduled_at`` identity is preserved);
     - a non-blank ``title`` is ALWAYS required: it is the Meeting
       title used when the reschedule must first materialize a virtual
       occurrence, and it is NEVER used to overwrite the title of an
@@ -892,6 +898,15 @@ def reschedule_meeting_recurrence_occurrence(
         original_scheduled_at=occurrence.original_start,
     ).first()
     if meeting is not None:
+        # A cancelled Meeting is terminal: a reschedule would silently
+        # reactivate the cancelled occurrence. The exclusion written by
+        # the cancellation stays in place; restoring the occurrence is
+        # a separate, deferred operation.
+        if meeting.status == Meeting.Status.CANCELLED:
+            raise MeetingDomainError(
+                "A cancelled Meeting cannot be rescheduled: the "
+                "occurrence stays excluded."
+            )
         # Already materialized: move the existing row only. The
         # request's title is deliberately NOT applied — a reschedule
         # never renames an existing Meeting. The canonical Meeting
@@ -1047,6 +1062,192 @@ def exclude_meeting_recurrence_occurrence(
             recurrence=recurrence,
             original_scheduled_at=occurrence.original_start,
         )
+
+
+@transaction.atomic
+def cancel_meeting_recurrence_occurrence(
+    *,
+    meeting,
+    actor,
+):
+    """Cancel ONE materialized recurring occurrence ("only this meeting").
+
+    This is the materialized counterpart of
+    ``exclude_meeting_recurrence_occurrence`` (which handles a VIRTUAL
+    occurrence with an exclusion only): the occurrence already has a
+    concrete ``Meeting``, and cancelling it PRESERVES that Meeting.
+
+    Canonical final state of one cancellation:
+
+    - the Meeting row survives with its primary key, its
+      ``recurrence`` FK, its immutable ``original_scheduled_at``
+      occurrence identity, its current ``scheduled_at`` (a moved
+      Meeting keeps its moved time — the exclusion is keyed to the
+      ORIGINAL occurrence, not to the moved time), its title, and all
+      Meeting-specific content (Sections, agenda items, notes,
+      participants, Work Item links, audit history);
+    - ``status`` becomes ``cancelled`` — a TERMINAL Meeting state
+      reachable ONLY through this operation. No generic lifecycle
+      operation exists (start / end / reopen each accept exactly one
+      source status and none of them produces ``cancelled``), and the
+      Meeting PATCH surface rejects the ``status`` field, so no
+      alternate unvalidated path can cancel a recurring Meeting. A
+      cancelled Meeting cannot transition back to upcoming / live /
+      completed (all three lifecycle actions reject it), and there is
+      no restore / reactivate in V1;
+    - exactly ONE ``MeetingRecurrenceExclusion`` exists for
+      ``(recurrence, original_scheduled_at)``: the cancelled
+      occurrence drops out of the EFFECTIVE occurrence set (raw
+      expansion unchanged, no replacement occurrence, siblings
+      untouched), and the canonical materialization / virtual
+      reschedule gates keep it out of the effective set going forward.
+
+    Preconditions, enforced before anything is persisted:
+
+    - a persisted Meeting with BOTH recurrence provenance fields
+      (``recurrence`` and ``original_scheduled_at`` — a paired
+      invariant): a standalone / non-recurring Meeting has no
+      occurrence identity to cancel, and a still-virtual occurrence
+      has no concrete Meeting (use
+      ``exclude_meeting_recurrence_occurrence`` for that; this
+      operation never materializes);
+    - the canonical scoped Meeting write rule (group scope → group
+      read members; project scope → Project owner/member,
+      non-archived Projects only) — the same rule every other Meeting
+      mutation uses;
+    - the Meeting status must be ``upcoming``: a ``live`` or
+      ``completed`` Meeting is rejected and left completely unchanged
+      (historical / in-progress Meetings are never retroactively
+      treated as if they never happened).
+
+    Atomicity / locking: the Meeting row is locked
+    (``SELECT … FOR UPDATE``) to serialize against concurrent
+    lifecycle transitions and deletion on the same Meeting, and the
+    exclusion insert takes the SAME ``MeetingRecurrence`` row lock
+    (``FOR NO KEY UPDATE``) as materialization and virtual exclusion,
+    with a re-check under the lock: the final persisted state can
+    never be "Meeting cancelled but no exclusion" or "exclusion
+    created but Meeting still active", and a racing concurrent
+    exclusion is reused rather than duplicated. No new locking
+    architecture is introduced.
+
+    Inconsistent-pair repair: if an exclusion for the same occurrence
+    already exists while the Meeting is still active (a state the
+    normal domain flows prevent), the existing exclusion is REUSED and
+    the Meeting cancellation completes — no duplicate exclusion.
+
+    IDEMPOTENT: cancelling the same already-cancelled Meeting again
+    returns the same Meeting row and the same exclusion row, keeps
+    the status cancelled, changes no content, and records NO further
+    ``meeting.cancelled`` event (if the exclusion were missing — a
+    state this operation itself cannot produce — it is re-created as
+    part of the replay, converging to the canonical final state).
+
+    Audit: exactly ONE ``meeting.cancelled`` event is recorded for the
+    first successful cancellation, inside the same transaction as the
+    status change and the exclusion (a rollback leaves no orphaned
+    event); an idempotent replay records none. No recurrence-wide
+    audit taxonomy is introduced.
+    """
+    if meeting.pk is None:
+        raise MeetingDomainError(
+            "Only persisted Meetings can be cancelled."
+        )
+
+    # Canonical scoped Meeting write rule — the same rule every other
+    # Meeting mutation enforces.
+    _require_meeting_write_access(meeting=meeting, user=actor)
+
+    # The locked row is a separate instance; the caller's instance is
+    # refreshed at the end so it reflects the authoritative state
+    # (same convention as start/end/reopen).
+    caller_meeting = meeting
+
+    with transaction.atomic():
+        # Serialize against concurrent lifecycle transitions,
+        # cancellation, and deletion on this Meeting, then re-read the
+        # authoritative state under the lock.
+        meeting = Meeting.objects.select_for_update().get(pk=meeting.pk)
+
+        if meeting.recurrence_id is None or (
+            meeting.original_scheduled_at is None
+        ):
+            raise MeetingDomainError(
+                "Cancellation applies to a materialized recurring "
+                "occurrence: this Meeting has no recurrence "
+                "provenance."
+            )
+
+        already_cancelled = (
+            meeting.status == Meeting.Status.CANCELLED
+        )
+        if not already_cancelled and (
+            meeting.status != Meeting.Status.UPCOMING
+        ):
+            raise MeetingDomainError(
+                "Only an upcoming Meeting can be cancelled: live and "
+                "completed Meetings cannot be cancelled."
+            )
+
+        # Ensure exactly ONE exclusion keyed by the immutable original
+        # occurrence. The re-check under the Slice-6 recurrence row
+        # lock reuses a racing exclusion instead of duplicating it.
+        exclusion = MeetingRecurrenceExclusion.objects.filter(
+            recurrence_id=meeting.recurrence_id,
+            original_scheduled_at=meeting.original_scheduled_at,
+        ).first()
+        if exclusion is None:
+            # ``FOR NO KEY UPDATE`` (not ``FOR UPDATE``): the same
+            # Slice-6 invariant as materialization / virtual
+            # exclusion — it serializes the domain writers without
+            # deadlocking against an in-flight raw Meeting insert's
+            # deferred FK ``FOR KEY SHARE`` check.
+            MeetingRecurrence.objects.select_for_update(no_key=True).get(
+                pk=meeting.recurrence_id
+            )
+            exclusion = MeetingRecurrenceExclusion.objects.filter(
+                recurrence_id=meeting.recurrence_id,
+                original_scheduled_at=meeting.original_scheduled_at,
+            ).first()
+            if exclusion is None:
+                exclusion = MeetingRecurrenceExclusion.objects.create(
+                    recurrence_id=meeting.recurrence_id,
+                    original_scheduled_at=meeting.original_scheduled_at,
+                    created_by=actor,
+                )
+
+        if already_cancelled:
+            # Idempotent replay: same Meeting row, same exclusion row,
+            # status stays cancelled, no content changes, no event.
+            caller_meeting.refresh_from_db()
+            return caller_meeting
+
+        # Terminal transition. Only ``status`` (and ``updated_at``)
+        # changes: every provenance and content field is preserved.
+        meeting.status = Meeting.Status.CANCELLED
+        meeting.save(update_fields=["status", "updated_at"])
+
+        # Recorded inside the same atomic block as the status change
+        # and the exclusion: a rollback leaves no orphaned event, and
+        # the idempotent replay path above never reaches this point.
+        record_audit_event(
+            research_group=meeting.research_group,
+            actor=actor,
+            event_type=MeetingAuditEventType.CANCELLED,
+            project=meeting.project,
+            meeting=meeting,
+            data={
+                "changes": {
+                    "originalScheduledAt": _iso8601_utc(
+                        meeting.original_scheduled_at,
+                    ),
+                    "scheduledAt": _iso8601_utc(meeting.scheduled_at),
+                }
+            },
+        )
+
+    caller_meeting.refresh_from_db()
+    return caller_meeting
 
 
 # ── MeetingSeriesSection ─────────────────────────────────────────
@@ -2153,12 +2354,35 @@ def delete_meeting(*, meeting, actor):
     Meeting: deleting the Meeting removes only the origin links, never
     the Work Items. A Meeting Template (MeetingSeries) and sibling
     occurrences are independent records and are never touched.
+
+    Recurring-occurrence guard: a Meeting with recurrence provenance
+    (``recurrence`` set — materialized from a MeetingRecurrence
+    occurrence) is REJECTED with a domain error and left completely
+    unchanged. Recurrence-aware cancellation (see
+    ``cancel_meeting_recurrence_occurrence``) is the way to remove ONE
+    materialized occurrence while preserving the Meeting's
+    content/history; the generic hard-delete path must not be able to
+    bypass it. Standalone (non-recurring) Meetings keep the existing
+    hard-delete semantics unchanged.
     """
     _require_meeting_write_access(meeting=meeting, user=actor)
 
     # Serialize against concurrent lifecycle transitions on this Meeting.
     Meeting.objects.select_for_update().get(pk=meeting.pk)
     meeting.refresh_from_db()
+
+    # Recurrence provenance guard: a Meeting materialized from a
+    # MeetingRecurrence occurrence must not be destroyed through the
+    # generic hard-delete path. Cancellation is the recurrence-aware
+    # way to remove ONE occurrence (it preserves the Meeting row, its
+    # content/history, and the occurrence identity via the exclusion);
+    # a permanent deletion would bypass all of that. Standalone
+    # (non-recurring) Meetings keep the ordinary hard-delete behavior.
+    if meeting.recurrence_id is not None:
+        raise MeetingDomainError(
+            "A recurring Meeting cannot be permanently deleted: use "
+            "recurrence-aware cancellation instead."
+        )
 
     meeting.delete()
 

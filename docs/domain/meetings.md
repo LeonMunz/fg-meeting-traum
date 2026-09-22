@@ -772,9 +772,11 @@ explicit exclusion
 not part of the effective occurrence set
 ```
 
-Cancellation/deletion of an ALREADY-MATERIALIZED occurrence is NOT
-part of this operation (see "Not implemented (deferred)" below); the
-service rejects it and leaves the concrete Meeting untouched.
+Excluding an ALREADY-MATERIALIZED occurrence is NOT part of this
+operation; the service rejects it and leaves the concrete Meeting
+untouched. Cancelling an already-materialized occurrence is a
+separate operation with its own Meeting lifecycle semantics — see
+"Single-occurrence cancellation (materialized)" below.
 
 **Persisted model.** `meetings.MeetingRecurrenceExclusion` (table
 `meetings_recurrence_exclusion`, migration `meetings/0016`):
@@ -820,9 +822,10 @@ exactly ONE exclusion for the occurrence:
   Meeting completely unchanged (no deletion, no lifecycle/status
   change, no exclusion row);
   this check runs under the recurrence row lock (below) so a
-  concurrent materialization cannot commit after it. Cancellation /
-  deletion of an already-materialized occurrence remains a separate,
-  deferred operation;
+  concurrent materialization cannot commit after it. Cancellation of
+  an already-materialized occurrence is a separate operation with its
+  own Meeting lifecycle semantics (see "Single-occurrence
+  cancellation (materialized)" below);
 - **Creates exactly one exclusion record and nothing else:** zero
   `Meeting` rows, zero Sections, zero participants, zero audit
   events. Virtual exclusion never routes through materialization;
@@ -888,6 +891,113 @@ siblings are unchanged, no replacement occurrence is added, and the
 GET remains side-effect free. There is no HTTP write API for
 exclusion and no Recurrence UI for this operation yet.
 
+### Single-occurrence cancellation (materialized) (implemented)
+
+Cancelling ONE materialized occurrence removes it from the
+recurrence's EFFECTIVE occurrence set while PRESERVING the concrete
+`Meeting`: the row, its content, and its history survive; only the
+status changes, and the occurrence identity is persisted as an
+exclusion.
+
+```text
+materialized recurring occurrence
+        ↓
+cancel only this occurrence
+        ↓
+Meeting retained + status cancelled
+        +
+MeetingRecurrenceExclusion(original occurrence)
+        ↓
+absent from effective recurrence expansion
+```
+
+This is the materialized counterpart of "Single-occurrence
+exclusion" (virtual occurrences): an occurrence with NO concrete
+`Meeting` is excluded with an exclusion only; an occurrence that
+ALREADY has a concrete `Meeting` is cancelled (Meeting →
+`cancelled` + exclusion keyed by the immutable ORIGINAL occurrence).
+A virtual occurrence is never materialized merely so it can be
+cancelled.
+
+**Terminal `cancelled` status.** `Meeting.Status` gains `cancelled`
+(migration `meetings/0017`). It is TERMINAL and reachable ONLY
+through the dedicated cancellation domain operation:
+
+- the existing lifecycle actions each accept exactly one source
+  status (`upcoming → live`, `live → completed`,
+  `completed → live`) and none of them produces `cancelled`; the
+  Meeting PATCH surface rejects the `status` field, so no generic
+  transition can bypass the dedicated operation;
+- a cancelled Meeting cannot transition back to `upcoming`, `live`,
+  or `completed` (every lifecycle action rejects it); there is no
+  restore / reactivate in V1;
+- only an `upcoming` Meeting can be cancelled: `live` and
+  `completed` Meetings are rejected and left completely unchanged —
+  historical / in-progress Meetings are never retroactively treated
+  as if they never happened.
+
+**Domain operation.**
+`meetings.services.cancel_meeting_recurrence_occurrence` operates on
+a concrete recurring `Meeting`:
+
+- **Required:** a persisted Meeting with BOTH recurrence provenance
+  fields (`recurrence` + `original_scheduled_at` — a paired
+  invariant), the canonical scoped Meeting write rule, and status
+  `upcoming`;
+- **Preserved:** the Meeting row / primary key, the recurrence FK,
+  the immutable `original_scheduled_at`, the current `scheduled_at`,
+  the title, Sections, agenda items, notes, participants, Work Item
+  links, and historical audit records — nothing is deleted or
+  recreated;
+- **A MOVED occurrence is cancelled by its ORIGINAL identity:** if
+  the Meeting was rescheduled (e.g. raw Monday 10:00 moved to
+  Tuesday 14:00), the exclusion is keyed to the original Monday
+  occurrence, never to the moved time; the Meeting keeps its moved
+  `scheduled_at` and its original `original_scheduled_at`;
+- **Exactly one exclusion:** cancellation persists — or REUSES an
+  already-existing — `MeetingRecurrenceExclusion` for
+  `(recurrence, original_scheduled_at)`: no duplicate row, and the
+  recurrence rule is never mutated. If an exclusion for the same
+  occurrence already exists while the Meeting is still active (a
+  state the normal domain flows prevent), it is reused and the
+  cancellation completes (inconsistent-pair repair);
+- **Atomic:** inside one `transaction.atomic()`, the Meeting row is
+  locked (`FOR UPDATE`) and the exclusion insert takes the SAME
+  `MeetingRecurrence` row lock (`FOR NO KEY UPDATE`) as
+  materialization / virtual exclusion, with a re-check under the
+  lock — the final state can never be "cancelled without exclusion"
+  or "excluded without cancellation", and a racing concurrent
+  exclusion is reused rather than duplicated;
+- **Idempotent:** cancelling an already-cancelled Meeting again
+  returns the same Meeting row and the same exclusion row, keeps the
+  status cancelled, changes no content, and records no further event;
+- **Protected afterwards:** the cancelled occurrence drops out of
+  the effective expansion (raw expansion unchanged, NO replacement
+  occurrence, siblings untouched, a COUNT-limited series does not
+  grow); materialization cannot create a second Meeting for its
+  original occurrence (the idempotent path returns the existing
+  cancelled Meeting); rescheduling the cancelled Meeting is rejected;
+  the exclusion is never removed automatically;
+- **Hard-delete guard:** the generic `delete_meeting` operation
+  rejects a Meeting with recurrence provenance (clear domain error,
+  Meeting left unchanged): the recurring-occurrence path must not be
+  able to destroy the Meeting's content/history instead of
+  cancelling it. Standalone (non-recurring) Meetings keep the
+  ordinary hard-delete behavior unchanged;
+- **Authorized:** the canonical scoped Meeting write rule (group
+  scope → group read members; project scope → Project owner/member,
+  non-archived Projects only) — the same rule every other Meeting
+  mutation enforces; read access alone is never sufficient;
+- **Audit:** exactly ONE `meeting.cancelled` event for the first
+  successful cancellation, recorded in the same transaction as the
+  status change and the exclusion; an idempotent replay records
+  none. No recurrence-wide audit taxonomy is introduced.
+
+There is no HTTP cancellation endpoint and no frontend cancellation
+UX in this slice: the operation is the canonical domain service that
+a future API/UI will be forced through (instead of a destructive
+delete).
+
 ### Not implemented (deferred)
 
 The following are intentionally out of this slice and remain
@@ -897,12 +1007,12 @@ unimplemented:
   frontend clients, and Recurrence UI (including the occurrence
   preview UI); an explicit maximum window size for the bounded
   occurrence read API (pending product/API decision);
-- cancellation/deletion of an already-materialized occurrence (and
-  restore/unexclude): exclusion of a VIRTUAL occurrence is
-  implemented (see "Single-occurrence exclusion" above) and
-  excluding an already-materialized occurrence is rejected; the
-  concrete Meeting's cancellation lifecycle (status/history
-  semantics) is a separate, still-open decision;
+- restore / reactivate (unexclude) of a cancelled or excluded
+  occurrence, and whole-series (whole-recurrence) cancellation /
+  termination: the single-occurrence paths are implemented
+  (virtual: "Single-occurrence exclusion"; materialized:
+  "Single-occurrence cancellation (materialized)"), and neither is
+  reversible in V1;
 - "this and following" series semantics and whole-occurrence editing
   beyond the implemented single-occurrence reschedule (moving one
   materialized occurrence is implemented, see
@@ -1243,7 +1353,18 @@ type MeetingStatus =
   | "upcoming"
   | "live"
   | "completed"
+  | "cancelled"
 ```
+
+`cancelled` is a TERMINAL cancellation state for one materialized
+recurring occurrence (§5a, "Single-occurrence cancellation
+(materialized)"): the Meeting row and all its content/history are
+preserved, only the status changes. It is reachable ONLY through the
+dedicated cancellation domain operation — never through the
+start/end/reopen lifecycle actions (none of them accepts or produces
+it, and the Meeting PATCH surface rejects the `status` field) — and
+it can never transition back to `upcoming` / `live` / `completed`.
+There is no restore / reactivate in V1.
 
 Constraint (enforced by a database check constraint on both `Meeting` and
 `MeetingSeries`):

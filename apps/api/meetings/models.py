@@ -320,6 +320,15 @@ class Meeting(models.Model):
         UPCOMING = "upcoming", "Upcoming"
         LIVE = "live", "Live"
         COMPLETED = "completed", "Completed"
+        # Terminal cancellation state for one materialized recurring
+        # occurrence: the Meeting row and all its content/history are
+        # preserved; only the status changes, and the occurrence is
+        # removed from the effective recurrence set through its
+        # MeetingRecurrenceExclusion. Reached ONLY through the
+        # dedicated cancellation domain operation — never through the
+        # start/end/reopen lifecycle actions, and never reversible
+        # (no restore/reactivate in V1).
+        CANCELLED = "cancelled", "Cancelled"
 
     class Scope(models.TextChoices):
         GROUP = "group", "Research group"
