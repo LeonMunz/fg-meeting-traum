@@ -37,11 +37,13 @@ from .models import (
     Meeting,
     MeetingParticipant,
     MeetingRecurrence,
+    MeetingRecurrenceExclusion,
     MeetingSection,
 )
 from .recurrence import derive_occurrence_identity
 from .services import (
     MeetingAuditEventType,
+    exclude_meeting_recurrence_occurrence,
     materialize_meeting_recurrence_occurrence,
 )
 from .tests_recurrence import MeetingRecurrenceBase, _utc
@@ -994,3 +996,33 @@ class MeetingRecurrenceRescheduleApiTest(MeetingRecurrenceBase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         meeting.refresh_from_db()
         self.assertEqual(meeting.scheduled_at, far)
+
+    def test_excluded_virtual_occurrence_reschedule_rejected(self):
+        """An excluded virtual occurrence cannot be rescheduled: the
+        move would first materialize it through the canonical path,
+        which the exclusion gates — no Meeting, no move, no events,
+        and the exclusion survives the attempt."""
+        self.login(self.alex)
+        occurrence = self._occurrence()  # virtual, Jan 6
+        exclusion = exclude_meeting_recurrence_occurrence(
+            recurrence=self.recurrence,
+            occurrence=occurrence,
+            actor=self.alex,
+        )
+        moved = (occurrence.original_start + timedelta(hours=5))
+
+        response = self._post(
+            self._payload(occurrence, moved.isoformat()),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("error", response.json())
+        self.assertEqual(Meeting.objects.count(), 0)
+        self.assertEqual(MeetingSection.objects.count(), 0)
+        self.assertEqual(MeetingParticipant.objects.count(), 0)
+        self.assertEqual(AuditEvent.objects.count(), 0)
+        # The exclusion was not removed by the rejected reschedule.
+        self.assertEqual(MeetingRecurrenceExclusion.objects.count(), 1)
+        self.assertEqual(
+            MeetingRecurrenceExclusion.objects.get().pk, exclusion.pk,
+        )

@@ -247,6 +247,72 @@ class MeetingRecurrence(models.Model):
         return f"Recurrence {self.frequency} every {self.interval} from {self.start_date}"
 
 
+class MeetingRecurrenceExclusion(models.Model):
+    """One persistently excluded original occurrence of a recurrence.
+
+    An exclusion removes ONE virtual occurrence from the recurrence's
+    EFFECTIVE occurrence set without materializing a concrete Meeting
+    and without touching the recurrence rule (see §5a of
+    ``docs/domain/meetings.md``). It is the persistence basis for a
+    later "cancel/delete this one meeting" operation.
+
+    Invariants:
+
+    - An exclusion belongs to exactly one MeetingRecurrence and exactly
+      one ORIGINAL rule-produced occurrence: ``original_scheduled_at``
+      is the occurrence's immutable original scheduled start (the same
+      aware instant the bounded expansion returns). It never depends on
+      any alternate/moved datetime, and the canonical UUIDv5 occurrence
+      identity is derived from this pair — no second occurrence-ID
+      system is stored.
+    - ``(recurrence, original_scheduled_at)`` is UNIQUE: at most one
+      exclusion row per recurrence occurrence, even under concurrent
+      writes.
+    - Exclusions filter the effective occurrence set AFTER rule
+      generation: they consume no occurrence and generate no
+      replacement (a COUNT-limited series does not grow after an
+      exclusion), and different recurrences with an occurrence at the
+      same timestamp exclude independently.
+    - Excluding an already-materialized occurrence is NOT supported by
+      this concept: the domain service rejects it. Cancellation/deletion
+      of a materialized occurrence is a separate, deferred operation.
+    """
+
+    recurrence = models.ForeignKey(
+        MeetingRecurrence,
+        on_delete=models.CASCADE,
+        related_name="exclusions",
+    )
+    # The occurrence's IMMUTABLE original scheduled start (the same
+    # aware instant the bounded expansion returns; in the recurrence's
+    # stored timezone it is the original wall-clock start). Never an
+    # alternate/moved time.
+    original_scheduled_at = models.DateTimeField()
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        related_name="created_meeting_recurrence_exclusions",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "meetings_recurrence_exclusion"
+        ordering = ["original_scheduled_at", "id"]
+        constraints = [
+            # At most one exclusion per recurrence occurrence.
+            models.UniqueConstraint(
+                fields=["recurrence", "original_scheduled_at"],
+                name="meetings_recurrence_exclusion_unique_occurrence",
+            ),
+        ]
+
+    def __str__(self):
+        return (
+            f"Excluded occurrence {self.original_scheduled_at} "
+            f"of recurrence {self.recurrence_id}"
+        )
+
+
 class Meeting(models.Model):
     """One concrete meeting occurrence inside a Research Group."""
 

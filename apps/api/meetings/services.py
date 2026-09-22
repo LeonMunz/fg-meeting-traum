@@ -29,6 +29,7 @@ from .models import (
     MeetingNote,
     MeetingParticipant,
     MeetingRecurrence,
+    MeetingRecurrenceExclusion,
     MeetingSection,
     MeetingSeries,
     MeetingSeriesSection,
@@ -509,6 +510,60 @@ def expand_meeting_recurrence_occurrences(
         raise MeetingDomainError(str(exc)) from exc
 
 
+def expand_effective_meeting_recurrence_occurrences(
+    *,
+    meeting_recurrence,
+    range_start,
+    range_end,
+):
+    """Expand one persisted recurrence into its EFFECTIVE occurrence set.
+
+    The effective occurrence set is the RAW rule expansion (the full
+    recurrence-rule semantics of
+    ``expand_meeting_recurrence_occurrences``) with persisted
+    single-occurrence exclusions filtered out AFTER rule generation:
+
+    - the recurrence rule itself is never mutated and re-expanding it
+      RAW produces the identical series;
+    - an excluded occurrence simply drops out of the result: it
+      consumes nothing and generates NO replacement occurrence (a
+      COUNT-limited series does not grow, an end-date-limited series
+      does not extend);
+    - siblings keep their identities, original starts, and order.
+
+    Read-only: creates or mutates no persistence state. Access to the
+    recurrence row is the caller's responsibility, exactly like the raw
+    expansion.
+    """
+    occurrences = expand_meeting_recurrence_occurrences(
+        meeting_recurrence=meeting_recurrence,
+        range_start=range_start,
+        range_end=range_end,
+    )
+    if not occurrences:
+        return []
+
+    # One bounded query over the requested window: (recurrence,
+    # original_scheduled_at) is unique, so the exclusion set is exact
+    # and needs no per-occurrence lookup.
+    excluded_starts = set(
+        MeetingRecurrenceExclusion.objects.filter(
+            recurrence=meeting_recurrence,
+            original_scheduled_at__in=[
+                occurrence.original_start for occurrence in occurrences
+            ],
+        ).values_list("original_scheduled_at", flat=True)
+    )
+    if not excluded_starts:
+        return occurrences
+
+    return [
+        occurrence
+        for occurrence in occurrences
+        if occurrence.original_start not in excluded_starts
+    ]
+
+
 def _require_valid_recurrence_occurrence(*, recurrence, occurrence):
     """Reject any value that is not a genuine occurrence of the recurrence.
 
@@ -630,6 +685,13 @@ def materialize_meeting_recurrence_occurrence(
     callers cannot invent arbitrary recurrence ids or original starts to
     create recurring Meetings outside the recurrence rule.
 
+    A persistent single-occurrence EXCLUSION is an additional
+    eligibility gate, checked under the recurrence row lock (below):
+    an excluded occurrence is a genuine raw occurrence but is NOT
+    materializable — materializing it raises a domain error and
+    persists nothing. Virtual reschedule inherits this gate because it
+    materializes through this operation.
+
     Authorization reuses the canonical scoped Meeting write rule (group
     scope → group read members; project scope → Project owner/member,
     non-archived Projects only), exactly like Meeting creation.
@@ -664,6 +726,29 @@ def materialize_meeting_recurrence_occurrence(
             ).first()
             if existing is not None:
                 return existing
+
+            # Serialize against a concurrent exclusion of this
+            # recurrence, then re-check exclusion under the lock: an
+            # excluded occurrence is not materializable, and a
+            # concurrent exclusion cannot commit after this check.
+            # ``FOR NO KEY UPDATE`` (not ``FOR UPDATE``): the two domain
+            # writers still serialize against each other (the lock mode
+            # conflicts with itself), but it is compatible with the FK
+            # ``FOR KEY SHARE`` check a concurrent in-flight Meeting
+            # insert performs at commit time (Django creates FKs
+            # DEFERRABLE INITIALLY DEFERRED) — a plain ``FOR UPDATE``
+            # here deadlocked with such a transaction.
+            MeetingRecurrence.objects.select_for_update(no_key=True).get(
+                pk=recurrence.pk
+            )
+            if MeetingRecurrenceExclusion.objects.filter(
+                recurrence=recurrence,
+                original_scheduled_at=occurrence.original_start,
+            ).exists():
+                raise MeetingDomainError(
+                    "This occurrence is excluded from the recurrence: "
+                    "an excluded occurrence cannot be materialized."
+                )
 
             meeting = Meeting.objects.create(
                 research_group=recurrence.research_group,
@@ -759,6 +844,10 @@ def reschedule_meeting_recurrence_occurrence(
     - the candidate must be a genuine occurrence of EXACTLY this
       recurrence (``_require_valid_recurrence_occurrence``: derived
       identity match AND bounded rule membership);
+    - an EXCLUDED virtual occurrence is rejected through the canonical
+      materialization gate (the move would first materialize it):
+      nothing is created, moved, or de-excluded, and no
+      ``meeting.created`` / ``meeting.rescheduled`` event is recorded;
     - a non-blank ``title`` is ALWAYS required: it is the Meeting
       title used when the reschedule must first materialize a virtual
       occurrence, and it is NEVER used to overwrite the title of an
@@ -833,6 +922,130 @@ def reschedule_meeting_recurrence_occurrence(
             meeting=meeting,
             actor=actor,
             scheduled_at=scheduled_at,
+        )
+
+
+def exclude_meeting_recurrence_occurrence(
+    *,
+    recurrence,
+    occurrence,
+    actor,
+):
+    """Persistently exclude ONE virtual occurrence of a recurrence.
+
+    The operation removes the occurrence from the recurrence's
+    EFFECTIVE occurrence set by persisting exactly one
+    ``MeetingRecurrenceExclusion`` row keyed by (recurrence, immutable
+    original scheduled start). It is the persistence basis for a later
+    "cancel/delete this one meeting" operation.
+
+    Enforced semantics:
+
+    - the recurrence must be persisted (stable occurrence identities
+      require a schedule id);
+    - the candidate must be a genuine occurrence of EXACTLY this
+      recurrence (``_require_valid_recurrence_occurrence``: derived
+      identity match AND bounded rule membership) — forged identities,
+      foreign occurrences, off-rule wall-clock times, and occurrences
+      beyond the end-date / count contract are rejected before anything
+      is persisted;
+    - the occurrence must still be VIRTUAL: if a concrete Meeting was
+      already materialized from it, the operation is REJECTED with a
+      domain error and leaves that Meeting completely unchanged (no
+      deletion, no lifecycle/status change, no exclusion row). The
+      check runs under the recurrence row lock (see below) so a
+      concurrent materialization cannot commit after it. Cancellation/
+      deletion of an already-materialized occurrence is a separate,
+      deferred operation;
+    - the operation creates exactly ONE exclusion record and NOTHING
+      else: zero Meeting rows, zero Sections, zero participants, zero
+      audit events. It never routes through materialization;
+    - IDEMPOTENT: excluding the same occurrence repeatedly returns the
+      existing exclusion row without creating duplicates. The unique
+      ``(recurrence, original_scheduled_at)`` constraint makes
+      duplicates impossible even when two exclusions race (the losing
+      transaction is rolled back and the winner's row is returned);
+    - the raw occurrence validation above is deliberately UNCHANGED
+      (raw rule membership, not effective-set membership): re-
+      excluding an already-excluded occurrence stays idempotent. The
+      exclusion is only consumed as a gate on the materialization side;
+    - the recurrence rule is NOT mutated: no rule field, end mode, or
+      identity changes, and the raw rule still produces the same
+      occurrences. The exclusion consumes no occurrence and generates
+      no replacement.
+
+    Authorization reuses the canonical scoped Meeting write rule
+    (group scope → group read members; project scope → Project
+    owner/member, non-archived Projects only), exactly like Meeting
+    creation and occurrence materialization.
+
+    No audit event is recorded: the exclusion neither creates nor
+    mutates any Meeting, and no canonical recurrence-level audit event
+    family exists — no new audit taxonomy is introduced for this
+    operation (an explicit decision, see docs/domain/meetings.md §5a).
+    """
+    if recurrence.pk is None:
+        raise MeetingDomainError(
+            "Only persisted recurrences can have occurrences excluded: "
+            "stable occurrence identities require a schedule id."
+        )
+
+    _require_scoped_write_access(
+        research_group=recurrence.research_group,
+        scope=recurrence.scope,
+        project=recurrence.project,
+        user=actor,
+    )
+
+    _require_valid_recurrence_occurrence(
+        recurrence=recurrence,
+        occurrence=occurrence,
+    )
+
+    existing = MeetingRecurrenceExclusion.objects.filter(
+        recurrence=recurrence,
+        original_scheduled_at=occurrence.original_start,
+    ).first()
+    if existing is not None:
+        return existing
+
+    try:
+        with transaction.atomic():
+            # Serialize against a concurrent materialization of this
+            # recurrence, then check materialization state under the
+            # lock: excluding an already-materialized occurrence is
+            # rejected, and a concurrent materialization cannot commit
+            # after this check.
+            # ``FOR NO KEY UPDATE`` for the same reason as in
+            # ``materialize_meeting_recurrence_occurrence``: it
+            # serializes the two domain writers without deadlocking
+            # against an in-flight raw Meeting insert's deferred FK
+            # check.
+            MeetingRecurrence.objects.select_for_update(no_key=True).get(
+                pk=recurrence.pk
+            )
+            if Meeting.objects.filter(
+                recurrence=recurrence,
+                original_scheduled_at=occurrence.original_start,
+            ).exists():
+                raise MeetingDomainError(
+                    "This occurrence already has a concrete Meeting: "
+                    "excluding an already-materialized occurrence is "
+                    "not supported. Cancellation or deletion of the "
+                    "concrete Meeting is a separate operation."
+                )
+            return MeetingRecurrenceExclusion.objects.create(
+                recurrence=recurrence,
+                original_scheduled_at=occurrence.original_start,
+                created_by=actor,
+            )
+    except IntegrityError:
+        # A concurrent exclusion of the same occurrence won the race:
+        # the unique constraint rejected our insert and rolled the
+        # transaction back. The winner's row is the canonical one.
+        return MeetingRecurrenceExclusion.objects.get(
+            recurrence=recurrence,
+            original_scheduled_at=occurrence.original_start,
         )
 
 

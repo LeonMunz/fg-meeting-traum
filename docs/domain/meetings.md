@@ -325,11 +325,15 @@ domain-level bounded expansion operation + one explicit materialization
 operation that turns a single calculated occurrence into a concrete
 `Meeting` (see "Materialization" below). The Recurrence has a
 read-only bounded occurrence READ API (see "Bounded occurrence read
-API") and one explicit idempotent HTTP materialization action (see
-"Occurrence materialization API"); recurrence creation/editing remain
-domain-only operations, and there is no Recurrence UI. Occurrence
-Meetings are never auto-created outside the explicit materialization
-operation.
+API"), one explicit idempotent HTTP materialization action (see
+"Occurrence materialization API"), one single-occurrence reschedule
+action (see "Single-occurrence reschedule" below), and one persistent
+single-occurrence exclusion operation that removes ONE virtual
+occurrence from the effective occurrence set without materializing a
+Meeting (see "Single-occurrence exclusion" below). Recurrence
+creation/editing remain domain-only operations, and there is no
+Recurrence UI. Occurrence Meetings are never auto-created outside the
+explicit materialization operation.
 
 ### V1 recurrence language (implemented)
 
@@ -478,10 +482,15 @@ creates no `Meeting` rows, audit events, participants, or Sections.
   recurrences answer a non-leaking `404`; a recurrence id alone never
   grants access.
 - **Calculation:** the API layer validates request input and
-  delegates occurrence calculation to the domain expansion operation
-  (`expand_meeting_recurrence_occurrences`); recurrence calculation,
-  timezone/DST handling, end-mode semantics, and occurrence identity
-  are never re-implemented in the API layer.
+  delegates occurrence calculation to the domain EFFECTIVE expansion
+  operation (`expand_effective_meeting_recurrence_occurrences`): the
+  raw rule expansion (`expand_meeting_recurrence_occurrences`) with
+  persisted single-occurrence exclusions filtered out AFTER rule
+  generation. An excluded occurrence is simply absent from the result
+  — no replacement occurrence is generated, and the recurrence rule
+  itself is never mutated. Recurrence calculation, timezone/DST
+  handling, end-mode semantics, and occurrence identity are never
+  re-implemented in the API layer.
 - **Materialization resolution:** which calculated occurrences are
   already materialized is resolved from the persisted provenance
   (`Meeting.recurrence` + `Meeting.original_scheduled_at`, unique per
@@ -530,6 +539,15 @@ materializes ONE calculated occurrence into a concrete `Meeting`:
   first occurrence, beyond the end) are rejected before anything is
   persisted; callers cannot invent arbitrary recurrence ids or original
   starts to create recurring Meetings outside the rule.
+- **Not excluded:** a persistent single-occurrence exclusion (see
+  "Single-occurrence exclusion" below) is an additional eligibility
+  gate, checked under the recurrence row lock before any write: an
+  excluded occurrence is a genuine raw occurrence but is NOT
+  materializable — materializing it is rejected with a domain error
+  and persists nothing (no Meeting, Section, participant, or
+  `meeting.created` event), leaving the exclusion untouched. The
+  exclusion is therefore a one-way gate: it is not removed by a
+  rejected materialization, and there is no restore/unexclude in V1.
 - **Authorized:** the canonical scoped Meeting write rule (group scope
   → group read members; project scope → Project owner/member,
   non-archived Projects only), exactly like Meeting creation.
@@ -737,6 +755,139 @@ the final authority.
   re-places an occurrence at its moved `scheduled_at`. There is no
   Recurrence UI for this action yet.
 
+### Single-occurrence exclusion (implemented)
+
+Excluding ONE virtual occurrence removes it from the recurrence's
+EFFECTIVE occurrence set without materializing a concrete `Meeting`
+and without changing the recurrence rule. It is the persistence basis
+for a later "cancel/delete this one meeting" operation:
+
+```text
+recurrence rule
+    ↓
+raw occurrence
+    ↓
+explicit exclusion
+    ↓
+not part of the effective occurrence set
+```
+
+Cancellation/deletion of an ALREADY-MATERIALIZED occurrence is NOT
+part of this operation (see "Not implemented (deferred)" below); the
+service rejects it and leaves the concrete Meeting untouched.
+
+**Persisted model.** `meetings.MeetingRecurrenceExclusion` (table
+`meetings_recurrence_exclusion`, migration `meetings/0016`):
+
+```text
+id
+recurrence_id            (CASCADE) — exactly one MeetingRecurrence
+original_scheduled_at    the occurrence's IMMUTABLE original scheduled
+                         start (same aware instant the bounded
+                         expansion returns); never an alternate/moved
+                         time
+created_by_id            (RESTRICT)
+created_at
+```
+
+The exclusion is keyed by (recurrence, original scheduled start):
+
+- the canonical Slice-1 UUIDv5 occurrence identity is derived from
+  exactly this pair, so NO second occurrence-ID system is stored;
+- the exclusion is anchored to the ORIGINAL rule occurrence, never to
+  any alternate/moved datetime — it stays an exclusion of the same
+  occurrence regardless of any later functionality that moves other
+  occurrences;
+- `UNIQUE (recurrence, original_scheduled_at)`: at most one exclusion
+  row per recurrence occurrence, even under concurrent writes;
+- different recurrences producing an occurrence at the same timestamp
+  exclude independently.
+
+**Domain operation.**
+`meetings.services.exclude_meeting_recurrence_occurrence` persists
+exactly ONE exclusion for the occurrence:
+
+- **Validated:** the candidate must be a genuine occurrence of
+  EXACTLY the supplied recurrence (the same
+  `_require_valid_recurrence_occurrence` rule-membership check as
+  materialization: derived identity match AND bounded rule
+  membership). Forged identities, foreign occurrences, off-rule
+  wall-clock times/dates, occurrences before the first occurrence,
+  and occurrences beyond the end-date / count contract are rejected
+  before anything is persisted;
+- **Virtual-only:** if the occurrence already has a concrete Meeting,
+  the operation is rejected with a domain error and leaves that
+  Meeting completely unchanged (no deletion, no lifecycle/status
+  change, no exclusion row);
+  this check runs under the recurrence row lock (below) so a
+  concurrent materialization cannot commit after it. Cancellation /
+  deletion of an already-materialized occurrence remains a separate,
+  deferred operation;
+- **Creates exactly one exclusion record and nothing else:** zero
+  `Meeting` rows, zero Sections, zero participants, zero audit
+  events. Virtual exclusion never routes through materialization;
+- **Idempotent:** excluding the same occurrence repeatedly returns
+  the existing row; the unique constraint makes duplicates impossible
+  even when two exclusions race (the losing transaction is rolled
+  back and the winner's row is returned);
+  re-exclusion stays idempotent because the validation basis is RAW
+  rule membership (not effective-set membership) — an already-excluded
+  occurrence is still a genuine occurrence of the rule;
+- **One-way gate:** once an occurrence is excluded it can no longer be
+  materialized (the canonical materialization service rejects it, see
+  "Materialization") and a virtual reschedule of it fails (a reschedule
+  would first materialize it through the same gated path). A rejected
+  materialization or reschedule NEVER removes the exclusion; there is
+  no restore/unexclude in V1. The exclusion is a one-way write through
+  the public / domain write flows;
+- **Race-safe:** the exclusion write and the materialization write both
+  take a `SELECT … FOR NO KEY UPDATE` row lock on the `MeetingRecurrence`
+  row and re-check the other operation's state under that lock, so the
+  final persisted state never carries BOTH a concrete `Meeting` and an
+  exclusion for the same original occurrence through the domain
+  services (a losing racer is rejected with a domain error). The lock
+  mode is deliberately `FOR NO KEY UPDATE` rather than `FOR UPDATE`: it
+  still serializes the two domain writers against each other (the mode
+  conflicts with itself), but it is compatible with the `FOR KEY SHARE`
+  foreign-key check that Django's `DEFERRABLE INITIALLY DEFERRED`
+  `Meeting.recurrence` FK performs at a concurrent transaction's commit
+  time — a plain `FOR UPDATE` deadlocked with an in-flight raw Meeting
+  insert (reproduced and pinned by the concurrency tests). No new
+  locking architecture is introduced.
+- **Authorized:** the canonical scoped Meeting write rule (group
+  scope → group read members; project scope → Project owner/member,
+  non-archived Projects only), exactly like Meeting creation and
+  occurrence materialization. Read access alone is never sufficient:
+  a user who may read occurrences (e.g. a Project viewer) cannot
+  exclude them;
+- **No audit event:** the exclusion neither creates nor mutates any
+  Meeting, and no canonical recurrence-level audit event family
+  exists — no new audit taxonomy is introduced for this operation
+  (an explicit decision, kept here on purpose).
+
+**Effective occurrence expansion.**
+`meetings.services.expand_effective_meeting_recurrence_occurrences`
+is the single domain operation for the EFFECTIVE occurrence set: the
+raw rule expansion (`expand_meeting_recurrence_occurrences`) with
+persisted exclusions filtered out AFTER rule generation. Consequences:
+
+- the raw recurrence rule is unchanged: re-expanding it RAW produces
+  the identical series; `COUNT`, end date, interval, DST, and monthly
+  skipping remain properties of the rule;
+- an exclusion CONSUMES nothing and generates NO replacement:
+  `COUNT = 3` with occurrences A, B, C and B excluded yields
+  effective A, C — never A, C, D; an end-date-limited series does not
+  extend beyond its original end;
+- siblings keep their identities, original starts, and order;
+- read-only: creates or mutates no persistence state.
+
+The bounded occurrence read API (see "Bounded occurrence read API"
+above) answers with the EFFECTIVE occurrence set: after excluding a
+virtual occurrence it is absent from the normal occurrence list,
+siblings are unchanged, no replacement occurrence is added, and the
+GET remains side-effect free. There is no HTTP write API for
+exclusion and no Recurrence UI for this operation yet.
+
 ### Not implemented (deferred)
 
 The following are intentionally out of this slice and remain
@@ -746,9 +897,14 @@ unimplemented:
   frontend clients, and Recurrence UI (including the occurrence
   preview UI); an explicit maximum window size for the bounded
   occurrence read API (pending product/API decision);
-- exclusions/cancellations of individual occurrences, "this and
-  following" series semantics, and whole-occurrence editing beyond
-  the implemented single-occurrence reschedule (moving one
+- cancellation/deletion of an already-materialized occurrence (and
+  restore/unexclude): exclusion of a VIRTUAL occurrence is
+  implemented (see "Single-occurrence exclusion" above) and
+  excluding an already-materialized occurrence is rejected; the
+  concrete Meeting's cancellation lifecycle (status/history
+  semantics) is a separate, still-open decision;
+- "this and following" series semantics and whole-occurrence editing
+  beyond the implemented single-occurrence reschedule (moving one
   materialized occurrence is implemented, see
   "Single-occurrence reschedule" above);
 - whole-series (whole-recurrence) editing semantics and schedule

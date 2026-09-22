@@ -91,7 +91,7 @@ from .services import (
     create_work_item_from_meeting_item,
     delete_meeting_note,
     end_meeting,
-    expand_meeting_recurrence_occurrences,
+    expand_effective_meeting_recurrence_occurrences,
     materialize_meeting_recurrence_occurrence,
     list_meeting_item_notes,
     reopen_meeting,
@@ -2359,9 +2359,11 @@ class MeetingRecurrenceOccurrenceListView(APIView):
 
     Read-only bounded occurrence read for one MeetingRecurrence:
     ``?from=<aware datetime>&to=<aware datetime>`` (both mandatory).
-    Delegates occurrence calculation to the domain expansion
-    operation and resolves materialized occurrences with one bounded
-    query. Creates no Meeting rows: GET requests never mutate.
+    Delegates occurrence calculation to the domain EFFECTIVE
+    expansion (the raw rule with persisted single-occurrence
+    exclusions filtered out after rule generation) and resolves
+    materialized occurrences with one bounded query. Creates no
+    Meeting rows: GET requests never mutate.
     """
 
     permission_classes = [IsAuthenticated]
@@ -2395,7 +2397,7 @@ class MeetingRecurrenceOccurrenceListView(APIView):
                 status=400,
             )
 
-        occurrences = expand_meeting_recurrence_occurrences(
+        occurrences = expand_effective_meeting_recurrence_occurrences(
             meeting_recurrence=recurrence,
             range_start=range_start,
             range_end=range_end,

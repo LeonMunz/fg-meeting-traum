@@ -22,9 +22,11 @@ from .models import (
     Meeting,
     MeetingParticipant,
     MeetingRecurrence,
+    MeetingRecurrenceExclusion,
     MeetingSection,
 )
 from .services import (
+    exclude_meeting_recurrence_occurrence,
     materialize_meeting_recurrence_occurrence,
     update_meeting,
 )
@@ -459,3 +461,175 @@ class MeetingRecurrenceOccurrenceApiTest(MeetingRecurrenceBase):
             len(small_ctx.captured_queries),
             len(large_ctx.captured_queries),
         )
+
+
+class MeetingRecurrenceOccurrenceExclusionApiTest(MeetingRecurrenceBase):
+    """The bounded occurrence read API answers with the EFFECTIVE
+    occurrence set: the raw rule expansion with persisted
+    single-occurrence exclusions filtered out after rule generation.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.client = APIClient()
+        # Daily 09:30 Berlin, first occurrence 2026-01-05, no end.
+        self.recurrence = self._create_recurrence()
+
+    def login(self, user):
+        self.client.logout()
+        self.client.force_login(user)
+
+    def _path(self):
+        return (
+            f"/api/meeting-recurrences/"
+            f"{self.recurrence.pk}/occurrences/"
+        )
+
+    def _get_occurrences(self, start=None, end=None):
+        return self.client.get(
+            self._path(),
+            {
+                "from": (start or _utc(2026, 1, 5, 0, 0)).isoformat(),
+                "to": (end or _utc(2026, 1, 12, 0, 0)).isoformat(),
+            },
+        )
+
+    def _exclude(self, occurrence):
+        return exclude_meeting_recurrence_occurrence(
+            recurrence=self.recurrence,
+            occurrence=occurrence,
+            actor=self.alex,
+        )
+
+    def _raw_occurrences(self, start, end):
+        return self._expand(self.recurrence, start, end)
+
+    def _materialize(self, recurrence, occurrence):
+        return materialize_meeting_recurrence_occurrence(
+            recurrence=recurrence,
+            occurrence=occurrence,
+            actor=self.alex,
+            title="Materialized",
+        )
+
+    def test_excluded_virtual_occurrence_is_absent_from_get(self):
+        self.login(self.chris)
+        (excluded,) = self._raw_occurrences(
+            _utc(2026, 1, 6), _utc(2026, 1, 6, 23, 59),
+        )
+        self._exclude(excluded)
+
+        start, end = _utc(2026, 1, 5, 0, 0), _utc(2026, 1, 12, 0, 0)
+        response = self._get_occurrences(start=start, end=end)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.json()
+        # Jan 5 .. Jan 11 minus the excluded Jan 6: six occurrences.
+        self.assertEqual(len(data), 6)
+        self.assertNotIn(
+            str(excluded.occurrence_id),
+            [item["occurrenceId"] for item in data],
+        )
+
+    def test_sibling_occurrences_remain_unchanged(self):
+        self.login(self.chris)
+        raw = self._raw_occurrences(
+            _utc(2026, 1, 5, 0, 0), _utc(2026, 1, 12, 0, 0),
+        )
+        self._exclude(raw[1])  # Jan 6
+
+        response = self._get_occurrences()
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.json()
+        expected = [occurrence for occurrence in raw if occurrence != raw[1]]
+        self.assertEqual(len(data), len(expected))
+        for item, occurrence in zip(data, expected):
+            self.assertEqual(
+                item["occurrenceId"], str(occurrence.occurrence_id),
+            )
+            self.assertEqual(
+                item["originalScheduledAt"],
+                occurrence.original_start.astimezone(UTC)
+                .isoformat()
+                .replace("+00:00", "Z"),
+            )
+            self.assertEqual(
+                item["originalLocal"], occurrence.original_local.isoformat(),
+            )
+            self.assertEqual(item["materialized"], False)
+            self.assertIsNone(item["meetingId"])
+
+    def test_count_limited_exclusion_adds_no_replacement(self):
+        self.login(self.chris)
+        self.recurrence = self._create_recurrence(
+            end_mode="count", occurrence_count=3,
+        )
+        raw = self._raw_occurrences(
+            _utc(2026, 1, 5), _utc(2026, 1, 9, 23, 59),
+        )
+        self.assertEqual(len(raw), 3)  # Jan 5, Jan 6, Jan 7
+        self._exclude(raw[1])  # Jan 6
+
+        response = self._get_occurrences(
+            start=_utc(2026, 1, 5), end=_utc(2026, 1, 9, 23, 59),
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.json()
+        self.assertEqual(
+            [item["originalLocal"] for item in data],
+            ["2026-01-05T09:30:00", "2026-01-07T09:30:00"],
+        )
+        # No replacement: day 4 (Jan 8) must NOT appear.
+        self.assertNotIn("2026-01-08T09:30:00",
+                         [item["originalLocal"] for item in data])
+
+    def test_get_after_exclusion_creates_no_side_effects(self):
+        self.login(self.chris)
+        (excluded,) = self._raw_occurrences(
+            _utc(2026, 1, 6), _utc(2026, 1, 6, 23, 59),
+        )
+        self._exclude(excluded)
+
+        self.assertEqual(MeetingRecurrenceExclusion.objects.count(), 1)
+        response = self._get_occurrences()
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(Meeting.objects.count(), 0)
+        self.assertEqual(MeetingSection.objects.count(), 0)
+        self.assertEqual(MeetingParticipant.objects.count(), 0)
+        self.assertEqual(AuditEvent.objects.count(), 0)
+        # The GET neither added nor removed any exclusion.
+        self.assertEqual(MeetingRecurrenceExclusion.objects.count(), 1)
+
+    def test_excluding_every_occurrence_returns_empty_array(self):
+        self.login(self.chris)
+        self.recurrence = self._create_recurrence(
+            end_mode="count", occurrence_count=2,
+        )
+        raw = self._raw_occurrences(
+            _utc(2026, 1, 5), _utc(2026, 1, 7, 23, 59),
+        )
+        for occurrence in raw:
+            self._exclude(occurrence)
+
+        response = self._get_occurrences(
+            start=_utc(2026, 1, 5), end=_utc(2026, 1, 7, 23, 59),
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.json(), [])
+
+    def test_materialized_sibling_still_reported_after_exclusion(self):
+        self.login(self.chris)
+        raw = self._raw_occurrences(
+            _utc(2026, 1, 5, 0, 0), _utc(2026, 1, 12, 0, 0),
+        )
+        meeting = self._materialize(self.recurrence, raw[2])  # Jan 7
+        self._exclude(raw[1])  # Jan 6
+
+        response = self._get_occurrences()
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.json()
+        item = next(
+            item for item in data
+            if item["occurrenceId"] == str(raw[2].occurrence_id)
+        )
+        self.assertEqual(item["materialized"], True)
+        self.assertEqual(item["meetingId"], meeting.pk)

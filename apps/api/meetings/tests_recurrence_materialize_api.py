@@ -30,10 +30,14 @@ from .models import (
     Meeting,
     MeetingParticipant,
     MeetingRecurrence,
+    MeetingRecurrenceExclusion,
     MeetingSection,
 )
 from .recurrence import derive_occurrence_identity
-from .services import MeetingAuditEventType
+from .services import (
+    MeetingAuditEventType,
+    exclude_meeting_recurrence_occurrence,
+)
 from .tests_recurrence import MeetingRecurrenceBase, _utc
 
 User = get_user_model()
@@ -575,3 +579,117 @@ class MeetingRecurrenceMaterializeApiTest(MeetingRecurrenceBase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("title", response.json())
         self.assertEqual(Meeting.objects.count(), 0)
+
+
+class MeetingRecurrenceExcludedMaterializeApiTest(MeetingRecurrenceBase):
+    """A persistently excluded virtual occurrence cannot be
+    materialized over HTTP: the canonical domain materialization
+    service rejects it before anything is persisted.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.client = APIClient()
+        # Daily 09:30 Berlin, first occurrence 2026-01-05, no end.
+        self.recurrence = self._create_recurrence()
+
+    def login(self, user):
+        self.client.logout()
+        self.client.force_login(user)
+
+    def _path(self):
+        return (
+            f"/api/meeting-recurrences/{self.recurrence.pk}"
+            "/occurrences/materialize/"
+        )
+
+    def _occurrence(self, local="2026-01-06T09:30:00"):
+        tz = ZoneInfo(self.recurrence.timezone_name)
+        instant = datetime.fromisoformat(local).replace(tzinfo=tz)
+        (occurrence,) = self._expand(self.recurrence, instant, instant)
+        return occurrence
+
+    def _utc_iso(self, occurrence):
+        return (
+            occurrence.original_start.astimezone(UTC)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+
+    def _payload(self, occurrence, title="Materialized"):
+        return {
+            "occurrenceId": str(occurrence.occurrence_id),
+            "originalScheduledAt": self._utc_iso(occurrence),
+            "title": title,
+        }
+
+    def _post(self, payload):
+        return self.client.post(
+            self._path(),
+            data=json.dumps(payload),
+            content_type="application/json",
+        )
+
+    def _exclude(self, occurrence):
+        return exclude_meeting_recurrence_occurrence(
+            recurrence=self.recurrence,
+            occurrence=occurrence,
+            actor=self.alex,
+        )
+
+    def test_excluded_occurrence_materialization_rejected(self):
+        self.login(self.alex)
+        excluded = self._occurrence()
+        exclusion = self._exclude(excluded)
+
+        response = self._post(self._payload(excluded))
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("error", response.json())
+        # Nothing was persisted; the exclusion is untouched.
+        self.assertEqual(Meeting.objects.count(), 0)
+        self.assertEqual(MeetingSection.objects.count(), 0)
+        self.assertEqual(MeetingParticipant.objects.count(), 0)
+        self.assertEqual(AuditEvent.objects.count(), 0)
+        self.assertEqual(MeetingRecurrenceExclusion.objects.count(), 1)
+        self.assertEqual(
+            MeetingRecurrenceExclusion.objects.get().pk, exclusion.pk,
+        )
+
+    def test_excluded_occurrence_still_absent_from_read_api(self):
+        self.login(self.chris)
+        excluded = self._occurrence()
+        self._exclude(excluded)
+
+        response = self.client.get(
+            f"/api/meeting-recurrences/{self.recurrence.pk}"
+            "/occurrences/",
+            {
+                "from": _utc(2026, 1, 5, 0, 0).isoformat(),
+                "to": _utc(2026, 1, 12, 0, 0).isoformat(),
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.json()
+        # Jan 5 .. Jan 11 minus the excluded Jan 6: six occurrences.
+        self.assertEqual(len(data), 6)
+        self.assertNotIn(
+            str(excluded.occurrence_id),
+            [item["occurrenceId"] for item in data],
+        )
+
+    def test_sibling_occurrence_still_materializes_over_http(self):
+        self.login(self.alex)
+        self._exclude(self._occurrence())  # Jan 6
+        sibling = self._occurrence(local="2026-01-07T09:30:00")
+
+        response = self._post(self._payload(sibling, title="Sibling"))
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(Meeting.objects.count(), 1)
+        self.assertEqual(
+            Meeting.objects.get().original_scheduled_at,
+            sibling.original_start,
+        )
+        self.assertEqual(MeetingRecurrenceExclusion.objects.count(), 1)
