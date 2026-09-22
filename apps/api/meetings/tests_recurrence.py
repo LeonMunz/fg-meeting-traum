@@ -35,6 +35,7 @@ from .services import (
     create_meeting_recurrence,
     expand_meeting_recurrence_occurrences,
     materialize_meeting_recurrence_occurrence,
+    reschedule_meeting_recurrence_occurrence,
     update_meeting,
 )
 
@@ -1390,6 +1391,558 @@ class MeetingRecurrenceMaterializationTest(MeetingRecurrenceBase):
         )
         self.assertEqual(Meeting.objects.get(pk=meeting.pk).title,
                          "Renamed occurrence")
+
+
+class MeetingRecurrenceRescheduleTest(MeetingRecurrenceBase):
+    """Single-occurrence reschedule ("only this meeting", domain layer).
+
+    The move is represented by a concrete Meeting: ``scheduled_at``
+    moves, while the immutable ``original_scheduled_at`` occurrence
+    identity, the recurrence rule, and every other occurrence stay
+    untouched. A still-virtual occurrence is first materialized
+    through the canonical idempotent materialization path, then
+    moved.
+    """
+
+    def _first_occurrence(self, recurrence):
+        (occurrence,) = self._expand(
+            recurrence, _utc(2026, 1, 5), _utc(2026, 1, 6),
+        )
+        return occurrence
+
+    def _materialize(
+        self, recurrence, occurrence, *, actor=None, title="Materialized",
+    ):
+        return materialize_meeting_recurrence_occurrence(
+            recurrence=recurrence,
+            occurrence=occurrence,
+            actor=actor if actor is not None else self.alex,
+            title=title,
+        )
+
+    def _reschedule(
+        self,
+        recurrence,
+        occurrence,
+        scheduled_at,
+        *,
+        actor=None,
+        title="Materialized",
+    ):
+        return reschedule_meeting_recurrence_occurrence(
+            recurrence=recurrence,
+            occurrence=occurrence,
+            scheduled_at=scheduled_at,
+            actor=actor if actor is not None else self.alex,
+            title=title,
+        )
+
+    def _recurrence_rule_snapshot(self, recurrence):
+        """Every field of the recurrence rule row."""
+        return {
+            "research_group_id": recurrence.research_group_id,
+            "scope": recurrence.scope,
+            "project_id": recurrence.project_id,
+            "frequency": recurrence.frequency,
+            "interval": recurrence.interval,
+            "weekdays": recurrence.weekdays,
+            "start_date": recurrence.start_date,
+            "local_time": recurrence.local_time,
+            "timezone_name": recurrence.timezone_name,
+            "end_mode": recurrence.end_mode,
+            "end_date": recurrence.end_date,
+            "occurrence_count": recurrence.occurrence_count,
+            "created_by_id": recurrence.created_by_id,
+            "created_at": recurrence.created_at,
+            "updated_at": recurrence.updated_at,
+        }
+
+    # 1. The move changes scheduled_at only.
+
+    def test_reschedule_moves_only_scheduled_at(self):
+        recurrence = self._create_recurrence()
+        occurrence = self._first_occurrence(recurrence)
+        meeting = self._materialize(recurrence, occurrence)
+        original = meeting.original_scheduled_at
+
+        moved = _utc(2026, 3, 15, 14, 0)
+        updated = self._reschedule(recurrence, occurrence, moved)
+        updated.refresh_from_db()
+
+        # The concrete Meeting moved to the new planned time...
+        self.assertEqual(updated.scheduled_at, moved)
+        # ...while the immutable occurrence identity is unchanged.
+        self.assertEqual(updated.original_scheduled_at, original)
+        self.assertEqual(updated.recurrence_id, recurrence.pk)
+        # Nothing else about the Meeting changed.
+        self.assertEqual(updated.title, "Materialized")
+        self.assertEqual(updated.status, Meeting.Status.UPCOMING)
+        self.assertEqual(updated.created_by_id, self.alex.pk)
+        # The canonical occurrence identity is still derivable from
+        # the persisted state alone.
+        stored_local = updated.original_scheduled_at.astimezone(
+            BERLIN,
+        ).replace(tzinfo=None)
+        self.assertEqual(
+            derive_occurrence_identity(
+                recurrence_id=updated.recurrence_id,
+                original_local=stored_local,
+                timezone_name=recurrence.timezone_name,
+            ),
+            occurrence.occurrence_id,
+        )
+        # Exactly one Meeting row still exists for the occurrence.
+        self.assertEqual(Meeting.objects.count(), 1)
+
+    # 2. A real move records exactly one structured event.
+
+    def test_reschedule_records_one_structured_event(self):
+        recurrence = self._create_recurrence()
+        occurrence = self._first_occurrence(recurrence)
+        meeting = self._materialize(recurrence, occurrence)
+        original = meeting.scheduled_at
+
+        moved = _utc(2026, 3, 15, 14, 0)
+        self._reschedule(recurrence, occurrence, moved)
+
+        events = AuditEvent.objects.filter(
+            meeting=meeting,
+            event_type="meeting.rescheduled",
+        ).order_by("id")
+        self.assertEqual(events.count(), 1)
+        event = events.get()
+        self.assertEqual(event.actor, self.alex)
+        # The persisted event uses the canonical _iso8601_utc form
+        # (UTC ISO-8601 with the +00:00 offset, never a 'Z' suffix).
+        def _stored_utc(dt):
+            return dt.astimezone(UTC).isoformat()
+
+        self.assertEqual(
+            event.data["changes"]["scheduledAt"]["from"],
+            _stored_utc(original),
+        )
+        self.assertEqual(
+            event.data["changes"]["scheduledAt"]["to"],
+            _stored_utc(moved),
+        )
+
+    # 3. A no-op reschedule changes nothing and records no event.
+
+    def test_noop_reschedule_records_no_event_and_no_change(self):
+        recurrence = self._create_recurrence()
+        occurrence = self._first_occurrence(recurrence)
+        meeting = self._materialize(recurrence, occurrence)
+        before_scheduled_at = meeting.scheduled_at
+
+        self._reschedule(
+            recurrence, occurrence, meeting.scheduled_at,
+        )
+        meeting.refresh_from_db()
+
+        # Same planned time: nothing about the Meeting's state
+        # (planned time, original identity, provenance) changes, and
+        # no reschedule event is recorded.
+        self.assertEqual(
+            meeting.scheduled_at, before_scheduled_at,
+        )
+        self.assertEqual(
+            meeting.original_scheduled_at, occurrence.original_start,
+        )
+        self.assertEqual(
+            AuditEvent.objects.filter(
+                meeting=meeting,
+                event_type="meeting.rescheduled",
+            ).count(),
+            0,
+        )
+
+    # 4. The move does not create a second Meeting for the occurrence.
+
+    def test_reschedule_keeps_the_single_meeting_row(self):
+        recurrence = self._create_recurrence()
+        occurrence = self._first_occurrence(recurrence)
+        meeting = self._materialize(recurrence, occurrence)
+
+        self._reschedule(recurrence, occurrence, _utc(2026, 3, 1, 10, 0))
+        self._reschedule(recurrence, occurrence, _utc(2026, 3, 2, 11, 0))
+
+        self.assertEqual(Meeting.objects.count(), 1)
+        self.assertEqual(
+            Meeting.objects.get(pk=meeting.pk).scheduled_at,
+            _utc(2026, 3, 2, 11, 0),
+        )
+        # Re-materializing after the move still reuses the same row.
+        again = self._materialize(recurrence, occurrence)
+        self.assertEqual(again.pk, meeting.pk)
+        self.assertEqual(Meeting.objects.count(), 1)
+
+    # 5. The recurrence rule itself is not mutated.
+
+    def test_reschedule_does_not_mutate_the_recurrence_rule(self):
+        recurrence = self._create_recurrence()
+        occurrence = self._first_occurrence(recurrence)
+        self._materialize(recurrence, occurrence)
+        before = self._recurrence_rule_snapshot(recurrence)
+
+        self._reschedule(recurrence, occurrence, _utc(2026, 3, 15, 14, 0))
+
+        recurrence.refresh_from_db()
+        self.assertEqual(
+            self._recurrence_rule_snapshot(recurrence), before,
+        )
+
+    # 6. Every other occurrence in the series is untouched.
+
+    def test_reschedule_leaves_other_occurrences_untouched(self):
+        recurrence = self._create_recurrence()
+        start, end = _utc(2026, 1, 5), _utc(2026, 1, 9)
+        occurrences = {
+            occ.original_local.date(): occ
+            for occ in self._expand(recurrence, start, end)
+        }
+        jan6 = occurrences[date(2026, 1, 6)]
+        jan7 = occurrences[date(2026, 1, 7)]
+        jan8 = occurrences[date(2026, 1, 8)]
+        moved_meeting = self._materialize(recurrence, jan6)
+        untouched_meeting = self._materialize(recurrence, jan7)
+
+        before_expansion = self._expand(recurrence, start, end)
+        self._reschedule(
+            recurrence, jan6, _utc(2026, 3, 15, 14, 0),
+        )
+        after_expansion = self._expand(recurrence, start, end)
+
+        # The rule still produces the identical occurrence series.
+        self.assertEqual(
+            [occ.occurrence_id for occ in before_expansion],
+            [occ.occurrence_id for occ in after_expansion],
+        )
+        # The sibling materialized Meeting did not move...
+        untouched_meeting.refresh_from_db()
+        self.assertEqual(
+            untouched_meeting.scheduled_at, jan7.original_start,
+        )
+        # ...and the untouched sibling is still virtual as before.
+        self.assertIsNone(
+            Meeting.objects.filter(
+                recurrence=recurrence,
+                original_scheduled_at=jan8.original_start,
+            ).first(),
+        )
+        moved_meeting.refresh_from_db()
+        self.assertEqual(
+            moved_meeting.scheduled_at, _utc(2026, 3, 15, 14, 0),
+        )
+
+    # 7. A virtual occurrence is materialized, then moved.
+
+    def test_virtual_occurrence_is_materialized_then_moved(self):
+        recurrence = self._create_recurrence()
+        occurrence = self._first_occurrence(recurrence)
+        moved = _utc(2026, 3, 15, 14, 0)
+
+        meeting = self._reschedule(
+            recurrence, occurrence, moved, title="January 5 Standup",
+        )
+
+        # Exactly one concrete Meeting was created for the
+        # occurrence — no other occurrence (adjacent/future) was
+        # materialized.
+        self.assertEqual(Meeting.objects.count(), 1)
+        self.assertIsInstance(meeting, Meeting)
+        self.assertEqual(meeting.title, "January 5 Standup")
+        # Recurrence provenance and the immutable identity.
+        self.assertEqual(meeting.recurrence_id, recurrence.pk)
+        self.assertEqual(
+            meeting.original_scheduled_at, occurrence.original_start,
+        )
+        # The Meeting was moved to the requested time.
+        self.assertEqual(meeting.scheduled_at, moved)
+        self.assertEqual(meeting.status, Meeting.Status.UPCOMING)
+        # Standalone-style initialization: one Agenda section, the
+        # creator as participant.
+        self.assertEqual(meeting.meeting_sections.count(), 1)
+        self.assertEqual(
+            [p.user_id for p in meeting.participant_relations.all()],
+            [self.alex.pk],
+        )
+        # One canonical meeting.created event (materialization) plus
+        # one meeting.rescheduled event (the move), nothing else.
+        self.assertEqual(
+            AuditEvent.objects.filter(
+                meeting=meeting,
+                event_type="meeting.created",
+            ).count(),
+            1,
+        )
+        rescheduled = AuditEvent.objects.filter(
+            meeting=meeting,
+            event_type="meeting.rescheduled",
+        ).order_by("id")
+        self.assertEqual(rescheduled.count(), 1)
+        self.assertEqual(
+            rescheduled.get().data["changes"]["scheduledAt"]["to"],
+            moved.astimezone(UTC).isoformat(),
+        )
+
+    def test_virtual_reschedule_replay_reuses_the_same_meeting(self):
+        recurrence = self._create_recurrence()
+        occurrence = self._first_occurrence(recurrence)
+        moved = _utc(2026, 3, 15, 14, 0)
+
+        first = self._reschedule(
+            recurrence, occurrence, moved, title="First title",
+        )
+        # Repeating the SAME request (same actor, same new time) acts
+        # on the same row: the move is a no-op, so no second
+        # reschedule event and no duplicate structure.
+        second = self._reschedule(
+            recurrence, occurrence, moved, title="First title",
+        )
+        self.assertEqual(first.pk, second.pk)
+        self.assertEqual(Meeting.objects.count(), 1)
+        self.assertEqual(MeetingSection.objects.count(), 1)
+        self.assertEqual(MeetingParticipant.objects.count(), 1)
+        self.assertEqual(
+            AuditEvent.objects.filter(
+                event_type="meeting.created",
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            AuditEvent.objects.filter(
+                event_type="meeting.rescheduled",
+            ).count(),
+            1,
+        )
+
+    def test_virtual_reschedule_second_move_moves_the_same_meeting(self):
+        recurrence = self._create_recurrence()
+        occurrence = self._first_occurrence(recurrence)
+
+        first = self._reschedule(
+            recurrence, occurrence, _utc(2026, 3, 1, 10, 0),
+        )
+        # A second reschedule with a NEW time moves the SAME row.
+        second = self._reschedule(
+            recurrence, occurrence, _utc(2026, 3, 2, 11, 0),
+        )
+        self.assertEqual(first.pk, second.pk)
+        self.assertEqual(Meeting.objects.count(), 1)
+        self.assertEqual(
+            Meeting.objects.get(pk=first.pk).scheduled_at,
+            _utc(2026, 3, 2, 11, 0),
+        )
+        self.assertEqual(
+            Meeting.objects.get(pk=first.pk).original_scheduled_at,
+            occurrence.original_start,
+        )
+        self.assertEqual(
+            AuditEvent.objects.filter(
+                event_type="meeting.created",
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            AuditEvent.objects.filter(
+                event_type="meeting.rescheduled",
+            ).count(),
+            2,
+        )
+
+    def test_virtual_noop_reschedule_records_created_but_no_rescheduled(
+        self,
+    ):
+        # Moving a virtual occurrence to its OWN original time still
+        # materializes it (created event) but is a no-op move (no
+        # reschedule event) — the canonical no-op behavior.
+        recurrence = self._create_recurrence()
+        occurrence = self._first_occurrence(recurrence)
+
+        meeting = self._reschedule(
+            recurrence, occurrence, occurrence.original_start,
+        )
+        self.assertEqual(Meeting.objects.count(), 1)
+        self.assertEqual(
+            meeting.scheduled_at, occurrence.original_start,
+        )
+        self.assertEqual(
+            AuditEvent.objects.filter(
+                meeting=meeting,
+                event_type="meeting.created",
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            AuditEvent.objects.filter(
+                meeting=meeting,
+                event_type="meeting.rescheduled",
+            ).count(),
+            0,
+        )
+
+    def test_materialized_reschedule_never_overwrites_the_title(self):
+        recurrence = self._create_recurrence()
+        occurrence = self._first_occurrence(recurrence)
+        meeting = self._materialize(recurrence, occurrence, title="Original")
+
+        updated = self._reschedule(
+            recurrence, occurrence, _utc(2026, 3, 15, 14, 0),
+            title="Renamed by reschedule",
+        )
+        self.assertEqual(updated.pk, meeting.pk)
+        # The request title is ignored for an existing Meeting.
+        self.assertEqual(
+            Meeting.objects.get(pk=meeting.pk).title, "Original",
+        )
+
+    def test_blank_title_is_rejected_and_persists_nothing(self):
+        recurrence = self._create_recurrence()
+        occurrence = self._first_occurrence(recurrence)
+
+        with self.assertRaises(MeetingDomainError):
+            self._reschedule(
+                recurrence, occurrence, _utc(2026, 3, 15, 14, 0),
+                title="  ",
+            )
+        # The virtual occurrence was NOT materialized as a side
+        # effect of the rejected request.
+        self.assertEqual(Meeting.objects.count(), 0)
+        self.assertEqual(AuditEvent.objects.count(), 0)
+
+    # 8. Occurrence validation against the rule is enforced.
+
+    def _synthetic_occurrence(self, recurrence, original_local):
+        """A well-formed occurrence VALUE with the canonical derived
+        identity, so rule membership (not identity) decides."""
+        return MeetingRecurrenceOccurrence(
+            occurrence_id=derive_occurrence_identity(
+                recurrence_id=recurrence.pk,
+                original_local=original_local,
+                timezone_name=recurrence.timezone_name,
+            ),
+            original_local=original_local,
+            original_start=original_local.replace(tzinfo=BERLIN),
+        )
+
+    def test_forged_wall_clock_time_is_rejected(self):
+        recurrence = self._create_recurrence()
+        self._materialize(
+            recurrence, self._first_occurrence(recurrence),
+        )
+        # A self-consistent forged pair: the identity matches the
+        # supplied (wrong) wall-clock time, but the rule never
+        # produces 10:00 — the Meeting must not be moved.
+        forged = self._synthetic_occurrence(
+            recurrence, datetime(2026, 1, 6, 10, 0),
+        )
+        with self.assertRaises(MeetingDomainError):
+            self._reschedule(
+                recurrence, forged, _utc(2026, 3, 15, 14, 0),
+            )
+        self.assertEqual(
+            Meeting.objects.get().scheduled_at,
+            _utc(2026, 1, 5, 8, 30),
+        )
+
+    def test_foreign_recurrence_identity_is_rejected(self):
+        recurrence = self._create_recurrence()
+        other = self._create_recurrence()  # same rule, different id
+        occurrence = self._first_occurrence(recurrence)
+        self._materialize(recurrence, occurrence)
+
+        # A genuine occurrence of a DIFFERENT schedule (same rule,
+        # different schedule id → different identity) must not be
+        # reschedulable through this recurrence.
+        foreign = self._first_occurrence(other)
+        self.assertNotEqual(foreign.occurrence_id, occurrence.occurrence_id)
+        with self.assertRaises(MeetingDomainError):
+            self._reschedule(
+                recurrence, foreign, _utc(2026, 3, 15, 14, 0),
+            )
+        self.assertEqual(
+            Meeting.objects.get().scheduled_at, occurrence.original_start,
+        )
+
+    def test_occurrence_beyond_the_count_contract_is_rejected(self):
+        recurrence = self._create_recurrence(
+            frequency="daily", interval=1,
+            end_mode="count", occurrence_count=3,
+        )
+        first = self._first_occurrence(recurrence)
+        self._materialize(recurrence, first)
+
+        # Jan 8 is outside the count contract: no move, no change.
+        beyond = self._synthetic_occurrence(
+            recurrence, datetime(2026, 1, 8, 9, 30),
+        )
+        with self.assertRaises(MeetingDomainError):
+            self._reschedule(
+                recurrence, beyond, _utc(2026, 3, 15, 14, 0),
+            )
+        self.assertEqual(
+            Meeting.objects.get().scheduled_at, first.original_start,
+        )
+
+    # 9. Canonical scoped write/authorization rules apply.
+
+    def test_reschedule_requires_scoped_write_access(self):
+        recurrence = self._create_recurrence()
+        occurrence = self._first_occurrence(recurrence)
+        self._materialize(recurrence, occurrence)
+
+        # An outsider (not a Research Group member) cannot reschedule.
+        with self.assertRaises(MeetingDomainError):
+            self._reschedule(
+                recurrence, occurrence, _utc(2026, 3, 15, 14, 0),
+                actor=self.maria,
+            )
+        # A Research Group member can.
+        updated = self._reschedule(
+            recurrence, occurrence, _utc(2026, 3, 15, 14, 0),
+            actor=self.chris,
+        )
+        self.assertEqual(
+            updated.scheduled_at, _utc(2026, 3, 15, 14, 0),
+        )
+
+    def test_project_scoped_reschedule_uses_project_write_rule(self):
+        recurrence = self._create_recurrence(
+            scope=MeetingRecurrence.Scope.PROJECT, project=self.project,
+        )
+        occurrence = self._first_occurrence(recurrence)
+        self._materialize(recurrence, occurrence)
+
+        # A Project viewer cannot reschedule.
+        with self.assertRaises(MeetingDomainError):
+            self._reschedule(
+                recurrence, occurrence, _utc(2026, 3, 15, 14, 0),
+                actor=self.laura,
+            )
+        # A Project member can; the Meeting keeps its Project.
+        updated = self._reschedule(
+            recurrence, occurrence, _utc(2026, 3, 15, 14, 0),
+            actor=self.chris,
+        )
+        self.assertEqual(updated.scope, Meeting.Scope.PROJECT)
+        self.assertEqual(updated.project_id, self.project.pk)
+
+    def test_reschedule_rejected_for_archived_project(self):
+        recurrence = self._create_recurrence(
+            scope=MeetingRecurrence.Scope.PROJECT, project=self.project,
+        )
+        occurrence = self._first_occurrence(recurrence)
+        self._materialize(recurrence, occurrence)
+        archive_project(project=self.project, actor=self.alex)
+        # Re-load as a real request would: the creation return value
+        # still caches the pre-archive Project instance.
+        recurrence = MeetingRecurrence.objects.get(pk=recurrence.pk)
+
+        with self.assertRaises(MeetingDomainError):
+            self._reschedule(
+                recurrence, occurrence, _utc(2026, 3, 15, 14, 0),
+                actor=self.chris,
+            )
 
 
 class MeetingRecurrenceMaterializationConcurrencyTest(TransactionTestCase):

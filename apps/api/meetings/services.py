@@ -716,6 +716,126 @@ def materialize_meeting_recurrence_occurrence(
         )
 
 
+def reschedule_meeting_recurrence_occurrence(
+    *,
+    recurrence,
+    occurrence,
+    scheduled_at,
+    actor,
+    title,
+):
+    """Reschedule ONE occurrence ("only this meeting").
+
+    This is the first single-occurrence override semantic: it moves the
+    concrete ``Meeting`` that was materialized from exactly this
+    occurrence while leaving the recurrence rule, the immutable
+    occurrence identity, and every other occurrence in the series
+    untouched.
+
+    The move is represented by a concrete Meeting (V1):
+
+    - ``original_scheduled_at`` stays the immutable occurrence
+      identity — it is never changed;
+    - ``scheduled_at`` becomes the new actual planned meeting time;
+    - ``Meeting.recurrence`` keeps pointing at the same
+      MeetingRecurrence — the rule is NOT mutated, no new recurrence
+      identity is generated, and no second Meeting is created for the
+      same occurrence.
+
+    If the occurrence is still VIRTUAL, it is first materialized
+    through the canonical idempotent materialization path
+    (``materialize_meeting_recurrence_occurrence``), and the same
+    concrete Meeting is then moved — one all-or-nothing operation, so
+    a failed move never leaves an orphaned materialized Meeting
+    behind. If the occurrence already has a concrete Meeting, that row
+    is reused and only its ``scheduled_at`` changes.
+
+    Preconditions, enforced before anything is persisted:
+
+    - the canonical scoped Meeting write rule of the Recurrence's
+      scope (group scope → group read members; project scope →
+      Project owner/member, non-archived Projects only), exactly like
+      Meeting creation and occurrence materialization;
+    - the candidate must be a genuine occurrence of EXACTLY this
+      recurrence (``_require_valid_recurrence_occurrence``: derived
+      identity match AND bounded rule membership);
+    - a non-blank ``title`` is ALWAYS required: it is the Meeting
+      title used when the reschedule must first materialize a virtual
+      occurrence, and it is NEVER used to overwrite the title of an
+      already-materialized Meeting.
+
+    The time change itself is delegated to the canonical
+    ``update_meeting`` domain operation, which preserves recurrence
+    provenance (it only touches ``title`` / ``scheduled_at`` /
+    ``updated_at``) and records exactly one structured
+    ``meeting.rescheduled`` event for a real date-time change; a
+    no-op (same value) reschedule changes nothing and records no
+    event. A first-time reschedule of a virtual occurrence therefore
+    produces exactly one ``meeting.created`` event (from
+    materialization) plus one ``meeting.rescheduled`` event (from the
+    move); a no-op move of a virtual occurrence produces the
+    ``meeting.created`` event only.
+    """
+    if recurrence.pk is None:
+        raise MeetingDomainError(
+            "Only persisted recurrences can be rescheduled: stable "
+            "occurrence identities require a schedule id."
+        )
+
+    _require_scoped_write_access(
+        research_group=recurrence.research_group,
+        scope=recurrence.scope,
+        project=recurrence.project,
+        user=actor,
+    )
+
+    _require_valid_recurrence_occurrence(
+        recurrence=recurrence,
+        occurrence=occurrence,
+    )
+
+    title = str(title or "").strip()
+    if not title:
+        raise MeetingDomainError("Meeting title is required.")
+
+    meeting = Meeting.objects.filter(
+        recurrence=recurrence,
+        original_scheduled_at=occurrence.original_start,
+    ).first()
+    if meeting is not None:
+        # Already materialized: move the existing row only. The
+        # request's title is deliberately NOT applied — a reschedule
+        # never renames an existing Meeting. The canonical Meeting
+        # update preserves recurrence provenance and records the
+        # meeting.rescheduled event; it re-checks the scoped write
+        # rule for the Meeting itself.
+        return update_meeting(
+            meeting=meeting,
+            actor=actor,
+            scheduled_at=scheduled_at,
+        )
+
+    # Virtual occurrence: the canonical idempotent materialization
+    # creates the concrete Meeting (title, provenance, default
+    # Section, creator participant, meeting.created event), then the
+    # same row is moved. The outer atomic makes the whole operation
+    # all-or-nothing: a failed move rolls the materialization back.
+    # The unique (recurrence, original_scheduled_at) constraint keeps
+    # duplicates impossible even when two requests race.
+    with transaction.atomic():
+        meeting = materialize_meeting_recurrence_occurrence(
+            recurrence=recurrence,
+            occurrence=occurrence,
+            actor=actor,
+            title=title,
+        )
+        return update_meeting(
+            meeting=meeting,
+            actor=actor,
+            scheduled_at=scheduled_at,
+        )
+
+
 # ── MeetingSeriesSection ─────────────────────────────────────────
 
 

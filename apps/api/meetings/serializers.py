@@ -914,3 +914,35 @@ class MeetingRecurrenceMaterializeSerializer(serializers.Serializer):
         max_length=255,
         allow_blank=False,
     )
+
+
+class MeetingRecurrenceRescheduleSerializer(serializers.Serializer):
+    """POST body contract for rescheduling ONE materialized occurrence.
+
+    The request must carry the stable occurrence identity
+    (``occurrenceId``) and the canonical original scheduled timestamp
+    (``originalScheduledAt``) exactly as reported by the bounded
+    occurrence read API, plus the new planned meeting time
+    (``scheduledAt``). The occurrence identity is an opaque derived
+    UUIDv5 that cannot be inverted, so the original scheduled start is
+    part of the contract: the server revalidates the pair against the
+    recurrence rule (derived identity match AND bounded rule
+    membership) before anything is persisted. Both timestamps must be
+    timezone-aware — a naive value is rejected, never silently
+    interpreted in a server timezone. The new ``scheduledAt`` is the
+    Meeting's own editable planned time; it does not have to match the
+    recurrence rule (that is the point of a single-occurrence move).
+    ``title`` is required for EVERY reschedule request: it is the
+    Meeting title used when the reschedule must first materialize a
+    virtual occurrence, and it is deliberately IGNORED when the
+    occurrence is already materialized (a reschedule never renames an
+    existing Meeting).
+    """
+
+    occurrenceId = serializers.UUIDField()
+    originalScheduledAt = _AwareDateTimeField()
+    scheduledAt = _AwareDateTimeField()
+    title = serializers.CharField(
+        max_length=255,
+        allow_blank=False,
+    )

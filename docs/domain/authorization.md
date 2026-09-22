@@ -140,7 +140,11 @@ empty (deny).
 - `MEETING_RECURRENCE_READ` follows the Meeting scope rules for the
   Recurrence (group scope: `GROUP_READ`; Project scope: `PROJECT_READ`),
   mirroring the Meeting Series read rule. No Recurrence write capability
-  exists yet — there is no Recurrence mutation API.
+  exists: the occurrence materialization API and the single-occurrence
+  reschedule API are WRITE operations that reuse the canonical scoped
+  Meeting write rule (group scope: `GROUP_READ`; Project scope:
+  `PROJECT_WORK`, Project not archived) enforced by their domain
+  services — read access alone is never sufficient.
 
 ### Default deny
 

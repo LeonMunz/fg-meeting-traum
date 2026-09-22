@@ -617,6 +617,126 @@ persistence to the domain service, which remains the final authority.
   `materialized: true` with its `meetingId` in the bounded occurrence
   read API. There is no Recurrence UI for this action yet.
 
+### Single-occurrence reschedule (implemented)
+
+A single-occurrence move ("only this meeting") changes ONE occurrence
+while leaving the recurrence rule and every other occurrence in the
+series untouched. It is the first actual override semantic of the
+recurring-meeting domain.
+
+**Domain decision (V1).** The move is represented by a concrete
+`Meeting` — no `OccurrenceOverride` model, no second Meeting, no new
+recurrence identity:
+
+```text
+original_scheduled_at = immutable occurrence identity
+scheduled_at          = current actual planned meeting time
+```
+
+The single domain operation
+`meetings.services.reschedule_meeting_recurrence_occurrence` moves the
+concrete `Meeting` that was materialized from exactly one calculated
+occurrence:
+
+- **Materializes on demand:** if the occurrence is still VIRTUAL, the
+  operation first materializes it through the canonical idempotent
+  materialization path (the request's `title` becomes the new Meeting's
+  title) and then moves the same concrete Meeting — one all-or-nothing
+  operation, so a failed move never leaves an orphaned materialized
+  Meeting behind. If the occurrence already has a concrete Meeting,
+  that row is reused and only its `scheduled_at` changes. Either way
+  there is exactly ONE concrete Meeting per occurrence, created only by
+  the canonical materialization path;
+- **Title contract:** the reschedule request ALWAYS carries a
+  non-blank `title`. It is used only when the reschedule must first
+  materialize a virtual occurrence; it is never used to rename an
+  already-materialized Meeting. No recurrence-level title and no
+  Template behavior exist for this operation.
+
+- **Provenance-preserving:** `Meeting.scheduled_at` changes to the new
+  planned time; `Meeting.original_scheduled_at` and
+  `Meeting.recurrence` are NEVER touched, so the stable occurrence
+  identity (the Slice-1 UUIDv5 derived from the recurrence id, the
+  original wall-clock start, and the stored timezone) and the
+  materialization mapping of the bounded occurrence read API are
+  unchanged;
+- **Rule untouched:** the `MeetingRecurrence` row is not mutated — no
+  rule field, no end mode, no identity changes, and re-expanding the
+  rule produces the identical occurrence series before and after the
+  move;
+- **Sibling occurrences untouched:** every other occurrence (virtual
+  or materialized) keeps its identity, original start, and planned
+  time;
+- **Validated:** like materialization, the candidate must be a
+  genuine occurrence of EXACTLY the supplied recurrence (derived
+  identity match AND bounded rule membership); forged identities,
+  foreign occurrences, and occurrences the rule never produces are
+  rejected before anything is persisted;
+- **Authorized:** the canonical scoped Meeting write rule (group
+  scope → group read members; project scope → Project owner/member,
+  non-archived Projects only), exactly like Meeting creation and
+  occurrence materialization;
+- **Audited:** the time change is delegated to the canonical
+  `update_meeting` domain operation, which records exactly one
+  structured `meeting.rescheduled` event for a real date-time change;
+  a no-op (same-value) reschedule records no event. A first-time
+  reschedule of a virtual occurrence therefore produces exactly one
+  `meeting.created` event (from the materialization) plus one
+  `meeting.rescheduled` event (from the move); a no-op move of a
+  virtual occurrence produces the `meeting.created` event only.
+
+The NEW planned time is NOT constrained by the recurrence rule: it may
+differ from the rule's wall-clock time, weekday, or interval (that is
+the point of a single-occurrence move). A later reschedule of the same
+occurrence moves the same concrete Meeting again (still one Meeting,
+one event per real change).
+
+### Single-occurrence reschedule API (implemented)
+
+`POST /api/meeting-recurrences/{recurrenceId}/occurrences/reschedule/`
+reschedules ONE materialized occurrence of one Recurrence through the
+domain operation above; the API layer validates request input and
+delegates occurrence validation, the materialization requirement,
+authorization, and persistence to the domain service, which remains
+the final authority.
+
+- **Request:** `occurrenceId` (the stable occurrence identity
+  reported by the bounded occurrence read API),
+  `originalScheduledAt` (the immutable original scheduled start,
+  timezone-aware ISO-8601), `scheduledAt` (the new planned meeting
+  time, timezone-aware ISO-8601), and `title` (required, non-blank:
+  the Meeting title used when the reschedule must first materialize a
+  virtual occurrence; deliberately ignored for an already-materialized
+  Meeting, which a reschedule never renames). As for materialization,
+  the occurrence identity is an opaque derived UUIDv5 that cannot be
+  inverted, so the original scheduled start is part of the contract:
+  the server revalidates the pair against the recurrence rule before
+  anything is persisted.
+- **Validation:** naive timestamps, invalid UUIDs, missing or blank
+  fields, mutually inconsistent identity pairs, and pairs the rule
+  never produces are rejected with `400` and persist nothing. A
+  VIRTUAL (not yet materialized) occurrence is NOT rejected: it is
+  materialized through the canonical idempotent materialization path
+  (the request's `title` is used) and then moved.
+- **Authorization:** the canonical scoped Meeting write rule of the
+  Recurrence's scope (group scope → current group members; Project
+  scope → Project owner/member, non-archived Projects only). Read
+  access (a Project viewer may read occurrences) is never sufficient:
+  read-allowed, write-unallowed actors answer `403`; inaccessible
+  recurrences answer a non-leaking `404`.
+- **Response:** the updated concrete Meeting representation (the
+  canonical Meeting serializer) with `200`; a no-op reschedule also
+  answers `200` and records no `meeting.rescheduled` event. Repeating
+  a request for the same occurrence always operates on the SAME
+  concrete Meeting row (no duplicate Meeting, Section, participant, or
+  `meeting.created` event).
+- The bounded occurrence read API is unchanged by the move: the
+  occurrence still reports the same `occurrenceId` /
+  `originalScheduledAt`, stays `materialized: true` with the same
+  `meetingId`, and appears at its ORIGINAL slot — the read API never
+  re-places an occurrence at its moved `scheduled_at`. There is no
+  Recurrence UI for this action yet.
+
 ### Not implemented (deferred)
 
 The following are intentionally out of this slice and remain
@@ -626,11 +746,11 @@ unimplemented:
   frontend clients, and Recurrence UI (including the occurrence
   preview UI); an explicit maximum window size for the bounded
   occurrence read API (pending product/API decision);
-- individual occurrence editing/moving, exclusions/cancellations,
-  "only this meeting", "this and following" (the persistence contract
-  for moving is in place: `Meeting.scheduled_at` may change while
-  `Meeting.original_scheduled_at` stays the immutable original
-  identity);
+- exclusions/cancellations of individual occurrences, "this and
+  following" series semantics, and whole-occurrence editing beyond
+  the implemented single-occurrence reschedule (moving one
+  materialized occurrence is implemented, see
+  "Single-occurrence reschedule" above);
 - whole-series (whole-recurrence) editing semantics and schedule
   revisions/segments;
 - template-delete behavior for Templates referenced by an active

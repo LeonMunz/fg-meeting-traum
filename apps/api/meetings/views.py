@@ -52,6 +52,7 @@ from .serializers import (
     MeetingRecurrenceMaterializeSerializer,
     MeetingRecurrenceOccurrenceQuerySerializer,
     MeetingRecurrenceOccurrenceSerializer,
+    MeetingRecurrenceRescheduleSerializer,
     MeetingSectionCreateSerializer,
     MeetingSectionPatchSerializer,
     MeetingSectionReorderSerializer,
@@ -97,6 +98,7 @@ from .services import (
     reorder_meeting_sections,
     reorder_series_sections,
     remove_meeting_participant,
+    reschedule_meeting_recurrence_occurrence,
     start_meeting,
     update_meeting,
     update_meeting_note,
@@ -2523,3 +2525,85 @@ class MeetingRecurrenceOccurrenceMaterializeView(APIView):
             MeetingSerializer(meeting).data,
             status=201 if created_now else 200,
         )
+
+
+class MeetingRecurrenceOccurrenceRescheduleView(APIView):
+    """POST /api/meeting-recurrences/{recurrence_id}/occurrences/reschedule/
+
+    Reschedule ONE materialized occurrence of the Recurrence ("only
+    this meeting"): the concrete Meeting that was materialized from the
+    occurrence moves to a new planned time while the recurrence rule,
+    the immutable occurrence identity, and every other occurrence in
+    the series are left untouched. The request carries the stable
+    occurrence identity (``occurrenceId``) plus the canonical original
+    scheduled timestamp (``originalScheduledAt``) exactly as reported
+    by the bounded occurrence read API, and the new planned time
+    (``scheduledAt``); the identity is an opaque derived UUIDv5 that
+    cannot be inverted, so the original scheduled start is part of the
+    contract, plus the concrete Meeting ``title`` (required for every
+    request: it is the title used when the reschedule must first
+    materialize a virtual occurrence, and is ignored for an
+    already-materialized Meeting, which a reschedule never renames).
+    The view only validates request input and reconstructs the
+    canonical occurrence value — recurrence mathematics, occurrence
+    validation (derived identity match AND bounded rule membership),
+    on-demand materialization of a virtual occurrence, the canonical
+    scoped Meeting write authorization, and the provenance-preserving
+    time change (with the ``meeting.rescheduled`` audit event) all stay
+    in the domain service, which remains the final authority.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, recurrence_id):
+        recurrence = _require_meeting_recurrence_access(
+            request,
+            recurrence_id,
+        )
+        if recurrence is None:
+            return Response(
+                {"error": "Meeting recurrence not found"},
+                status=404,
+            )
+
+        if not _has_recurrence_write_access(request.user, recurrence):
+            return _mutation_forbidden_response()
+
+        serializer = MeetingRecurrenceRescheduleSerializer(
+            data=request.data,
+        )
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=400)
+
+        data = serializer.validated_data
+
+        # Reconstruct the canonical occurrence value from the pair the
+        # read API reports: the aware instant normalized into the
+        # schedule's stored timezone (wall clock first, then the
+        # DST-correct aware form — the exact construction the domain
+        # expansion uses). Recurrence mathematics stay in the domain
+        # layer: the reschedule service revalidates the identity and
+        # rule membership before anything is persisted.
+        tz = ZoneInfo(recurrence.timezone_name)
+        original_local = (
+            data["originalScheduledAt"].astimezone(tz).replace(tzinfo=None)
+        )
+        original_start = original_local.replace(tzinfo=tz)
+        occurrence = MeetingRecurrenceOccurrence(
+            occurrence_id=data["occurrenceId"],
+            original_local=original_local,
+            original_start=original_start,
+        )
+
+        try:
+            meeting = reschedule_meeting_recurrence_occurrence(
+                recurrence=recurrence,
+                occurrence=occurrence,
+                scheduled_at=data["scheduledAt"],
+                actor=request.user,
+                title=data["title"],
+            )
+        except MeetingDomainError as exc:
+            return Response({"error": exc.message}, status=400)
+
+        return Response(MeetingSerializer(meeting).data)

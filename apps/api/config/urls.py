@@ -87,6 +87,7 @@ from meetings.views import (
     MeetingParticipantListCreateView,
     MeetingRecurrenceOccurrenceListView,
     MeetingRecurrenceOccurrenceMaterializeView,
+    MeetingRecurrenceOccurrenceRescheduleView,
     MeetingSectionListCreateView,
     MeetingSectionReorderView,
     MeetingSectionDetailView,
@@ -212,6 +213,7 @@ urlpatterns = [
     # occurrence materialization)
     path('api/meeting-recurrences/<int:recurrence_id>/occurrences/', MeetingRecurrenceOccurrenceListView.as_view(), name='meeting-recurrence-occurrences'),
     path('api/meeting-recurrences/<int:recurrence_id>/occurrences/materialize/', MeetingRecurrenceOccurrenceMaterializeView.as_view(), name='meeting-recurrence-occurrence-materialize'),
+    path('api/meeting-recurrences/<int:recurrence_id>/occurrences/reschedule/', MeetingRecurrenceOccurrenceRescheduleView.as_view(), name='meeting-recurrence-occurrence-reschedule'),
 ]
 
 # Browser-E2E-only fixture endpoints. Registered exclusively under the
