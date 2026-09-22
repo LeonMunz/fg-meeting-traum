@@ -936,6 +936,48 @@ through the dedicated cancellation domain operation:
   historical / in-progress Meetings are never retroactively treated
   as if they never happened.
 
+**HTTP action (implemented).**
+`POST /api/meetings/{meetingId}/cancel/` exposes the domain operation
+above as ONE explicit Meeting-resource action (the route shape and
+error conventions mirror the existing `start` / `end` / `reopen`
+actions and the FollowUp cancel action):
+
+- **Request:** the concrete Meeting id only — no body fields. The
+  endpoint operates on a concrete `Meeting` id, so it never takes an
+  occurrence identity, a scheduled start, or any recurrence-level
+  input, and it NEVER materializes a virtual occurrence.
+- **Resolution and authorization:** the Meeting is resolved through
+  the normal Meeting visibility rule (creator-or-participant read
+  access; inaccessible / unknown ids answer a non-leaking `404`), and
+  the action enforces the canonical scoped Meeting write rule before
+  the domain operation runs (read-only actors answer `403`;
+  unauthenticated requests are rejected). Like every other
+  Meeting action, the write rule only ever applies to a Meeting
+  that first passes the visibility stage: a write-authorized
+  actor who is neither creator nor participant of the Meeting
+  gets the same non-leaking `404`. The domain service re-enforces
+  the same write rule — the view adds no second capability and no
+  endpoint-specific role logic.
+- **Response:** the retained canonical Meeting representation (the
+  canonical Meeting serializer — same `id`, `status: cancelled`,
+  unchanged `scheduledAt` / title / content) with `200` for BOTH the
+  initial cancellation and an idempotent replay. No second
+  cancellation DTO exists.
+- **Idempotent replay:** repeating the POST for the same cancelled
+  Meeting answers `200` with the same Meeting, reuses the same
+  exclusion, mutates no content, and records no additional
+  `meeting.cancelled` event.
+- **Lifecycle errors:** cancelling a standalone (non-recurring)
+  Meeting, a `LIVE` Meeting, or a `COMPLETED` Meeting answers `400`
+  with the domain error message; those Meetings are left completely
+  unchanged.
+- **Not a bypass:** the Meeting PATCH surface still rejects the
+  `status` field, and the generic Meeting DELETE still rejects a
+  Meeting with recurrence provenance — the dedicated action is the
+  ONLY supported cancellation path.
+
+There is no frontend cancellation UX for this action yet.
+
 **Domain operation.**
 `meetings.services.cancel_meeting_recurrence_occurrence` operates on
 a concrete recurring `Meeting`:
@@ -993,10 +1035,9 @@ a concrete recurring `Meeting`:
   status change and the exclusion; an idempotent replay records
   none. No recurrence-wide audit taxonomy is introduced.
 
-There is no HTTP cancellation endpoint and no frontend cancellation
-UX in this slice: the operation is the canonical domain service that
-a future API/UI will be forced through (instead of a destructive
-delete).
+The HTTP cancellation action above is the canonical path a client is
+forced through (instead of a destructive delete); no frontend
+cancellation UX exists yet.
 
 ### Not implemented (deferred)
 

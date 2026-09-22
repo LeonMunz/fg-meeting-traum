@@ -67,6 +67,7 @@ from work_items.views import (
 )
 
 from meetings.views import (
+    MeetingCancelView,
     MeetingDetailView,
     MeetingEndView,
     MeetingReopenView,
@@ -182,6 +183,7 @@ urlpatterns = [
     path('api/meetings/<int:meeting_id>/start', MeetingStartView.as_view(), name='meeting-start'),
     path('api/meetings/<int:meeting_id>/end', MeetingEndView.as_view(), name='meeting-end'),
     path('api/meetings/<int:meeting_id>/reopen', MeetingReopenView.as_view(), name='meeting-reopen'),
+    path('api/meetings/<int:meeting_id>/cancel', MeetingCancelView.as_view(), name='meeting-cancel'),
     path('api/meetings/<int:meeting_id>/participants/', MeetingParticipantListCreateView.as_view(), name='meeting-participants-list'),
     path('api/meetings/<int:meeting_id>/participants/<int:participant_id>/', MeetingParticipantDetailView.as_view(), name='meeting-participant-detail'),
     path('api/meetings/<int:meeting_id>/items/', MeetingItemListCreateView.as_view(), name='meeting-items-list'),

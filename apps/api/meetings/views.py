@@ -73,6 +73,7 @@ from .services import (
     _has_canonical_meeting_read_access,
     _has_can_meet_participant_add_access,
     add_meeting_participant,
+    cancel_meeting_recurrence_occurrence,
     create_meeting,
     delete_meeting,
     delete_meeting_series,
@@ -326,10 +327,12 @@ def _participant_candidate_response(request):
 
 
 def _run_meeting_lifecycle_action(request, meeting, action):
-    """Shared handler for explicit Start/End lifecycle actions.
+    """Shared handler for explicit Meeting action endpoints.
 
-    Enforces the scope-aware Meeting write rule, runs the domain
-    transition, and returns the updated canonical Meeting.
+    Used by the Start/End/Reopen lifecycle actions and the
+    materialized-occurrence cancel action: enforces the scope-aware
+    Meeting write rule, runs the domain operation, and returns the
+    updated canonical Meeting.
     """
     if not _has_scoped_write_access(request.user, meeting):
         return _mutation_forbidden_response()
@@ -1313,6 +1316,36 @@ class MeetingReopenView(APIView):
             request,
             meeting,
             reopen_meeting,
+        )
+
+
+class MeetingCancelView(APIView):
+    """POST /api/meetings/{id}/cancel — cancel ONE materialized
+    recurring occurrence ("only this meeting").
+
+    Delegates entirely to the canonical domain operation
+    ``cancel_meeting_recurrence_occurrence``: lifecycle validation,
+    exclusion persistence, idempotency, recurrence locking, audit, and
+    the scoped Meeting write rule stay in the domain service. The
+    Meeting row survives with terminal ``cancelled`` status; the
+    response is the retained canonical Meeting representation (``200``
+    for both the initial cancellation and an idempotent replay).
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, meeting_id):
+        meeting = _require_meeting_access(request, meeting_id)
+        if meeting is None:
+            return Response(
+                {"error": "Meeting not found"},
+                status=404,
+            )
+
+        return _run_meeting_lifecycle_action(
+            request,
+            meeting,
+            cancel_meeting_recurrence_occurrence,
         )
 
 
