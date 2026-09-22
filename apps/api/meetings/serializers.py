@@ -831,3 +831,63 @@ class MeetingWorkItemCreateSerializer(serializers.Serializer):
         ),
         required=False,
     )
+
+
+# ── MeetingRecurrence occurrences (bounded read API) ───────────
+
+
+class _AwareDateTimeField(serializers.DateTimeField):
+    """A DateTimeField that rejects naive input datetimes.
+
+    The bounded occurrence-expansion contract requires timezone-aware
+    window boundaries; a naive value must be rejected, never silently
+    interpreted in the server timezone.
+    """
+
+    default_error_messages = {
+        **serializers.DateTimeField.default_error_messages,
+        "naive": (
+            "Datetime must be timezone-aware (include a UTC offset "
+            "or timezone name)."
+        ),
+    }
+
+    def enforce_timezone(self, value):
+        if value.tzinfo is None:
+            self.fail("naive")
+        return value
+
+
+class MeetingRecurrenceOccurrenceQuerySerializer(serializers.Serializer):
+    """GET query contract for the bounded occurrence read.
+
+    Both window boundaries are mandatory and must be timezone-aware.
+    The field name ``from`` is a Python keyword, so the declared field
+    map is returned from ``get_fields`` instead of class attributes.
+    """
+
+    def get_fields(self):
+        return {
+            "from": _AwareDateTimeField(),
+            "to": _AwareDateTimeField(),
+        }
+
+
+class MeetingRecurrenceOccurrenceSerializer(serializers.Serializer):
+    """Compact read-only representation of one calculated occurrence.
+
+    ``occurrenceId`` is the stable Slice-1 occurrence identity (the
+    same value for a virtual and a materialized occurrence);
+    ``originalScheduledAt`` is the immutable original scheduled start
+    (aware instant) and ``originalLocal`` / ``timezone`` carry the
+    local wall-clock scheduling information of the stored timezone.
+    A materialized occurrence additionally exposes the concrete
+    ``meetingId`` without duplicating the Meeting payload.
+    """
+
+    occurrenceId = serializers.UUIDField()
+    originalScheduledAt = serializers.DateTimeField()
+    originalLocal = serializers.CharField()
+    timezone = serializers.CharField()
+    materialized = serializers.BooleanField()
+    meetingId = serializers.IntegerField(allow_null=True)

@@ -20,6 +20,7 @@ class ScopeKind(str, Enum):
     PROJECT = "project"
     MEETING = "meeting"
     MEETING_SERIES = "meeting_series"
+    MEETING_RECURRENCE = "meeting_recurrence"
 
 
 @dataclass(frozen=True)

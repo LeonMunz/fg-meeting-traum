@@ -85,6 +85,7 @@ from meetings.views import (
     MeetingNoteDetailView,
     MeetingParticipantDetailView,
     MeetingParticipantListCreateView,
+    MeetingRecurrenceOccurrenceListView,
     MeetingSectionListCreateView,
     MeetingSectionReorderView,
     MeetingSectionDetailView,
@@ -205,6 +206,9 @@ urlpatterns = [
     path('api/meeting-series/<int:series_id>/occurrences/', MeetingSeriesCreateOccurrenceView.as_view(), name='meeting-series-occurrences'),
     path('api/meeting-series/<int:series_id>/participant-candidates/', MeetingSeriesParticipantCandidateListView.as_view(), name='meeting-series-participant-candidates'),
     path('api/meeting-series-sections/<int:section_id>/', MeetingSeriesSectionDetailView.as_view(), name='meeting-series-section-detail'),
+
+    # Meeting Recurrences (bounded occurrence read; read-only)
+    path('api/meeting-recurrences/<int:recurrence_id>/occurrences/', MeetingRecurrenceOccurrenceListView.as_view(), name='meeting-recurrence-occurrences'),
 ]
 
 # Browser-E2E-only fixture endpoints. Registered exclusively under the

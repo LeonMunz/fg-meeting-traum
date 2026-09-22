@@ -30,6 +30,8 @@ class Capability(str, Enum):
     MEETING_SERIES_READ = "meeting_series.read"
     MEETING_SERIES_WRITE = "meeting_series.write"
 
+    MEETING_RECURRENCE_READ = "meeting_recurrence.read"
+
 
 _NO_CAPABILITIES: frozenset[Capability] = frozenset()
 

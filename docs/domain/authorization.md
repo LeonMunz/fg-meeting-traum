@@ -101,6 +101,7 @@ code checks capabilities, never raw role strings.
 | `MEETING_WRITE` | Mutate a Meeting occurrence (lifecycle, sections, items, notes, participants) |
 | `MEETING_SERIES_READ` | Read one Meeting Series template |
 | `MEETING_SERIES_WRITE` | Mutate a Meeting Series template |
+| `MEETING_RECURRENCE_READ` | Read one Meeting Recurrence schedule and its calculated occurrences |
 
 ### ResearchGroup role → capabilities
 
@@ -136,6 +137,10 @@ empty (deny).
 - `MEETING_SERIES_READ` / `MEETING_SERIES_WRITE` follow the Meeting scope
   rules for the Series (group scope: `GROUP_READ`; Project scope:
   `PROJECT_READ` / `PROJECT_WORK`, Project not archived for write).
+- `MEETING_RECURRENCE_READ` follows the Meeting scope rules for the
+  Recurrence (group scope: `GROUP_READ`; Project scope: `PROJECT_READ`),
+  mirroring the Meeting Series read rule. No Recurrence write capability
+  exists yet — there is no Recurrence mutation API.
 
 ### Default deny
 

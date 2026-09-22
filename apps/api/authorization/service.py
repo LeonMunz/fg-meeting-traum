@@ -324,6 +324,62 @@ def resolve_meeting_series_scope(
     )
 
 
+# ── Meeting Recurrence scope ────────────────────────────────────
+
+
+def resolve_meeting_recurrence_scope(
+    user,
+    recurrence,
+) -> Optional[ScopeContext]:
+    """Resolve the user's scope for one MeetingRecurrence schedule.
+
+    A Recurrence is a scope-level schedule resource (not a concrete
+    Meeting occurrence), so its read rule follows the Meeting Series
+    scope read rule for the Recurrence's scope:
+
+    - group scope: any current ResearchGroup member (``GROUP_READ``);
+    - Project scope: current Project membership (``PROJECT_READ``)
+      AND a current ResearchGroupMembership in the Project's group.
+
+    Returns None when the user has no read access, so views answer a
+    non-leaking 404. Knowing a valid recurrence id never grants
+    access. (No Recurrence write capability exists yet: there is no
+    Recurrence mutation API.)
+    """
+    auth = get_auth_context(user)
+    if not auth.is_active:
+        return None
+
+    group_scope = resolve_group_scope(user, recurrence.research_group_id)
+    if group_scope is None:
+        return None
+
+    if recurrence.scope == "group":
+        if recurrence.project_id is not None:
+            # Scope inconsistency guard: a group Recurrence must not
+            # reference a Project.
+            return None
+    else:
+        if recurrence.project_id is None:
+            return None
+        project_scope = resolve_project_scope(user, recurrence.project_id)
+        if project_scope is None:
+            return None
+        if project_scope.research_group_id != recurrence.research_group_id:
+            # Scope inconsistency guard: the Recurrence's Project must
+            # live in the Recurrence's own Research Group.
+            return None
+        if not project_scope.has(Capability.PROJECT_READ):
+            return None
+
+    return ScopeContext(
+        kind=ScopeKind.MEETING_RECURRENCE,
+        research_group_id=recurrence.research_group_id,
+        project_id=recurrence.project_id,
+        capabilities=frozenset({Capability.MEETING_RECURRENCE_READ}),
+    )
+
+
 __all__ = [
     "AuthorizationDenied",
     "AuthContext",
@@ -342,4 +398,5 @@ __all__ = [
     "resolve_meeting_scope",
     "require_meeting_write",
     "resolve_meeting_series_scope",
+    "resolve_meeting_recurrence_scope",
 ]

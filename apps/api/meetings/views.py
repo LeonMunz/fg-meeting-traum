@@ -14,6 +14,7 @@ from authorization.service import (
     resolve_group_scope,
     resolve_meeting_scope,
     resolve_meeting_series_scope,
+    resolve_meeting_recurrence_scope,
 )
 from research_groups.models import (
     ResearchGroupMembership,
@@ -25,6 +26,7 @@ from .models import (
     MeetingItemFollowUp,
     MeetingNote,
     MeetingParticipant,
+    MeetingRecurrence,
     MeetingSection,
     MeetingSeries,
     MeetingSeriesSection,
@@ -44,6 +46,8 @@ from .serializers import (
     MeetingNoteSerializer,
     MeetingParticipantCandidateContextSerializer,
     MeetingPatchSerializer,
+    MeetingRecurrenceOccurrenceQuerySerializer,
+    MeetingRecurrenceOccurrenceSerializer,
     MeetingSectionCreateSerializer,
     MeetingSectionPatchSerializer,
     MeetingSectionReorderSerializer,
@@ -82,6 +86,7 @@ from .services import (
     create_work_item_from_meeting_item,
     delete_meeting_note,
     end_meeting,
+    expand_meeting_recurrence_occurrences,
     list_meeting_item_notes,
     reopen_meeting,
     reorder_meeting_sections,
@@ -2294,3 +2299,119 @@ class MeetingNoteDetailView(APIView):
             )
 
         return Response(status=204)
+
+
+# ── MeetingRecurrence endpoints ─────────────────────────────────
+
+
+def _require_meeting_recurrence_access(request, recurrence_id):
+    try:
+        recurrence = MeetingRecurrence.objects.select_related(
+            "research_group",
+            "project",
+            "created_by",
+        ).get(pk=recurrence_id)
+    except MeetingRecurrence.DoesNotExist:
+        return None
+
+    if not _has_recurrence_read_access(request.user, recurrence):
+        return None
+
+    return recurrence
+
+
+def _has_recurrence_read_access(user, recurrence):
+    """MeetingRecurrence read: the kernel's
+    MEETING_RECURRENCE_READ capability (scope-level read rule,
+    non-leaking 404 for inaccessible recurrences)."""
+    scope = resolve_meeting_recurrence_scope(user, recurrence)
+    return scope is not None and scope.has(
+        Capability.MEETING_RECURRENCE_READ
+    )
+
+
+class MeetingRecurrenceOccurrenceListView(APIView):
+    """GET /api/meeting-recurrences/{recurrence_id}/occurrences/
+
+    Read-only bounded occurrence read for one MeetingRecurrence:
+    ``?from=<aware datetime>&to=<aware datetime>`` (both mandatory).
+    Delegates occurrence calculation to the domain expansion
+    operation and resolves materialized occurrences with one bounded
+    query. Creates no Meeting rows: GET requests never mutate.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, recurrence_id):
+        recurrence = _require_meeting_recurrence_access(
+            request,
+            recurrence_id,
+        )
+        if recurrence is None:
+            return Response(
+                {"error": "Meeting recurrence not found"},
+                status=404,
+            )
+
+        query_serializer = MeetingRecurrenceOccurrenceQuerySerializer(
+            data=request.query_params,
+        )
+        if not query_serializer.is_valid():
+            return Response(query_serializer.errors, status=400)
+
+        range_start = query_serializer.validated_data["from"]
+        range_end = query_serializer.validated_data["to"]
+        if range_start >= range_end:
+            return Response(
+                {
+                    "error": (
+                        "'from' must be earlier than 'to'."
+                    )
+                },
+                status=400,
+            )
+
+        occurrences = expand_meeting_recurrence_occurrences(
+            meeting_recurrence=recurrence,
+            range_start=range_start,
+            range_end=range_end,
+        )
+
+        # Resolve materialization in ONE bounded query over the
+        # requested window: (recurrence, original_scheduled_at) is
+        # unique, so the instant-to-Meeting mapping is exact and
+        # needs no per-occurrence lookup.
+        materialized_ids = dict(
+            Meeting.objects
+            .filter(
+                recurrence=recurrence,
+                original_scheduled_at__in=[
+                    occurrence.original_start
+                    for occurrence in occurrences
+                ],
+            )
+            .values_list("original_scheduled_at", "id")
+        )
+
+        items = [
+            {
+                "occurrenceId": occurrence.occurrence_id,
+                "originalScheduledAt": occurrence.original_start,
+                "originalLocal": occurrence.original_local.isoformat(),
+                "timezone": recurrence.timezone_name,
+                "materialized": (
+                    occurrence.original_start in materialized_ids
+                ),
+                "meetingId": materialized_ids.get(
+                    occurrence.original_start
+                ),
+            }
+            for occurrence in occurrences
+        ]
+
+        return Response(
+            MeetingRecurrenceOccurrenceSerializer(
+                items,
+                many=True,
+            ).data
+        )

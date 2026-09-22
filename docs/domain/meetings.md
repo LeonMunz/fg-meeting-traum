@@ -323,9 +323,12 @@ A Recurrence never pre-creates `Meeting` rows and is never an
 occurrence itself. The Recurrence is a persisted schedule + a
 domain-level bounded expansion operation + one explicit materialization
 operation that turns a single calculated occurrence into a concrete
-`Meeting` (see "Materialization" below). There is still no recurrence
-API and no UI; occurrence Meetings are never auto-created outside that
-explicit operation.
+`Meeting` (see "Materialization" below). The Recurrence has a
+read-only bounded occurrence READ API (see "Bounded occurrence read
+API"); recurrence creation/editing and materialization remain
+domain-only operations, and there is no Recurrence UI. Occurrence
+Meetings are never auto-created outside the explicit materialization
+operation.
 
 ### V1 recurrence language (implemented)
 
@@ -429,8 +432,9 @@ domain expansion operation. Its contract:
   the requested window (inclusive), in chronological order;
 - it is **read-only**: it creates no `Meeting` rows, mutates nothing,
   and stays independent of persisted concrete Meetings. Access to the
-  recurrence row is the caller's responsibility; a future API slice
-  will enforce the canonical scoped read rule before expansion.
+  recurrence row is enforced by the bounded occurrence read API
+  (see below): the canonical scoped read rule is checked before any
+  expansion over HTTP.
 
 Each returned occurrence is a value (not a model row) carrying:
 
@@ -446,6 +450,61 @@ Each returned occurrence is a value (not a model row) carrying:
   identical start times, and is designed to remain the immutable
   original-start identity if a future override moves a materialized
   Meeting.
+
+### Bounded occurrence read API (implemented)
+
+`GET /api/meeting-recurrences/{recurrenceId}/occurrences/` exposes the
+bounded occurrence read over HTTP. It is strictly read-only: it
+creates no `Meeting` rows, audit events, participants, or Sections.
+
+- **Window contract:** the query parameters `from` and `to` are BOTH
+  mandatory, timezone-aware ISO-8601 datetimes. Missing values,
+  invalid syntax, naive datetimes, and `from >= to` are rejected with
+  `400` (missing/invalid values in the canonical DRF serializer error
+  shape; `from >= to` as `{"error": ...}`); no default range is ever
+  substituted. The HTTP boundary preserves the domain invariant that
+  an expansion is always finite: there is no unbounded "return every
+  occurrence" request. There is deliberately NO maximum window size
+  in V1 — an explicit maximum is a pending product/API decision, not
+  an implementation detail.
+- **Authorization:** the canonical scoped read rule for the
+  Recurrence's scope is enforced by the authorization kernel
+  (`resolve_meeting_recurrence_scope` + `MEETING_RECURRENCE_READ`)
+  before any expansion: group scope → any current Research Group
+  member; Project scope → current Project membership
+  (`PROJECT_READ`) AND current group membership (a Project viewer may
+  read, mirroring the Meeting Series scope read rule). Inaccessible
+  recurrences answer a non-leaking `404`; a recurrence id alone never
+  grants access.
+- **Calculation:** the API layer validates request input and
+  delegates occurrence calculation to the domain expansion operation
+  (`expand_meeting_recurrence_occurrences`); recurrence calculation,
+  timezone/DST handling, end-mode semantics, and occurrence identity
+  are never re-implemented in the API layer.
+- **Materialization resolution:** which calculated occurrences are
+  already materialized is resolved from the persisted provenance
+  (`Meeting.recurrence` + `Meeting.original_scheduled_at`, unique per
+  recurrence) with ONE bounded query over the requested window — no
+  per-occurrence lookup, and no Meeting is created or mutated by the
+  read. A virtual and a materialized occurrence keep the SAME stable
+  `occurrenceId`.
+
+The response is a JSON array (the repository's list convention) of
+compact occurrence objects:
+
+```text
+occurrenceId          stable Slice-1 occurrence identity (UUIDv5)
+originalScheduledAt   immutable original scheduled start (aware, UTC ISO-8601)
+originalLocal         original wall-clock start in the stored timezone (naive)
+timezone              IANA timezone name of the stored schedule
+materialized          bool
+meetingId             concrete Meeting id, or null while virtual
+```
+
+`occurrenceId` / `originalScheduledAt` never depend on the
+materialized Meeting's editable `scheduled_at`: moving the Meeting's
+planned time changes neither the occurrence identity nor its
+materialization mapping.
 
 ### Materialization (implemented)
 
@@ -520,9 +579,11 @@ and no UI for it yet.
 The following are intentionally out of this slice and remain
 unimplemented:
 
-- any recurrence API endpoint, client, or UI (creation, editing,
-  occurrence preview, list/detail views) — the materialization
-  operation is domain-only so far;
+- recurrence creation/editing API, recurrence list/detail views,
+  frontend clients, and Recurrence UI; the HTTP materialization
+  action (the materialization operation is domain-only so far) and
+  the occurrence preview UI; an explicit maximum window size for the
+  bounded occurrence read API (pending product/API decision);
 - individual occurrence editing/moving, exclusions/cancellations,
   "only this meeting", "this and following" (the persistence contract
   for moving is in place: `Meeting.scheduled_at` may change while
