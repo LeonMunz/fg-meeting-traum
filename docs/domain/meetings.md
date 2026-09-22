@@ -888,8 +888,75 @@ The bounded occurrence read API (see "Bounded occurrence read API"
 above) answers with the EFFECTIVE occurrence set: after excluding a
 virtual occurrence it is absent from the normal occurrence list,
 siblings are unchanged, no replacement occurrence is added, and the
-GET remains side-effect free. There is no HTTP write API for
-exclusion and no Recurrence UI for this operation yet.
+GET remains side-effect free. The exclusion is exposed through one
+explicit HTTP write action (see "Single-occurrence exclusion API"
+below); there is no Recurrence UI for this operation yet.
+
+### Single-occurrence exclusion API (implemented)
+
+`POST /api/meeting-recurrences/{recurrenceId}/occurrences/exclude/`
+excludes ONE still-virtual occurrence of one Recurrence through the
+domain operation above; the API layer validates request input and
+delegates occurrence validation, the materialized-occurrence
+boundary, authorization, and idempotent persistence to the domain
+service, which remains the final authority.
+
+- **Request:** `occurrenceId` (the stable occurrence identity
+  reported by the bounded occurrence read API) and
+  `originalScheduledAt` (the immutable original scheduled start,
+  timezone-aware ISO-8601). The occurrence identity is an opaque
+  derived UUIDv5 that cannot be inverted, so the original scheduled
+  start is part of the contract: the server revalidates the pair
+  against the recurrence rule (derived identity match AND bounded
+  rule membership) before anything is persisted. No `title`, no
+  Meeting id, no template id, and no scheduled-start replacement —
+  excluding a virtual occurrence never creates a Meeting.
+- **Validation:** naive timestamps, invalid UUIDs, missing fields,
+  mutually inconsistent identity pairs, and pairs the rule never
+  produces (wrong wall-clock time, before the first occurrence,
+  beyond the end-date / count contract, identity of a foreign
+  recurrence) are rejected with `400` and persist nothing.
+- **Authorization:** exclusion is a WRITE operation: the canonical
+  scoped Meeting write rule of the Recurrence's scope (group scope →
+  current group members; Project scope → Project owner/member,
+  non-archived Projects only), exactly like occurrence
+  materialization. Read access (a Project viewer may read
+  occurrences) is never sufficient: read-allowed, write-unallowed
+  actors answer `403`; inaccessible recurrences answer a non-leaking
+  `404`; unauthenticated requests are rejected.
+- **Response:** one stable idempotent `204 No Content` for BOTH the
+  first successful exclusion and an idempotent replay: the operation
+  persists exactly one exclusion row and nothing else, so there is no
+  resource representation to return. A repeated valid request (same
+  or another authorized actor, any offset representation of the same
+  instant) keeps exactly one exclusion row, creates no Meeting, and
+  mutates the recurrence rule in no way.
+- **Materialized boundary:** an occurrence that already has a
+  concrete Meeting is rejected with `400` (the domain error) and the
+  Meeting is left completely unchanged — not cancelled, not deleted,
+  not altered, and no second exclusion is added through this path.
+  The client must use `POST /api/meetings/{meetingId}/cancel/` for a
+  materialized upcoming occurrence (see "Single-occurrence
+  cancellation (materialized)" below).
+- **Effect on the read API:** the bounded occurrence read API
+  immediately reports the effective set — the excluded occurrence is
+  absent, siblings are unchanged, no replacement occurrence is
+  generated, and nothing is materialized by the GET. After exclusion,
+  the materialization and reschedule endpoints reject the occurrence
+  without creating a Meeting (one-way gate). There is no Recurrence
+  UI for this action yet.
+
+The "only this meeting" distinction, end to end:
+
+```text
+virtual occurrence
+→ POST /api/meeting-recurrences/{recurrenceId}/occurrences/exclude/
+→ exclusion only (no Meeting, no audit event)
+
+materialized upcoming occurrence
+→ POST /api/meetings/{meetingId}/cancel/
+→ cancelled Meeting + exclusion
+```
 
 ### Single-occurrence cancellation (materialized) (implemented)
 

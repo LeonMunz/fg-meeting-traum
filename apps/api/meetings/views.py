@@ -50,6 +50,7 @@ from .serializers import (
     MeetingParticipantCandidateContextSerializer,
     MeetingPatchSerializer,
     MeetingRecurrenceMaterializeSerializer,
+    MeetingRecurrenceOccurrenceExcludeSerializer,
     MeetingRecurrenceOccurrenceQuerySerializer,
     MeetingRecurrenceOccurrenceSerializer,
     MeetingRecurrenceRescheduleSerializer,
@@ -93,6 +94,7 @@ from .services import (
     delete_meeting_note,
     end_meeting,
     expand_effective_meeting_recurrence_occurrences,
+    exclude_meeting_recurrence_occurrence,
     materialize_meeting_recurrence_occurrence,
     list_meeting_item_notes,
     reopen_meeting,
@@ -2642,3 +2644,92 @@ class MeetingRecurrenceOccurrenceRescheduleView(APIView):
             return Response({"error": exc.message}, status=400)
 
         return Response(MeetingSerializer(meeting).data)
+
+
+class MeetingRecurrenceOccurrenceExcludeView(APIView):
+    """POST /api/meeting-recurrences/{recurrence_id}/occurrences/exclude/
+
+    Exclude ONE still-virtual occurrence of the Recurrence from the
+    effective occurrence set ("only this meeting", virtual path):
+    exactly one ``MeetingRecurrenceExclusion`` is persisted and the
+    occurrence drops out of the effective expansion — no `Meeting` is
+    created and the recurrence rule is never mutated. This is the
+    virtual counterpart of the materialized cancellation action
+    (``POST /api/meetings/{id}/cancel/``); the two paths must not be
+    mixed: an occurrence that already has a concrete Meeting is
+    REJECTED here with the domain error and that Meeting is left
+    completely unchanged.
+
+    The request carries the stable occurrence identity
+    (``occurrenceId``) plus the canonical original scheduled timestamp
+    (``originalScheduledAt``) exactly as reported by the bounded
+    occurrence read API; the identity is an opaque derived UUIDv5 that
+    cannot be inverted, so the original scheduled start is part of the
+    contract. No ``title`` or any other Meeting-level input exists: no
+    Meeting is being created.
+
+    The view only validates request input and reconstructs the
+    canonical occurrence value — occurrence validation (derived
+    identity match AND bounded rule membership), the materialized-
+    occurrence boundary, the canonical write authorization,
+    idempotency, recurrence locking, and persistence all stay in the
+    domain exclusion service, which remains the final authority.
+
+    The response is a stable, idempotent `204 No Content` for BOTH the
+    first successful exclusion and an idempotent replay: the operation
+    persists exactly one exclusion row and nothing else, so there is no
+    resource representation to return.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, recurrence_id):
+        recurrence = _require_meeting_recurrence_access(
+            request,
+            recurrence_id,
+        )
+        if recurrence is None:
+            return Response(
+                {"error": "Meeting recurrence not found"},
+                status=404,
+            )
+
+        if not _has_recurrence_write_access(request.user, recurrence):
+            return _mutation_forbidden_response()
+
+        serializer = MeetingRecurrenceOccurrenceExcludeSerializer(
+            data=request.data,
+        )
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=400)
+
+        data = serializer.validated_data
+
+        # Reconstruct the canonical occurrence value from the pair the
+        # read API reports: the aware instant normalized into the
+        # schedule's stored timezone (wall clock first, then the
+        # DST-correct aware form — the exact construction the domain
+        # expansion uses). Recurrence mathematics stay in the domain
+        # layer: the exclusion service revalidates the identity and
+        # rule membership before anything is persisted.
+        tz = ZoneInfo(recurrence.timezone_name)
+        original_local = (
+            data["originalScheduledAt"].astimezone(tz).replace(tzinfo=None)
+        )
+        original_start = original_local.replace(tzinfo=tz)
+        occurrence = MeetingRecurrenceOccurrence(
+            occurrence_id=data["occurrenceId"],
+            original_local=original_local,
+            original_start=original_start,
+        )
+
+        try:
+            exclude_meeting_recurrence_occurrence(
+                recurrence=recurrence,
+                occurrence=occurrence,
+                actor=request.user,
+            )
+        except MeetingDomainError as exc:
+            return Response({"error": exc.message}, status=400)
+
+        return Response(status=204)
