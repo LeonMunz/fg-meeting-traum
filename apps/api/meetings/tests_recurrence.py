@@ -27,12 +27,15 @@ from .models import (
     MeetingParticipant,
     MeetingRecurrence,
     MeetingSection,
+    MeetingSeries,
 )
 from .recurrence import MeetingRecurrenceOccurrence, derive_occurrence_identity
 from .services import (
     MeetingDomainError,
     create_meeting,
     create_meeting_recurrence,
+    create_meeting_series,
+    create_series_section,
     expand_meeting_recurrence_occurrences,
     materialize_meeting_recurrence_occurrence,
     reschedule_meeting_recurrence_occurrence,
@@ -108,10 +111,40 @@ class MeetingRecurrenceBase(TestCase):
             role=ProjectMembership.Role.VIEWER,
         )
 
-    def _create_recurrence(self, **overrides):
+    def _create_series(self, **overrides):
+        """A canonical Meeting Template with one active 'Agenda'
+        section — the default content source for fixture recurrences."""
         params = dict(
             research_group=self.group,
             actor=self.alex,
+            title="Standup Template",
+        )
+        params.update(overrides)
+        series = create_meeting_series(**params)
+        create_series_section(
+            meeting_series=series,
+            actor=self.alex,
+            name="Agenda",
+        )
+        return series
+
+    def _create_recurrence(self, meeting_series=None, **overrides):
+        # New recurrences require a canonical Meeting Template: the
+        # fixture supplies one by default, matching the new-recurring-
+        # series invariant. A project-scoped recurrence automatically
+        # receives a project-scoped Template of the same Project.
+        if meeting_series is None:
+            series_overrides = {}
+            if overrides.get("scope") == "project":
+                series_overrides.update(
+                    scope="project",
+                    project=overrides.get("project"),
+                )
+            meeting_series = self._create_series(**series_overrides)
+        params = dict(
+            research_group=self.group,
+            actor=self.alex,
+            meeting_series=meeting_series,
             title="Daily Standup",
             frequency="daily",
             interval=1,
@@ -127,6 +160,22 @@ class MeetingRecurrenceBase(TestCase):
             meeting_recurrence=recurrence,
             range_start=start,
             range_end=end,
+        )
+
+    def _first_occurrence(self, recurrence):
+        (occurrence,) = self._expand(
+            recurrence, _utc(2026, 1, 5), _utc(2026, 1, 6),
+        )
+        return occurrence
+
+    def _materialize(
+        self, recurrence, occurrence, *, actor=None, title="Materialized",
+    ):
+        return materialize_meeting_recurrence_occurrence(
+            recurrence=recurrence,
+            occurrence=occurrence,
+            actor=actor if actor is not None else self.alex,
+            title=title,
         )
 
 
@@ -340,6 +389,7 @@ class MeetingRecurrenceValidationTest(MeetingRecurrenceBase):
             create_meeting_recurrence(
                 research_group=self.group,
                 actor=self.alex,
+                meeting_series=self._create_series(),
                 frequency="daily",
                 interval=1,
                 start_date=date(2026, 1, 5),
@@ -982,22 +1032,6 @@ class MeetingRecurrenceOccurrenceIdentityTest(MeetingRecurrenceBase):
 class MeetingRecurrenceMaterializationTest(MeetingRecurrenceBase):
     """Occurrence → concrete Meeting materialization (domain layer)."""
 
-    def _first_occurrence(self, recurrence):
-        (occurrence,) = self._expand(
-            recurrence, _utc(2026, 1, 5), _utc(2026, 1, 6),
-        )
-        return occurrence
-
-    def _materialize(
-        self, recurrence, occurrence, *, actor=None, title="Materialized",
-    ):
-        return materialize_meeting_recurrence_occurrence(
-            recurrence=recurrence,
-            occurrence=occurrence,
-            actor=actor if actor is not None else self.alex,
-            title=title,
-        )
-
     def _synthetic_occurrence(self, recurrence, original_local):
         """A well-formed occurrence VALUE for a date/time of our choice.
 
@@ -1032,10 +1066,13 @@ class MeetingRecurrenceMaterializationTest(MeetingRecurrenceBase):
         self.assertEqual(meeting.research_group_id, self.group.pk)
         self.assertEqual(meeting.scope, Meeting.Scope.GROUP)
         self.assertIsNone(meeting.project)
-        # A usable standalone-style structure and the creator as the
-        # first participant.
+        # A usable structure snapshotted from the recurrence's
+        # canonical Template, and the creator as the first participant.
         section = meeting.meeting_sections.get()
         self.assertEqual(section.name, "Agenda")
+        self.assertEqual(
+            section.source_series_section.name, "Agenda",
+        )
         self.assertEqual(
             [p.user_id for p in meeting.participant_relations.all()],
             [self.alex.pk],
@@ -1401,24 +1438,34 @@ class MeetingRecurrenceMaterializationTest(MeetingRecurrenceBase):
         self.assertEqual(Meeting.objects.count(), 1)
         self.assertEqual(again.scheduled_at, moved)
 
-    # 15. Template behavior: Recurrences have no Template association in
-    #     V1, so materialization initializes standalone-style and the
-    #     materialized Meeting owns its own persistent state.
+    # 15. Template behavior: a new occurrence is initialized from the
+    #     recurrence's canonical Meeting Template (the normal
+    #     Meeting-from-Template semantics), and the materialized
+    #     Meeting owns its own persistent state afterwards.
 
-    def test_materialized_meeting_is_initialized_standalone_style(self):
+    def test_materialized_meeting_is_initialized_from_the_recurrence_template(
+            self,
+    ):
         recurrence = self._create_recurrence()
         occurrence = self._first_occurrence(recurrence)
         meeting = self._materialize(recurrence, occurrence)
 
-        self.assertIsNone(meeting.series)
+        # The Meeting carries the recurrence's Template as its
+        # provenance source, exactly like a Meeting created from a
+        # Template.
+        self.assertEqual(meeting.series, recurrence.series)
         sections = list(meeting.meeting_sections.order_by("position"))
         self.assertEqual([s.name for s in sections], ["Agenda"])
         self.assertEqual(sections[0].position, 0)
         self.assertTrue(sections[0].is_visible)
-        self.assertIsNone(sections[0].source_series_section)
+        # The snapshot keeps its Template provenance pointer.
+        self.assertEqual(
+            sections[0].source_series_section,
+            recurrence.series.series_sections.get(),
+        )
 
         # The concrete Meeting owns its state: mutating it is ordinary
-        # Meeting editing (no Template involved, nothing to cascade).
+        # Meeting editing (nothing on the Template cascades).
         update_meeting(
             meeting=meeting, actor=self.alex, title="Renamed occurrence",
         )
@@ -1542,22 +1589,6 @@ class MeetingRecurrenceRescheduleTest(MeetingRecurrenceBase):
     through the canonical idempotent materialization path, then
     moved.
     """
-
-    def _first_occurrence(self, recurrence):
-        (occurrence,) = self._expand(
-            recurrence, _utc(2026, 1, 5), _utc(2026, 1, 6),
-        )
-        return occurrence
-
-    def _materialize(
-        self, recurrence, occurrence, *, actor=None, title="Materialized",
-    ):
-        return materialize_meeting_recurrence_occurrence(
-            recurrence=recurrence,
-            occurrence=occurrence,
-            actor=actor if actor is not None else self.alex,
-            title=title,
-        )
 
     def _reschedule(
         self,
@@ -1798,9 +1829,12 @@ class MeetingRecurrenceRescheduleTest(MeetingRecurrenceBase):
         # The Meeting was moved to the requested time.
         self.assertEqual(meeting.scheduled_at, moved)
         self.assertEqual(meeting.status, Meeting.Status.UPCOMING)
-        # Standalone-style initialization: one Agenda section, the
-        # creator as participant.
+        # Template-backed initialization: one snapshot of the Template's
+        # active 'Agenda' section, the creator as participant.
         self.assertEqual(meeting.meeting_sections.count(), 1)
+        self.assertEqual(
+            meeting.series, recurrence.series,
+        )
         self.assertEqual(
             [p.user_id for p in meeting.participant_relations.all()],
             [self.alex.pk],
@@ -2124,9 +2158,20 @@ class MeetingRecurrenceMaterializationConcurrencyTest(TransactionTestCase):
             user=self.alex,
             role=ResearchGroupMembership.Role.ADMIN,
         )
+        series = create_meeting_series(
+            research_group=self.group,
+            actor=self.alex,
+            title="Race Template",
+        )
+        create_series_section(
+            meeting_series=series,
+            actor=self.alex,
+            name="Agenda",
+        )
         self.recurrence = create_meeting_recurrence(
             research_group=self.group,
             actor=self.alex,
+            meeting_series=series,
             title="Race",
             frequency="daily",
             interval=1,

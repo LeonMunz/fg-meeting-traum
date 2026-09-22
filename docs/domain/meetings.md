@@ -253,7 +253,10 @@ A Meeting Template defines:
 - identity and purpose,
 - group or Project scope,
 - the default Meeting structure (its editable Sections),
-- the collection of Meeting occurrences created from it.
+- the collection of Meeting occurrences created from it,
+- the content source of the recurring schedules (`MeetingRecurrence`,
+  §5a) that reference it: their future materializations snapshot its
+  active Sections.
 
 Not yet implemented on the Template: default participants, moderator rotation,
 and Series-level guidance. Those remain intended direction from the product
@@ -294,8 +297,13 @@ Template deletion. The occurrence's provenance reference
 (`Meeting.series`) and the section snapshots' source pointer
 (`MeetingSection.source_series_section`) are cleared (`SET_NULL`);
 every snapshot's own content (names, descriptions, order, items,
-notes) is preserved. Sibling Templates are independent records and
-are never touched.
+notes) is preserved. Recurrences that reference the Template are
+preserved the same way: `MeetingRecurrence.series` is `SET_NULL`, and
+the recurrence's rule, title, and materialized Meetings all survive —
+the recurrence then behaves like a legacy template-less recurrence
+(future virtual materialization is an explicit domain error until a
+Template is associated again). Sibling Templates are independent
+records and are never touched.
 
 **User interaction:** the Meeting Templates overview offers the
 destructive "Delete template" action per Template row (three-dot
@@ -315,8 +323,9 @@ A **recurring meeting schedule** stores the RULE from which meeting
 occurrences are calculated. It is a distinct domain concept from both:
 
 - the `MeetingSeries` Meeting Template (§5) — a reusable meeting
-  structure (title, Sections); a Recurrence has no Sections and no
-  Template, and a Template has no schedule;
+  structure (title, Sections). A Recurrence carries no Sections of its
+  own and references at most ONE Template as the content source for
+  future materializations; a Template has no schedule.
 - the concrete `Meeting` (§11) — one occurrence in time.
 
 A Recurrence never pre-creates `Meeting` rows and is never an
@@ -335,15 +344,21 @@ creation/editing remain domain-only operations, and there is no
 Recurrence UI. Occurrence Meetings are never auto-created outside the
 explicit materialization operation.
 
-A Recurrence owns exactly two persisted values: the recurrence RULE and
-the canonical title of the recurring SERIES. The title identifies the
-series even when zero occurrences have been materialized and is the
-DEFAULT title of a `Meeting` when a future occurrence is materialized.
-Once a `Meeting` exists, its title and content are Meeting-owned:
-changing `recurrence.title` does NOT rewrite the title of any
-already-materialized `Meeting` (no cascade, ever) — only FUTURE
-materializations pick up the new series title. The Recurrence→Template
-linkage remains DEFERRED (see "Deferred" below).
+A Recurrence owns three persisted values: the recurrence RULE, the
+canonical title of the recurring SERIES, and the canonical MEETING
+TEMPLATE reference. The title identifies the series even when zero
+occurrences have been materialized and is the DEFAULT title of a
+`Meeting` when a future occurrence is materialized. Once a `Meeting`
+exists, its title and content are Meeting-owned: changing
+`recurrence.title` does NOT rewrite the title of any already-
+materialized `Meeting` (no cascade, ever) — only FUTURE materializations
+pick up the new series title. The Template reference determines the
+default content source for future occurrences: new materializations
+snapshot the Template's active Sections (normal Meeting-from-Template
+semantics), while already-materialized `Meeting`s remain independent
+snapshots. The title is independent of the Template's title: it is
+never derived from a Template, and renaming a Template never changes
+the recurrence title.
 
 ### V1 recurrence language (implemented)
 
@@ -353,7 +368,14 @@ The persisted language is intentionally limited:
   non-blank (whitespace-stripped) and at most 255 characters (the same
   constraints and normalization conventions as Meeting / MeetingSeries
   titles); identifies the series even when zero Meetings have been
-  materialized;
+  materialized; the title is INDEPENDENT of the Template's title;
+- **template:** the canonical Meeting Template (`MeetingSeries`) whose
+  active Sections are the content source for future materializations —
+  required (a valid, persisted, scope-consistent Template of the same
+  Research Group / Project) for every NEW recurrence; the database
+  reference is nullable ONLY as a documented legacy compatibility state
+  for recurrences created before the linkage existed (migration
+  `meetings/0019`);
 - **frequency:** `daily`, `weekly`, `monthly` — nothing else (no
   yearly, no arbitrary RRULE input);
 - **interval:** a positive integer (N days / N weeks / N months);
@@ -389,6 +411,7 @@ research_group_id        (RESTRICT) — same shape as Meeting / MeetingSeries
 scope                    group | project
 project_id NULLABLE      (RESTRICT)
 title                    canonical series title (required; migration meetings/0018)
+series_id NULLABLE       canonical Meeting Template (SET_NULL; NULL only for legacy rows; migration meetings/0019)
 frequency                daily | weekly | monthly
 interval                 >= 1
 weekdays                 JSON list, sorted; [] unless frequency = weekly
@@ -424,6 +447,24 @@ model default is introduced. Already-populated titles are never
 rewritten, and every NEW recurrence must provide a real canonical
 title through the domain creation service.
 
+**Canonical Meeting Template (migration `meetings/0019`).**
+`series` is the canonical reference to the existing Meeting Template
+aggregate (`MeetingSeries`): the Template whose active Sections are
+the content source for FUTURE materializations of this schedule. The
+column is added NULLABLE and NO data step is executed — every
+recurrence row created before the linkage legitimately keeps
+`series = NULL` (a documented legacy compatibility state, never a
+defect): the migration does not fabricate, guess, or backfill a
+Template, creates no placeholder Templates, and touches no historical
+row. From this point on, every NEW recurrence must reference a valid,
+persisted, scope-consistent Template through the domain creation
+service, and materializing a still-virtual occurrence of a template-
+less recurrence is an explicit domain error (there is no canonical
+content source). On Template deletion the reference is cleared
+(`SET_NULL`, the same preservation semantics as `Meeting.series`):
+the recurrence, its rule, and its materialized Meetings survive, and
+the recurrence then behaves like a legacy template-less recurrence.
+
 Database check constraints enforce: scope/Project consistency (group →
 no Project, project → Project), `interval >= 1`, end-mode field
 consistency (exactly the fields of the selected mode are set),
@@ -433,9 +474,18 @@ non-weekly frequencies.
 Creation goes through the domain service
 `meetings.services.create_meeting_recurrence`, which reuses the
 canonical scoped Meeting write rule (group scope → group read members;
-project scope → Project owner/member, non-archived Projects only) and
-rejects, before any row is written:
+project scope → Project owner/member, non-archived Projects only) —
+and, for the Template reference, the canonical scoped Template write
+rule of the same scope (group scope → group read members; project
+scope → Project owner/member, non-archived Projects only: a
+read-only/viewer actor can never bind a Template) — and rejects,
+before any row is written:
 
+- a missing, unsaved, or nonexistent Template reference;
+- a Template of a different Research Group, or a Template whose scope
+  does not match the recurrence's scope (group recurrence →
+  group-scoped Template; project recurrence → Template of the same
+  Project);
 - a blank title (after strip);
 - unsupported frequencies;
 - `interval <= 0`;
@@ -603,11 +653,33 @@ materializes ONE calculated occurrence into a concrete `Meeting`:
 The materialized Meeting is a normal concrete FG `Meeting` (no parallel
 recurrence-specific Meeting type). It inherits the recurrence's
 Research Group / scope / Project, starts `upcoming`, is created by the
-actor, and is initialized standalone-style with a single default
-`Agenda` Section and the creator as participant. Recurrences have no
-Meeting Template association in V1 (a Recurrence has no Sections and no
-Template), so there is no Template to snapshot; once materialized, the
-concrete Meeting owns its own persistent state like any other Meeting.
+actor, and is initialized from the recurrence's canonical Meeting
+Template with the normal Meeting-from-Template semantics: the
+Template's ACTIVE Sections are snapshotted into the new Meeting
+through the same canonical Template-instantiation logic as
+`create_meeting_from_series` (the Meeting carries
+`series=<Template>` and every snapshot keeps its
+`source_series_section` pointer), and the creator becomes a
+participant. The default TITLE still comes from the recurrence
+(canonical series title, Slice-10 semantics) — never from the
+Template.
+
+**Template-less recurrences (legacy compatibility state).** A
+recurrence whose `series` reference is NULL — a row created before the
+Template linkage existed, or one whose Template was later deleted
+(`SET_NULL`) — cannot materialize a STILL-VIRTUAL occurrence: there
+is no canonical content source, so the operation raises an explicit
+domain error instead of silently creating an empty/standalone
+Meeting. Everything that needs no content source keeps working on a
+template-less recurrence: reads, virtual-occurrence exclusion, and
+lifecycle operations (reschedule / cancel / idempotent replay) on
+ALREADY-materialized Meetings.
+
+**Snapshot independence.** Once a Meeting is materialized, its
+Sections and content are Meeting-owned snapshots: later Template edits
+do not rewrite it, and changing the recurrence's Template reference
+does not rewrite it either — only FUTURE materializations use the
+(newly) associated Template.
 
 **Persisted invariant.** `Meeting` gains exactly two nullable fields
 (migration `meetings/0015`; ordinary Meetings carry neither and are
@@ -724,7 +796,11 @@ occurrence:
   series title and is used only when the reschedule must first
   materialize a virtual occurrence; it is never used to rename an
   already-materialized Meeting and is never written to the recurrence.
-  No Template behavior exists for this operation.
+  A virtual occurrence is materialized from the recurrence's canonical
+  Template like any materialization (so a template-less legacy
+  recurrence cannot be virtually rescheduled — the canonical
+  materialization gate applies); moving an already-materialized
+  Meeting never touches the Template.
 
 - **Provenance-preserving:** `Meeting.scheduled_at` changes to the new
   planned time; `Meeting.original_scheduled_at` and
@@ -1166,10 +1242,6 @@ cancellation UX exists yet.
 The following are intentionally out of this slice and remain
 unimplemented:
 
-- Recurrence→Template ownership (`MeetingRecurrence.template` /
-  `meeting_series`): the next independent persisted/domain decision —
-  DEFERRED. Until it is made, a Recurrence has no Template reference
-  and materialization initializes standalone-style Meetings;
 - recurrence creation/editing API, recurrence list/detail views,
   frontend clients, and Recurrence UI (including the occurrence
   preview UI); an explicit maximum window size for the bounded
@@ -1185,9 +1257,8 @@ unimplemented:
   materialized occurrence is implemented, see
   "Single-occurrence reschedule" above);
 - whole-series (whole-recurrence) editing semantics and schedule
-  revisions/segments;
-- template-delete behavior for Templates referenced by an active
-  Recurrence (Recurrences do not reference Templates at all in V1);
+  revisions/segments (including changing a recurrence's Template
+  association — domain/model-level today, no public edit-series API);
 - `.ics` export, calendar (Google/Outlook) sync, arbitrary RRULE input,
   yearly recurrence, nth-weekday monthly recurrence.
 
@@ -1432,10 +1503,12 @@ A Meeting is created in one of three ways:
 - **Materialized recurrence occurrence**
   (`materialize_meeting_recurrence_occurrence`, domain-only so far): one
   validated calculated occurrence of a `MeetingRecurrence` becomes a
-  concrete Meeting initialized standalone-style (default `Agenda`
-  Section) with its immutable recurrence provenance persisted (§5a,
-  Materialization). Recurrences have no Template in V1, so nothing is
-  snapshotted from a Template.
+  concrete Meeting initialized from the recurrence's canonical Meeting
+  Template (the Template's active Sections are snapshotted with the
+  normal Meeting-from-Template semantics) with its immutable
+  recurrence provenance persisted (§5a, Materialization). A
+  template-less legacy recurrence cannot materialize a still-virtual
+  occurrence (explicit domain error).
 
 Creation requires a Research Group. The Project is optional; the Meeting
 Template is optional.

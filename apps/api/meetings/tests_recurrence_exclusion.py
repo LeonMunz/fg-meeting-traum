@@ -43,6 +43,8 @@ from .services import (
     MeetingDomainError,
     MeetingAuditEventType,
     create_meeting_recurrence,
+    create_meeting_series,
+    create_series_section,
     exclude_meeting_recurrence_occurrence,
     expand_meeting_recurrence_occurrences,
     expand_effective_meeting_recurrence_occurrences,
@@ -813,9 +815,20 @@ class MeetingRecurrenceExclusionConcurrencyTest(TransactionTestCase):
             user=self.alex,
             role=ResearchGroupMembership.Role.ADMIN,
         )
+        series = create_meeting_series(
+            research_group=self.group,
+            actor=self.alex,
+            title="Race Template",
+        )
+        create_series_section(
+            meeting_series=series,
+            actor=self.alex,
+            name="Agenda",
+        )
         self.recurrence = create_meeting_recurrence(
             research_group=self.group,
             actor=self.alex,
+            meeting_series=series,
             title="Race",
             frequency="daily",
             interval=1,

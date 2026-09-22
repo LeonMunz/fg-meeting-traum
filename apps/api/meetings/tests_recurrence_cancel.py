@@ -41,6 +41,8 @@ from .services import (
     create_meeting_item,
     create_meeting_recurrence,
     create_meeting_section,
+    create_meeting_series,
+    create_series_section,
     create_work_item_from_meeting_item,
     delete_meeting,
     end_meeting,
@@ -1046,9 +1048,20 @@ class MeetingRecurrenceCancelConcurrencyTest(TransactionTestCase):
             user=self.alex,
             role=ResearchGroupMembership.Role.ADMIN,
         )
+        series = create_meeting_series(
+            research_group=self.group,
+            actor=self.alex,
+            title="Race Template",
+        )
+        create_series_section(
+            meeting_series=series,
+            actor=self.alex,
+            name="Agenda",
+        )
         self.recurrence = create_meeting_recurrence(
             research_group=self.group,
             actor=self.alex,
+            meeting_series=series,
             title="Race",
             frequency="daily",
             interval=1,

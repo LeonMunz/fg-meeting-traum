@@ -345,8 +345,18 @@ def delete_meeting_series(*, meeting_series, actor):
     occurrence; it only clears the occurrence's provenance reference
     (``Meeting.series`` is SET_NULL) and the section snapshots' source
     pointer (``MeetingSection.source_series_section`` is SET_NULL)
-    while every snapshot's own content is preserved. Sibling
-    Templates are independent records and are never touched.
+    while every snapshot's own content is preserved.
+
+    Recurrences referencing the Template are NOT deleted either: the
+    reference is cleared (``MeetingRecurrence.series`` is SET_NULL, the
+    same preservation semantics as ``Meeting.series``), and the
+    recurrence's rule, title, and materialized Meetings all survive.
+    The recurrence then behaves like a legacy template-less recurrence:
+    its existing materialized Meetings remain fully usable, but
+    materializing a still-virtual occurrence is an explicit domain
+    error until a Template is associated again.
+
+    Sibling Templates are independent records and are never touched.
     """
     # Serialize against concurrent Template lifecycle operations and
     # revalidate against the current persisted state (e.g. a Project
@@ -372,6 +382,7 @@ def create_meeting_recurrence(
     research_group,
     actor,
     title,
+    meeting_series,
     frequency,
     interval,
     start_date,
@@ -396,7 +407,19 @@ def create_meeting_recurrence(
     identifies the series even when zero Meetings have been materialized
     and is the DEFAULT title of a Meeting when a future occurrence is
     materialized; once a Meeting exists, its title is Meeting-owned and
-    never rewritten from the recurrence.
+    never rewritten from the recurrence. It is INDEPENDENT of the
+    Template's title: it is never derived from a Template, and renaming
+    a Template never changes it.
+
+    ``meeting_series`` is the canonical Meeting Template (required):
+    the Template whose active Sections are the content source for
+    FUTURE materializations of this schedule. It must be a PERSISTED
+    Template whose scope matches the recurrence's scope exactly (group
+    scope ↔ a group-scoped Template of the same Research Group; project
+    scope ↔ the Template of the same Project), and the actor must hold
+    the canonical Template write rule of that scope (the same scoped
+    write rule the recurrence itself requires — a read-only/viewer
+    actor can never bind a Template).
 
     The V1 definition is validated before anything is persisted and must
     be internally consistent:
@@ -427,6 +450,42 @@ def create_meeting_recurrence(
     if not title:
         raise MeetingDomainError("Recurrence title is required.")
 
+    if meeting_series is None or meeting_series.pk is None:
+        raise MeetingDomainError(
+            "A recurrence requires a persisted Meeting Template."
+        )
+    template = MeetingSeries.objects.select_related(
+        "research_group", "project",
+    ).filter(pk=meeting_series.pk).first()
+    if template is None:
+        raise MeetingDomainError(
+            "A recurrence requires a persisted Meeting Template."
+        )
+    if template.research_group_id != research_group.pk:
+        raise MeetingDomainError(
+            "The Meeting Template must belong to the recurrence's "
+            "Research Group."
+        )
+    if scope == MeetingRecurrence.Scope.GROUP:
+        if (
+            template.scope != MeetingSeries.Scope.GROUP
+            or template.project_id is not None
+        ):
+            raise MeetingDomainError(
+                "A group-scoped recurrence requires a group-scoped "
+                "Meeting Template."
+            )
+    else:
+        if (
+            template.scope != MeetingSeries.Scope.PROJECT
+            or template.project_id != project.pk
+        ):
+            raise MeetingDomainError(
+                "A project-scoped recurrence requires the Meeting "
+                "Template of the same Project."
+            )
+    _require_series_write_access(meeting_series=template, user=actor)
+
     try:
         normalized_weekdays = validate_recurrence_definition(
             frequency=frequency,
@@ -447,6 +506,7 @@ def create_meeting_recurrence(
         scope=scope,
         project=project,
         title=title,
+        series=template,
         frequency=frequency,
         interval=interval,
         weekdays=list(normalized_weekdays),
@@ -676,11 +736,9 @@ def materialize_meeting_recurrence_occurrence(
     The materialized Meeting is a normal concrete FG Meeting (no parallel
     recurrence-specific Meeting type): it inherits the recurrence's
     Research Group / scope / Project, starts as ``upcoming``, is created
-    by ``actor``, and is initialized standalone-style with a single
-    default ``Agenda`` section and the creator as participant.
-    (Recurrences have no Meeting Template association in V1, so there is
-    no Template to snapshot; Template initialization remains tied to a
-    future, explicitly documented Recurrence→Template decision.)
+    by ``actor``, and is initialized from the recurrence's canonical
+    Meeting Template (see **Template** below) with the creator as
+    participant.
 
     **Title:** the Recurrence owns the canonical series title. A newly
     materialized Meeting DEFAULTS its title to ``recurrence.title``; an
@@ -691,6 +749,27 @@ def materialize_meeting_recurrence_occurrence(
     from the recurrence or from the request. A later change of
     ``recurrence.title`` never rewrites any already-materialized
     Meeting's title — once a Meeting exists, its title is Meeting-owned.
+    The title is never derived from the Template: the recurrence title
+    wins even when the Template's title differs.
+
+    **Template:** the recurrence's canonical Meeting Template
+    (``recurrence.series``, read from the row lock) is the content
+    source of a NEW occurrence: its ACTIVE Sections are snapshotted
+    into the new Meeting through the same canonical
+    Template-instantiation logic as ``create_meeting_from_series``
+    (the Meeting carries ``series=<Template>`` and every snapshot keeps
+    its ``source_series_section`` pointer). A recurrence WITHOUT a
+    Template — a legacy row from before the Template linkage, or one
+    whose Template was later deleted (``SET_NULL``) — cannot materialize
+    a STILL-VIRTUAL occurrence: there is no canonical content source,
+    and the operation raises a domain error instead of silently
+    creating an empty/standalone Meeting. Replaying an
+    ALREADY-MATERIALIZED occurrence always returns the existing
+    Meeting, template or not. Once a Meeting exists, its Sections and
+    content are Meeting-owned snapshots: later Template edits — and
+    even changing the recurrence's Template reference — never rewrite
+    it; only FUTURE materializations use the (newly) associated
+    Template.
 
     The Meeting persists its immutable occurrence provenance:
 
@@ -766,10 +845,35 @@ def materialize_meeting_recurrence_occurrence(
             # ``FOR KEY SHARE`` check a concurrent in-flight Meeting
             # insert performs at commit time (Django creates FKs
             # DEFERRABLE INITIALLY DEFERRED) — a plain ``FOR UPDATE``
-            # here deadlocked with such a transaction.
-            MeetingRecurrence.objects.select_for_update(no_key=True).get(
-                pk=recurrence.pk
+            # here deadlocked with such a transaction. The lock row is
+            # reused as the authoritative recurrence state (including
+            # the CURRENT Template reference) for this materialization;
+            # the Template is fetched separately, so the lock query
+            # never joins the nullable Template relation.
+            locked_recurrence = MeetingRecurrence.objects.select_for_update(
+                no_key=True,
+            ).get(pk=recurrence.pk)
+
+            # The recurrence's canonical Template is the ONLY content
+            # source of a new occurrence. A recurrence without a
+            # Template — a legacy row from before the Template linkage,
+            # or one whose Template was deleted (SET_NULL) — cannot
+            # materialize a still-virtual occurrence: an explicit
+            # domain error, never a silently created empty/standalone
+            # Meeting. (An already-materialized occurrence was returned
+            # above, template or not.)
+            meeting_series = (
+                MeetingSeries.objects
+                .filter(pk=locked_recurrence.series_id)
+                .first()
             )
+            if meeting_series is None:
+                raise MeetingDomainError(
+                    "This recurrence has no Meeting Template: a "
+                    "still-virtual occurrence cannot be materialized "
+                    "without a canonical content source."
+                )
+
             if MeetingRecurrenceExclusion.objects.filter(
                 recurrence=recurrence,
                 original_scheduled_at=occurrence.original_start,
@@ -785,21 +889,20 @@ def materialize_meeting_recurrence_occurrence(
                 project=recurrence.project,
                 recurrence=recurrence,
                 original_scheduled_at=occurrence.original_start,
+                series=meeting_series,
                 title=title,
                 scheduled_at=occurrence.original_start,
                 status=Meeting.Status.UPCOMING,
                 created_by=actor,
             )
 
-            # The default section is internal structure of the creation
-            # operation, not an agenda mutation: it produces no separate
-            # event.
-            MeetingSection.objects.create(
+            # The Template's active Sections are snapshotted into the
+            # new Meeting through the canonical Template-instantiation
+            # logic shared with create_meeting_from_series: internal
+            # structure of the creation operation, no separate event.
+            _snapshot_series_sections(
                 meeting=meeting,
-                name="Agenda",
-                description="",
-                position=0,
-                is_visible=True,
+                meeting_series=meeting_series,
             )
 
             _create_initial_meeting_participants(
@@ -1412,6 +1515,35 @@ def reorder_series_sections(
 # ── Meeting occurrence from Series (snapshot) ────────────────────
 
 
+def _snapshot_series_sections(*, meeting, meeting_series):
+    """Instantiate the Template's active Sections into one Meeting.
+
+    The canonical Template-instantiation logic shared by
+    ``create_meeting_from_series`` and recurrence-occurrence
+    materialization: only ACTIVE Template Sections are copied into
+    occurrence-level ``MeetingSection`` snapshots (Template order:
+    position, then id), and every snapshot keeps its
+    ``source_series_section`` provenance pointer. After the snapshot
+    the occurrence structure is independent of the Template: later
+    Template edits never rewrite an existing Meeting.
+    """
+    active_sections = (
+        MeetingSeriesSection.objects
+        .filter(meeting_series=meeting_series, is_active=True)
+        .order_by("position", "id")
+    )
+
+    for idx, series_section in enumerate(active_sections):
+        MeetingSection.objects.create(
+            meeting=meeting,
+            source_series_section=series_section,
+            name=series_section.name,
+            description=series_section.description,
+            position=idx,
+            is_visible=True,
+        )
+
+
 @transaction.atomic
 def create_meeting_from_series(
     *,
@@ -1457,22 +1589,13 @@ def create_meeting_from_series(
         participants=participants,
     )
 
-    # Snapshot active series sections.
-    active_sections = (
-        MeetingSeriesSection.objects
-        .filter(meeting_series=meeting_series, is_active=True)
-        .order_by("position", "id")
+    # Snapshot the active Template Sections (canonical
+    # Template-instantiation logic, shared with recurrence
+    # materialization).
+    _snapshot_series_sections(
+        meeting=meeting,
+        meeting_series=meeting_series,
     )
-
-    for idx, series_section in enumerate(active_sections):
-        MeetingSection.objects.create(
-            meeting=meeting,
-            source_series_section=series_section,
-            name=series_section.name,
-            description=series_section.description,
-            position=idx,
-            is_visible=True,
-        )
 
     # Recorded inside the same atomic block: if anything above rolls
     # back, no AuditEvent survives either. The section snapshots are

@@ -109,7 +109,24 @@ class MeetingRecurrence(models.Model):
       materialized, and it is the DEFAULT title of a Meeting when a
       future occurrence is materialized. Once a Meeting exists, its
       title is Meeting-owned: changing the recurrence title never
-      rewrites an already-materialized Meeting's title.
+      rewrites an already-materialized Meeting's title. The title is
+      INDEPENDENT of the Template's title: it is never derived from a
+      Template, and renaming a Template never changes it.
+    - ``series`` is the canonical Meeting Template (``MeetingSeries``)
+      whose ACTIVE Sections are the content source for FUTURE
+      materializations of this schedule. It is nullable ONLY as a
+      documented legacy compatibility state for recurrences created
+      before the Template linkage existed: the domain creation service
+      (``create_meeting_recurrence``) requires a valid, persisted,
+      scope-consistent Template for every NEW recurrence, and
+      materializing a STILL-VIRTUAL occurrence of a template-less
+      recurrence is an explicit domain error.
+    - A materialized Meeting is an independent snapshot: its Sections
+      and content are Meeting-owned, so later Template edits — and even
+      changing this reference — never rewrite any existing Meeting.
+      Deleting the referenced Template preserves the Recurrence
+      (``SET_NULL``, the same semantics as ``Meeting.series``); the
+      recurrence then behaves like a legacy template-less recurrence.
     - Occurrences are derived values, never persisted Meetings: creating or
       expanding a recurrence must not pre-create Meeting rows.
     - The start date is the first actual occurrence (a weekly schedule's
@@ -165,6 +182,22 @@ class MeetingRecurrence(models.Model):
     # (non-blank after strip, max_length 255 — enforced by the creation
     # service and the column).
     title = models.CharField(max_length=255)
+
+    # The canonical Meeting Template (Meeting Series) for this schedule:
+    # the Template whose active Sections are snapshotted into every
+    # FUTURE materialized occurrence (see class docstring). Nullable
+    # ONLY for legacy recurrences created before the Template linkage
+    # existed (migration meetings/0019); every NEW recurrence must
+    # reference a valid, persisted Template through the domain creation
+    # service. SET_NULL on Template deletion: the recurrence and its
+    # materialized Meetings are preserved, exactly like Meeting.series.
+    series = models.ForeignKey(
+        MeetingSeries,
+        on_delete=models.SET_NULL,
+        related_name="recurrences",
+        null=True,
+        blank=True,
+    )
 
     # ── The recurrence rule ─────────────────────────────────────
     frequency = models.CharField(

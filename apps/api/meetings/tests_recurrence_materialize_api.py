@@ -168,11 +168,18 @@ class MeetingRecurrenceMaterializeApiTest(MeetingRecurrenceBase):
         self.assertEqual(meeting.status, Meeting.Status.UPCOMING)
         self.assertEqual(meeting.created_by, self.chris)
 
-        # Standalone-style initialization: one Agenda section, the
-        # creator as participant, ONE meeting.created event.
+        # Template-backed initialization: a snapshot of the
+        # recurrence's Template's active 'Agenda' section, the creator
+        # as participant, ONE meeting.created event.
         (section,) = MeetingSection.objects.all()
         self.assertEqual(section.meeting, meeting)
         self.assertEqual(section.name, "Agenda")
+        self.assertEqual(section.source_series_section.name, "Agenda")
+        # The Meeting carries the recurrence's Template as provenance.
+        self.assertEqual(meeting.series_id, self.recurrence.series_id)
+        self.assertEqual(
+            data["seriesId"], self.recurrence.series_id,
+        )
         self.assertEqual(
             list(
                 MeetingParticipant.objects.filter(
