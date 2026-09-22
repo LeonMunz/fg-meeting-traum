@@ -10,6 +10,7 @@ from .models import (
     MeetingItem,
     MeetingItemFollowUp,
     MeetingNote,
+    MeetingRecurrence,
     MeetingSection,
     MeetingSeries,
     MeetingSeriesSection,
@@ -830,6 +831,127 @@ class MeetingWorkItemCreateSerializer(serializers.Serializer):
             min_value=1,
         ),
         required=False,
+    )
+
+
+# ── MeetingRecurrence (creation HTTP API) ───────────────────────
+
+
+class MeetingRecurrenceSerializer(serializers.ModelSerializer):
+    """Canonical read representation of one MeetingRecurrence schedule.
+
+    Exposes the saved configuration a frontend can render without
+    reconstructing it from the request: the explicit series title, the
+    referenced Meeting Template, and the V1 recurrence rule. It exposes
+    NO internal implementation state (no end-mode flag, no
+    materialization/virtual state, no lock fields): ``endDate`` and
+    ``count`` are the user-facing end semantics (both ``null`` while the
+    schedule is open-ended), mirroring the request contract.
+    """
+
+    meetingSeriesId = serializers.IntegerField(
+        source="series_id",
+        read_only=True,
+    )
+    researchGroupId = serializers.IntegerField(
+        source="research_group_id",
+        read_only=True,
+    )
+    projectId = serializers.IntegerField(
+        source="project_id",
+        read_only=True,
+        allow_null=True,
+    )
+    startDate = serializers.DateField(
+        source="start_date",
+        read_only=True,
+    )
+    localTime = serializers.TimeField(
+        source="local_time",
+        read_only=True,
+    )
+    timezone = serializers.CharField(
+        source="timezone_name",
+        read_only=True,
+    )
+    endDate = serializers.DateField(
+        source="end_date",
+        read_only=True,
+        allow_null=True,
+    )
+    count = serializers.IntegerField(
+        source="occurrence_count",
+        read_only=True,
+        allow_null=True,
+    )
+
+    class Meta:
+        model = MeetingRecurrence
+        fields = [
+            "id",
+            "title",
+            "meetingSeriesId",
+            "researchGroupId",
+            "scope",
+            "projectId",
+            "frequency",
+            "interval",
+            "weekdays",
+            "startDate",
+            "localTime",
+            "timezone",
+            "endDate",
+            "count",
+        ]
+
+
+class MeetingRecurrenceCreateSerializer(serializers.Serializer):
+    """POST body for creating a MeetingRecurrence from a Meeting Template.
+
+    The selected MeetingSeries is the canonical content source and
+    DETERMINES the recurrence's group/project scope: the client supplies
+    only the template reference, the explicit series title, and the V1
+    recurrence rule — never ownership fields. This serializer performs
+    syntactic validation and field parsing only. Every recurrence-rule
+    invariant (frequency, positive interval, weekday validity and the
+    weekly start-date rule, IANA timezone, end-mode mutual exclusion and
+    ordering) is enforced by the domain creation service
+    (``create_meeting_recurrence``), never duplicated here.
+
+    ``weekdays`` are ISO weekday integers (0 = Monday .. 6 = Sunday) and
+    are only meaningful for ``weekly`` schedules. ``endDate`` and
+    ``count`` map to the domain end modes: both absent/null → open-ended;
+    ``endDate`` → inclusive final calendar date; ``count`` → total
+    occurrences including the first; both set → rejected by the domain.
+    """
+
+    meetingSeriesId = serializers.IntegerField(min_value=1)
+    title = serializers.CharField(
+        max_length=255,
+        allow_blank=False,
+    )
+    frequency = serializers.ChoiceField(
+        choices=MeetingRecurrence.Frequency.choices,
+    )
+    interval = serializers.IntegerField()
+    weekdays = serializers.ListField(
+        child=serializers.IntegerField(),
+        required=False,
+        allow_empty=True,
+        default=list,
+    )
+    startDate = serializers.DateField()
+    localTime = serializers.TimeField()
+    timezone = serializers.CharField(max_length=64)
+    endDate = serializers.DateField(
+        required=False,
+        allow_null=True,
+        default=None,
+    )
+    count = serializers.IntegerField(
+        required=False,
+        allow_null=True,
+        default=None,
     )
 
 

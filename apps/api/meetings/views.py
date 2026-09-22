@@ -49,11 +49,13 @@ from .serializers import (
     MeetingNoteSerializer,
     MeetingParticipantCandidateContextSerializer,
     MeetingPatchSerializer,
+    MeetingRecurrenceCreateSerializer,
     MeetingRecurrenceMaterializeSerializer,
     MeetingRecurrenceOccurrenceExcludeSerializer,
     MeetingRecurrenceOccurrenceQuerySerializer,
     MeetingRecurrenceOccurrenceSerializer,
     MeetingRecurrenceRescheduleSerializer,
+    MeetingRecurrenceSerializer,
     MeetingSectionCreateSerializer,
     MeetingSectionPatchSerializer,
     MeetingSectionReorderSerializer,
@@ -79,6 +81,7 @@ from .services import (
     delete_meeting,
     delete_meeting_series,
     create_meeting_from_series,
+    create_meeting_recurrence,
     create_meeting_item,
     create_meeting_note,
     focus_meeting_item,
@@ -2344,6 +2347,89 @@ class MeetingNoteDetailView(APIView):
 
 
 # ── MeetingRecurrence endpoints ─────────────────────────────────
+
+
+class MeetingRecurrenceCreateView(APIView):
+    """POST /api/meeting-recurrences/
+
+    Create a recurring-meeting schedule from an existing Meeting
+    Template plus an explicit series title and a V1 recurrence rule.
+
+    The selected MeetingSeries is the canonical content source and
+    DETERMINES the recurrence's group/project scope: the client never
+    sends ownership fields. The view resolves and authorizes the
+    Template with the existing MeetingSeries conventions (non-leaking
+    ``404`` for an unknown/invisible Template, then the canonical scoped
+    Template write rule), then delegates creation ENTIRELY to the domain
+    service ``create_meeting_recurrence`` — the domain stays the
+    authority on every recurrence-rule invariant and the final write
+    authorization. Creating the recurrence persists exactly one
+    ``MeetingRecurrence`` and NEVER materializes a Meeting.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = MeetingRecurrenceCreateSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=400)
+        data = serializer.validated_data
+
+        series = _require_meeting_series_access(
+            request, data["meetingSeriesId"],
+        )
+        if series is None:
+            return Response(
+                {"error": "Meeting series not found"},
+                status=404,
+            )
+
+        if not _has_scoped_write_access(request.user, series):
+            return _mutation_forbidden_response()
+
+        # The Template determines the canonical scope; the client never
+        # supplies ownership fields.
+        if series.scope == MeetingSeries.Scope.PROJECT:
+            scope = MeetingRecurrence.Scope.PROJECT
+            project = series.project
+        else:
+            scope = MeetingRecurrence.Scope.GROUP
+            project = None
+
+        end_date = data["endDate"]
+        count = data["count"]
+        if end_date is not None:
+            end_mode = MeetingRecurrence.EndMode.END_DATE
+        elif count is not None:
+            end_mode = MeetingRecurrence.EndMode.COUNT
+        else:
+            end_mode = MeetingRecurrence.EndMode.NO_END
+
+        try:
+            recurrence = create_meeting_recurrence(
+                research_group=series.research_group,
+                actor=request.user,
+                title=data["title"],
+                meeting_series=series,
+                frequency=data["frequency"],
+                interval=data["interval"],
+                weekdays=data.get("weekdays", ()),
+                start_date=data["startDate"],
+                local_time=data["localTime"],
+                timezone_name=data["timezone"],
+                scope=scope,
+                project=project,
+                end_mode=end_mode,
+                end_date=end_date,
+                occurrence_count=count,
+            )
+        except MeetingDomainError as exc:
+            return Response({"error": exc.message}, status=400)
+
+        return Response(
+            MeetingRecurrenceSerializer(recurrence).data,
+            status=201,
+        )
 
 
 def _require_meeting_recurrence_access(request, recurrence_id):

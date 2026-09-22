@@ -500,6 +500,88 @@ before any row is written:
 - an `end_date` before the `start_date`;
 - any other field incompatible with the selected end mode.
 
+### Creation HTTP API (implemented)
+
+`POST /api/meeting-recurrences/` exposes the creation of a recurring
+meeting schedule over HTTP. It is the backend half of the product flow
+“choose a Meeting Template → enter a series title → configure the
+recurrence → create the Recurrence”, and it enables the flow to persist a
+schedule WITHOUT materializing the first Meeting.
+
+**Request contract:** the body represents the V1 domain directly and does
+NOT carry ownership fields — the selected Meeting Template determines the
+scope:
+
+```text
+meetingSeriesId   existing MeetingSeries (Meeting Template) id
+title             explicit series title (required)
+frequency         daily | weekly | monthly
+interval          positive integer step in units of the frequency
+weekdays          ISO weekday integers 0 = Monday .. 6 = Sunday
+                  (weekly schedules only)
+startDate         local calendar date of the FIRST occurrence
+localTime         local wall-clock time (e.g. "10:00")
+timezone          IANA timezone name (e.g. "Europe/Berlin")
+endDate           inclusive final calendar date (optional)
+count             total occurrences INCLUDING the first (optional)
+```
+
+`endDate` and `count` map to the domain end modes: both absent/`null` →
+open-ended; `endDate` → inclusive final date; `count` → total occurrences
+including the first; both set → rejected.
+
+**Template resolution and scope derivation:** the selected
+`MeetingSeries` is the canonical content source and already belongs to its
+group/project scope. The view resolves it through the existing
+MeetingSeries visibility convention and DERIVES the recurrence's scope
+from it — group-scoped Template → group scope (no Project); project-scoped
+Template → project scope of the Template's Project. The client never
+supplies ownership fields, so a client cannot author a scope mismatch.
+
+**Explicit series title:** `title` is required and is the canonical title
+of the recurring SERIES. It is INDEPENDENT of the Template's title — it is
+never derived from the Template, and a later Template rename never changes
+it. The frontend may prefill the field, but the API contract keeps the
+series title distinct from the Template name. Title normalization and
+bounds (strip, non-blank, max length 255) are the canonical domain rules.
+
+**Domain delegation:** the view and serializer perform syntactic
+validation, field parsing, Template resolution, and scope derivation only.
+Creation delegates ENTIRELY to `create_meeting_recurrence`; the domain
+stays the authority on the recurrence-rule invariants, the weekly
+start-date weekday rule, timezone/rule semantics, scope consistency, and
+the final write authorization. The API layer re-implements no recurrence
+engine.
+
+**Authorization and non-leaking behavior:** the view reuses the existing
+MeetingSeries visibility/write conventions before attempting the write,
+then the canonical domain write rule remains the final authority. An
+unknown or non-visible Template answers a non-leaking `404`; a visible
+but not-writable Template (a Project viewer, or an archived Project)
+answers `403`; an unauthenticated request is rejected. A group-scoped
+Template is writable by any group read member; a project-scoped Template
+by a non-archived Project owner/member. Template visibility is not
+broadened by this endpoint.
+
+**Success:** `201 Created` with the canonical representation of the newly
+created Recurrence — `id`, the explicit `title`, `meetingSeriesId`, the
+derived `scope` / `researchGroupId` / `projectId`, and the V1 rule
+(`frequency`, `interval`, canonical `weekdays`, `startDate`, `localTime`,
+`timezone`, and the user-facing `endDate` / `count` end semantics — both
+`null` while open-ended). The response exposes no internal implementation
+terminology (no end-mode flag, no materialized/virtual state, no lock
+fields).
+
+**No materialization on creation:** a successful creation persists exactly
+one `MeetingRecurrence` and ZERO `Meeting` rows, Meeting Sections,
+participants, or Meeting audit events. The first occurrence (the start
+date) remains virtual and is materialized later through the existing
+occurrence materialization endpoint. The recurrence created through this
+endpoint immediately works with the existing bounded occurrence read API
+and the existing materialize / reschedule / exclude / cancel endpoints,
+whose contracts are unchanged.
+
+### Bounded occurrence expansion (implemented)
 ### Bounded occurrence expansion (implemented)
 
 `meetings.services.expand_meeting_recurrence_occurrences` is the single

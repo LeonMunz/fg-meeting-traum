@@ -86,6 +86,7 @@ from meetings.views import (
     MeetingNoteDetailView,
     MeetingParticipantDetailView,
     MeetingParticipantListCreateView,
+    MeetingRecurrenceCreateView,
     MeetingRecurrenceOccurrenceListView,
     MeetingRecurrenceOccurrenceExcludeView,
     MeetingRecurrenceOccurrenceMaterializeView,
@@ -214,6 +215,7 @@ urlpatterns = [
 
     # Meeting Recurrences (bounded occurrence read + idempotent
     # occurrence materialization)
+    path('api/meeting-recurrences/', MeetingRecurrenceCreateView.as_view(), name='meeting-recurrence-create'),
     path('api/meeting-recurrences/<int:recurrence_id>/occurrences/', MeetingRecurrenceOccurrenceListView.as_view(), name='meeting-recurrence-occurrences'),
     path('api/meeting-recurrences/<int:recurrence_id>/occurrences/exclude/', MeetingRecurrenceOccurrenceExcludeView.as_view(), name='meeting-recurrence-occurrence-exclude'),
     path('api/meeting-recurrences/<int:recurrence_id>/occurrences/materialize/', MeetingRecurrenceOccurrenceMaterializeView.as_view(), name='meeting-recurrence-occurrence-materialize'),
