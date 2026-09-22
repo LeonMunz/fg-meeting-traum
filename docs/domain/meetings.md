@@ -3,7 +3,7 @@
 **Status:** Canonical Meeting domain specification
 **Scope:** Meeting templates, Meeting, Sections, MeetingItems, lifecycle, Work Item integration, permissions, privacy and implementation boundaries
 
-> **User-facing terminology:** the product exposes `Research Group Meeting`, `Project Meeting`, and `Meeting Templates`. Internally, a `Meeting Template` is persisted as a `MeetingSeries`. No recurrence semantics are implemented, and no `MeetingSeries` may be presented to users as "Series" or implied to auto-create recurring Meetings. When this document (or other canonical docs) uses the word “Series”, it refers to the internal `MeetingSeries` persistence model, not a user-facing concept; user-facing copy must say “Meeting Template”.
+> **User-facing terminology:** the product exposes `Research Group Meeting`, `Project Meeting`, and `Meeting Templates`. Internally, a `Meeting Template` is persisted as a `MeetingSeries` and a recurring meeting schedule is persisted as a `MeetingRecurrence` (§5a) — three distinct concepts: the Template (reusable meeting structure), the Recurrence (stored schedule rule), and the Meeting (one concrete occurrence). No `MeetingSeries` may be presented to users as "Series" or implied to auto-create recurring Meetings, and a `MeetingRecurrence` must not be conflated with a `MeetingSeries` Template or with a concrete `Meeting`. A Recurrence never auto-creates `Meeting` rows: its occurrences are calculated on demand for an explicitly bounded range (see §5a). When this document (or other canonical docs) uses the word “Series”, it refers to the internal `MeetingSeries` persistence model, not a user-facing concept; user-facing copy must say “Meeting Template”.
 
 ---
 
@@ -225,7 +225,9 @@ implementation detail and is not the user-facing term.
 
 **There are no recurrence semantics.** A Meeting Template does not schedule,
 repeat, or automatically create Meetings. Creating an occurrence is always an
-explicit action by a user.
+explicit action by a user. Recurring meeting schedules are a separate
+persisted aggregate (`MeetingRecurrence`, §5a); they are not a property of a
+Meeting Template and never create `Meeting` rows by themselves.
 
 Conceptual model (internal persistence):
 
@@ -304,6 +306,163 @@ unchanged, and a failed deletion keeps the Template state and
 surfaces the error. The row menu is rendered only for Templates the
 current user can manage under the rule above (the server remains
 authoritative).
+
+---
+
+## 5a. Recurring meeting schedules (internal: `MeetingRecurrence`, implemented core)
+
+A **recurring meeting schedule** stores the RULE from which meeting
+occurrences are calculated. It is a distinct domain concept from both:
+
+- the `MeetingSeries` Meeting Template (§5) — a reusable meeting
+  structure (title, Sections); a Recurrence has no Sections and no
+  Template, and a Template has no schedule;
+- the concrete `Meeting` (§11) — one occurrence in time.
+
+A Recurrence never pre-creates `Meeting` rows and is never an
+occurrence itself. In this slice the Recurrence is a persisted
+schedule + a domain-level bounded expansion operation only: there is no
+recurrence API, no UI, and no materialization of occurrences into
+`Meeting` rows (see "Not implemented" at the end of this section).
+
+### V1 recurrence language (implemented)
+
+The persisted language is intentionally limited:
+
+- **frequency:** `daily`, `weekly`, `monthly` — nothing else (no
+  yearly, no arbitrary RRULE input);
+- **interval:** a positive integer (N days / N weeks / N months);
+- **weekdays (weekly only):** one or more ISO weekdays
+  (0 = Monday … 6 = Sunday, `date.weekday()` convention), stored sorted
+  and de-duplicated; non-weekly schedules carry none;
+- **start date + local time + IANA timezone:** required; the start date
+  is the first actual occurrence, at the configured local time in the
+  stored IANA timezone (e.g. `Europe/Berlin`);
+- **end mode:** exactly one of
+  - `no_end` — no limiter;
+  - `end_date` — an **inclusive** final calendar date;
+  - `count` — a total number of meetings that **includes the first
+    occurrence**;
+  - `end_date` and `count` are **mutually exclusive**, and each belongs
+    to its mode only.
+
+**Monthly semantics:** monthly recurrence means "the same calendar day
+as the start date" (the day is derived from the start date, never stored
+separately). Months without that day (e.g. a schedule starting on the
+31st) are **skipped** — the occurrence is simply absent; the date is
+never shifted to the last day of the month. There is no
+nth-weekday-monthly semantics in V1.
+
+### Persisted model (implemented)
+
+`meetings.MeetingRecurrence` (table `meetings_recurrence`, migration
+`meetings/0014`):
+
+```text
+id
+research_group_id        (RESTRICT) — same shape as Meeting / MeetingSeries
+scope                    group | project
+project_id NULLABLE      (RESTRICT)
+frequency                daily | weekly | monthly
+interval                 >= 1
+weekdays                 JSON list, sorted; [] unless frequency = weekly
+start_date               local calendar date of the first occurrence
+local_time               configured local wall-clock time
+timezone_name            IANA timezone (e.g. Europe/Berlin)
+end_mode                 no_end | end_date | count
+end_date NULLABLE        inclusive; end_date mode only
+occurrence_count NULLABLE total incl. first; count mode only
+created_by_id            (RESTRICT)
+created_at / updated_at
+```
+
+Database check constraints enforce: scope/Project consistency (group →
+no Project, project → Project), `interval >= 1`, end-mode field
+consistency (exactly the fields of the selected mode are set),
+`end_date >= start_date` when set, and empty `weekdays` for
+non-weekly frequencies.
+
+Creation goes through the domain service
+`meetings.services.create_meeting_recurrence`, which reuses the
+canonical scoped Meeting write rule (group scope → group read members;
+project scope → Project owner/member, non-archived Projects only) and
+rejects, before any row is written:
+
+- unsupported frequencies;
+- `interval <= 0`;
+- weekly recurrence without valid weekdays (missing, empty, out of the
+  0..6 range, non-integer, or not a list);
+- a weekly start date whose weekday is not part of the recurrence
+  pattern;
+- weekdays on a non-weekly schedule (incompatible field);
+- invalid / non-IANA timezone values;
+- `count <= 0`;
+- simultaneous `count` and `end_date` (in either mode);
+- an `end_date` before the `start_date`;
+- any other field incompatible with the selected end mode.
+
+### Bounded occurrence expansion (implemented)
+
+`meetings.services.expand_meeting_recurrence_occurrences` is the single
+domain expansion operation. Its contract:
+
+- it **always requires an explicit bounded range**: `range_start` and
+  `range_end` are mandatory, timezone-aware, `range_start <=
+  range_end`. There is **no unbounded "return every occurrence"
+  operation** — an unbounded expansion is impossible by API shape;
+- it calculates occurrences in **local wall-clock time** using the
+  stored IANA timezone and **preserves the configured local time across
+  DST transitions** (the wall-clock time stays constant; the UTC instant
+  shifts with the offset). The range is converted into the schedule's
+  stored timezone before filtering, so window membership is exact for
+  the schedule's own calendar;
+- it respects daily / weekly / monthly intervals (weekly weeks are
+  anchored at the start date's week), treats the end date as
+  **inclusive**, and treats `count` as the **total** number of meetings
+  of the rule **including the first** — occurrences before the window
+  consume the count too;
+- it **skips nonexistent calendar dates** for monthly schedules (never
+  shifting to the month end);
+- it returns only occurrences whose original local start falls inside
+  the requested window (inclusive), in chronological order;
+- it is **read-only**: it creates no `Meeting` rows, mutates nothing,
+  and stays independent of persisted concrete Meetings. Access to the
+  recurrence row is the caller's responsibility; a future API slice
+  will enforce the canonical scoped read rule before expansion.
+
+Each returned occurrence is a value (not a model row) carrying:
+
+- `original_local` — the naive wall-clock start in the stored
+  timezone;
+- `original_start` — the same instant as a timezone-aware datetime
+  (DST-correct offset);
+- `occurrence_id` — the **stable occurrence identity**: a deterministic
+  UUIDv5 derived from the schedule id, the **original** scheduled
+  (wall-clock) start, and the timezone name. The identity is derived
+  from the originally calculated start, is identical across repeated
+  expansions and across processes, differs per schedule even for
+  identical start times, and is designed to remain the immutable
+  original-start identity if a future override moves a materialized
+  Meeting.
+
+### Not implemented (deferred)
+
+The following are intentionally out of this slice and remain
+unimplemented:
+
+- any recurrence API endpoint, client, or UI (creation, editing,
+  occurrence preview, list/detail views);
+- lazy materialization of calculated occurrences into concrete
+  `Meeting` rows (no auto-creation, ever, outside an explicit future
+  operation);
+- individual occurrence editing/moving, exclusions/cancellations,
+  "only this meeting", "this and following";
+- whole-series (whole-recurrence) editing semantics and schedule
+  revisions/segments;
+- template-delete behavior for Templates referenced by an active
+  Recurrence (Recurrences do not reference Templates at all in V1);
+- `.ics` export, calendar (Google/Outlook) sync, arbitrary RRULE input,
+  yearly recurrence, nth-weekday monthly recurrence.
 
 ---
 

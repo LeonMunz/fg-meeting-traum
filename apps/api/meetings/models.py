@@ -94,6 +94,159 @@ class MeetingSeriesSection(models.Model):
         return f"{self.meeting_series.title}: {self.name}"
 
 
+class MeetingRecurrence(models.Model):
+    """A persisted recurring-meeting schedule (V1 recurrence language).
+
+    A MeetingRecurrence stores the RULE from which meeting occurrences are
+    calculated on demand for an explicitly bounded range. It is NOT a
+    Meeting Template: the MeetingSeries template concepts (title, sections,
+    occurrence snapshots) are a distinct concept and remain unchanged.
+
+    Invariants:
+
+    - Occurrences are derived values, never persisted Meetings: creating or
+      expanding a recurrence must not pre-create Meeting rows.
+    - The start date is the first actual occurrence (a weekly schedule's
+      start weekday must be part of its weekday pattern).
+    - Monthly recurrence keeps the start date's calendar day
+      (``start_date.day``); months without that day produce NO occurrence
+      (the date is skipped, never shifted to the month end).
+    - The configured ``local_time`` is a wall-clock time in
+      ``timezone_name`` and is preserved across DST transitions.
+    - ``end_mode`` is exactly one of: ``no_end``, ``end_date`` (inclusive
+      final calendar date), or ``count`` (total occurrences, INCLUDING the
+      first). ``end_date`` and ``occurrence_count`` are mutually exclusive,
+      and each belongs to its mode only (see DB constraints).
+    """
+
+    class Scope(models.TextChoices):
+        GROUP = "group", "Research group"
+        PROJECT = "project", "Project"
+
+    class Frequency(models.TextChoices):
+        DAILY = "daily", "Daily"
+        WEEKLY = "weekly", "Weekly"
+        MONTHLY = "monthly", "Monthly"
+
+    class EndMode(models.TextChoices):
+        NO_END = "no_end", "No end"
+        END_DATE = "end_date", "End date"
+        COUNT = "count", "Count"
+
+    # Ownership / context — same shape as Meeting and MeetingSeries.
+    research_group = models.ForeignKey(
+        ResearchGroup,
+        on_delete=models.RESTRICT,
+        related_name="meeting_recurrences",
+    )
+    scope = models.CharField(
+        max_length=16,
+        choices=Scope.choices,
+        default=Scope.GROUP,
+    )
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.RESTRICT,
+        related_name="meeting_recurrences",
+        null=True,
+        blank=True,
+    )
+
+    # ── The recurrence rule ─────────────────────────────────────
+    frequency = models.CharField(
+        max_length=16,
+        choices=Frequency.choices,
+    )
+    # Step in units of the frequency: N days / N weeks / N months.
+    # Always >= 1 (enforced by constraint + service validation).
+    interval = models.PositiveSmallIntegerField()
+    # Selected weekdays for weekly recurrence ONLY: sorted ISO weekday
+    # integers (0 = Monday .. 6 = Sunday, matching date.weekday()).
+    # Empty list for daily / monthly schedules.
+    weekdays = models.JSONField(default=list)
+    # Local calendar date of the FIRST occurrence (wall-clock date in
+    # ``timezone_name``, not a UTC date). For monthly schedules this date's
+    # calendar day is the recurring day; the day is deliberately not stored
+    # separately (derived from the start date).
+    start_date = models.DateField()
+    # Configured local wall-clock time in ``timezone_name``; preserved
+    # across DST transitions.
+    local_time = models.TimeField()
+    # IANA timezone name (e.g. "Europe/Berlin"); validated at creation.
+    timezone_name = models.CharField(max_length=64)
+    end_mode = models.CharField(
+        max_length=16,
+        choices=EndMode.choices,
+        default=EndMode.NO_END,
+    )
+    # Inclusive final calendar date; END_DATE mode only.
+    end_date = models.DateField(null=True, blank=True)
+    # Total occurrences INCLUDING the first; COUNT mode only.
+    occurrence_count = models.PositiveIntegerField(null=True, blank=True)
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        related_name="created_meeting_recurrences",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "meetings_recurrence"
+        ordering = ["start_date", "id"]
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(scope="group", project__isnull=True)
+                    | models.Q(scope="project", project__isnull=False)
+                ),
+                name="meetings_recurrence_scope_project_consistent",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(interval__gte=1),
+                name="meetings_recurrence_interval_positive",
+            ),
+            # Exactly the fields of the selected end mode may be set:
+            # no_end → neither; end_date → end_date only;
+            # count → occurrence_count only.
+            models.CheckConstraint(
+                condition=(
+                    models.Q(
+                        end_mode="no_end",
+                        end_date__isnull=True,
+                        occurrence_count__isnull=True,
+                    )
+                    | models.Q(
+                        end_mode="end_date",
+                        end_date__isnull=False,
+                        occurrence_count__isnull=True,
+                    )
+                    | models.Q(
+                        end_mode="count",
+                        end_date__isnull=True,
+                        occurrence_count__isnull=False,
+                    )
+                ),
+                name="meetings_recurrence_end_mode_consistent",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(end_date__isnull=True)
+                | models.Q(end_date__gte=models.F("start_date")),
+                name="meetings_recurrence_end_date_not_before_start",
+            ),
+            # Weekday selection is a weekly-only concept.
+            models.CheckConstraint(
+                condition=models.Q(frequency="weekly")
+                | models.Q(weekdays=[]),
+                name="meetings_recurrence_weekdays_only_weekly",
+            ),
+        ]
+
+    def __str__(self):
+        return f"Recurrence {self.frequency} every {self.interval} from {self.start_date}"
+
+
 class Meeting(models.Model):
     """One concrete meeting occurrence inside a Research Group."""
 

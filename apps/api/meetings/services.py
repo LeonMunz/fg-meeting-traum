@@ -26,9 +26,15 @@ from .models import (
     MeetingItemWorkItem,
     MeetingNote,
     MeetingParticipant,
+    MeetingRecurrence,
     MeetingSection,
     MeetingSeries,
     MeetingSeriesSection,
+)
+from .recurrence import (
+    RecurrenceError,
+    calculate_recurrence_occurrences,
+    validate_recurrence_definition,
 )
 
 
@@ -350,6 +356,153 @@ def delete_meeting_series(*, meeting_series, actor):
     _require_series_write_access(meeting_series=meeting_series, user=actor)
 
     meeting_series.delete()
+
+
+# ── MeetingRecurrence (recurring-meeting schedules) ─────────────
+
+
+def create_meeting_recurrence(
+    *,
+    research_group,
+    actor,
+    frequency,
+    interval,
+    start_date,
+    local_time,
+    timezone_name,
+    scope=MeetingRecurrence.Scope.GROUP,
+    project=None,
+    weekdays=(),
+    end_mode=MeetingRecurrence.EndMode.NO_END,
+    end_date=None,
+    occurrence_count=None,
+):
+    """Persist one recurring-meeting schedule (V1 recurrence language).
+
+    Uses the canonical scoped Meeting write rule (group scope → group
+    read members; project scope → Project owner/member, non-archived
+    Projects only), exactly like Meeting creation.
+
+    The V1 definition is validated before anything is persisted and must
+    be internally consistent:
+
+    - frequency is ``daily`` / ``weekly`` / ``monthly``;
+    - interval is a positive integer;
+    - weekly schedules need one or more weekdays (0 = Monday .. 6 =
+      Sunday), and the start date's weekday must be part of the pattern,
+      so the start date is always the first actual occurrence;
+    - non-weekly schedules must not carry weekdays;
+    - timezone_name must be a valid IANA timezone;
+    - end mode is ``no_end`` / ``end_date`` / ``count`` with exactly the
+      matching fields: end date is inclusive and never before the start
+      date; count is positive and INCLUDES the first occurrence; end date
+      and count are mutually exclusive;
+    - creating a schedule never creates any Meeting row.
+
+    Raises MeetingDomainError on any authorization or validation failure.
+    """
+    _require_scoped_write_access(
+        research_group=research_group,
+        scope=scope,
+        project=project,
+        user=actor,
+    )
+
+    try:
+        normalized_weekdays = validate_recurrence_definition(
+            frequency=frequency,
+            interval=interval,
+            weekdays=weekdays,
+            start_date=start_date,
+            local_time=local_time,
+            timezone_name=timezone_name,
+            end_mode=end_mode,
+            end_date=end_date,
+            occurrence_count=occurrence_count,
+        )
+    except RecurrenceError as exc:
+        raise MeetingDomainError(str(exc)) from exc
+
+    return MeetingRecurrence.objects.create(
+        research_group=research_group,
+        scope=scope,
+        project=project,
+        frequency=frequency,
+        interval=interval,
+        weekdays=list(normalized_weekdays),
+        start_date=start_date,
+        local_time=local_time,
+        timezone_name=timezone_name,
+        end_mode=end_mode,
+        end_date=end_date,
+        occurrence_count=occurrence_count,
+        created_by=actor,
+    )
+
+
+def expand_meeting_recurrence_occurrences(
+    *,
+    meeting_recurrence,
+    range_start,
+    range_end,
+):
+    """Deterministically expand one persisted recurrence for a bounded window.
+
+    Read-only domain operation: calculates the occurrence values (stable
+    occurrence identity + original local wall-clock start + DST-correct
+    aware start) whose original local start falls inside the explicitly
+    bounded, timezone-aware window ``[range_start, range_end]`` (inclusive
+    on both ends). There is deliberately NO unbounded "return every
+    occurrence" variant: ``range_start`` and ``range_end`` are required
+    keyword arguments.
+
+    Expansion works in the schedule's stored IANA timezone in local
+    wall-clock time (the configured local time is preserved across DST
+    transitions), respects daily/weekly/monthly intervals, treats the
+    end date as inclusive, treats the count as the total number of
+    meetings including the first, skips nonexistent monthly dates, and
+    never returns occurrences outside the requested window.
+
+    Expansion creates no Meeting rows and stays independent of persisted
+    concrete Meetings. Access to the recurrence row is the caller's
+    responsibility (a future API slice enforces the scoped read rule);
+    expansion itself grants no access.
+    """
+    if meeting_recurrence.pk is None:
+        raise MeetingDomainError(
+            "Only persisted recurrences can be expanded: stable occurrence "
+            "identities require a schedule id."
+        )
+    if range_start is None or range_end is None:
+        raise MeetingDomainError(
+            "Expansion requires an explicitly bounded range."
+        )
+    if range_start.tzinfo is None or range_end.tzinfo is None:
+        raise MeetingDomainError(
+            "Expansion range boundaries must be timezone-aware datetimes."
+        )
+    if range_start > range_end:
+        raise MeetingDomainError(
+            "The expansion range start must not be after the range end."
+        )
+
+    try:
+        return calculate_recurrence_occurrences(
+            recurrence_id=meeting_recurrence.pk,
+            frequency=meeting_recurrence.frequency,
+            interval=meeting_recurrence.interval,
+            weekdays=meeting_recurrence.weekdays,
+            start_date=meeting_recurrence.start_date,
+            local_time=meeting_recurrence.local_time,
+            timezone_name=meeting_recurrence.timezone_name,
+            end_mode=meeting_recurrence.end_mode,
+            end_date=meeting_recurrence.end_date,
+            occurrence_count=meeting_recurrence.occurrence_count,
+            range_start=range_start,
+            range_end=range_end,
+        )
+    except RecurrenceError as exc:
+        raise MeetingDomainError(str(exc)) from exc
 
 
 # ── MeetingSeriesSection ─────────────────────────────────────────
