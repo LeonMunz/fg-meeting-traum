@@ -335,10 +335,25 @@ creation/editing remain domain-only operations, and there is no
 Recurrence UI. Occurrence Meetings are never auto-created outside the
 explicit materialization operation.
 
+A Recurrence owns exactly two persisted values: the recurrence RULE and
+the canonical title of the recurring SERIES. The title identifies the
+series even when zero occurrences have been materialized and is the
+DEFAULT title of a `Meeting` when a future occurrence is materialized.
+Once a `Meeting` exists, its title and content are Meeting-owned:
+changing `recurrence.title` does NOT rewrite the title of any
+already-materialized `Meeting` (no cascade, ever) — only FUTURE
+materializations pick up the new series title. The Recurrence→Template
+linkage remains DEFERRED (see "Deferred" below).
+
 ### V1 recurrence language (implemented)
 
 The persisted language is intentionally limited:
 
+- **title:** the canonical title of the recurring series — required,
+  non-blank (whitespace-stripped) and at most 255 characters (the same
+  constraints and normalization conventions as Meeting / MeetingSeries
+  titles); identifies the series even when zero Meetings have been
+  materialized;
 - **frequency:** `daily`, `weekly`, `monthly` — nothing else (no
   yearly, no arbitrary RRULE input);
 - **interval:** a positive integer (N days / N weeks / N months);
@@ -373,6 +388,7 @@ id
 research_group_id        (RESTRICT) — same shape as Meeting / MeetingSeries
 scope                    group | project
 project_id NULLABLE      (RESTRICT)
+title                    canonical series title (required; migration meetings/0018)
 frequency                daily | weekly | monthly
 interval                 >= 1
 weekdays                 JSON list, sorted; [] unless frequency = weekly
@@ -386,6 +402,28 @@ created_by_id            (RESTRICT)
 created_at / updated_at
 ```
 
+**Canonical series title (migration `meetings/0018`).** `title` is the
+canonical title of the recurring series: it identifies the series even
+when zero `Meeting` rows exist and is the default source of a
+materialized Meeting's title. Once a Meeting exists, its title is
+Meeting-owned — changing `recurrence.title` NEVER rewrites the title of
+an already-materialized Meeting; only future materializations default
+to the new series title. The 0018 migration adds the column nullable
+and backfills every existing recurrence before finally setting
+`NOT NULL`: a recurrence with materialized Meetings takes the title of
+its EARLIEST materialized Meeting (deterministic: smallest
+`original_scheduled_at`, then id) — the preferred legacy title source;
+a legacy recurrence with ZERO materialized Meetings (a VALID pre-slice
+state — the old creation service took no title and never had to
+materialize) receives a deterministic, migration-only descriptive
+title derived from its own persisted schedule
+(`Recurring meeting · <start_date> <local time>`): locale- and
+timezone-independent, never claiming a Meeting/Template title that
+never existed, and strictly legacy-data remediation — no permanent
+model default is introduced. Already-populated titles are never
+rewritten, and every NEW recurrence must provide a real canonical
+title through the domain creation service.
+
 Database check constraints enforce: scope/Project consistency (group →
 no Project, project → Project), `interval >= 1`, end-mode field
 consistency (exactly the fields of the selected mode are set),
@@ -398,6 +436,7 @@ canonical scoped Meeting write rule (group scope → group read members;
 project scope → Project owner/member, non-archived Projects only) and
 rejects, before any row is written:
 
+- a blank title (after strip);
 - unsupported frequencies;
 - `interval <= 0`;
 - weekly recurrence without valid weekdays (missing, empty, out of the
@@ -551,6 +590,15 @@ materializes ONE calculated occurrence into a concrete `Meeting`:
 - **Authorized:** the canonical scoped Meeting write rule (group scope
   → group read members; project scope → Project owner/member,
   non-archived Projects only), exactly like Meeting creation.
+- **Title:** the Recurrence owns the canonical series title. A newly
+  materialized Meeting DEFAULTS its title to `recurrence.title`; an
+  explicitly supplied non-blank `title` argument is a creation-time
+  override that wins for the first creation only. The title is applied
+  ONLY when the Meeting row is created — an idempotent replay returns
+  the existing Meeting and never overwrites its (possibly renamed)
+  title from the recurrence or from the request, and a later change of
+  `recurrence.title` never rewrites any already-materialized Meeting's
+  title.
 
 The materialized Meeting is a normal concrete FG `Meeting` (no parallel
 recurrence-specific Meeting type). It inherits the recurrence's
@@ -606,13 +654,19 @@ persistence to the domain service, which remains the final authority.
 - **Request:** `occurrenceId` (the stable occurrence identity
   reported by the bounded occurrence read API),
   `originalScheduledAt` (the immutable original scheduled start,
-  timezone-aware ISO-8601), and `title` (the concrete Meeting title,
-  required). The occurrence identity is an opaque derived UUIDv5 that
-  cannot be inverted, so the original scheduled start is part of the
-  contract: the server revalidates the pair against the recurrence
-  rule (derived identity match AND bounded rule membership) before
-  anything is persisted — a caller cannot create recurring Meetings
-  by supplying an unchecked datetime or UUID.
+  timezone-aware ISO-8601), and `title` (required, non-blank). The
+  occurrence identity is an opaque derived UUIDv5 that cannot be
+  inverted, so the original scheduled start is part of the contract:
+  the server revalidates the pair against the recurrence rule (derived
+  identity match AND bounded rule membership) before anything is
+  persisted — a caller cannot create recurring Meetings by supplying an
+  unchecked datetime or UUID. **Transitional title contract:** the
+  domain materialization no longer depends on a caller-supplied title
+  (it defaults to the canonical `recurrence.title`); the existing HTTP
+  `title` field is preserved for backward compatibility and acts as an
+  explicit creation-time override of that default — applied only when
+  the Meeting row is created, ignored on an idempotent replay, and
+  never written back to the recurrence.
 - **Validation:** naive timestamps, invalid UUIDs, missing fields,
   blank/overlong titles, and pairs the rule never produces (wrong
   wall-clock time, before the first occurrence, beyond the end-date /
@@ -666,10 +720,11 @@ occurrence:
   there is exactly ONE concrete Meeting per occurrence, created only by
   the canonical materialization path;
 - **Title contract:** the reschedule request ALWAYS carries a
-  non-blank `title`. It is used only when the reschedule must first
+  non-blank `title`. It is a creation-time override of the canonical
+  series title and is used only when the reschedule must first
   materialize a virtual occurrence; it is never used to rename an
-  already-materialized Meeting. No recurrence-level title and no
-  Template behavior exist for this operation.
+  already-materialized Meeting and is never written to the recurrence.
+  No Template behavior exists for this operation.
 
 - **Provenance-preserving:** `Meeting.scheduled_at` changes to the new
   planned time; `Meeting.original_scheduled_at` and
@@ -1111,6 +1166,10 @@ cancellation UX exists yet.
 The following are intentionally out of this slice and remain
 unimplemented:
 
+- Recurrence→Template ownership (`MeetingRecurrence.template` /
+  `meeting_series`): the next independent persisted/domain decision —
+  DEFERRED. Until it is made, a Recurrence has no Template reference
+  and materialization initializes standalone-style Meetings;
 - recurrence creation/editing API, recurrence list/detail views,
   frontend clients, and Recurrence UI (including the occurrence
   preview UI); an explicit maximum window size for the bounded

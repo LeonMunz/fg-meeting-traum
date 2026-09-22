@@ -816,6 +816,7 @@ class MeetingRecurrenceExclusionConcurrencyTest(TransactionTestCase):
         self.recurrence = create_meeting_recurrence(
             research_group=self.group,
             actor=self.alex,
+            title="Race",
             frequency="daily",
             interval=1,
             start_date=date(2026, 1, 5),

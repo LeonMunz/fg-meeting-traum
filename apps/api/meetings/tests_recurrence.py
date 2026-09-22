@@ -112,6 +112,7 @@ class MeetingRecurrenceBase(TestCase):
         params = dict(
             research_group=self.group,
             actor=self.alex,
+            title="Daily Standup",
             frequency="daily",
             interval=1,
             start_date=date(2026, 1, 5),
@@ -330,6 +331,38 @@ class MeetingRecurrenceValidationTest(MeetingRecurrenceBase):
             self._create_recurrence(
                 scope="project", project=self.project, actor=self.laura,
             )
+
+    # Canonical series title: required, normalized like the other
+    # Meeting / MeetingSeries titles (strip + non-blank, max_length 255).
+
+    def test_title_is_a_required_parameter(self):
+        with self.assertRaises(TypeError):
+            create_meeting_recurrence(
+                research_group=self.group,
+                actor=self.alex,
+                frequency="daily",
+                interval=1,
+                start_date=date(2026, 1, 5),
+                local_time=time(9, 30),
+                timezone_name="Europe/Berlin",
+            )
+        self.assertEqual(MeetingRecurrence.objects.count(), 0)
+
+    def test_blank_title_rejected(self):
+        with self.assertRaises(MeetingDomainError):
+            self._create_recurrence(title="   ")
+        self.assertEqual(MeetingRecurrence.objects.count(), 0)
+
+    def test_title_is_stripped_and_persisted(self):
+        recurrence = self._create_recurrence(
+            title="  Weekly Research Sync  ",
+        )
+        recurrence.refresh_from_db()
+        self.assertEqual(recurrence.title, "Weekly Research Sync")
+
+    def test_title_accepts_meeting_title_max_length(self):
+        recurrence = self._create_recurrence(title="x" * 255)
+        self.assertEqual(len(recurrence.title), 255)
 
 
 class MeetingRecurrenceExpansionTest(MeetingRecurrenceBase):
@@ -1392,6 +1425,112 @@ class MeetingRecurrenceMaterializationTest(MeetingRecurrenceBase):
         self.assertEqual(Meeting.objects.get(pk=meeting.pk).title,
                          "Renamed occurrence")
 
+    # 16. Canonical series title: a new Meeting DEFAULTS to
+    #     recurrence.title; an explicit caller title is a
+    #     creation-time override only; existing Meeting titles are
+    #     Meeting-owned and never rewritten from the recurrence.
+
+    def test_materialize_without_title_defaults_to_recurrence_title(self):
+        recurrence = self._create_recurrence(title="Weekly Research Sync")
+        occurrence = self._first_occurrence(recurrence)
+
+        meeting = materialize_meeting_recurrence_occurrence(
+            recurrence=recurrence,
+            occurrence=occurrence,
+            actor=self.alex,
+        )
+
+        self.assertEqual(meeting.title, "Weekly Research Sync")
+        self.assertEqual(meeting.research_group_id, self.group.pk)
+        # Provenance is unchanged by the title defaulting.
+        self.assertEqual(meeting.recurrence, recurrence)
+        self.assertEqual(
+            meeting.original_scheduled_at, occurrence.original_start,
+        )
+
+    def test_explicit_title_is_a_creation_time_override(self):
+        recurrence = self._create_recurrence(title="Weekly Research Sync")
+        occurrence = self._first_occurrence(recurrence)
+
+        meeting = self._materialize(
+            recurrence, occurrence, title="Budget Review",
+        )
+
+        self.assertEqual(meeting.title, "Budget Review")
+        # The canonical series title is untouched by the override.
+        recurrence.refresh_from_db()
+        self.assertEqual(recurrence.title, "Weekly Research Sync")
+
+    def test_materialize_replay_does_not_overwrite_renamed_meeting(self):
+        recurrence = self._create_recurrence(title="Weekly Research Sync")
+        occurrence = self._first_occurrence(recurrence)
+        meeting = self._materialize(recurrence, occurrence)
+
+        # The individual Meeting is renamed and the series title changes.
+        update_meeting(
+            meeting=meeting, actor=self.alex, title="Special Review",
+        )
+        recurrence.title = "Renamed Series"
+        recurrence.save(update_fields=["title"])
+
+        # Replay returns the same Meeting and keeps its title.
+        again = self._materialize(recurrence, occurrence)
+        self.assertEqual(again.pk, meeting.pk)
+        again.refresh_from_db()
+        self.assertEqual(again.title, "Special Review")
+        self.assertEqual(Meeting.objects.count(), 1)
+
+    def test_changing_recurrence_title_does_not_rename_existing_meetings(self):
+        recurrence = self._create_recurrence(title="Weekly Research Sync")
+        (first,) = self._expand(
+            recurrence, _utc(2026, 1, 5), _utc(2026, 1, 5, 23, 59),
+        )
+        (second,) = self._expand(
+            recurrence, _utc(2026, 1, 6), _utc(2026, 1, 6, 23, 59),
+        )
+        (third,) = self._expand(
+            recurrence, _utc(2026, 1, 7), _utc(2026, 1, 7, 23, 59),
+        )
+        # Default materialization (no caller title): both Meetings take
+        # the canonical series title.
+        meeting_a = materialize_meeting_recurrence_occurrence(
+            recurrence=recurrence, occurrence=first, actor=self.alex,
+        )
+        meeting_b = materialize_meeting_recurrence_occurrence(
+            recurrence=recurrence, occurrence=second, actor=self.alex,
+        )
+
+        recurrence.title = "Weekly Research Sync v2"
+        recurrence.save(update_fields=["title"])
+
+        # Already-materialized Meetings keep their concrete titles.
+        meeting_a.refresh_from_db()
+        meeting_b.refresh_from_db()
+        self.assertEqual(meeting_a.title, "Weekly Research Sync")
+        self.assertEqual(meeting_b.title, "Weekly Research Sync")
+
+        # Future materialization uses the NEW series title by default.
+        meeting_c = materialize_meeting_recurrence_occurrence(
+            recurrence=recurrence,
+            occurrence=third,
+            actor=self.alex,
+        )
+        self.assertEqual(meeting_c.title, "Weekly Research Sync v2")
+
+    def test_multiple_future_occurrences_default_to_canonical_title(self):
+        recurrence = self._create_recurrence(title="Weekly Research Sync")
+        occurrences = self._expand(
+            recurrence, _utc(2026, 1, 5), _utc(2026, 1, 8, 23, 59),
+        )
+        self.assertEqual(len(occurrences), 4)
+        for occurrence in occurrences:
+            meeting = materialize_meeting_recurrence_occurrence(
+                recurrence=recurrence,
+                occurrence=occurrence,
+                actor=self.alex,
+            )
+            self.assertEqual(meeting.title, "Weekly Research Sync")
+
 
 class MeetingRecurrenceRescheduleTest(MeetingRecurrenceBase):
     """Single-occurrence reschedule ("only this meeting", domain layer).
@@ -1796,6 +1935,25 @@ class MeetingRecurrenceRescheduleTest(MeetingRecurrenceBase):
             Meeting.objects.get(pk=meeting.pk).title, "Original",
         )
 
+    def test_rescheduled_occurrence_preserves_concrete_title(self):
+        recurrence = self._create_recurrence(title="Weekly Research Sync")
+        occurrence = self._first_occurrence(recurrence)
+        meeting = self._materialize(recurrence, occurrence, title="Original")
+
+        moved = _utc(2026, 3, 15, 14, 0)
+        updated = self._reschedule(
+            recurrence, occurrence, moved, title="Ignored Title",
+        )
+        updated.refresh_from_db()
+        self.assertEqual(updated.scheduled_at, moved)
+        # The concrete Meeting keeps its own title after the move...
+        self.assertEqual(updated.title, "Original")
+        # ...and a later series-title change does not touch it.
+        recurrence.title = "Weekly Research Sync v2"
+        recurrence.save(update_fields=["title"])
+        updated.refresh_from_db()
+        self.assertEqual(updated.title, "Original")
+
     def test_blank_title_is_rejected_and_persists_nothing(self):
         recurrence = self._create_recurrence()
         occurrence = self._first_occurrence(recurrence)
@@ -1969,6 +2127,7 @@ class MeetingRecurrenceMaterializationConcurrencyTest(TransactionTestCase):
         self.recurrence = create_meeting_recurrence(
             research_group=self.group,
             actor=self.alex,
+            title="Race",
             frequency="daily",
             interval=1,
             start_date=date(2026, 1, 5),
@@ -2100,3 +2259,157 @@ class MeetingRecurrenceMaterializationConcurrencyTest(TransactionTestCase):
         )
         self.assertEqual(Meeting.objects.count(), 1)
         self.assertEqual(Meeting.objects.first().title, "Winner")
+
+
+class MeetingRecurrenceTitleMigrationTest(TransactionTestCase):
+    """Data behavior of the 0018 canonical-title backfill.
+
+    The authoritative end-to-end reproduction is ``manage.py migrate``
+    against a pre-0018 database; this test exercises the *data*
+    behavior of the backfill function on a real PostgreSQL table that
+    already carries the final schema (NOT NULL title) — the same
+    pattern as the section backfill test: drop NOT NULL, insert
+    legacy rows, run the migration data function, assert, and finally
+    execute the migration's EXACT final ``SET NOT NULL`` step so the
+    end-to-end schema path is exercised, not just the helper.
+    """
+
+    def _seed_legacy_rows(self):
+        from django.apps import apps as django_apps
+
+        with db_connection.schema_editor(atomic=False) as editor:
+            editor.execute(
+                'ALTER TABLE "meetings_recurrence" '
+                'ALTER COLUMN "title" DROP NOT NULL;'
+            )
+            alex = User.objects.create_user(
+                username="recreg-alex", password="Pass1!",
+            )
+            group = ResearchGroup.objects.create(
+                name="Reg Group", created_by=alex,
+            )
+            ResearchGroupMembership.objects.create(
+                research_group=group,
+                user=alex,
+                role=ResearchGroupMembership.Role.ADMIN,
+            )
+
+            def legacy_recurrence(start_date, local_time, title=None):
+                return MeetingRecurrence.objects.create(
+                    research_group=group,
+                    frequency="daily",
+                    interval=1,
+                    weekdays=[],
+                    start_date=start_date,
+                    local_time=local_time,
+                    timezone_name="Europe/Berlin",
+                    created_by=alex,
+                    title=title,  # the column pre-dates the legacy row
+                )
+
+            def legacy_meeting(recurrence, day, title):
+                original = datetime(2026, 1, day, 9, 30, tzinfo=BERLIN)
+                return Meeting.objects.create(
+                    research_group=group,
+                    scope="group",
+                    recurrence=recurrence,
+                    original_scheduled_at=original,
+                    title=title,
+                    scheduled_at=original,
+                    created_by=alex,
+                )
+
+            # ONE materialized Meeting → its title is the source.
+            single = legacy_recurrence(date(2026, 1, 5), time(9, 30))
+            legacy_meeting(single, 5, "Backfill Source")
+
+            # MULTIPLE materialized Meetings → the EARLIEST canonical
+            # occurrence wins regardless of insertion order (the later
+            # Meeting is deliberately created FIRST).
+            multi = legacy_recurrence(date(2026, 1, 5), time(9, 30))
+            legacy_meeting(multi, 6, "Later Meeting")
+            legacy_meeting(multi, 5, "Earlier Meeting")
+
+            # ZERO materialized Meetings — a VALID pre-slice state
+            # (the old creation service took no title and never had to
+            # materialize) → deterministic migration-only title.
+            empty_a = legacy_recurrence(date(2026, 9, 28), time(10, 0))
+            # A second zero-Meeting recurrence with the SAME schedule.
+            empty_b = legacy_recurrence(date(2026, 9, 28), time(10, 0))
+
+            # Already populated (if the structure allows that state) →
+            # the backfill never rewrites it.
+            existing = legacy_recurrence(
+                date(2026, 2, 1), time(9, 30), title="Existing Title",
+            )
+            return (
+                django_apps, single, multi, empty_a, empty_b, existing,
+            )
+
+    def _run_backfill(self, django_apps):
+        import importlib
+
+        m18 = importlib.import_module(
+            "meetings.migrations.0018_meetingrecurrence_title"
+        )
+        with db_connection.schema_editor(atomic=False) as editor:
+            m18._backfill_recurrence_titles(django_apps, editor)
+        return m18
+
+    def _assert_backfilled(self, single, multi, empty_a, empty_b, existing):
+        for recurrence in (single, multi, empty_a, empty_b, existing):
+            recurrence.refresh_from_db()
+        self.assertEqual(single.title, "Backfill Source")
+        # Earliest canonical occurrence (original_scheduled_at), not
+        # insertion order.
+        self.assertEqual(multi.title, "Earlier Meeting")
+        # Zero-Meeting recurrences: deterministic schedule title.
+        self.assertEqual(
+            empty_a.title, "Recurring meeting · 2026-09-28 10:00",
+        )
+        self.assertEqual(
+            empty_b.title, "Recurring meeting · 2026-09-28 10:00",
+        )
+        # Pre-populated titles are never rewritten.
+        self.assertEqual(existing.title, "Existing Title")
+
+    def _finalize_schema(self, m18):
+        """Execute the migration's EXACT final SET NOT NULL step.
+
+        It succeeds only if EVERY legacy row (including the
+        zero-Meeting recurrences) was backfilled — the whole point of
+        the deterministic legacy fallback.
+        """
+        set_not_null = next(
+            op for op in m18.Migration.operations
+            if getattr(op, "sql", None) and "SET NOT NULL" in op.sql
+        )
+        with db_connection.schema_editor(atomic=False) as editor:
+            editor.execute(set_not_null.sql)
+
+    def test_backfill_populates_every_legacy_state(self):
+        (django_apps, single, multi, empty_a, empty_b, existing) = (
+            self._seed_legacy_rows()
+        )
+
+        m18 = self._run_backfill(django_apps)
+        self._assert_backfilled(single, multi, empty_a, empty_b, existing)
+
+        # The migration reaches the final non-null schema on a table
+        # that contains zero-Meeting recurrences.
+        self._finalize_schema(m18)
+        empty_a.refresh_from_db()
+        empty_b.refresh_from_db()
+        self.assertTrue(empty_a.title)
+        self.assertTrue(empty_b.title)
+
+    def test_backfill_is_idempotent(self):
+        (django_apps, single, multi, empty_a, empty_b, existing) = (
+            self._seed_legacy_rows()
+        )
+
+        m18 = self._run_backfill(django_apps)
+        self._assert_backfilled(single, multi, empty_a, empty_b, existing)
+        self._run_backfill(django_apps)
+        self._assert_backfilled(single, multi, empty_a, empty_b, existing)
+        self._finalize_schema(m18)

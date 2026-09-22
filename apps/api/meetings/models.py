@@ -104,6 +104,12 @@ class MeetingRecurrence(models.Model):
 
     Invariants:
 
+    - ``title`` is the canonical title of the recurring SERIES: it
+      identifies the series even when zero Meetings have been
+      materialized, and it is the DEFAULT title of a Meeting when a
+      future occurrence is materialized. Once a Meeting exists, its
+      title is Meeting-owned: changing the recurrence title never
+      rewrites an already-materialized Meeting's title.
     - Occurrences are derived values, never persisted Meetings: creating or
       expanding a recurrence must not pre-create Meeting rows.
     - The start date is the first actual occurrence (a weekly schedule's
@@ -151,6 +157,14 @@ class MeetingRecurrence(models.Model):
         null=True,
         blank=True,
     )
+
+    # The canonical title of the recurring series (see class docstring):
+    # available even with zero materialized Meetings and the default
+    # source for a newly materialized Meeting's title. Same constraints
+    # and normalization conventions as Meeting.title / MeetingSeries.title
+    # (non-blank after strip, max_length 255 — enforced by the creation
+    # service and the column).
+    title = models.CharField(max_length=255)
 
     # ── The recurrence rule ─────────────────────────────────────
     frequency = models.CharField(
@@ -244,7 +258,10 @@ class MeetingRecurrence(models.Model):
         ]
 
     def __str__(self):
-        return f"Recurrence {self.frequency} every {self.interval} from {self.start_date}"
+        return (
+            f"{self.title} ({self.frequency} every {self.interval} "
+            f"from {self.start_date})"
+        )
 
 
 class MeetingRecurrenceExclusion(models.Model):

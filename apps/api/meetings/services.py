@@ -371,6 +371,7 @@ def create_meeting_recurrence(
     *,
     research_group,
     actor,
+    title,
     frequency,
     interval,
     start_date,
@@ -388,6 +389,14 @@ def create_meeting_recurrence(
     Uses the canonical scoped Meeting write rule (group scope → group
     read members; project scope → Project owner/member, non-archived
     Projects only), exactly like Meeting creation.
+
+    ``title`` is the canonical title of the recurring SERIES (required,
+    non-blank after strip, at most 255 characters — the same constraints
+    and normalization conventions as Meeting / MeetingSeries titles). It
+    identifies the series even when zero Meetings have been materialized
+    and is the DEFAULT title of a Meeting when a future occurrence is
+    materialized; once a Meeting exists, its title is Meeting-owned and
+    never rewritten from the recurrence.
 
     The V1 definition is validated before anything is persisted and must
     be internally consistent:
@@ -414,6 +423,10 @@ def create_meeting_recurrence(
         user=actor,
     )
 
+    title = str(title or "").strip()
+    if not title:
+        raise MeetingDomainError("Recurrence title is required.")
+
     try:
         normalized_weekdays = validate_recurrence_definition(
             frequency=frequency,
@@ -433,6 +446,7 @@ def create_meeting_recurrence(
         research_group=research_group,
         scope=scope,
         project=project,
+        title=title,
         frequency=frequency,
         interval=interval,
         weekdays=list(normalized_weekdays),
@@ -643,7 +657,7 @@ def materialize_meeting_recurrence_occurrence(
     recurrence,
     occurrence,
     actor,
-    title,
+    title=None,
 ):
     """Materialize one calculated occurrence into a concrete Meeting.
 
@@ -667,6 +681,16 @@ def materialize_meeting_recurrence_occurrence(
     (Recurrences have no Meeting Template association in V1, so there is
     no Template to snapshot; Template initialization remains tied to a
     future, explicitly documented Recurrence→Template decision.)
+
+    **Title:** the Recurrence owns the canonical series title. A newly
+    materialized Meeting DEFAULTS its title to ``recurrence.title``; an
+    explicitly supplied non-blank ``title`` is a creation-time override
+    that wins for the first creation only. The title is applied ONLY
+    when the Meeting row is created: an idempotent replay returns the
+    existing Meeting and never overwrites its (possibly renamed) title
+    from the recurrence or from the request. A later change of
+    ``recurrence.title`` never rewrites any already-materialized
+    Meeting's title — once a Meeting exists, its title is Meeting-owned.
 
     The Meeting persists its immutable occurrence provenance:
 
@@ -711,6 +735,10 @@ def materialize_meeting_recurrence_occurrence(
     )
 
     title = str(title or "").strip()
+    if not title:
+        # No caller-supplied title: the recurrence owns the canonical
+        # series title and it is the default for the new Meeting.
+        title = recurrence.title.strip()
     if not title:
         raise MeetingDomainError("Meeting title is required.")
 

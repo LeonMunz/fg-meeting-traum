@@ -265,6 +265,27 @@ class MeetingRecurrenceMaterializeApiTest(MeetingRecurrenceBase):
             Meeting.objects.get().title, "First title",
         )
 
+    def test_request_title_is_a_creation_time_override_of_the_series_title(
+        self,
+    ):
+        """Transitional HTTP contract: the existing required ``title``
+        field stays accepted and is an explicit creation-time override;
+        the canonical recurrence series title is the domain default
+        and is NOT mutated by the override."""
+        self.login(self.chris)
+        occurrence = self._occurrence()
+
+        response = self._post(
+            self._payload(occurrence, title="Budget Review"),
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.json()["title"], "Budget Review")
+
+        # The series title stays the canonical default and is untouched
+        # by the per-Meeting override.
+        self.recurrence.refresh_from_db()
+        self.assertEqual(self.recurrence.title, "Daily Standup")
+
     def test_same_instant_with_different_offsets_is_the_same_occurrence(
         self,
     ):
