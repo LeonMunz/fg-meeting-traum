@@ -10,11 +10,13 @@ import { ApiError } from '../../api/client'
 import {
   createMeeting,
   createMeetingFromSeries,
+  createMeetingRecurrence,
   listMeetings,
 } from '../../api/meetings'
 import type {
   ApiMeeting,
   ApiMeetingStatus,
+  ApiCreateMeetingRecurrenceInput,
 } from '../../api/types'
 import { useResearchGroupListScope } from '../research-group/useResearchGroupListScope'
 import {
@@ -86,6 +88,11 @@ export function MeetingListPage() {
     useState(false)
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] =
+    useState<string | null>(null)
+  // Success signal for a created recurring series: the Meetings list cannot
+  // show virtual (not materialized) occurrences, so the confirmation is a
+  // dismissible page banner — never a fabricated Meeting row.
+  const [seriesSuccess, setSeriesSuccess] =
     useState<string | null>(null)
 
   const loadMeetings = useCallback(async () => {
@@ -183,6 +190,36 @@ export function MeetingListPage() {
     }
   }
 
+  const handleCreateSeries = async (
+    input: ApiCreateMeetingRecurrenceInput,
+  ) => {
+    setCreating(true)
+    setCreateError(null)
+
+    try {
+      const recurrence =
+        await createMeetingRecurrence(input)
+
+      // No concrete Meeting was created: nothing is inserted into the
+      // list, and the user is told a RECURRING SERIES was created.
+      setCreateDialogOpen(false)
+      setSeriesSuccess(
+        `Recurring series “${recurrence.title}” created.`,
+      )
+    } catch (createSeriesError) {
+      // The dialog stays open with all recurrence fields preserved;
+      // there is no fallback to ordinary Meeting creation.
+      setCreateError(
+        getErrorMessage(
+          createSeriesError,
+          'Recurring series could not be created.',
+        ),
+      )
+    } finally {
+      setCreating(false)
+    }
+  }
+
   const pageLoading =
     researchGroupsLoading || loading
 
@@ -212,11 +249,15 @@ export function MeetingListPage() {
           }
           onClick={() => {
             setCreateError(null)
+            setSeriesSuccess(null)
             setCreateDialogOpen(true)
           }}
           className="inline-flex h-10 shrink-0 items-center gap-2 rounded-lg bg-accent px-4 text-sm font-semibold text-text-inverse shadow-sm transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-45"
         >
-          <span className="material-symbols-outlined text-[19px]">
+          <span
+            aria-hidden="true"
+            className="material-symbols-outlined text-[19px]"
+          >
             add
           </span>
           New meeting
@@ -233,6 +274,46 @@ export function MeetingListPage() {
           Meeting Templates
         </button>
       </header>
+
+      {seriesSuccess && (
+        <div
+          role="status"
+          className="mt-6 flex items-center justify-between gap-4 rounded-xl border border-border-subtle bg-surface px-5 py-3.5"
+        >
+          <div className="flex min-w-0 items-start gap-2.5">
+            <span
+              aria-hidden="true"
+              className="material-symbols-outlined mt-0.5 shrink-0 text-[20px] text-accent-text"
+            >
+              repeat
+            </span>
+
+            <div className="min-w-0">
+              <p className="truncate text-sm font-medium text-text">
+                {seriesSuccess}
+              </p>
+              <p className="mt-0.5 text-xs text-text-muted">
+                Its occurrences are virtual until materialized and are not
+                listed in the Meetings list yet.
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            aria-label="Dismiss"
+            onClick={() => setSeriesSuccess(null)}
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-text-muted transition hover:bg-surface-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+          >
+            <span
+              aria-hidden="true"
+              className="material-symbols-outlined text-[16px]"
+            >
+              close
+            </span>
+          </button>
+        </div>
+      )}
 
       {pageLoading ? (
         <div className="mt-8 flex min-h-64 items-center justify-center rounded-xl border border-border-subtle bg-surface-quiet">
@@ -292,15 +373,19 @@ export function MeetingListPage() {
             Create the first meeting for this research group.
           </p>
 
-          <button
-            type="button"
-            onClick={() => {
-              setCreateError(null)
-              setCreateDialogOpen(true)
-            }}
-            className="mt-5 inline-flex h-9 items-center gap-2 rounded-lg bg-accent px-4 text-sm font-semibold text-text-inverse"
-          >
-            <span className="material-symbols-outlined text-[18px]">
+              <button
+                type="button"
+                onClick={() => {
+                  setCreateError(null)
+                  setSeriesSuccess(null)
+                  setCreateDialogOpen(true)
+                }}
+                className="mt-5 inline-flex h-9 items-center gap-2 rounded-lg bg-accent px-4 text-sm font-semibold text-text-inverse"
+              >
+            <span
+              aria-hidden="true"
+              className="material-symbols-outlined text-[18px]"
+            >
               add
             </span>
             Create meeting
@@ -378,6 +463,9 @@ export function MeetingListPage() {
         }}
         onCreate={(input) =>
           void handleCreateMeeting(input)
+        }
+        onCreateSeries={(input) =>
+          void handleCreateSeries(input)
         }
       />
     </div>
