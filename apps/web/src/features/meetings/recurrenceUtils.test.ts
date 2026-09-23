@@ -137,7 +137,7 @@ describe('formatRecurrenceSummary', () => {
         endMode: 'count',
         count: 12,
       }),
-    ).toBe('Every day at 10:30 AM · 12 occurrences')
+    ).toBe('Every day at 10:30 AM · 12 meetings')
 
     expect(
       formatRecurrenceSummary({
@@ -148,6 +148,6 @@ describe('formatRecurrenceSummary', () => {
         endMode: 'count',
         count: 1,
       }),
-    ).toBe('Every day at 10:30 AM · 1 occurrence')
+    ).toBe('Every day at 10:30 AM · 1 meeting')
   })
 })

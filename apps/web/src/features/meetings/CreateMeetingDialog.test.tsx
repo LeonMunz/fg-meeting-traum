@@ -348,7 +348,7 @@ describe('CreateMeetingDialog participant picker', () => {
     renderDialog()
     await screen.findByRole('option', { name: 'External collaboration' })
 
-    fireEvent.change(screen.getByLabelText('Project'), {
+    fireEvent.change(screen.getByLabelText('Context'), {
       target: { value: '9' },
     })
     searchFor('external')
@@ -382,31 +382,36 @@ describe('CreateMeetingDialog modal foundation', () => {
     ).not.toBeInTheDocument()
   })
 
-  it('orders the fields Title, Project, Meeting template, Participants, then the Schedule section', () => {
+  it('orders the fields Title, Context, Meeting template, Schedule, Repeat, then Participants', () => {
     renderDialog()
 
     const title = screen.getByLabelText('Title')
-    const project = screen.getByLabelText('Project')
+    const context = screen.getByLabelText('Context')
     const template = screen.getByLabelText('Meeting template')
-    const participants = screen.getByLabelText('Participants')
     const schedule = screen.getByRole('heading', { name: 'Schedule' })
     const date = screen.getByLabelText('Date')
     const time = screen.getByLabelText('Time')
+    const repeat = screen.getByLabelText('Repeat')
+    const participants = screen.getByLabelText('Participants')
 
     expect(
-      title.compareDocumentPosition(project) &
+      title.compareDocumentPosition(context) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy()
     expect(
-      project.compareDocumentPosition(template) &
+      context.compareDocumentPosition(template) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy()
     expect(
-      template.compareDocumentPosition(participants) &
+      template.compareDocumentPosition(schedule) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy()
     expect(
-      participants.compareDocumentPosition(schedule) &
+      schedule.compareDocumentPosition(repeat) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+    expect(
+      repeat.compareDocumentPosition(participants) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy()
 
@@ -415,11 +420,11 @@ describe('CreateMeetingDialog modal foundation', () => {
     expect(schedule.parentElement).toContainElement(time)
   })
 
-  it('offers the Research group meeting option without null-oriented wording', () => {
+  it('offers the Research group Context option without null-oriented wording', () => {
     renderDialog()
 
     expect(
-      screen.getByRole('option', { name: 'Research group meeting' }),
+      screen.getByRole('option', { name: 'Research group' }),
     ).toBeVisible()
     expect(
       screen.queryByRole('option', { name: /No project/ }),
@@ -444,13 +449,20 @@ describe('CreateMeetingDialog modal foundation', () => {
     )
   })
 
-  it('shows the no-template helper and switches it once a Template is selected', async () => {
+  it('shows the recurrence gating under Repeat without a Template and the template helper with one', async () => {
     renderDialog()
     await screen.findByRole('option', { name: 'Weekly template' })
 
+    // No Template: no template helper — the Repeat field carries the
+    // recurrence gating instead.
+    expect(
+      screen.queryByText(
+        'Uses the template sections as the starting structure.',
+      ),
+    ).not.toBeInTheDocument()
     expect(
       screen.getByText(
-        'Choose a template to enable recurring meetings.',
+        'Choose a meeting template to enable recurrence.',
       ),
     ).toBeVisible()
 
@@ -460,7 +472,7 @@ describe('CreateMeetingDialog modal foundation', () => {
 
     expect(
       screen.queryByText(
-        'Choose a template to enable recurring meetings.',
+        'Choose a meeting template to enable recurrence.',
       ),
     ).not.toBeInTheDocument()
     expect(
@@ -501,11 +513,28 @@ describe('CreateMeetingDialog modal foundation', () => {
     })
   })
 
-  it('exposes no Repeat/recurrence controls and keeps the Cancel + Create meeting footer', () => {
+  it('shows the disabled Repeat field in its one-time default and keeps the Cancel + Create meeting footer', () => {
     renderDialog()
 
     expect(
-      screen.queryByText(/repeat meeting/i),
+      screen.getByLabelText('Repeat'),
+    ).toBeVisible()
+    // No Template yet: recurrence is gated, `Does not repeat` is the
+    // one-time default, and no recurrence-detail control renders.
+    expect(
+      screen.getByLabelText('Repeat'),
+    ).toBeDisabled()
+    expect(
+      screen.getByLabelText('Repeat'),
+    ).toHaveValue('none')
+    expect(
+      screen.queryByLabelText('Every'),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('group', { name: 'On' }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByLabelText('Never'),
     ).not.toBeInTheDocument()
     expect(
       screen.queryByRole('button', { name: /create series/i }),

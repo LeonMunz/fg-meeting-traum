@@ -472,13 +472,13 @@ describe('CreateMeetingDialog time suggestions', () => {
 })
 
 describe('CreateMeetingDialog timezone display', () => {
-  it('shows the IANA timezone of the user, not a hardcoded value', () => {
+  it('shows the IANA timezone of the user as a labeled Time zone line', () => {
     renderDialog()
 
     const timezone =
       Intl.DateTimeFormat().resolvedOptions().timeZone
     expect(
-      screen.getByText(`Local time · ${timezone}`),
+      screen.getByText(`Time zone: ${timezone}`),
     ).toBeVisible()
   })
 })

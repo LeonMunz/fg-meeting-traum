@@ -39,18 +39,18 @@ export type RecurrenceWeekday = 0 | 1 | 2 | 3 | 4 | 5 | 6
 
 export const ISO_WEEKDAYS: ReadonlyArray<{
   value: RecurrenceWeekday
-  /** Compact button label (M T W T F S S). */
+  /** Compact button label (Mon Tue Wed Thu Fri Sat Sun). */
   short: string
   /** Full weekday name (accessible name + summary copy). */
   name: string
 }> = [
-  { value: 0, short: 'M', name: 'Monday' },
-  { value: 1, short: 'T', name: 'Tuesday' },
-  { value: 2, short: 'W', name: 'Wednesday' },
-  { value: 3, short: 'T', name: 'Thursday' },
-  { value: 4, short: 'F', name: 'Friday' },
-  { value: 5, short: 'S', name: 'Saturday' },
-  { value: 6, short: 'S', name: 'Sunday' },
+  { value: 0, short: 'Mon', name: 'Monday' },
+  { value: 1, short: 'Tue', name: 'Tuesday' },
+  { value: 2, short: 'Wed', name: 'Wednesday' },
+  { value: 3, short: 'Thu', name: 'Thursday' },
+  { value: 4, short: 'Fri', name: 'Friday' },
+  { value: 5, short: 'Sat', name: 'Saturday' },
+  { value: 6, short: 'Sun', name: 'Sunday' },
 ]
 
 export type RecurrenceFrequency = 'daily' | 'weekly' | 'monthly'
@@ -153,7 +153,7 @@ export function formatRecurrenceSummary(
   if (input.endMode === 'date' && input.endDate) {
     endPhrase = `until ${formatDatePartLocale(input.endDate, input.locale)}`
   } else if (input.endMode === 'count' && input.count != null) {
-    endPhrase = `${input.count} occurrence${
+    endPhrase = `${input.count} meeting${
       input.count === 1 ? '' : 's'
     }`
   } else {

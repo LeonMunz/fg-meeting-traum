@@ -5,6 +5,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
 } from '@testing-library/react'
 import {
   afterEach,
@@ -90,6 +91,8 @@ const locale = browserLocale()
 const TIME_1030 = formatTimePartLocale('10:30', locale)
 const END_DATE_LABEL = formatDatePartLocale('2026-11-30', locale)
 
+type RepeatMode = 'none' | 'daily' | 'weekly' | 'monthly'
+
 type RenderOptions = {
   onCreateSeries?: (input: ApiCreateMeetingRecurrenceInput) => void
   submitting?: boolean
@@ -126,8 +129,10 @@ async function selectTemplate() {
   })
 }
 
-function enableRepeat() {
-  fireEvent.click(screen.getByRole('switch', { name: 'Repeat meeting' }))
+function selectRepeat(mode: RepeatMode) {
+  fireEvent.change(screen.getByLabelText('Repeat'), {
+    target: { value: mode },
+  })
 }
 
 function setBaseForm(
@@ -184,34 +189,45 @@ afterEach(() => {
 })
 
 describe('CreateMeetingDialog recurrence disclosure', () => {
-  it('renders no Repeat control and no recurrence editor without a Template', async () => {
+  it('shows the disabled Does not repeat field with its helper and no recurrence editor without a Template', async () => {
     vi.mocked(meetingsApi.listMeetingSeries).mockResolvedValue([])
 
     renderDialog()
     await screen.findByRole('option', { name: 'No template' })
 
-    expect(
-      screen.queryByRole('switch', { name: 'Repeat meeting' }),
-    ).not.toBeInTheDocument()
-    expect(screen.queryByText(/repeat meeting/i)).not.toBeInTheDocument()
-    expect(screen.queryByLabelText('Every')).not.toBeInTheDocument()
+    const repeat = screen.getByLabelText('Repeat') as HTMLSelectElement
+    expect(repeat).toBeVisible()
+    expect(repeat).toBeDisabled()
+    expect(repeat).toHaveValue('none')
     expect(
       screen.getByText(
-        'Choose a template to enable recurring meetings.',
+        'Choose a meeting template to enable recurrence.',
       ),
     ).toBeVisible()
+    // No recurrence-detail controls and no summary in the gated state.
+    expect(screen.queryByLabelText('Every')).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('group', { name: 'On' }),
+    ).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Never')).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Create series' }),
+    ).not.toBeInTheDocument()
   })
 
-  it('reveals the Repeat toggle with a Template selected, defaulting to OFF', async () => {
+  it('enables the Repeat field once a Template is selected, defaulting to Does not repeat', async () => {
     renderDialog()
     await selectTemplate()
 
-    const toggle = screen.getByRole('switch', {
-      name: 'Repeat meeting',
-    })
-    expect(toggle).toBeVisible()
-    expect(toggle).toHaveAttribute('aria-checked', 'false')
-    // OFF: no recurrence-detail controls and the one-time action.
+    const repeat = screen.getByLabelText('Repeat') as HTMLSelectElement
+    expect(repeat).toBeEnabled()
+    expect(repeat).toHaveValue('none')
+    expect(
+      within(repeat)
+        .getAllByRole('option')
+        .map((option) => option.textContent),
+    ).toEqual(['Does not repeat', 'Daily', 'Weekly', 'Monthly'])
+    // Default: no recurrence-detail controls and the one-time action.
     expect(screen.queryByLabelText('Every')).not.toBeInTheDocument()
     expect(
       screen.getByRole('button', { name: 'Create meeting' }),
@@ -221,56 +237,39 @@ describe('CreateMeetingDialog recurrence disclosure', () => {
     ).not.toBeInTheDocument()
   })
 
-  it('reveals the recurrence editor and renames the primary action when ON', async () => {
+  it('reveals the recurrence editor when Weekly is selected and renames the primary action', async () => {
     renderDialog()
     await selectTemplate()
-    enableRepeat()
+    selectRepeat('weekly')
 
-    expect(screen.getByRole('switch', { name: 'Repeat meeting' }))
-      .toHaveAttribute('aria-checked', 'true')
     expect(screen.getByLabelText('Every')).toBeVisible()
-    expect(
-      screen.getByRole('group', { name: 'Frequency' }),
-    ).toBeVisible()
     expect(
       screen.getByRole('group', { name: 'On' }),
     ).toBeVisible()
     expect(screen.getByLabelText('Never')).toBeVisible()
-    expect(screen.getByRole('button', { name: 'Create series' }))
-      .toBeVisible()
+    expect(
+      screen.getByRole('button', { name: 'Create series' }),
+    ).toBeVisible()
     expect(
       screen.queryByRole('button', { name: 'Create meeting' }),
     ).not.toBeInTheDocument()
   })
 
-  it('defaults to Weekly frequency with interval 1 and the start-date weekday', async () => {
+  it('shows no recurrence error immediately after selecting Weekly (auto-selected weekday)', async () => {
     renderDialog()
     await selectTemplate()
     setBaseForm(TUESDAY)
-    enableRepeat()
+    selectRepeat('weekly')
 
-    expect(weekdayButton('Monday')).toHaveAttribute('aria-pressed', 'false')
+    // The Schedule weekday is auto-selected: valid on activation.
     expect(weekdayButton('Tuesday')).toHaveAttribute('aria-pressed', 'true')
-    expect(weekdayButton('Wednesday')).toHaveAttribute('aria-pressed', 'false')
-    expect(screen.getByLabelText('Every')).toHaveValue('1')
-    expect(screen.getByText('week')).toBeVisible()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Create series' }),
+    ).toBeEnabled()
   })
 
-  it('maps the start date to backend ISO weekdays (Monday = 0, Sunday = 6)', async () => {
-    renderDialog()
-    await selectTemplate()
-    enableRepeat()
-
-    setBaseForm(MONDAY)
-    expect(weekdayButton('Monday')).toHaveAttribute('aria-pressed', 'true')
-    expect(weekdayButton('Tuesday')).toHaveAttribute('aria-pressed', 'false')
-
-    setBaseForm(SUNDAY)
-    expect(weekdayButton('Sunday')).toHaveAttribute('aria-pressed', 'true')
-    expect(weekdayButton('Monday')).toHaveAttribute('aria-pressed', 'false')
-  })
-
-  it('keeps the ordinary Meeting flow authoritative while Repeat is OFF', async () => {
+  it('keeps the ordinary Meeting flow authoritative while Repeat is Does not repeat', async () => {
     const { onCreate, onCreateSeries } = renderDialog()
     await selectTemplate()
     setBaseForm()
@@ -288,21 +287,22 @@ describe('CreateMeetingDialog recurrence disclosure', () => {
     expect(onCreateSeries).not.toHaveBeenCalled()
   })
 
-  it('restores the ordinary submission when Repeat is turned OFF again', async () => {
+  it('restores the ordinary submission when the user returns to Does not repeat', async () => {
     const { onCreate, onCreateSeries } = renderDialog()
     await selectTemplate()
-    enableRepeat()
     setBaseForm()
+    selectRepeat('weekly')
 
     fireEvent.change(screen.getByLabelText('Every'), {
       target: { value: '3' },
     })
-    fireEvent.click(screen.getByRole('switch', { name: 'Repeat meeting' }))
+    selectRepeat('none')
 
     // The recurrence editor is hidden; the one-time action is back.
     expect(screen.queryByLabelText('Every')).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Create meeting' }))
-      .toBeVisible()
+    expect(
+      screen.getByRole('button', { name: 'Create meeting' }),
+    ).toBeVisible()
 
     submitForm()
 
@@ -315,20 +315,147 @@ describe('CreateMeetingDialog recurrence disclosure', () => {
     )
     expect(onCreateSeries).not.toHaveBeenCalled()
   })
+
+  it('re-disables the Repeat field and presents Does not repeat when the Template is removed', async () => {
+    const { onCreate, onCreateSeries } = renderDialog()
+    await selectTemplate()
+    setBaseForm()
+    selectRepeat('weekly')
+
+    fireEvent.change(screen.getByLabelText('Meeting template'), {
+      target: { value: '' },
+    })
+
+    const repeat = screen.getByLabelText('Repeat') as HTMLSelectElement
+    expect(repeat).toBeDisabled()
+    expect(repeat).toHaveValue('none')
+    expect(
+      screen.getByText(
+        'Choose a meeting template to enable recurrence.',
+      ),
+    ).toBeVisible()
+    expect(screen.queryByLabelText('Every')).not.toBeInTheDocument()
+
+    submitForm()
+
+    expect(onCreate).toHaveBeenCalledTimes(1)
+    expect(onCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ seriesId: null }),
+    )
+    expect(onCreateSeries).not.toHaveBeenCalled()
+  })
+
+  it('resets the canonical recurrence state when the Template is removed — re-selection starts at Does not repeat', async () => {
+    renderDialog()
+    await selectTemplate()
+    setBaseForm(TUESDAY, '10:30', 'Team Rituals')
+    selectRepeat('weekly')
+
+    // Configure recurrence-only state that must NOT survive removal.
+    fireEvent.change(screen.getByLabelText('Every'), {
+      target: { value: '2' },
+    })
+    fireEvent.click(weekdayButton('Thursday'))
+    fireEvent.click(screen.getByLabelText('On date'))
+    fireEvent.change(screen.getByLabelText('End date'), {
+      target: { value: '2026-11-30' },
+    })
+
+    const dateBefore = (
+      screen.getByLabelText('Date') as HTMLInputElement
+    ).value
+    const timeBefore = (
+      screen.getByLabelText('Time') as HTMLInputElement
+    ).value
+
+    // Remove the Template.
+    fireEvent.change(screen.getByLabelText('Meeting template'), {
+      target: { value: '' },
+    })
+
+    const repeat = screen.getByLabelText('Repeat') as HTMLSelectElement
+    expect(repeat).toBeDisabled()
+    expect(repeat).toHaveValue('none')
+    // No recurrence-detail control or summary survives the removal.
+    expect(screen.queryByLabelText('Every')).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('group', { name: 'On' }),
+    ).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Never')).not.toBeInTheDocument()
+    expect(
+      screen.queryByLabelText('End date'),
+    ).not.toBeInTheDocument()
+    expect(screen.queryByText(/· no end/)).not.toBeInTheDocument()
+
+    // Title / Date / Time are preserved by the removal.
+    expect(screen.getByLabelText('Title')).toHaveValue('Team Rituals')
+    expect(screen.getByLabelText('Date')).toHaveValue(dateBefore)
+    expect(screen.getByLabelText('Time')).toHaveValue(timeBefore)
+
+    // Re-selecting a Template starts at Does not repeat (enabled).
+    await selectTemplate()
+    expect(repeat).toBeEnabled()
+    expect(repeat).toHaveValue('none')
+
+    // Re-activating Weekly shows no leftovers of the removed
+    // configuration: interval back to 1, Never end, and the weekday
+    // auto-derived from the (unchanged) Schedule date.
+    selectRepeat('weekly')
+    expect(screen.getByLabelText('Every')).toHaveValue('1')
+    expect(screen.getByLabelText('Never')).toBeChecked()
+    expect(
+      screen.queryByLabelText('End date'),
+    ).not.toBeInTheDocument()
+    expect(weekdayButton('Tuesday')).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+    expect(weekdayButton('Thursday')).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    )
+  })
 })
 
 describe('CreateMeetingDialog recurrence editor', () => {
+  it('selecting Weekly auto-selects the Schedule weekday (ISO weekday mapping)', async () => {
+    renderDialog()
+    await selectTemplate()
+    selectRepeat('weekly')
+
+    setBaseForm(MONDAY)
+    expect(weekdayButton('Monday')).toHaveAttribute('aria-pressed', 'true')
+    expect(weekdayButton('Tuesday')).toHaveAttribute('aria-pressed', 'false')
+
+    setBaseForm(SUNDAY)
+    expect(weekdayButton('Sunday')).toHaveAttribute('aria-pressed', 'true')
+    expect(weekdayButton('Monday')).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it('defaults Weekly to interval 1 with the singular unit and the schedule summary', async () => {
+    renderDialog()
+    await selectTemplate()
+    setBaseForm(TUESDAY)
+    selectRepeat('weekly')
+
+    expect(screen.getByLabelText('Every')).toHaveValue('1')
+    expect(screen.getByText('week')).toBeVisible()
+    expect(
+      screen.getByText(`Every week on Tuesday at ${TIME_1030} · no end`),
+    ).toBeVisible()
+  })
+
   it('lets the user select multiple weekdays and requires at least one', async () => {
     renderDialog()
     await selectTemplate()
     setBaseForm(TUESDAY)
-    enableRepeat()
+    selectRepeat('weekly')
 
     fireEvent.click(weekdayButton('Thursday'))
     expect(weekdayButton('Tuesday')).toHaveAttribute('aria-pressed', 'true')
     expect(weekdayButton('Thursday')).toHaveAttribute('aria-pressed', 'true')
 
-    // Deselecting everything is invalid.
+    // Deselecting everything after manual interaction is invalid.
     fireEvent.click(weekdayButton('Tuesday'))
     fireEvent.click(weekdayButton('Thursday'))
     expect(
@@ -343,7 +470,7 @@ describe('CreateMeetingDialog recurrence editor', () => {
     renderDialog()
     await selectTemplate()
     setBaseForm(TUESDAY)
-    enableRepeat()
+    selectRepeat('weekly')
 
     // Manually configure: keep Thursday only.
     fireEvent.click(weekdayButton('Tuesday'))
@@ -370,7 +497,7 @@ describe('CreateMeetingDialog recurrence editor', () => {
     renderDialog()
     await selectTemplate()
     setBaseForm(TUESDAY)
-    enableRepeat()
+    selectRepeat('weekly')
 
     fireEvent.click(weekdayButton('Thursday'))
     expect(weekdayButton('Tuesday')).toHaveAttribute('aria-pressed', 'true')
@@ -385,18 +512,19 @@ describe('CreateMeetingDialog recurrence editor', () => {
     expect(weekdayButton('Sunday')).toHaveAttribute('aria-pressed', 'false')
   })
 
-  it('hides the weekday selector for Daily', async () => {
+  it('shows interval + Ends without weekdays for Daily', async () => {
     renderDialog()
     await selectTemplate()
     setBaseForm()
-    enableRepeat()
+    selectRepeat('daily')
 
     // Interval 2: the unit label must pluralize per frequency.
     fireEvent.change(screen.getByLabelText('Every'), {
       target: { value: '2' },
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Daily' }))
 
+    expect(screen.getByLabelText('Every')).toBeVisible()
+    expect(screen.getByLabelText('Never')).toBeVisible()
     expect(
       screen.queryByRole('group', { name: 'On' }),
     ).not.toBeInTheDocument()
@@ -406,25 +534,46 @@ describe('CreateMeetingDialog recurrence editor', () => {
     expect(screen.getByText('days')).toBeVisible()
   })
 
-  it('shows the derived day-of-month for Monthly and keeps it read-only', async () => {
+  it('shows interval + Ends without weekdays for Monthly and keeps the same-day rule', async () => {
     renderDialog()
     await selectTemplate()
     setBaseForm(TUESDAY)
-    enableRepeat()
+    selectRepeat('monthly')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Monthly' }))
-
-    expect(screen.getByText('On day 22')).toBeVisible()
-    expect(screen.queryByRole('group', { name: 'On' }))
-      .not.toBeInTheDocument()
+    expect(screen.getByLabelText('Every')).toBeVisible()
+    expect(screen.getByLabelText('Never')).toBeVisible()
+    expect(
+      screen.queryByRole('group', { name: 'On' }),
+    ).not.toBeInTheDocument()
     expect(screen.getByText('month')).toBeVisible()
+    // The same-day-of-month rule is derived from the start date (22) and
+    // surfaces in the summary — no separate editable day control.
+    expect(screen.queryByText('On day 22')).not.toBeInTheDocument()
+    expect(
+      screen.getByText(`Every month on day 22 at ${TIME_1030} · no end`),
+    ).toBeVisible()
+  })
+
+  it('Does not repeat renders zero recurrence-detail fields and no summary', async () => {
+    renderDialog()
+    await selectTemplate()
+    setBaseForm()
+
+    expect(screen.queryByLabelText('Every')).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('group', { name: 'On' }),
+    ).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Never')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('On date')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('After')).not.toBeInTheDocument()
+    expect(screen.queryByText(/· no end/)).not.toBeInTheDocument()
   })
 
   it('does not silently clamp invalid interval text while editing and requires >= 1', async () => {
     renderDialog()
     await selectTemplate()
     setBaseForm()
-    enableRepeat()
+    selectRepeat('weekly')
 
     const interval = screen.getByLabelText('Every')
     fireEvent.change(interval, { target: { value: '0' } })
@@ -454,7 +603,7 @@ describe('CreateMeetingDialog recurrence editor', () => {
     const { onCreateSeries } = renderDialog()
     await selectTemplate()
     setBaseForm()
-    enableRepeat()
+    selectRepeat('weekly')
 
     // Never (default): both fields null.
     submitForm()
@@ -484,7 +633,7 @@ describe('CreateMeetingDialog recurrence editor', () => {
     // After: only count is set.
     fireEvent.click(screen.getByLabelText('After'))
     fireEvent.change(
-      screen.getByLabelText('Number of occurrences'),
+      screen.getByLabelText('Number of meetings'),
       { target: { value: '12' } },
     )
     submitForm()
@@ -496,14 +645,35 @@ describe('CreateMeetingDialog recurrence editor', () => {
     )
   })
 
+  it('uses meetings copy for the count end mode', async () => {
+    renderDialog()
+    await selectTemplate()
+    setBaseForm()
+    selectRepeat('weekly')
+
+    fireEvent.click(screen.getByLabelText('After'))
+    fireEvent.change(
+      screen.getByLabelText('Number of meetings'),
+      { target: { value: '3' } },
+    )
+
+    expect(screen.getByText('meetings')).toBeVisible()
+    expect(
+      screen.queryByText('occurrences'),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByText(`Every week on Tuesday at ${TIME_1030} · 3 meetings`),
+    ).toBeVisible()
+  })
+
   it('requires a count of at least 1 and a valid end date', async () => {
     renderDialog()
     await selectTemplate()
     setBaseForm()
-    enableRepeat()
+    selectRepeat('weekly')
 
     fireEvent.click(screen.getByLabelText('After'))
-    const count = screen.getByLabelText('Number of occurrences')
+    const count = screen.getByLabelText('Number of meetings')
     fireEvent.change(count, { target: { value: '0' } })
     fireEvent.blur(count)
     expect(
@@ -530,7 +700,7 @@ describe('CreateMeetingDialog recurrence editor', () => {
     renderDialog()
     await selectTemplate()
     setBaseForm(TUESDAY)
-    enableRepeat()
+    selectRepeat('weekly')
 
     expect(
       screen.getByText(`Every week on Tuesday at ${TIME_1030} · no end`),
@@ -546,7 +716,7 @@ describe('CreateMeetingDialog recurrence editor', () => {
       ),
     ).toBeVisible()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Daily' }))
+    selectRepeat('daily')
     expect(
       screen.getByText(`Every 2 days at ${TIME_1030} · no end`),
     ).toBeVisible()
@@ -562,12 +732,12 @@ describe('CreateMeetingDialog recurrence editor', () => {
 
     fireEvent.click(screen.getByLabelText('After'))
     fireEvent.change(
-      screen.getByLabelText('Number of occurrences'),
+      screen.getByLabelText('Number of meetings'),
       { target: { value: '5' } },
     )
     expect(
       screen.getByText(
-        `Every 2 days at ${formatTimePartLocale('09:15', locale)} · 5 occurrences`,
+        `Every 2 days at ${formatTimePartLocale('09:15', locale)} · 5 meetings`,
       ),
     ).toBeVisible()
 
@@ -582,11 +752,34 @@ describe('CreateMeetingDialog recurrence editor', () => {
     ).toBeVisible()
   })
 
+  it('shows no summary while the recurrence is invalid', async () => {
+    renderDialog()
+    await selectTemplate()
+    setBaseForm(TUESDAY)
+    selectRepeat('weekly')
+    expect(
+      screen.getByText(`Every week on Tuesday at ${TIME_1030} · no end`),
+    ).toBeVisible()
+
+    // Deselecting every weekday invalidates the rule: the field error
+    // is the presentation, not an instructional summary box.
+    fireEvent.click(weekdayButton('Tuesday'))
+    expect(
+      screen.getByRole('alert').textContent,
+    ).toBe('Select at least one weekday.')
+    expect(screen.queryByText(/· no end/)).not.toBeInTheDocument()
+    expect(
+      screen.queryByText(
+        'Complete the recurrence details to see the schedule summary.',
+      ),
+    ).not.toBeInTheDocument()
+  })
+
   it('uses the existing Schedule controls as the recurrence date/time source', async () => {
     const { onCreateSeries } = renderDialog()
     await selectTemplate()
     setBaseForm('2026-09-22', '14:05')
-    enableRepeat()
+    selectRepeat('weekly')
 
     submitForm()
 
@@ -605,7 +798,7 @@ describe('CreateMeetingDialog recurring submit contract', () => {
     const { onCreate, onCreateSeries } = renderDialog()
     await selectTemplate()
     setBaseForm(TUESDAY, '10:30', 'Team Rituals')
-    enableRepeat()
+    selectRepeat('weekly')
     fireEvent.change(screen.getByLabelText('Every'), {
       target: { value: '2' },
     })
@@ -635,8 +828,7 @@ describe('CreateMeetingDialog recurring submit contract', () => {
     const { onCreateSeries } = renderDialog()
     await selectTemplate()
     setBaseForm('2026-09-28')
-    enableRepeat()
-    fireEvent.click(screen.getByRole('button', { name: 'Monthly' }))
+    selectRepeat('monthly')
 
     submitForm()
 
@@ -653,14 +845,14 @@ describe('CreateMeetingDialog recurring submit contract', () => {
     const { rerender, onCreate } = renderDialog()
     await selectTemplate()
     setBaseForm(TUESDAY)
-    enableRepeat()
+    selectRepeat('weekly')
     fireEvent.change(screen.getByLabelText('Every'), {
       target: { value: '2' },
     })
     fireEvent.click(weekdayButton('Thursday'))
     fireEvent.click(screen.getByLabelText('After'))
     fireEvent.change(
-      screen.getByLabelText('Number of occurrences'),
+      screen.getByLabelText('Number of meetings'),
       { target: { value: '5' } },
     )
 
@@ -681,17 +873,15 @@ describe('CreateMeetingDialog recurring submit contract', () => {
     expect(screen.getByLabelText('Every')).toHaveValue('2')
     expect(weekdayButton('Tuesday')).toHaveAttribute('aria-pressed', 'true')
     expect(weekdayButton('Thursday')).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByLabelText('Number of occurrences')).toHaveValue('5')
-    expect(
-      screen.getByRole('switch', { name: 'Repeat meeting' }),
-    ).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByLabelText('Number of meetings')).toHaveValue('5')
+    expect(screen.getByLabelText('Repeat')).toHaveValue('weekly')
   })
 
   it('prevents duplicate submission while the recurring creation is pending', async () => {
     const { rerender } = renderDialog()
     await selectTemplate()
     setBaseForm()
-    enableRepeat()
+    selectRepeat('weekly')
 
     rerender(
       <CreateMeetingDialog
@@ -716,7 +906,7 @@ describe('CreateMeetingDialog recurring submit contract', () => {
   it('resets the recurrence defaults when the dialog is closed and reopened', async () => {
     const { rerender } = renderDialog()
     await selectTemplate()
-    enableRepeat()
+    selectRepeat('weekly')
     fireEvent.change(screen.getByLabelText('Every'), {
       target: { value: '4' },
     })
@@ -746,8 +936,7 @@ describe('CreateMeetingDialog recurring submit contract', () => {
     )
     await selectTemplate()
 
-    expect(screen.getByRole('switch', { name: 'Repeat meeting' }))
-      .toHaveAttribute('aria-checked', 'false')
+    expect(screen.getByLabelText('Repeat')).toHaveValue('none')
     expect(
       screen.queryByLabelText('Every'),
     ).not.toBeInTheDocument()
@@ -757,14 +946,13 @@ describe('CreateMeetingDialog recurring submit contract', () => {
     const { onClose } = renderDialog()
     await selectTemplate()
     setBaseForm()
-    enableRepeat()
+    selectRepeat('daily')
 
     // Recurrence controls behave as inside-modal interaction.
-    fireEvent.click(screen.getByRole('button', { name: 'Daily' }))
     fireEvent.change(screen.getByLabelText('Every'), {
       target: { value: '2' },
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Weekly' }))
+    selectRepeat('weekly')
     fireEvent.click(screen.getByLabelText('After'))
     expect(onClose).not.toHaveBeenCalled()
 
@@ -786,7 +974,7 @@ describe('CreateMeetingDialog recurring participants', () => {
     const { onCreate, onCreateSeries } = renderDialog()
     await selectTemplate()
     setBaseForm()
-    enableRepeat()
+    selectRepeat('weekly')
 
     // A candidate is searched but never selected.
     fireEvent.change(screen.getByLabelText('Participants'), {
@@ -809,7 +997,7 @@ describe('CreateMeetingDialog recurring participants', () => {
     const { onCreate, onCreateSeries } = renderDialog()
     await selectTemplate()
     setBaseForm()
-    enableRepeat()
+    selectRepeat('weekly')
 
     fireEvent.change(screen.getByLabelText('Participants'), {
       target: { value: 'ch' },
@@ -820,8 +1008,8 @@ describe('CreateMeetingDialog recurring participants', () => {
       }),
     )
 
-    // The obsolete safety gate (warning + disabled submit) is gone:
-    // the recurring submit stays enabled and no blocker is shown.
+    // Recurring submission is enabled with participants selected:
+    // no blocker is rendered.
     expect(
       screen.queryByText(
         /Recurring series can't be created with participants yet/,
@@ -852,7 +1040,7 @@ describe('CreateMeetingDialog recurring participants', () => {
     const { onCreate, onCreateSeries } = renderDialog()
     await selectTemplate()
     setBaseForm()
-    enableRepeat()
+    selectRepeat('weekly')
 
     fireEvent.change(screen.getByLabelText('Participants'), {
       target: { value: 'ex' },
@@ -877,7 +1065,7 @@ describe('CreateMeetingDialog recurring participants', () => {
     expect(onCreate).not.toHaveBeenCalled()
   })
 
-  it('still submits the one-time flow WITH participants while Repeat is OFF', async () => {
+  it('still submits the one-time flow WITH participants while Repeat is Does not repeat', async () => {
     const { onCreate, onCreateSeries } = renderDialog()
     await selectTemplate()
     setBaseForm()
@@ -890,7 +1078,8 @@ describe('CreateMeetingDialog recurring participants', () => {
     })
     fireEvent.click(addButton)
 
-    // Repeat stays OFF: participants are part of the one-time contract.
+    // Repeat stays Does not repeat: participants are part of the
+    // one-time contract.
     submitForm()
 
     expect(onCreate).toHaveBeenCalledWith(

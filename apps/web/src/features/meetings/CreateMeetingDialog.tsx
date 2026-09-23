@@ -68,7 +68,8 @@ type CreateMeetingDialogProps = {
   onClose: () => void
   onCreate: (input: CreateMeetingInput) => void
   /**
-   * Recurring-series submit. Called only when Repeat is ON and a Meeting
+   * Recurring-series submit. Called only when a repeating mode (Daily /
+   * Weekly / Monthly) is selected in the Repeat field AND a Meeting
    * Template is selected; the one-time `onCreate` is never invoked for a
    * recurring submission. When omitted, the recurring submit stays
    * disabled (no silent fallback to one-time creation).
@@ -141,14 +142,19 @@ export function CreateMeetingDialog({
   >(null)
   const participantSearchVersion = useRef(0)
 
-  // Recurrence (V1) editor state. Canonical defaults: Repeat OFF, Weekly,
-  // interval 1, end Never. The weekday set starts as the start date's ISO
-  // weekday and follows date changes until the user configures it manually
-  // (weekdaysTouched); hidden values never affect the one-time submit.
-  const [repeatOn, setRepeatOn] = useState(false)
-  const [recurrenceFrequency, setRecurrenceFrequency] = useState<
-    RecurrenceFrequency
-  >('weekly')
+  // Recurrence (V1) editor state. Canonical defaults: `Does not repeat`
+  // (the ordinary one-time flow), interval 1, end Never. The weekday set
+  // starts as the start date's ISO weekday and follows date changes until
+  // the user configures it manually (weekdaysTouched); the hidden values
+  // never affect the one-time submit. The Repeat select is the single
+  // recurrence-mode selector: `none` keeps one-time creation authoritative.
+  const [repeatMode, setRepeatMode] = useState<'none' | RecurrenceFrequency>(
+    'none',
+  )
+  // Error visibility is interaction-driven: a field-level error is
+  // presented only after the user has touched the field or attempted
+  // Create — never on initial activation.
+  const [submitAttempted, setSubmitAttempted] = useState(false)
   const [intervalText, setIntervalText] = useState('1')
   const [intervalTouched, setIntervalTouched] = useState(false)
   const [weekdays, setWeekdays] = useState<number[]>(() => [
@@ -197,8 +203,8 @@ export function CreateMeetingDialog({
       setSearchingParticipants(false)
       setParticipantSearchError(null)
       participantSearchVersion.current += 1
-      setRepeatOn(false)
-      setRecurrenceFrequency('weekly')
+      setRepeatMode('none')
+      setSubmitAttempted(false)
       setIntervalText('1')
       setIntervalTouched(false)
       setWeekdays([isoWeekdayOfLocalDate(boundary.datePart)])
@@ -333,10 +339,15 @@ export function CreateMeetingDialog({
     }
   }
 
-  const applyFrequency = (next: RecurrenceFrequency) => {
-    setRecurrenceFrequency(next)
-    // Re-activating Weekly without a manual configuration re-derives the
-    // default weekday set from the current start date.
+  const applyRepeatMode = (next: 'none' | RecurrenceFrequency) => {
+    setRepeatMode(next)
+    if (next === 'none') {
+      setEndDateCalendarOpen(false)
+      return
+    }
+    // Activating Weekly without a manual configuration derives the
+    // selected weekday from the current start date, so Weekly always
+    // opens in a valid state (no immediate error presentation).
     if (next === 'weekly' && !weekdaysTouched && dateValid) {
       setWeekdays([isoWeekdayOfLocalDate(dateText)])
     }
@@ -357,6 +368,37 @@ export function CreateMeetingDialog({
     setEndDateCalendarOpen(false)
     endDateInputRef.current?.focus()
   }
+
+  // Removing the Template — through ANY path: the `No template` option,
+  // a Context change, or a selection that no longer matches after the
+  // scoped Template fetch — makes one-time creation authoritative
+  // again: the canonical Repeat state returns to `Does not repeat`,
+  // not only visually, and the recurrence-only transient UI state
+  // (interval, weekday configuration, end condition, touched/error
+  // flags) is cleared — so re-selecting a Template starts at `Does not
+  // repeat` with no unexpected leftovers. Title, Context, Date, Time,
+  // and Participants are preserved.
+  const previousSeriesId = useRef(seriesId)
+  useEffect(() => {
+    const previous = previousSeriesId.current
+    previousSeriesId.current = seriesId
+    if (previous === '' || seriesId !== '') {
+      return
+    }
+    setRepeatMode('none')
+    setEndDateCalendarOpen(false)
+    setIntervalText('1')
+    setIntervalTouched(false)
+    if (dateValid) {
+      setWeekdays([isoWeekdayOfLocalDate(dateText)])
+    }
+    setWeekdaysTouched(false)
+    setEndMode('never')
+    setEndDateText('')
+    setEndDateTouched(false)
+    setCountText('')
+    setCountTouched(false)
+  }, [seriesId, dateValid, dateText])
 
   // Load the projects available for the selected research group so the
   // Project dropdown can offer them. Only write-role projects allow
@@ -541,19 +583,30 @@ export function CreateMeetingDialog({
   })
 
   // ── Recurrence (V1) derived state ────────────────────────────────
-  // Recurrence controls only exist with a selected Template, so the
-  // recurring submit is only possible with one; turning Repeat OFF (or
-  // going back to "No template") makes the one-time flow authoritative
-  // again, with the hidden recurrence values having no effect.
+  // The recurring submit is only possible with a selected Template:
+  // `Does not repeat` (or removing the Template) makes the one-time
+  // flow authoritative again, with the hidden recurrence values having
+  // no effect.
   const templateSelected = seriesId !== ''
-  const recurrenceActive = repeatOn && templateSelected
+  // Without a Template the Repeat select is disabled and presents
+  // `Does not repeat`: the one-time flow stays authoritative. Removing
+  // the Template resets the canonical mode (removal effect above), so
+  // re-selecting a Template starts at `Does not repeat` — the user
+  // must explicitly choose a recurring mode again.
+  const activeRepeatMode: 'none' | RecurrenceFrequency = templateSelected
+    ? repeatMode
+    : 'none'
+  const recurrenceActive = activeRepeatMode !== 'none'
 
   const intervalValue = parsePositiveIntegerText(intervalText, 1)
   const intervalError =
     intervalText !== '' && intervalValue === null && intervalTouched
-  const intervalUnit = `${frequencyUnit(recurrenceFrequency)}${
-    intervalValue === 1 ? '' : 's'
-  }`
+  const intervalUnit =
+    activeRepeatMode === 'none'
+      ? ''
+      : `${frequencyUnit(activeRepeatMode)}${
+          intervalValue === 1 ? '' : 's'
+        }`
 
   const endDateValid = endDateText !== '' && isValidDatePart(endDateText)
   // Errors only surface for the ACTIVE end mode: the inactive mode's input
@@ -574,18 +627,23 @@ export function CreateMeetingDialog({
 
   const startWeekday = dateValid ? isoWeekdayOfLocalDate(dateText) : null
   const weeklyWeekdaysValid =
-    recurrenceFrequency !== 'weekly' ||
+    activeRepeatMode !== 'weekly' ||
     (weekdays.length > 0 &&
       (startWeekday === null || weekdays.includes(startWeekday)))
 
   const weekdayError =
-    recurrenceActive && recurrenceFrequency === 'weekly'
+    recurrenceActive && activeRepeatMode === 'weekly'
       ? weekdays.length === 0
         ? 'Select at least one weekday.'
         : startWeekday !== null && !weekdays.includes(startWeekday)
           ? 'The start date\'s weekday must be selected.'
           : null
       : null
+  // Interaction-driven visibility: the auto-derived weekday set never
+  // presents an error; the field error appears only after the user has
+  // touched the weekday set or attempted Create.
+  const weekdayErrorVisible =
+    weekdayError !== null && (weekdaysTouched || submitAttempted)
 
   const recurrenceValid =
     title.trim() !== '' &&
@@ -606,12 +664,14 @@ export function CreateMeetingDialog({
     (endMode !== 'date' || endDateValid) &&
     (endMode !== 'count' || countValue !== null)
 
-  // The summary previews the resolved rule whenever every recurrence input
-  // is currently valid; it duplicates no recurrence-domain calculation.
+  // The summary previews the resolved rule ONLY while every recurrence
+  // input is currently valid; an invalid recurrence renders NO summary
+  // (the relevant field validation is the presentation). It duplicates no
+  // recurrence-domain calculation.
   const recurrenceSummary =
-    recurrenceSummaryValid
+    recurrenceActive && recurrenceSummaryValid
       ? formatRecurrenceSummary({
-          frequency: recurrenceFrequency,
+          frequency: activeRepeatMode,
           interval: intervalValue as number,
           weekdays,
           startDate: dateText,
@@ -621,7 +681,7 @@ export function CreateMeetingDialog({
           endDate: endMode === 'date' ? endDateText : null,
           count: endMode === 'count' ? countValue : null,
         })
-      : 'Complete the recurrence details to see the schedule summary.'
+      : null
 
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault()
@@ -637,6 +697,7 @@ export function CreateMeetingDialog({
     // conversion of localTime). It never calls the one-time Meeting
     // creation and no concrete Meeting is fabricated client-side.
     if (recurrenceActive) {
+      setSubmitAttempted(true)
       if (!recurrenceValid) {
         return
       }
@@ -644,10 +705,10 @@ export function CreateMeetingDialog({
       onCreateSeries?.({
         meetingSeriesId: Number(seriesId),
         title: trimmedTitle,
-        frequency: recurrenceFrequency,
+        frequency: activeRepeatMode,
         interval: intervalValue as number,
         weekdays:
-          recurrenceFrequency === 'weekly'
+          activeRepeatMode === 'weekly'
             ? [...weekdays].sort((a, b) => a - b)
             : [],
         startDate: dateText,
@@ -733,7 +794,7 @@ export function CreateMeetingDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="create-meeting-title"
-        className="flex max-h-[calc(100dvh-3rem)] w-full max-w-[min(32.5rem,calc(100vw-3rem))] flex-col overflow-hidden rounded-xl border border-border-subtle bg-surface shadow-xl"
+        className="flex max-h-[calc(100dvh-3rem)] w-full max-w-[min(35rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-xl border border-border-subtle bg-surface shadow-xl"
       >
         <form
           onSubmit={handleSubmit}
@@ -777,7 +838,7 @@ export function CreateMeetingDialog({
                 htmlFor="create-meeting-project"
                 className="mb-1.5 block text-sm font-medium text-text"
               >
-                Project
+                Context
               </label>
 
               <select
@@ -789,7 +850,7 @@ export function CreateMeetingDialog({
                 }}
                 className="h-10 w-full rounded-lg border border-border-control bg-surface px-3 text-sm text-text outline-none focus:border-focus focus:ring-2 focus:ring-focus/15"
               >
-                <option value="">Research group meeting</option>
+                <option value="">Research group</option>
 
                 {projects.map((project) => (
                   <option
@@ -812,7 +873,9 @@ export function CreateMeetingDialog({
 
               <select
                 id="create-meeting-template"
-                aria-describedby="create-meeting-template-help"
+                aria-describedby={
+                  seriesId !== '' ? 'create-meeting-template-help' : undefined
+                }
                 value={seriesId}
                 onChange={(event) =>
                   setSeriesId(event.target.value)
@@ -831,390 +894,542 @@ export function CreateMeetingDialog({
                 ))}
               </select>
 
-              <p
-                id="create-meeting-template-help"
-                className="mt-1.5 text-xs text-text-muted"
-              >
-                {seriesId === ''
-                  ? 'Choose a template to enable recurring meetings.'
-                  : 'Uses the template sections as the starting structure.'}
+              {seriesId !== '' && (
+                <p
+                  id="create-meeting-template-help"
+                  className="mt-1.5 text-xs text-text-muted"
+                >
+                  Uses the template sections as the starting structure.
+                </p>
+              )}
+            </div>
+
+            <div className="border-t border-border-subtle pt-5">
+              <h3 className="mb-3 text-sm font-semibold text-text">
+                Schedule
+              </h3>
+
+              <div className="grid grid-cols-1 gap-3 min-[480px]:grid-cols-[minmax(0,1fr)_128px] min-[480px]:items-start">
+                <div className="min-w-0">
+                  <label
+                    htmlFor="create-meeting-date"
+                    className="mb-1.5 block text-sm font-medium text-text"
+                  >
+                    Date
+                  </label>
+
+                  <div
+                    ref={dateFieldRef}
+                    className="relative"
+                  >
+                      <input
+                        id="create-meeting-date"
+                        ref={dateInputRef}
+                        type="text"
+                        value={dateDisplay}
+                        onChange={(event) =>
+                          applyDateText(event.target.value)
+                        }
+                        onFocus={() => setDateFocused(true)}
+                        onBlur={() => {
+                          setDateFocused(false)
+                          setDateTouched(true)
+                        }}
+                      placeholder="YYYY-MM-DD"
+                      aria-invalid={dateError || undefined}
+                      aria-describedby={
+                        dateError
+                          ? 'create-meeting-date-error'
+                          : undefined
+                      }
+                      className="h-10 w-full rounded-lg border border-border-control bg-surface pl-3 pr-10 text-sm text-text outline-none transition placeholder:text-text-muted/60 focus:border-focus focus:ring-2 focus:ring-focus/15"
+                    />
+
+                    <button
+                      type="button"
+                      aria-label="Choose date"
+                      aria-haspopup="grid"
+                      aria-expanded={calendarOpen}
+                      onClick={toggleCalendar}
+                      className="absolute right-1.5 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-text-muted transition hover:bg-surface-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+                    >
+                      <span
+                        aria-hidden="true"
+                        className="material-symbols-outlined text-[18px]"
+                      >
+                        calendar_month
+                      </span>
+                    </button>
+
+                    <CreateMeetingCalendar
+                      open={calendarOpen}
+                      locale={locale}
+                      selectedDatePart={dateValid ? dateText : null}
+                      anchorRef={dateFieldRef}
+                      triggerRef={dateInputRef}
+                      onSelect={handleCalendarSelect}
+                      onOpenChange={setCalendarOpen}
+                    />
+                  </div>
+
+                  {dateError && (
+                    <p
+                      id="create-meeting-date-error"
+                      role="alert"
+                      className="mt-1.5 text-xs text-danger"
+                    >
+                      Enter a valid date.
+                    </p>
+                  )}
+                </div>
+
+                <div className="min-w-0">
+                  <label
+                    htmlFor="create-meeting-time"
+                    className="mb-1.5 block text-sm font-medium text-text"
+                  >
+                    Time
+                  </label>
+
+                  <div
+                    ref={timeListRef}
+                    className="relative"
+                  >
+                    <input
+                      id="create-meeting-time"
+                      type="text"
+                      role="combobox"
+                      aria-expanded={timeListOpen}
+                      aria-haspopup="listbox"
+                      aria-autocomplete="list"
+                      aria-controls={
+                        timeListOpen
+                          ? 'create-meeting-time-listbox'
+                          : undefined
+                      }
+                      aria-activedescendant={
+                        timeListOpen
+                          ? `create-meeting-time-option-${activeTimeIndex}`
+                          : undefined
+                      }
+                      value={timeDisplay}
+                      onChange={(event) => {
+                        const value = event.target.value
+                        setTimeText(value)
+                        setActiveTimeIndex(
+                          Math.max(0, timeOptions.indexOf(value)),
+                        )
+                      }}
+                      onKeyDown={handleTimeKeyDown}
+                      onFocus={() => setTimeFocused(true)}
+                      onBlur={() => {
+                        setTimeFocused(false)
+                        setTimeTouched(true)
+                        setTimeListOpen(false)
+                        // Normalize manually entered times to the
+                        // canonical form (locale-independent parsing;
+                        // malformed text is kept as-is for validation).
+                        setTimeText(
+                          (current) => parseManualTime(current) ?? current,
+                        )
+                      }}
+                      placeholder="HH:MM"
+                      aria-invalid={timeError || undefined}
+                      aria-describedby={
+                        timeError
+                          ? 'create-meeting-time-error'
+                          : undefined
+                      }
+                      className="h-10 w-full rounded-lg border border-border-control bg-surface pl-3 pr-9 text-sm text-text outline-none transition placeholder:text-text-muted/60 focus:border-focus focus:ring-2 focus:ring-focus/15"
+                    />
+
+                    <button
+                      type="button"
+                      aria-label="Show time options"
+                      aria-haspopup="listbox"
+                      aria-expanded={timeListOpen}
+                      onClick={toggleTimeList}
+                      className="absolute right-1.5 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-text-muted transition hover:bg-surface-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+                    >
+                      <span
+                        aria-hidden="true"
+                        className="material-symbols-outlined text-[18px]"
+                      >
+                        expand_more
+                      </span>
+                    </button>
+
+                    {timeListOpen && (
+                      <div
+                        id="create-meeting-time-listbox"
+                        role="listbox"
+                        aria-label="Time options"
+                        className="absolute bottom-[calc(100%+6px)] right-0 z-50 w-full min-w-[128px] overflow-hidden rounded-lg border border-border-subtle bg-surface py-1 shadow-[0_12px_32px_rgba(0,0,0,0.32)]"
+                      >
+                        {timeOptions.map((option, index) => (
+                          <div
+                            key={option}
+                            id={`create-meeting-time-option-${index}`}
+                            role="option"
+                            aria-selected={option === timeText}
+                            onMouseDown={(event) =>
+                              event.preventDefault()
+                            }
+                            onClick={() =>
+                              selectTimeOption(option)
+                            }
+                            onMouseEnter={() =>
+                              setActiveTimeIndex(index)
+                            }
+                            className={[
+                              'cursor-pointer px-3 py-2 text-sm text-text',
+                              index === activeTimeIndex
+                                ? 'bg-surface-hover'
+                                : '',
+                            ].join(' ')}
+                          >
+                            {formatTimePartLocale(option, locale)}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {timeError && (
+                    <p
+                      id="create-meeting-time-error"
+                      role="alert"
+                      className="mt-1.5 text-xs text-danger"
+                    >
+                      Enter a valid time.
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <p className="mt-2.5 text-xs text-text-muted">
+                Time zone: {currentIanaTimezone()}
               </p>
             </div>
 
-            {templateSelected && (
-              <div>
-                <div className="flex items-center justify-between gap-3">
-                  <span
-                    id="create-meeting-repeat-label"
-                    className="text-sm font-medium text-text"
-                  >
-                    Repeat meeting
-                  </span>
+            <div>
+              <label
+                htmlFor="create-meeting-repeat"
+                className="mb-1.5 block text-sm font-medium text-text"
+              >
+                Repeat
+              </label>
 
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={repeatOn}
-                    aria-labelledby="create-meeting-repeat-label"
-                    onClick={() => {
-                      setRepeatOn((current) => !current)
-                      setEndDateCalendarOpen(false)
-                    }}
-                    className={[
-                      'relative h-6 w-11 shrink-0 rounded-full transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface',
-                      repeatOn ? 'bg-accent' : 'bg-surface-muted',
-                    ].join(' ')}
-                  >
-                    <span
-                      aria-hidden="true"
-                      className={[
-                        'absolute top-0.5 h-5 w-5 rounded-full bg-surface shadow transition-all',
-                        repeatOn ? 'left-[22px]' : 'left-0.5',
-                      ].join(' ')}
-                    />
-                  </button>
-                </div>
+              <select
+                id="create-meeting-repeat"
+                aria-describedby={
+                  templateSelected ? undefined : 'create-meeting-repeat-help'
+                }
+                value={activeRepeatMode}
+                disabled={!templateSelected}
+                onChange={(event) =>
+                  applyRepeatMode(
+                    event.target.value as 'none' | RecurrenceFrequency,
+                  )
+                }
+                className="h-10 w-full rounded-lg border border-border-control bg-surface px-3 text-sm text-text outline-none focus:border-focus focus:ring-2 focus:ring-focus/15 disabled:cursor-not-allowed disabled:opacity-45"
+              >
+                <option value="none">Does not repeat</option>
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly</option>
+                <option value="monthly">Monthly</option>
+              </select>
 
-                {repeatOn && (
-                  <div className="ml-1 mt-3 space-y-4 border-l-2 border-border-subtle pl-4">
+              {!templateSelected && (
+                <p
+                  id="create-meeting-repeat-help"
+                  className="mt-1.5 text-xs text-text-muted"
+                >
+                  Choose a meeting template to enable recurrence.
+                </p>
+              )}
+
+              {recurrenceActive && (
+                <div className="ml-3.5 mt-3 space-y-2.5">
+                  <div>
+                    <label
+                      htmlFor="create-meeting-recurrence-interval"
+                      className="mb-1.5 block text-sm font-medium text-text"
+                    >
+                      Every
+                    </label>
+
+                    <div className="flex items-center gap-2">
+                      <input
+                        id="create-meeting-recurrence-interval"
+                        type="text"
+                        inputMode="numeric"
+                        value={intervalText}
+                        onChange={(event) =>
+                          setIntervalText(event.target.value)
+                        }
+                        onBlur={() => setIntervalTouched(true)}
+                        aria-invalid={intervalError || undefined}
+                        aria-describedby={
+                          intervalError
+                            ? 'create-meeting-recurrence-interval-error'
+                            : undefined
+                        }
+                        className="h-9 w-20 rounded-lg border border-border-control bg-surface px-3 text-sm text-text outline-none transition focus:border-focus focus:ring-2 focus:ring-focus/15"
+                      />
+
+                      <span className="text-sm text-text-muted">
+                        {intervalUnit}
+                      </span>
+                    </div>
+
+                    {intervalError && (
+                      <p
+                        id="create-meeting-recurrence-interval-error"
+                        role="alert"
+                        className="mt-1.5 text-xs text-danger"
+                      >
+                        Enter a whole number of 1 or more.
+                      </p>
+                    )}
+                  </div>
+
+                  {activeRepeatMode === 'weekly' && (
                     <div>
                       <span
-                        id="create-meeting-recurrence-frequency-label"
+                        id="create-meeting-recurrence-weekdays-label"
                         className="mb-1.5 block text-sm font-medium text-text"
                       >
-                        Frequency
+                        On
                       </span>
 
                       <div
                         role="group"
-                        aria-labelledby="create-meeting-recurrence-frequency-label"
-                        className="grid w-full grid-cols-3 overflow-hidden rounded-lg border border-border-control bg-surface"
+                        aria-labelledby="create-meeting-recurrence-weekdays-label"
+                        aria-describedby={
+                          weekdayErrorVisible
+                            ? 'create-meeting-recurrence-weekdays-error'
+                            : undefined
+                        }
+                        className="grid grid-cols-7 gap-1.5"
                       >
-                        {(
-                          [
-                            ['daily', 'Daily'],
-                            ['weekly', 'Weekly'],
-                            ['monthly', 'Monthly'],
-                          ] as const
-                        ).map(([value, label], index) => (
-                          <button
-                            key={value}
-                            type="button"
-                            aria-pressed={recurrenceFrequency === value}
-                            onClick={() => applyFrequency(value)}
-                            className={[
-                              'h-9 text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus',
-                              index > 0
-                                ? 'border-l border-border-control'
-                                : '',
-                              recurrenceFrequency === value
-                                ? 'bg-surface-hover font-semibold text-text'
-                                : 'text-text-muted hover:bg-surface-hover',
-                            ].join(' ')}
-                          >
-                            {label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
+                        {ISO_WEEKDAYS.map((day) => {
+                          const selected = weekdays.includes(day.value)
 
-                    <div>
-                      <label
-                        htmlFor="create-meeting-recurrence-interval"
-                        className="mb-1.5 block text-sm font-medium text-text"
-                      >
-                        Every
+                          return (
+                            <button
+                              key={day.value}
+                              type="button"
+                              aria-pressed={selected}
+                              aria-label={day.name}
+                              onClick={() => toggleWeekday(day.value)}
+                              className={[
+                                'h-9 rounded-lg border text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
+                                selected
+                                  ? 'border-accent bg-accent text-text-inverse'
+                                  : 'border-border-control bg-surface text-text-muted hover:bg-surface-hover',
+                              ].join(' ')}
+                            >
+                              {day.short}
+                            </button>
+                          )
+                        })}
+                      </div>
+
+                      {weekdayErrorVisible && weekdayError && (
+                        <p
+                          id="create-meeting-recurrence-weekdays-error"
+                          role="alert"
+                          className="mt-1.5 text-xs text-danger"
+                        >
+                          {weekdayError}
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  <div>
+                    <span className="mb-1.5 block text-sm font-medium text-text">
+                      Ends
+                    </span>
+
+                    <div className="space-y-2">
+                      <label className="flex cursor-pointer items-center gap-2 text-sm text-text">
+                        <input
+                          type="radio"
+                          name="create-meeting-recurrence-end-mode"
+                          value="never"
+                          checked={endMode === 'never'}
+                          onChange={() => setEndMode('never')}
+                          className="h-4 w-4"
+                        />
+                        Never
                       </label>
 
                       <div className="flex items-center gap-2">
                         <input
-                          id="create-meeting-recurrence-interval"
-                          type="text"
-                          inputMode="numeric"
-                          value={intervalText}
-                          onChange={(event) =>
-                            setIntervalText(event.target.value)
-                          }
-                          onBlur={() => setIntervalTouched(true)}
-                          aria-invalid={intervalError || undefined}
-                          aria-describedby={
-                            intervalError
-                              ? 'create-meeting-recurrence-interval-error'
-                              : undefined
-                          }
-                          className="h-10 w-20 rounded-lg border border-border-control bg-surface px-3 text-sm text-text outline-none transition focus:border-focus focus:ring-2 focus:ring-focus/15"
+                          id="create-meeting-recurrence-end-mode-date"
+                          type="radio"
+                          name="create-meeting-recurrence-end-mode"
+                          value="date"
+                          checked={endMode === 'date'}
+                          onChange={() => setEndMode('date')}
+                          className="h-4 w-4"
                         />
+                        <label
+                          htmlFor="create-meeting-recurrence-end-mode-date"
+                          className="cursor-pointer text-sm text-text"
+                        >
+                          On date
+                        </label>
 
-                        <span className="text-sm text-text-muted">
-                          {intervalUnit}
-                        </span>
+                        {endMode === 'date' && (
+                          <div
+                            ref={endDateFieldRef}
+                            className="relative min-w-0 flex-1"
+                          >
+                            <input
+                              ref={endDateInputRef}
+                              type="text"
+                              aria-label="End date"
+                              value={
+                                endDateValid && !endDateCalendarOpen
+                                  ? formatDatePartLocale(
+                                      endDateText,
+                                      locale,
+                                    )
+                                  : endDateText
+                              }
+                              onChange={(event) =>
+                                setEndDateText(event.target.value)
+                              }
+                              onBlur={() => setEndDateTouched(true)}
+                              placeholder="YYYY-MM-DD"
+                              aria-invalid={endDateError || undefined}
+                              aria-describedby={
+                                endDateError
+                                  ? 'create-meeting-recurrence-end-date-error'
+                                  : undefined
+                              }
+                              className="h-9 w-full max-w-[180px] rounded-lg border border-border-control bg-surface pl-3 pr-10 text-sm text-text outline-none transition placeholder:text-text-muted/60 focus:border-focus focus:ring-2 focus:ring-focus/15"
+                            />
+
+                            <button
+                              type="button"
+                              aria-label="Choose end date"
+                              aria-haspopup="grid"
+                              aria-expanded={endDateCalendarOpen}
+                              onClick={() =>
+                                setEndDateCalendarOpen(
+                                  (current) => !current,
+                                )
+                              }
+                              className="absolute right-1.5 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-text-muted transition hover:bg-surface-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+                            >
+                              <span
+                                aria-hidden="true"
+                                className="material-symbols-outlined text-[18px]"
+                              >
+                                calendar_month
+                              </span>
+                            </button>
+
+                            <CreateMeetingCalendar
+                              open={endDateCalendarOpen}
+                              locale={locale}
+                              selectedDatePart={
+                                endDateValid ? endDateText : null
+                              }
+                              anchorRef={endDateFieldRef}
+                              triggerRef={endDateInputRef}
+                              onSelect={handleEndDateCalendarSelect}
+                              onOpenChange={setEndDateCalendarOpen}
+                            />
+                          </div>
+                        )}
                       </div>
 
-                      {intervalError && (
+                      {endDateError && (
                         <p
-                          id="create-meeting-recurrence-interval-error"
+                          id="create-meeting-recurrence-end-date-error"
                           role="alert"
-                          className="mt-1.5 text-xs text-danger"
+                          className="ml-6 text-xs text-danger"
+                        >
+                          Enter a valid date.
+                        </p>
+                      )}
+
+                      <div className="flex items-center gap-2">
+                        <input
+                          id="create-meeting-recurrence-end-mode-count"
+                          type="radio"
+                          name="create-meeting-recurrence-end-mode"
+                          value="count"
+                          checked={endMode === 'count'}
+                          onChange={() => setEndMode('count')}
+                          className="h-4 w-4"
+                        />
+                        <label
+                          htmlFor="create-meeting-recurrence-end-mode-count"
+                          className="cursor-pointer text-sm text-text"
+                        >
+                          After
+                        </label>
+
+                        {endMode === 'count' && (
+                          <>
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              aria-label="Number of meetings"
+                              value={countText}
+                              onChange={(event) =>
+                                setCountText(event.target.value)
+                              }
+                              onBlur={() => setCountTouched(true)}
+                              placeholder="10"
+                              aria-invalid={countError || undefined}
+                              aria-describedby={
+                                countError
+                                  ? 'create-meeting-recurrence-count-error'
+                                  : undefined
+                              }
+                              className="h-9 w-16 rounded-lg border border-border-control bg-surface px-3 text-sm text-text outline-none transition placeholder:text-text-muted/60 focus:border-focus focus:ring-2 focus:ring-focus/15"
+                            />
+
+                            <span className="text-sm text-text-muted">
+                              meetings
+                            </span>
+                          </>
+                        )}
+                      </div>
+
+                      {countError && (
+                        <p
+                          id="create-meeting-recurrence-count-error"
+                          role="alert"
+                          className="ml-6 text-xs text-danger"
                         >
                           Enter a whole number of 1 or more.
                         </p>
                       )}
                     </div>
+                  </div>
 
-                    {recurrenceFrequency === 'weekly' && (
-                      <div>
-                        <span
-                          id="create-meeting-recurrence-weekdays-label"
-                          className="mb-1.5 block text-sm font-medium text-text"
-                        >
-                          On
-                        </span>
-
-                        <div
-                          role="group"
-                          aria-labelledby="create-meeting-recurrence-weekdays-label"
-                          aria-describedby={
-                            weekdayError
-                              ? 'create-meeting-recurrence-weekdays-error'
-                              : undefined
-                          }
-                          className="flex gap-1.5"
-                        >
-                          {ISO_WEEKDAYS.map((day) => {
-                            const selected = weekdays.includes(day.value)
-
-                            return (
-                              <button
-                                key={day.value}
-                                type="button"
-                                aria-pressed={selected}
-                                aria-label={day.name}
-                                onClick={() => toggleWeekday(day.value)}
-                                className={[
-                                  'flex h-9 w-9 items-center justify-center gap-0.5 rounded-lg border text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
-                                  selected
-                                    ? 'border-accent bg-accent text-text-inverse'
-                                    : 'border-border-control bg-surface text-text-muted hover:bg-surface-hover',
-                                ].join(' ')}
-                              >
-                                {day.short}
-                                {selected && (
-                                  <span
-                                    aria-hidden="true"
-                                    className="material-symbols-outlined text-[14px]"
-                                  >
-                                    check
-                                  </span>
-                                )}
-                              </button>
-                            )
-                          })}
-                        </div>
-
-                        {weekdayError && (
-                          <p
-                            id="create-meeting-recurrence-weekdays-error"
-                            role="alert"
-                            className="mt-1.5 text-xs text-danger"
-                          >
-                            {weekdayError}
-                          </p>
-                        )}
-                      </div>
-                    )}
-
-                    {recurrenceFrequency === 'monthly' && (
-                      <p className="text-sm text-text-muted">
-                        {dateValid
-                          ? `On day ${Number(dateText.split('-')[2])}`
-                          : 'On day —'}
-                      </p>
-                    )}
-
-                    <div>
-                      <span className="mb-1.5 block text-sm font-medium text-text">
-                        Ends
-                      </span>
-
-                      <div className="space-y-2">
-                        <label className="flex cursor-pointer items-center gap-2 text-sm text-text">
-                          <input
-                            type="radio"
-                            name="create-meeting-recurrence-end-mode"
-                            value="never"
-                            checked={endMode === 'never'}
-                            onChange={() => setEndMode('never')}
-                            className="h-4 w-4"
-                          />
-                          Never
-                        </label>
-
-                        <div className="flex items-center gap-2">
-                          <input
-                            id="create-meeting-recurrence-end-mode-date"
-                            type="radio"
-                            name="create-meeting-recurrence-end-mode"
-                            value="date"
-                            checked={endMode === 'date'}
-                            onChange={() => setEndMode('date')}
-                            className="h-4 w-4"
-                          />
-                          <label
-                            htmlFor="create-meeting-recurrence-end-mode-date"
-                            className="cursor-pointer text-sm text-text"
-                          >
-                            On date
-                          </label>
-
-                          {endMode === 'date' && (
-                            <div
-                              ref={endDateFieldRef}
-                              className="relative min-w-0 flex-1"
-                            >
-                              <input
-                                ref={endDateInputRef}
-                                type="text"
-                                aria-label="End date"
-                                value={
-                                  endDateValid && !endDateCalendarOpen
-                                    ? formatDatePartLocale(
-                                        endDateText,
-                                        locale,
-                                      )
-                                    : endDateText
-                                }
-                                onChange={(event) =>
-                                  setEndDateText(event.target.value)
-                                }
-                                onBlur={() => setEndDateTouched(true)}
-                                placeholder="YYYY-MM-DD"
-                                aria-invalid={endDateError || undefined}
-                                aria-describedby={
-                                  endDateError
-                                    ? 'create-meeting-recurrence-end-date-error'
-                                    : undefined
-                                }
-                                className="h-9 w-full max-w-[180px] rounded-lg border border-border-control bg-surface pl-3 pr-10 text-sm text-text outline-none transition placeholder:text-text-muted/60 focus:border-focus focus:ring-2 focus:ring-focus/15"
-                              />
-
-                              <button
-                                type="button"
-                                aria-label="Choose end date"
-                                aria-haspopup="grid"
-                                aria-expanded={endDateCalendarOpen}
-                                onClick={() =>
-                                  setEndDateCalendarOpen(
-                                    (current) => !current,
-                                  )
-                                }
-                                className="absolute right-1.5 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-text-muted transition hover:bg-surface-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-                              >
-                                <span
-                                  aria-hidden="true"
-                                  className="material-symbols-outlined text-[18px]"
-                                >
-                                  calendar_month
-                                </span>
-                              </button>
-
-                              <CreateMeetingCalendar
-                                open={endDateCalendarOpen}
-                                locale={locale}
-                                selectedDatePart={
-                                  endDateValid ? endDateText : null
-                                }
-                                anchorRef={endDateFieldRef}
-                                triggerRef={endDateInputRef}
-                                onSelect={handleEndDateCalendarSelect}
-                                onOpenChange={setEndDateCalendarOpen}
-                              />
-                            </div>
-                          )}
-                        </div>
-
-                        {endDateError && (
-                          <p
-                            id="create-meeting-recurrence-end-date-error"
-                            role="alert"
-                            className="ml-6 text-xs text-danger"
-                          >
-                            Enter a valid date.
-                          </p>
-                        )}
-
-                        <div className="flex items-center gap-2">
-                          <input
-                            id="create-meeting-recurrence-end-mode-count"
-                            type="radio"
-                            name="create-meeting-recurrence-end-mode"
-                            value="count"
-                            checked={endMode === 'count'}
-                            onChange={() => setEndMode('count')}
-                            className="h-4 w-4"
-                          />
-                          <label
-                            htmlFor="create-meeting-recurrence-end-mode-count"
-                            className="cursor-pointer text-sm text-text"
-                          >
-                            After
-                          </label>
-
-                          {endMode === 'count' && (
-                            <>
-                              <input
-                                type="text"
-                                inputMode="numeric"
-                                aria-label="Number of occurrences"
-                                value={countText}
-                                onChange={(event) =>
-                                  setCountText(event.target.value)
-                                }
-                                onBlur={() => setCountTouched(true)}
-                                placeholder="10"
-                                aria-invalid={countError || undefined}
-                                aria-describedby={
-                                  countError
-                                    ? 'create-meeting-recurrence-count-error'
-                                    : undefined
-                                }
-                                className="h-9 w-16 rounded-lg border border-border-control bg-surface px-3 text-sm text-text outline-none transition placeholder:text-text-muted/60 focus:border-focus focus:ring-2 focus:ring-focus/15"
-                              />
-
-                              <span className="text-sm text-text-muted">
-                                occurrences
-                              </span>
-                            </>
-                          )}
-                        </div>
-
-                        {countError && (
-                          <p
-                            id="create-meeting-recurrence-count-error"
-                            role="alert"
-                            className="ml-6 text-xs text-danger"
-                          >
-                            Enter a whole number of 1 or more.
-                          </p>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="flex items-start gap-2 rounded-lg bg-surface-muted/50 px-3 py-2">
+                  {recurrenceSummary && (
+                    <p className="flex items-start gap-1.5 text-xs leading-4 text-text-muted">
                       <span
                         aria-hidden="true"
-                        className="material-symbols-outlined mt-0.5 text-[16px] text-text-muted"
+                        className="material-symbols-outlined mt-px text-[14px]"
                       >
                         repeat
                       </span>
-
-                      <p className="min-h-4 text-xs leading-4 text-text-muted">
-                        {recurrenceSummary}
-                      </p>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
+                      {recurrenceSummary}
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
 
             <div>
               <label
@@ -1353,213 +1568,6 @@ export function CreateMeetingDialog({
 
             </div>
 
-            <div className="border-t border-border-subtle pt-5">
-              <h3 className="mb-3 text-sm font-semibold text-text">
-                Schedule
-              </h3>
-
-              <div className="flex flex-col gap-3 min-[480px]:flex-row min-[480px]:items-start">
-                <div className="min-w-0 flex-1">
-                  <label
-                    htmlFor="create-meeting-date"
-                    className="mb-1.5 block text-sm font-medium text-text"
-                  >
-                    Date
-                  </label>
-
-                  <div
-                    ref={dateFieldRef}
-                    className="relative"
-                  >
-                      <input
-                        id="create-meeting-date"
-                        ref={dateInputRef}
-                        type="text"
-                        value={dateDisplay}
-                        onChange={(event) =>
-                          applyDateText(event.target.value)
-                        }
-                        onFocus={() => setDateFocused(true)}
-                        onBlur={() => {
-                          setDateFocused(false)
-                          setDateTouched(true)
-                        }}
-                      placeholder="YYYY-MM-DD"
-                      aria-invalid={dateError || undefined}
-                      aria-describedby={
-                        dateError
-                          ? 'create-meeting-date-error'
-                          : undefined
-                      }
-                      className="h-10 w-full rounded-lg border border-border-control bg-surface pl-3 pr-10 text-sm text-text outline-none transition placeholder:text-text-muted/60 focus:border-focus focus:ring-2 focus:ring-focus/15"
-                    />
-
-                    <button
-                      type="button"
-                      aria-label="Choose date"
-                      aria-haspopup="grid"
-                      aria-expanded={calendarOpen}
-                      onClick={toggleCalendar}
-                      className="absolute right-1.5 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-text-muted transition hover:bg-surface-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-                    >
-                      <span
-                        aria-hidden="true"
-                        className="material-symbols-outlined text-[18px]"
-                      >
-                        calendar_month
-                      </span>
-                    </button>
-
-                    <CreateMeetingCalendar
-                      open={calendarOpen}
-                      locale={locale}
-                      selectedDatePart={dateValid ? dateText : null}
-                      anchorRef={dateFieldRef}
-                      triggerRef={dateInputRef}
-                      onSelect={handleCalendarSelect}
-                      onOpenChange={setCalendarOpen}
-                    />
-                  </div>
-
-                  {dateError && (
-                    <p
-                      id="create-meeting-date-error"
-                      role="alert"
-                      className="mt-1.5 text-xs text-danger"
-                    >
-                      Enter a valid date.
-                    </p>
-                  )}
-                </div>
-
-                <div className="w-full min-[480px]:w-[148px] min-[480px]:shrink-0">
-                  <label
-                    htmlFor="create-meeting-time"
-                    className="mb-1.5 block text-sm font-medium text-text"
-                  >
-                    Time
-                  </label>
-
-                  <div
-                    ref={timeListRef}
-                    className="relative"
-                  >
-                    <input
-                      id="create-meeting-time"
-                      type="text"
-                      role="combobox"
-                      aria-expanded={timeListOpen}
-                      aria-haspopup="listbox"
-                      aria-autocomplete="list"
-                      aria-controls={
-                        timeListOpen
-                          ? 'create-meeting-time-listbox'
-                          : undefined
-                      }
-                      aria-activedescendant={
-                        timeListOpen
-                          ? `create-meeting-time-option-${activeTimeIndex}`
-                          : undefined
-                      }
-                      value={timeDisplay}
-                      onChange={(event) => {
-                        const value = event.target.value
-                        setTimeText(value)
-                        setActiveTimeIndex(
-                          Math.max(0, timeOptions.indexOf(value)),
-                        )
-                      }}
-                      onKeyDown={handleTimeKeyDown}
-                      onFocus={() => setTimeFocused(true)}
-                      onBlur={() => {
-                        setTimeFocused(false)
-                        setTimeTouched(true)
-                        setTimeListOpen(false)
-                        // Normalize manually entered times to the
-                        // canonical form (locale-independent parsing;
-                        // malformed text is kept as-is for validation).
-                        setTimeText(
-                          (current) => parseManualTime(current) ?? current,
-                        )
-                      }}
-                      placeholder="HH:MM"
-                      aria-invalid={timeError || undefined}
-                      aria-describedby={
-                        timeError
-                          ? 'create-meeting-time-error'
-                          : undefined
-                      }
-                      className="h-10 w-full rounded-lg border border-border-control bg-surface pl-3 pr-9 text-sm text-text outline-none transition placeholder:text-text-muted/60 focus:border-focus focus:ring-2 focus:ring-focus/15"
-                    />
-
-                    <button
-                      type="button"
-                      aria-label="Show time options"
-                      aria-haspopup="listbox"
-                      aria-expanded={timeListOpen}
-                      onClick={toggleTimeList}
-                      className="absolute right-1.5 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-text-muted transition hover:bg-surface-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-                    >
-                      <span
-                        aria-hidden="true"
-                        className="material-symbols-outlined text-[18px]"
-                      >
-                        expand_more
-                      </span>
-                    </button>
-
-                    {timeListOpen && (
-                      <div
-                        id="create-meeting-time-listbox"
-                        role="listbox"
-                        aria-label="Time options"
-                        className="absolute bottom-[calc(100%+6px)] right-0 z-50 w-full min-w-[148px] overflow-hidden rounded-lg border border-border-subtle bg-surface py-1 shadow-[0_12px_32px_rgba(0,0,0,0.32)]"
-                      >
-                        {timeOptions.map((option, index) => (
-                          <div
-                            key={option}
-                            id={`create-meeting-time-option-${index}`}
-                            role="option"
-                            aria-selected={option === timeText}
-                            onMouseDown={(event) =>
-                              event.preventDefault()
-                            }
-                            onClick={() =>
-                              selectTimeOption(option)
-                            }
-                            onMouseEnter={() =>
-                              setActiveTimeIndex(index)
-                            }
-                            className={[
-                              'cursor-pointer px-3 py-2 text-sm text-text',
-                              index === activeTimeIndex
-                                ? 'bg-surface-hover'
-                                : '',
-                            ].join(' ')}
-                          >
-                            {formatTimePartLocale(option, locale)}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  {timeError && (
-                    <p
-                      id="create-meeting-time-error"
-                      role="alert"
-                      className="mt-1.5 text-xs text-danger"
-                    >
-                      Enter a valid time.
-                    </p>
-                  )}
-                </div>
-              </div>
-
-              <p className="mt-2.5 text-xs text-text-muted">
-                Local time · {currentIanaTimezone()}
-              </p>
-            </div>
           </div>
 
           {submitError && (
@@ -1571,7 +1579,7 @@ export function CreateMeetingDialog({
             </div>
           )}
 
-          <div className="flex shrink-0 items-center justify-end gap-3 border-t border-border-subtle bg-surface-hover/30 px-6 py-4">
+          <div className="flex shrink-0 items-center justify-end gap-2 border-t border-border-subtle bg-surface-hover/30 px-6 py-4">
             <button
               type="button"
               disabled={submitting}

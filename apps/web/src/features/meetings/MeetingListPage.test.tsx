@@ -1516,9 +1516,9 @@ describe('MeetingListPage create dialog (unchanged behavior)', () => {
     fireEvent.change(screen.getByLabelText('Time'), {
       target: { value: '10:30' },
     })
-    fireEvent.click(
-      screen.getByRole('switch', { name: 'Repeat meeting' }),
-    )
+    fireEvent.change(screen.getByLabelText('Repeat'), {
+      target: { value: 'weekly' },
+    })
 
     fireEvent.submit(
       screen.getByLabelText('Title').closest('form')!,
@@ -1595,9 +1595,9 @@ describe('MeetingListPage create dialog (unchanged behavior)', () => {
     fireEvent.change(screen.getByLabelText('Time'), {
       target: { value: '10:30' },
     })
-    fireEvent.click(
-      screen.getByRole('switch', { name: 'Repeat meeting' }),
-    )
+    fireEvent.change(screen.getByLabelText('Repeat'), {
+      target: { value: 'weekly' },
+    })
     // Configure a value the failure must preserve.
     fireEvent.change(screen.getByLabelText('Every'), {
       target: { value: '2' },
