@@ -407,6 +407,26 @@ export async function listPersonalMeetingRecurrenceOccurrences(
   )
 }
 
+export async function materializeMeetingRecurrenceOccurrence(
+  recurrenceId: number,
+  input: {
+    occurrenceId: string
+    originalScheduledAt: string
+    title: string
+  },
+): Promise<ApiMeeting> {
+  // The canonical idempotent occurrence materialization endpoint:
+  // the stable occurrence identity pair (as reported by the bounded
+  // occurrence read) plus the concrete Meeting title. The server
+  // revalidates the pair against the recurrence rule and answers
+  // 201 on creation / 200 on an idempotent replay — both return the
+  // one canonical Meeting representation.
+  return apiPost<ApiMeeting>(
+    `/api/meeting-recurrences/${recurrenceId}/occurrences/materialize/`,
+    input,
+  )
+}
+
 /* ── Meeting Sections (occurrence structure) ───────────────────── */
 
 export async function listMeetingSections(

@@ -689,7 +689,7 @@ export function MeetingSeriesDetailPage() {
                 disabled={creatingSection}
                 className="inline-flex h-9 items-center gap-2 rounded-lg bg-action px-4 text-sm font-semibold text-text-inverse transition hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-45"
               >
-                <span className="material-symbols-outlined text-[18px]">
+                <span aria-hidden="true" className="material-symbols-outlined text-[18px]">
                   add
                 </span>
 

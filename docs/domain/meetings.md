@@ -943,9 +943,32 @@ scope behind a rule-display contract). A rescheduled occurrence
 appears only at its effective `scheduledAt` with a `Rescheduled`
 badge and an optional "Originally …" line; a `live` Meeting shows
 an `In progress` badge; a concrete row opens the existing Meeting
-detail, while a virtual occurrence row is visually normal but
-non-navigating and never materializes on render/click (row actions
-requiring concrete Meeting state are omitted by absence).
+detail, while a virtual occurrence row is visually and
+interactively identical to a concrete row (same hover, pointer,
+keyboard, and focus behavior, plus the same row "Open meeting"
+action). **Opening a virtual occurrence for its Meeting workspace
+is a persistent-state boundary and materializes exactly that
+occurrence:** an EXPLICIT open intent — row activation (pointer or
+keyboard) or the row's "Open meeting" action — calls the canonical
+idempotent occurrence materialization endpoint (see "Occurrence
+materialization API (implemented)") for exactly that occurrence and
+navigates to the Meeting detail the response returns — the SAME
+Meeting workspace an ordinary concrete Meeting uses (no separate
+"virtual occurrence editor"). Rendering the list, hovering,
+focusing, selecting a tab, or an occurrence merely entering the
+Upcoming window NEVER triggers the write. While a virtual open is
+in flight the row shows a subtle pending state and ignores further
+activation (double-click races issue at most one request; the
+endpoint's idempotency is the final authority, so a concurrent
+second client resolves to the one canonical Meeting, never a
+duplicate); a failed open keeps the user on Upcoming, restores the
+row to its interactive state, and shows concise actionable error
+feedback (a Meeting id is never fabricated for navigation).
+Concrete rows — one-time Meetings and already-materialized
+occurrences — always navigate directly to the existing Meeting and
+never call materialization again. The implementation terms
+`virtual` / `materialized` / `materialize` never appear in
+user-facing copy (the action is "Open meeting").
 Participants render only from the concrete Meeting's
 `participantIds` (never fabricated for virtual occurrences — the
 feed carries no participant data; the asymmetric contract is a
@@ -1303,7 +1326,17 @@ persistence to the domain service, which remains the final authority.
   Meeting, Section, participant, or `meeting.created` audit event.
 - The materialized occurrence immediately appears as
   `materialized: true` with its `meetingId` in the bounded occurrence
-  read API. There is no Recurrence UI for this action yet.
+  read API.
+- **Consumer:** the Upcoming view's explicit-open behavior is the
+  product consumer of this endpoint (see the Upcoming Meeting-page
+  integration description in §5a): opening a virtual occurrence
+  row calls THIS endpoint for exactly that occurrence and lands in
+  the Meeting detail the response returns; already-materialized
+  occurrences and one-time Meetings navigate directly and never
+  call it. The endpoint contract itself is unchanged by the UI
+  integration — request shape, authorization, idempotency, and the
+  Template / participant snapshot rules remain exactly as specified
+  above.
 
 ### Single-occurrence reschedule (implemented)
 

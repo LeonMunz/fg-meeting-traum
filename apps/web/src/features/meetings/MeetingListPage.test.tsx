@@ -43,6 +43,7 @@ vi.mock('../../api/meetings', async (importOriginal) => {
     ...actual,
     listMeetings: vi.fn(),
     listPersonalMeetingRecurrenceOccurrences: vi.fn(),
+    materializeMeetingRecurrenceOccurrence: vi.fn(),
     createMeeting: vi.fn(),
     createMeetingFromSeries: vi.fn(),
     createMeetingRecurrence: vi.fn(),
@@ -303,6 +304,9 @@ beforeEach(() => {
   vi.mocked(
     meetingsApi.listPersonalMeetingRecurrenceOccurrences,
   ).mockResolvedValue([])
+  vi.mocked(
+    meetingsApi.materializeMeetingRecurrenceOccurrence,
+  ).mockResolvedValue(createdMeeting)
   vi.mocked(meetingsApi.listMeetingSeries).mockResolvedValue([
     template,
   ])
@@ -473,6 +477,7 @@ describe('MeetingListPage — Upcoming data', () => {
 
     expect(text).not.toMatch(/virtual/i)
     expect(text).not.toMatch(/materialized/i)
+    expect(text).not.toMatch(/materialize/i)
     expect(text).not.toMatch(/generated/i)
     expect(text).not.toMatch(/series instance/i)
     expect(text).not.toMatch(/occurrence key/i)
@@ -781,7 +786,7 @@ describe('MeetingListPage — Upcoming data', () => {
 
     const row = screen
       .getByRole('button', {
-        name: 'Plain upcoming · 10:00',
+        name: 'Open Plain upcoming on Wed, Sep 23 at 10:00',
       })
 
     expect(
@@ -953,7 +958,7 @@ describe('MeetingListPage — row structure and interaction', () => {
     // The desktop row exposes four distinct regions: Time, Meeting,
     // People, Actions — and the kebab is inside the Actions region.
     const row = screen.getByRole('button', {
-      name: 'Team Sync · 10:00',
+      name: 'Open Team Sync on Wed, Sep 23 at 10:00',
     })
     expect(row.children).toHaveLength(4)
     const meetingBlock = row.children[1] as HTMLElement
@@ -964,7 +969,7 @@ describe('MeetingListPage — row structure and interaction', () => {
     expect(actionsRegion).toContainElement(kebab)
   })
 
-  it('shows participant data only when truthfully available (never for virtual occurrences)', async () => {
+  it('shows participant data only when truthfully available (never fabricated for virtual occurrences)', async () => {
     vi.mocked(meetingsApi.listMeetings).mockResolvedValue([
       makeMeeting({
         id: 101,
@@ -991,18 +996,15 @@ describe('MeetingListPage — row structure and interaction', () => {
       screen.getAllByText('2 people'),
     ).toHaveLength(2)
 
-    // The virtual row has no actions affordance and no people count.
     const virtualRow = screen
       .getByText('Occurrence row check')
       .parentElement! // Meeting content block
       .parentElement! // the row grid
 
-    // The virtual row keeps the four-region track (empty Actions
-    // region included)…
+    // The virtual row keeps the four-region track with an EMPTY
+    // People region…
     expect(virtualRow.children).toHaveLength(4)
-    expect(
-      within(virtualRow).queryByRole('button'),
-    ).not.toBeInTheDocument()
+    // …and no people count is fabricated anywhere in it.
     expect(
       within(virtualRow).queryByText(/people/),
     ).not.toBeInTheDocument()
@@ -1024,7 +1026,7 @@ describe('MeetingListPage — row structure and interaction', () => {
 
     const row = screen
       .getByRole('button', {
-        name: 'Team Sync · 10:00',
+        name: 'Open Team Sync on Wed, Sep 23 at 10:00',
       })
 
     // Tablet (768–1099): Time + Meeting + Actions; the standalone
@@ -1106,7 +1108,7 @@ describe('MeetingListPage — row structure and interaction', () => {
     })
 
     const row = screen.getByRole('button', {
-      name: 'Team Sync · 10:00',
+      name: 'Open Team Sync on Wed, Sep 23 at 10:00',
     })
 
     // Four sibling regions at the row level: Time, Meeting,
@@ -1147,7 +1149,7 @@ describe('MeetingListPage — row structure and interaction', () => {
     })
 
     const row = screen.getByRole('button', {
-      name: `${longTitle} · 17:30`,
+      name: `Open ${longTitle} on Wed, Sep 23 at 17:30`,
     })
 
     // The row keeps its four sibling regions regardless of title
@@ -1175,35 +1177,51 @@ describe('MeetingListPage — row structure and interaction', () => {
     ).toHaveClass('truncate')
   })
 
-  it('preserves the Actions track for a virtual occurrence without creating an unsupported action', async () => {
+  it('offers the same Open meeting affordance for a virtual occurrence as for a concrete Meeting', async () => {
     vi.mocked(
       meetingsApi.listPersonalMeetingRecurrenceOccurrences,
     ).mockResolvedValue([
       makeOccurrence({
-        occurrenceId: 'occ-track',
-        title: 'Track check',
+        occurrenceId: 'occ-v',
+        title: 'Weekly Research Sync',
       }),
     ])
 
     renderPage()
-    await screen.findByText('Track check')
+    await screen.findByText('Weekly Research Sync')
 
     const row = screen
-      .getByText('Track check')
+      .getByText('Weekly Research Sync')
       .parentElement! // Meeting content block
       .parentElement! // the row grid
 
     // The row keeps its four-region track (the Meeting column is
     // NOT pulled into the Actions region)…
     expect(row.children).toHaveLength(4)
-    // …and the Actions region exists but stays EMPTY: no
-    // unsupported action is offered for a virtual occurrence.
+    // …and the Actions region carries the SAME per-row overflow
+    // affordance as a concrete Meeting row.
     const actionsRegion =
       row.children[3] as HTMLElement
-    expect(actionsRegion.children).toHaveLength(0)
     expect(
-      within(actionsRegion).queryByRole('button'),
-    ).not.toBeInTheDocument()
+      within(actionsRegion).getByRole('button', {
+        name:
+          'Meeting actions for Weekly Research Sync',
+      }),
+    ).toBeVisible()
+
+    // The affordance offers the plain "Open meeting" action —
+    // never materialization terminology.
+    fireEvent.click(
+      within(actionsRegion).getByRole('button', {
+        name:
+          'Meeting actions for Weekly Research Sync',
+      }),
+    )
+    expect(
+      screen.getByRole('menuitem', {
+        name: 'Open meeting',
+      }),
+    ).toBeVisible()
   })
 
   it('keeps the generic "Recurring" metadata and never invents a rule string', async () => {
@@ -1334,7 +1352,7 @@ describe('MeetingListPage — row structure and interaction', () => {
     await screen.findByRole('heading', { name: 'Today · Wed, Sep 23' })
 
     const row = screen.getByRole('button', {
-      name: 'Plain upcoming · 10:00',
+      name: 'Open Plain upcoming on Wed, Sep 23 at 10:00',
     })
 
     // The Meeting content block holds exactly the title — no
@@ -1369,12 +1387,12 @@ describe('MeetingListPage — row structure and interaction', () => {
 
     renderPage()
     await screen.findByRole('button', {
-      name: 'Team Sync · 10:00',
+      name: 'Open Team Sync on Wed, Sep 23 at 10:00',
     })
 
     fireEvent.click(
       screen.getByRole('button', {
-        name: 'Team Sync · 10:00',
+        name: 'Open Team Sync on Wed, Sep 23 at 10:00',
       }),
     )
 
@@ -1407,38 +1425,143 @@ describe('MeetingListPage — row structure and interaction', () => {
     await screen.findByText('Meeting detail: 101')
   })
 
-  it('does not navigate or trigger any write for a virtual occurrence row', async () => {
+  it('gives same-title same-time occurrences on different dates unique accessible names', async () => {
+    // One concrete + two virtual rows share the title AND the clock
+    // time but occupy different calendar dates: every row must stay
+    // resolvable by its semantic identity alone (no positional
+    // disambiguation), and concrete + virtual follow the same
+    // naming rule.
+    vi.mocked(meetingsApi.listMeetings).mockResolvedValue([
+      makeMeeting({
+        id: 700,
+        title: 'Weekly Research Sync',
+        scheduledAt: localIso(2026, 9, 23, 11, 0),
+      }),
+    ])
     vi.mocked(
       meetingsApi.listPersonalMeetingRecurrenceOccurrences,
     ).mockResolvedValue([
       makeOccurrence({
-        occurrenceId: 'occ-v',
+        occurrenceId: 'occ-a',
         title: 'Weekly Research Sync',
+      }),
+      makeOccurrence({
+        occurrenceId: 'occ-b',
+        title: 'Weekly Research Sync',
+        originalScheduledAt: localIso(2026, 9, 30, 11, 0),
+        scheduledAt: localIso(2026, 9, 30, 11, 0),
       }),
     ])
 
     renderPage()
-    await screen.findByText('Weekly Research Sync')
 
-    const row = screen
-      .getByText('Weekly Research Sync')
-      .closest('div')!
-      .closest('div')!
-      .parentElement!
+    // Each name resolves to exactly one row (strict mode would
+    // reject a duplicate accessible name).
+    const concreteRow = await screen.findByRole('button', {
+      name: 'Open Weekly Research Sync on Wed, Sep 23 at 11:00',
+    })
+    const firstVirtualRow = screen.getByRole('button', {
+      name: 'Open Weekly Research Sync on Thu, Sep 24 at 11:00',
+    })
+    const secondVirtualRow = screen.getByRole('button', {
+      name: 'Open Weekly Research Sync on Wed, Sep 30 at 11:00',
+    })
 
-    // Visually normal, but not an interactive control.
-    expect(row).not.toHaveAttribute('role')
+    expect(
+      concreteRow.getAttribute('aria-label'),
+    ).not.toBe(firstVirtualRow.getAttribute('aria-label'))
+    expect(
+      firstVirtualRow.getAttribute('aria-label'),
+    ).not.toBe(secondVirtualRow.getAttribute('aria-label'))
+  })
+
+  it('identifies a rescheduled occurrence by its effective slot, not the original one', async () => {
+    vi.mocked(
+      meetingsApi.listPersonalMeetingRecurrenceOccurrences,
+    ).mockResolvedValue([
+      makeOccurrence({
+        occurrenceId: 'occ-r',
+        title: 'Weekly Research Sync',
+        originalScheduledAt: localIso(2026, 9, 30, 11, 0),
+        scheduledAt: localIso(2026, 9, 24, 14, 30),
+      }),
+    ])
+
+    renderPage()
+
+    // The accessible identity carries the EFFECTIVE date/time
+    // (where the occurrence appears in Upcoming)…
+    const row = await screen.findByRole('button', {
+      name: 'Open Weekly Research Sync on Thu, Sep 24 at 14:30',
+    })
+    expect(row).toHaveAttribute(
+      'aria-label',
+      'Open Weekly Research Sync on Thu, Sep 24 at 14:30',
+    )
+    // …and never the original slot.
+    expect(
+      row.getAttribute('aria-label'),
+    ).not.toMatch(/Sep 30/)
+  })
+
+})
+
+describe('MeetingListPage — opening Upcoming rows', () => {
+  function virtualFixture() {
+    return makeOccurrence({
+      occurrenceId: 'occ-v',
+      title: 'Weekly Research Sync',
+    })
+  }
+
+  const materializedMeeting: ApiMeeting = {
+    ...makeMeeting({
+      id: 555,
+      title: 'Weekly Research Sync',
+      scheduledAt: localIso(2026, 9, 24, 11, 0),
+      participantIds: [1],
+    }),
+  }
+
+  async function renderVirtualList() {
+    vi.mocked(
+      meetingsApi.listPersonalMeetingRecurrenceOccurrences,
+    ).mockResolvedValue([virtualFixture()])
+
+    renderPage()
+    await screen.findByRole('button', {
+      name: 'Open Weekly Research Sync on Thu, Sep 24 at 11:00',
+    })
+
+    return screen.getByRole('button', {
+      name: 'Open Weekly Research Sync on Thu, Sep 24 at 11:00',
+    }) as HTMLElement
+  }
+
+  it('opens a virtual occurrence with exactly one materialization request and navigates to the returned Meeting', async () => {
+    const row = await renderVirtualList()
+    vi.mocked(
+      meetingsApi.materializeMeetingRecurrenceOccurrence,
+    ).mockResolvedValue(materializedMeeting)
 
     fireEvent.click(row)
 
-    // No navigation…
+    await screen.findByText('Meeting detail: 555')
+
+    // The canonical endpoint contract: the stable occurrence
+    // identity pair exactly as the feed reported it, plus the
+    // concrete Meeting title.
     expect(
-      screen.queryByText(/Meeting detail:/),
-    ).not.toBeInTheDocument()
-    // …and no accidental materialization or Meeting creation.
-    expect(
-      meetingsApi.listPersonalMeetingRecurrenceOccurrences,
+      meetingsApi.materializeMeetingRecurrenceOccurrence,
     ).toHaveBeenCalledTimes(1)
+    expect(
+      meetingsApi.materializeMeetingRecurrenceOccurrence,
+    ).toHaveBeenCalledWith(10, {
+      occurrenceId: 'occ-v',
+      originalScheduledAt: localIso(2026, 9, 24, 11, 0),
+      title: 'Weekly Research Sync',
+    })
+    // No other write path was touched.
     expect(meetingsApi.createMeeting).not.toHaveBeenCalled()
     expect(
       meetingsApi.createMeetingFromSeries,
@@ -1446,6 +1569,194 @@ describe('MeetingListPage — row structure and interaction', () => {
     expect(
       meetingsApi.createMeetingRecurrence,
     ).not.toHaveBeenCalled()
+  })
+
+  it('navigates to a materialized occurrence directly, without any materialization request', async () => {
+    vi.mocked(meetingsApi.listMeetings).mockResolvedValue([
+      makeMeeting({
+        id: 102,
+        title: 'Design Review',
+        scheduledAt: localIso(2026, 9, 24, 14, 0),
+      }),
+    ])
+    vi.mocked(
+      meetingsApi.listPersonalMeetingRecurrenceOccurrences,
+    ).mockResolvedValue([
+      makeOccurrence({
+        occurrenceId: 'occ-m',
+        title: 'Design Review',
+        originalScheduledAt: localIso(2026, 9, 24, 14, 0),
+        scheduledAt: localIso(2026, 9, 24, 14, 0),
+        materialized: true,
+        meetingId: 102,
+      }),
+    ])
+
+    renderPage()
+    const row = await screen.findByRole('button', {
+      name: 'Open Design Review on Thu, Sep 24 at 14:00',
+    })
+
+    fireEvent.click(row)
+
+    await screen.findByText('Meeting detail: 102')
+    expect(
+      meetingsApi.materializeMeetingRecurrenceOccurrence,
+    ).not.toHaveBeenCalled()
+  })
+
+  it('issues no materialization request from rendering, hovering, or focusing the Upcoming list', async () => {
+    const row = await renderVirtualList()
+
+    // The list rendered a virtual occurrence…
+    expect(
+      meetingsApi.materializeMeetingRecurrenceOccurrence,
+    ).not.toHaveBeenCalled()
+
+    // …and neither focus nor hover intent writes anything.
+    fireEvent.focus(row)
+    fireEvent.mouseEnter(row)
+    expect(
+      meetingsApi.materializeMeetingRecurrenceOccurrence,
+    ).not.toHaveBeenCalled()
+  })
+
+  it('matches the concrete Meeting row interaction: pointer, keyboard, and focus behavior', async () => {
+    vi.mocked(meetingsApi.listMeetings).mockResolvedValue([
+      makeMeeting({
+        id: 101,
+        title: 'Team Sync',
+        scheduledAt: localIso(2026, 9, 23, 10, 0),
+      }),
+    ])
+    vi.mocked(
+      meetingsApi.listPersonalMeetingRecurrenceOccurrences,
+    ).mockResolvedValue([virtualFixture()])
+
+    renderPage()
+    await screen.findByRole('heading', {
+      name: 'Today · Wed, Sep 23',
+    })
+
+    const concreteRow = screen.getByRole('button', {
+      name: 'Open Team Sync on Wed, Sep 23 at 10:00',
+    }) as HTMLElement
+    const virtualRow = screen.getByRole('button', {
+      name: 'Open Weekly Research Sync on Thu, Sep 24 at 11:00',
+    }) as HTMLElement
+
+    // Same interactive contract on both rows.
+    for (const row of [concreteRow, virtualRow]) {
+      expect(row).toHaveAttribute('role', 'button')
+      expect(row).toHaveAttribute('tabindex', '0')
+      expect(row.className).toContain('cursor-pointer')
+      expect(row.className).toContain('hover:bg-surface-hover')
+      expect(row.className).toContain(
+        'focus-visible:ring-2',
+      )
+    }
+
+    // Keyboard activation of the virtual row is an explicit open
+    // intent too: Enter resolves the occurrence.
+    vi.mocked(
+      meetingsApi.materializeMeetingRecurrenceOccurrence,
+    ).mockResolvedValue(materializedMeeting)
+    fireEvent.keyDown(virtualRow, { key: 'Enter' })
+
+    await screen.findByText('Meeting detail: 555')
+    expect(
+      meetingsApi.materializeMeetingRecurrenceOccurrence,
+    ).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows a subtle per-row pending state and blocks duplicate activation while the open is in flight', async () => {
+    const row = await renderVirtualList()
+
+    let resolveMaterialize: (
+      value: ApiMeeting,
+    ) => void
+    vi.mocked(
+      meetingsApi.materializeMeetingRecurrenceOccurrence,
+    ).mockReturnValue(
+      new Promise<ApiMeeting>((resolve) => {
+        resolveMaterialize = resolve
+      }),
+    )
+
+    fireEvent.click(row)
+    await waitFor(() => {
+      expect(row).toHaveAttribute('aria-busy', 'true')
+    })
+
+    // Repeated activation (double-click race) while pending is a
+    // strict no-op client-side.
+    fireEvent.click(row)
+    fireEvent.keyDown(row, { key: 'Enter' })
+    expect(
+      meetingsApi.materializeMeetingRecurrenceOccurrence,
+    ).toHaveBeenCalledTimes(1)
+
+    resolveMaterialize!(materializedMeeting)
+    await screen.findByText('Meeting detail: 555')
+
+    // Still exactly one request after the flight settles.
+    expect(
+      meetingsApi.materializeMeetingRecurrenceOccurrence,
+    ).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the user on Upcoming with retryable error feedback when the open fails, and permits retry', async () => {
+    const row = await renderVirtualList()
+    vi.mocked(
+      meetingsApi.materializeMeetingRecurrenceOccurrence,
+    ).mockRejectedValue(
+      new ApiError(
+        400,
+        { error: 'The occurrence is no longer available.' },
+      ),
+    )
+
+    fireEvent.click(row)
+
+    // No navigation to a fabricated Meeting…
+    expect(
+      screen.queryByText(/Meeting detail:/),
+    ).not.toBeInTheDocument()
+
+    // Concise, actionable error feedback.
+    const alert = await screen.findByRole('alert')
+    expect(
+      within(alert).getByText(
+        'The meeting couldn\'t be opened.',
+      ),
+    ).toBeVisible()
+    expect(
+      within(alert).getByText(
+        'The occurrence is no longer available.',
+      ),
+    ).toBeVisible()
+    // The failed open restored the row to its interactive state
+    // (pending indicator gone, keyboard-activatable again).
+    expect(row).not.toHaveAttribute('aria-busy')
+    expect(row).toHaveAttribute('tabindex', '0')
+
+    // Retry through the banner re-issues the same explicit intent.
+    vi.mocked(
+      meetingsApi.materializeMeetingRecurrenceOccurrence,
+    ).mockResolvedValue(materializedMeeting)
+    fireEvent.click(
+      within(alert).getByRole('button', {
+        name: 'Try again',
+      }),
+    )
+
+    await screen.findByText('Meeting detail: 555')
+    expect(
+      meetingsApi.materializeMeetingRecurrenceOccurrence,
+    ).toHaveBeenCalledTimes(2)
+    expect(
+      screen.queryByRole('alert'),
+    ).toBeNull()
   })
 })
 

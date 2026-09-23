@@ -14,6 +14,7 @@ import {
   createMeetingRecurrence,
   listMeetings,
   listPersonalMeetingRecurrenceOccurrences,
+  materializeMeetingRecurrenceOccurrence,
 } from '../../api/meetings'
 import type {
   ApiMeeting,
@@ -30,6 +31,7 @@ import {
   selectUpcomingConcreteMeetings,
   selectUpcomingWindowRows,
   upcomingRequestWindow,
+  type UpcomingMeeting,
 } from './upcomingModel'
 import { groupUpcomingByDate } from './upcomingGroups'
 import { UpcomingMeetingsList } from './UpcomingMeetings'
@@ -178,6 +180,21 @@ export function MeetingListPage() {
   const [seriesToastVisible, setSeriesToastVisible] =
     useState(false)
   const seriesToastTimer = useRef<number | null>(null)
+
+  // Explicit open intents for virtual recurring occurrences: the
+  // row ids currently being resolved into their concrete Meeting.
+  // A row in this set ignores further activation, so double-click
+  // races and rapid re-activation never issue duplicate requests —
+  // the endpoint itself remains idempotent server-side.
+  const [openingRowIds, setOpeningRowIds] =
+    useState<Set<string>>(() => new Set())
+  // Concise, actionable feedback for a failed open: the message
+  // plus the exact row that failed, so "Try again" retries the same
+  // explicit intent.
+  const [openError, setOpenError] =
+    useState<{ item: UpcomingMeeting; message: string } | null>(
+      null,
+    )
 
   // One request window per page session: today → +42 days (local).
   const requestWindow = useMemo(
@@ -378,6 +395,89 @@ export function MeetingListPage() {
     dismissSeriesToast()
     setCreateDialogOpen(true)
   }
+
+  /**
+   * The single explicit "open this Upcoming row" intent — fired by
+   * row activation (pointer or keyboard) or the row's "Open
+   * meeting" action. NEVER fired by rendering, hover, focus, tab
+   * selection, or the row entering the window.
+   *
+   * - A row backed by a concrete Meeting (one-time or already
+   *   resolved) navigates directly to the existing Meeting
+   *   workspace — no write is issued for it.
+   * - A virtual recurring occurrence resolves exactly THAT
+   *   occurrence through the canonical idempotent materialization
+   *   API, then navigates to the Meeting the response returns.
+   *   While the request is in flight the row shows a subtle
+   *   pending state and ignores further activation; on failure the
+   *   user stays on Upcoming with concise error feedback and the
+   *   row returns to its normal interactive state.
+   */
+  const handleOpenRow = useCallback(
+    async (item: UpcomingMeeting) => {
+      if (item.meetingId != null) {
+        navigate(`/meetings/${item.meetingId}`)
+        return
+      }
+
+      if (
+        item.recurrenceId == null ||
+        item.occurrenceId == null ||
+        openingRowIds.has(item.id)
+      ) {
+        return
+      }
+
+      setOpenError(null)
+      setOpeningRowIds((current) => {
+        const next = new Set(current)
+        next.add(item.id)
+        return next
+      })
+
+      try {
+        const meeting =
+          await materializeMeetingRecurrenceOccurrence(
+            item.recurrenceId,
+            {
+              occurrenceId: item.occurrenceId,
+              // A virtual occurrence's effective time IS its
+              // immutable original slot; the fallback is
+              // defensive, not an alternate identity.
+              originalScheduledAt:
+                item.originalScheduledAt ??
+                item.scheduledAt,
+              title: item.title,
+            },
+          )
+
+        setOpeningRowIds((current) => {
+          const next = new Set(current)
+          next.delete(item.id)
+          return next
+        })
+
+        // Land in the SAME Meeting workspace an ordinary
+        // concrete Meeting uses — the id comes from the
+        // materialization response, never fabricated.
+        navigate(`/meetings/${meeting.id}`)
+      } catch (openRowError) {
+        setOpeningRowIds((current) => {
+          const next = new Set(current)
+          next.delete(item.id)
+          return next
+        })
+        setOpenError({
+          item,
+          message: getErrorMessage(
+            openRowError,
+            'The meeting could not be opened.',
+          ),
+        })
+      }
+    },
+    [navigate, openingRowIds],
+  )
 
   const handleTabKeyDown = (
     event: React.KeyboardEvent,
@@ -591,14 +691,56 @@ export function MeetingListPage() {
                 </div>
               )}
 
+              {openError && (
+                <div
+                  role="alert"
+                  className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-[10px] border border-border-subtle bg-warning-bg px-4 py-3"
+                >
+                  <span className="flex min-w-0 items-center gap-2 text-sm text-text">
+                    <span
+                      aria-hidden="true"
+                      className="material-symbols-outlined shrink-0 text-[18px] text-warning"
+                    >
+                      error_outline
+                    </span>
+                    <span className="min-w-0">
+                      <span className="font-medium">
+                        The meeting
+                        couldn't be opened.
+                      </span>{' '}
+                      <span className="text-text-muted">
+                        {openError.message}
+                      </span>
+                    </span>
+                  </span>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void handleOpenRow(openError.item)
+                    }
+                    className="ml-auto inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-border-subtle bg-surface px-3 text-xs font-semibold text-text transition hover:bg-surface-hover"
+                  >
+                    <span
+                      aria-hidden="true"
+                      className="material-symbols-outlined text-[16px]"
+                    >
+                      refresh
+                    </span>
+                    Try again
+                  </button>
+                </div>
+              )}
+
               <UpcomingMeetingsList
                 groups={upcomingGroups ?? []}
                 loading={listLoading}
                 recurrenceLoading={recurrencePending}
                 onNewMeeting={openCreateDialog}
-                onOpenMeeting={(meetingId) =>
-                  navigate(`/meetings/${meetingId}`)
+                onOpenRow={(item) =>
+                  void handleOpenRow(item)
                 }
+                openingRowIds={openingRowIds}
               />
             </>
           ))}

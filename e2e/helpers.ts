@@ -6,6 +6,61 @@ import {
 export const PASSWORD = 'DevPass1!'
 
 /**
+ * The redesigned Meeting Detail uses an inline quick-add: a quiet
+ * "+ Add item" button expands into a title input (required field)
+ * plus Add / Cancel. Enter also submits.
+ */
+export async function quickAddAgendaItem(
+  page: Page,
+  title: string,
+  sectionName = 'Agenda',
+) {
+  // The Meeting Section's accessible name is the section heading
+  // text; scoping by the exact section text targets that one
+  // section (no other element carries the section name).
+  const section = page
+    .locator('section')
+    .filter({ hasText: sectionName })
+
+  const input = page.getByLabel(`Add item to ${sectionName}`)
+
+  // The inline composer stays open after a successful submit (its
+  // input is cleared for the next item). If it is already open for
+  // this exact section, reuse it; otherwise open it via the
+  // 'Add item' / 'Add first item' trigger (the trigger is hidden
+  // while the composer is open).
+  const addButton = section
+    .getByRole('button', { name: 'Add item', exact: true })
+    .or(
+      section.getByRole('button', {
+        name: 'Add first item',
+        exact: true,
+      }),
+    )
+
+  if (await input.isVisible().catch(() => false)) {
+    // Composer already open: use it directly.
+  } else {
+    await addButton.scrollIntoViewIfNeeded()
+    await addButton.click()
+    await input.waitFor({ state: 'visible' })
+  }
+
+  await input.fill(title)
+
+  // The quick-add form's submit is 'Add'; scope it to the form so
+  // the participant panel's separate 'Add' button is never matched.
+  await section
+    .getByRole('button', { name: 'Add', exact: true })
+    .click()
+
+  // The newly created item title is visible inside this section.
+  await expect(
+    section.getByText(title, { exact: true }),
+  ).toBeVisible()
+}
+
+/**
  * Create a global account invitation through the existing backend
  * API using the browser's own authenticated session (the invitation
  * surface is the user menu / settings, not a dedicated page flow in

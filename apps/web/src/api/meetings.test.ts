@@ -18,6 +18,7 @@ import {
   createMeetingRecurrence,
   listMeetingRecurrences,
   listPersonalMeetingRecurrenceOccurrences,
+  materializeMeetingRecurrenceOccurrence,
   getMeetingItemFollowUpTargets,
   markMeetingItemFollowUp,
   reopenMeetingItem,
@@ -32,6 +33,7 @@ import type {
   ApiMeetingRecurrence,
   ApiMeetingRecurrenceOccurrence,
   ApiMeetingRecurrenceOverview,
+  ApiMeeting,
   ApiMeetingItem,
   ApiMeetingItemFollowUpSchedule,
   ApiMeetingItemFollowUpTargets,
@@ -602,5 +604,58 @@ describe('Personal recurring-occurrence feed API client', () => {
       '/api/meeting-recurrences/occurrences/?from=2026-09-23T00%3A00%3A00.000Z&to=2026-11-04T00%3A00%3A00.000Z',
     )
     expect(apiPost).not.toHaveBeenCalled()
+  })
+})
+
+describe('Recurrence occurrence materialization API client', () => {
+  beforeEach(() => {
+    vi.mocked(apiGet).mockReset()
+    vi.mocked(apiPost).mockReset()
+  })
+
+  it('POSTs the stable occurrence identity pair + title to the idempotent materialization endpoint', async () => {
+    const meeting: ApiMeeting = {
+      id: 555,
+      researchGroupId: 1,
+      scope: 'group',
+      projectId: null,
+      seriesId: null,
+      title: 'Weekly Research Sync',
+      scheduledAt: '2026-09-29T10:00:00Z',
+      startedAt: null,
+      endedAt: null,
+      status: 'upcoming',
+      currentMeetingItemId: null,
+      participantIds: [1],
+      createdById: 1,
+      createdAt: '2026-09-23T09:00:00Z',
+      updatedAt: '2026-09-23T09:00:00Z',
+    }
+    vi.mocked(apiPost).mockResolvedValue(meeting)
+
+    const result =
+      await materializeMeetingRecurrenceOccurrence(10, {
+        occurrenceId: 'o-1',
+        originalScheduledAt: '2026-09-29T10:00:00Z',
+        title: 'Weekly Research Sync',
+      })
+
+    // The canonical endpoint: one POST per recurrence carrying
+    // EXACTLY the occurrence identity pair as reported by the
+    // bounded occurrence read plus the concrete Meeting title.
+    // The server revalidates the pair and is the authority on
+    // idempotency (201 on creation, 200 on replay) — the client
+    // simply forwards and returns the Meeting representation.
+    expect(apiPost).toHaveBeenCalledTimes(1)
+    expect(apiPost).toHaveBeenCalledWith(
+      '/api/meeting-recurrences/10/occurrences/materialize/',
+      {
+        occurrenceId: 'o-1',
+        originalScheduledAt: '2026-09-29T10:00:00Z',
+        title: 'Weekly Research Sync',
+      },
+    )
+    expect(apiGet).not.toHaveBeenCalled()
+    expect(result).toEqual(meeting)
   })
 })

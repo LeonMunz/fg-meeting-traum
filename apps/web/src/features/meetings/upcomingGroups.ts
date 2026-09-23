@@ -179,6 +179,26 @@ export function formatUpcomingTime(
 }
 
 /**
+ * Local calendar date of an item's EFFECTIVE `scheduledAt`, formatted
+ * exactly like the absolute-date part of the date-group headings
+ * (e.g. 'Wed, Sep 23'). Used to give every actionable row a unique
+ * accessible identity: the date comes from the slot the occurrence
+ * actually occupies (a rescheduled occurrence is identified by its
+ * moved slot, never by the original one).
+ */
+export function formatUpcomingDate(
+  scheduledAt: string,
+): string {
+  const date = new Date(scheduledAt)
+
+  if (Number.isNaN(date.getTime())) {
+    return scheduledAt
+  }
+
+  return LATER_GROUP_LABEL.format(date)
+}
+
+/**
  * Reschedule metadata line: 'Originally Sep 29 · 10:00' (the original
  * slot's local date + clock time).
  */

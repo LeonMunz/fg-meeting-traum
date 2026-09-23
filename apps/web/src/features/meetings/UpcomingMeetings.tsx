@@ -6,10 +6,12 @@
  * The component is presentation-only: it receives an already
  * normalized, already-ordered list (see `upcomingModel.ts` /
  * `upcomingGroups.ts`) and renders rows, skeletons, and the empty
- * state. Recurring occurrences look like normal Meetings — the
- * internal materialized/virtual distinction never surfaces as copy
- * (a virtual occurrence simply has no concrete Meeting id and no
- * actions requiring one).
+ * state. Recurring occurrences look like normal Meetings — every
+ * row is openable. The internal materialized/virtual distinction
+ * never surfaces as copy: a virtual occurrence simply has no
+ * concrete Meeting id yet, and an explicit Open intent resolves it
+ * through the parent's open handler (the write itself stays in the
+ * page's data layer).
  */
 
 import {
@@ -21,6 +23,7 @@ import {
 import type { UpcomingMeeting } from './upcomingModel'
 import {
   formatOriginallyLabel,
+  formatUpcomingDate,
   formatUpcomingTime,
   peopleLabel,
 } from './upcomingGroups'
@@ -30,11 +33,12 @@ import type { UpcomingDateGroup } from './upcomingGroups'
 /* ── Row actions (V1: open the concrete Meeting) ───────────────── */
 
 /**
- * Per-row overflow affordance for concrete Meetings. V1 offers a
- * single action — open the Meeting — leaving the slot for future row
- * actions without changing the row geometry. Virtual occurrences do
- * NOT render this affordance: actions requiring concrete Meeting
- * state are omitted by absence, never presented as a broken click.
+ * Per-row overflow affordance. V1 offers a single action — open the
+ * Meeting — leaving the slot for future row actions without changing
+ * the row geometry. Concrete Meetings and virtual recurring
+ * occurrences render the SAME affordance: opening a virtual
+ * occurrence is the explicit intent that resolves it into the
+ * concrete Meeting workspace.
  */
 function RowActionsMenu({
   meetingTitle,
@@ -192,13 +196,32 @@ function rowStatusBadge(item: UpcomingMeeting): {
 
 function UpcomingMeetingRow({
   item,
-  onOpenMeeting,
+  onOpenRow,
+  pending,
 }: {
   item: UpcomingMeeting
-  onOpenMeeting: (meetingId: number) => void
+  onOpenRow: (item: UpcomingMeeting) => void
+  /**
+   * True while this row's explicit open intent is in flight (a
+   * virtual occurrence being resolved into its concrete Meeting).
+   * The row stays visible and its content intact — only the action
+   * affordance is replaced by a subtle pending indicator, and
+   * further activation is ignored until the request settles.
+   */
+  pending: boolean
 }) {
   const concrete = item.meetingId != null
+  // Every Upcoming row is openable: a row backed by a concrete
+  // Meeting opens it directly; a virtual recurring occurrence opens
+  // by resolving exactly that occurrence on explicit intent.
+  const openable = concrete || item.recurring
   const timeLabel = formatUpcomingTime(item.scheduledAt)
+  // Accessible identity of the concrete occurrence: title + EFFECTIVE
+  // local date + local time, the same naming rule for concrete and
+  // virtual rows. A rescheduled occurrence is identified by the slot
+  // it actually occupies. No internal (virtual/materialized/occurrence
+  // id) terminology is exposed.
+  const dateLabel = formatUpcomingDate(item.scheduledAt)
   const badge = rowStatusBadge(item)
   const originallyLabel =
     item.rescheduled && item.originalScheduledAt != null
@@ -219,23 +242,24 @@ function UpcomingMeetingRow({
     people != null
 
   const open = () => {
-    if (item.meetingId != null) {
-      onOpenMeeting(item.meetingId)
+    if (!pending) {
+      onOpenRow(item)
     }
   }
 
   return (
     <div
-      role={concrete ? 'button' : undefined}
-      tabIndex={concrete ? 0 : undefined}
+      role={openable ? 'button' : undefined}
+      tabIndex={openable ? 0 : undefined}
       aria-label={
-        concrete
-          ? `${item.title} · ${timeLabel}`
+        openable
+          ? `Open ${item.title} on ${dateLabel} at ${timeLabel}`
           : undefined
       }
-      onClick={concrete ? open : undefined}
+      aria-busy={pending || undefined}
+      onClick={openable ? open : undefined}
       onKeyDown={
-        concrete
+        openable
           ? (event) => {
               if (
                 event.key === 'Enter' ||
@@ -249,7 +273,7 @@ function UpcomingMeetingRow({
       }
       className={[
         'grid min-h-[68px] grid-cols-1 items-center gap-x-4 gap-y-1.5 px-4 py-3 text-left outline-none',
-        concrete
+        openable
           ? 'cursor-pointer transition select-none hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus'
           : '',
         // Tablet 768–1099px: Time + Meeting + Actions (People
@@ -322,7 +346,20 @@ function UpcomingMeetingRow({
       </div>
 
       <div className="flex justify-end md:justify-self-end">
-        {concrete && (
+        {pending ? (
+          // Subtle per-row pending indicator: the action affordance
+          // is replaced by a small spinner while the open intent is
+          // in flight. The row content (time, title, metadata) is
+          // untouched and the rest of the list stays fully
+          // interactive.
+          <span
+            aria-hidden="true"
+            className="material-symbols-outlined animate-spin text-[18px] text-text-muted"
+          >
+            refresh
+          </span>
+        ) : (
+          openable && (
           <div
             onClick={(event) =>
               event.stopPropagation()
@@ -333,10 +370,14 @@ function UpcomingMeetingRow({
           >
             <RowActionsMenu
               meetingTitle={item.title}
-              onOpen={open}
+              onOpen={() => {
+                if (!pending) {
+                  onOpenRow(item)
+                }
+              }}
             />
           </div>
-        )}
+        ))}
       </div>
     </div>
   )
@@ -423,19 +464,28 @@ function UpcomingEmptyState({
  * settled, the personal recurring-occurrence feed still pending)
  * renders the settled groups plus one honest trailing indicator —
  * the page never pretends the recurrence feed succeeded.
+ *
+ * `onOpenRow` receives the whole row model for an EXPLICIT open
+ * intent (row activation or the row's "Open meeting" action); the
+ * parent decides whether that is a direct navigation (concrete
+ * Meeting) or the resolution of a virtual occurrence. Rendering the
+ * list never invokes it. `openingRowIds` marks the rows whose open
+ * intent is still in flight (subtle per-row pending state).
  */
 export function UpcomingMeetingsList({
   groups,
   loading,
   recurrenceLoading,
   onNewMeeting,
-  onOpenMeeting,
+  onOpenRow,
+  openingRowIds,
 }: {
   groups: UpcomingDateGroup[]
   loading: boolean
   recurrenceLoading: boolean
   onNewMeeting: () => void
-  onOpenMeeting: (meetingId: number) => void
+  onOpenRow: (item: UpcomingMeeting) => void
+  openingRowIds: ReadonlySet<string>
 }) {
   if (loading) {
     return <UpcomingSkeleton />
@@ -478,7 +528,8 @@ export function UpcomingMeetingsList({
               <UpcomingMeetingRow
                 key={item.id}
                 item={item}
-                onOpenMeeting={onOpenMeeting}
+                onOpenRow={onOpenRow}
+                pending={openingRowIds.has(item.id)}
               />
             ))}
           </div>
