@@ -951,7 +951,113 @@ Participants render only from the concrete Meeting's
 feed carries no participant data; the asymmetric contract is a
 known follow-up). `Series` and `Past` exist as structural tabs
 with explicit coming-soon shells; their product behavior remains
-deferred.
+deferred (the backend Series overview read contract IS implemented —
+see "Series overview read API (implemented)" below).
+
+### Series overview read API (implemented)
+
+`GET /api/meeting-recurrences/` is the read contract the Meetings
+page's `Series` tab needs: exactly ONE record per personally
+relevant recurring Series. It complements — and is distinct from —
+the bounded personal recurring-occurrence feed: the feed is
+OCCURRENCE-oriented and WINDOW-bounded (a Series whose next
+occurrence lies outside the requested window, e.g. beyond the
+Upcoming +42-day window, is absent from it), while the overview is
+SERIES-oriented and WINDOW-free: a valid recurrence whose next event
+lies three months away still appears, with that next occurrence.
+
+- **Route:** the existing collection resource gains a GET handler
+  (`MeetingRecurrenceListCreateView`); the POST creation contract on
+  the same route is unchanged. `MeetingRecurrence` remains the
+  recurring-Series record — no second Series model, no Template
+  endpoint.
+- **Personal relevance (overview inclusion):** the established
+  personal-recurrence semantics — the same rule as the bounded
+  personal recurring-occurrence feed: the user is the recurrence
+  CREATOR (`created_by`) or a persisted intended PARTICIPANT
+  (`MeetingRecurrenceParticipant`). Scope-level read visibility
+  (`MEETING_RECURRENCE_READ`: Research Group / Project membership)
+  never puts a recurrence into the personal overview; an outsider
+  listed as an intended participant sees the series; a duplicate
+  relationship (a creator who is also an explicit participant)
+  yields exactly ONE row (the relevance selection is `distinct`,
+  and the `(recurrence, user)` participant relation is
+  database-unique, so a duplicate relation cannot duplicate the
+  row). A user without relevant recurrences receives an empty list;
+  unrelated series never leak (no existence, title, or timing).
+- **One row per recurrence:** the endpoint returns one record per
+  personally relevant `MeetingRecurrence` — never one row per
+  occurrence, never derived by deduplicating an occurrence window.
+- **Response read model:** one JSON object per relevant
+  `MeetingRecurrence` carrying the canonical recurrence
+  representation EXACTLY like the create/read contract (`id`,
+  `title`, `meetingSeriesId`, `scope`, `researchGroupId`,
+  `projectId`, `frequency`, `interval`, `weekdays`, `startDate`,
+  `localTime`, `timezone`, `endDate`, `count`) plus the minimal
+  Series-overview context:
+  - `creator` — the repository's canonical minimal User summary
+    (`id`, `username`, `firstName`, `lastName`), enough to render
+    "Created by <display name>" without a second User DTO;
+  - `peopleCount` — the exact people semantics of a FUTURE
+    materialized Meeting: the creator + the unique persisted
+    recurrence participants, creator duplication removed (creator
+    only => 1; creator + 3 other people => 4; the creator also
+    explicitly listed => still counted once). Research Group /
+    Project membership is never counted;
+  - `status` — a DERIVED presentation/read-model state, NOT a
+    persisted domain lifecycle and NOT a new status column:
+    `"active"` iff `nextOccurrenceScheduledAt` is non-null,
+    `"ended"` otherwise;
+  - `nextOccurrenceScheduledAt` — the earliest effective,
+    non-cancelled occurrence of the series whose effective
+    scheduled time is >= the server's current instant (aware ISO
+    timestamp), or `null` when the series has no further effective
+    occurrence.
+- **Next effective occurrence:** computed by the canonical domain
+  primitive `next_effective_meeting_recurrence_occurrence` — NO
+  second recurrence engine and NO arbitrary horizon (the Upcoming
+  +42-day window is never an input): the RAW candidate sequence is
+  the canonical bounded expansion (full recurrence-rule semantics:
+  daily / weekly / monthly, interval, weekdays, start date, local
+  time + IANA timezone, inclusive end date, count including the
+  first, skipped invalid monthly dates, stable occurrence
+  identity), searched in sliding bounded windows of a guaranteed
+  candidate horizon. A persisted single-occurrence EXCLUSION
+  removes its occurrence from the effective set (no replacement —
+  a COUNT-limited series does not grow); a CANCELLED materialized
+  occurrence (whose cancellation persists the exclusion) is absent
+  exactly like an excluded virtual occurrence; a RESCHEDULED
+  materialized occurrence reports its EFFECTIVE moved Meeting time —
+  which may be earlier than its still-virtual siblings (in which
+  case the earlier virtual sibling remains the next occurrence) or
+  later (in which case it is the next occurrence at its moved
+  time); a Meeting whose moved time already lies in the past simply
+  no longer takes place.
+- **Derived active/ended:** `"ended"` iff the series has no further
+  effective occurrence — a finite rule exhausted (end date passed
+  or count consumed) or every remaining occurrence excluded /
+  cancelled. This is presentation state, never a persisted
+  lifecycle and never a mutation of the recurrence.
+- **Ordering:** active Series first by `nextOccurrenceScheduledAt`
+  ascending; Series with no next occurrence after all active
+  Series; the stable recurrence id is the deterministic final
+  tie-breaker (never the title).
+- **Read efficiency:** the relevance selection (creator eager, the
+  participant intent prefetched — the `peopleCount` source), ALL
+  future exclusions, and ALL relevant materialized Meetings (original
+  start at or after now, or a planned time moved to or after now)
+  are each ONE batched query across every relevant recurrence
+  (grouped in memory and handed to the next-occurrence search as
+  preloaded sets) — the SQL query count is constant in BOTH the
+  number of relevant recurrences and the number of rule-generated
+  dates (pinned by a query-count regression: moving the next
+  occurrence farther into the future, or deepening the rule's
+  generated history, adds no SQL statements).
+- **Strictly read-only:** the GET causes ZERO mutations: no Meeting
+  materialization, no exclusion or participant writes, no audit
+  events, no recurrence mutation (pinned by before/after state
+  counts).
+
 
 ### Materialization (implemented)
 
@@ -1680,10 +1786,15 @@ cancellation UX exists yet.
 The following are intentionally out of this slice and remain
 unimplemented:
 
-- recurrence EDITING API, recurrence list/detail views, and Recurrence
+- recurrence EDITING API, recurrence DETAIL views, and Recurrence
   UI (including the occurrence preview UI); an explicit maximum window
   size for the bounded occurrence read API (pending product/API
   decision);
+
+  The personal recurring-SERIES overview backend read contract IS
+  implemented (see "Series overview read API (implemented)" above);
+  the Series tab UI, Series search / status-filter UI, and a Series
+  detail route/page remain unimplemented.
 
   The bounded current-user recurring-occurrence feed backend read
   contract IS implemented (see

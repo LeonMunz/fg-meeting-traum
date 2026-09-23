@@ -1,3 +1,5 @@
+from datetime import timezone as dt_timezone
+
 from django.contrib.auth import get_user_model
 
 from rest_framework import serializers
@@ -903,6 +905,74 @@ class MeetingRecurrenceSerializer(serializers.ModelSerializer):
             "endDate",
             "count",
         ]
+
+
+class MeetingRecurrenceOverviewSerializer(MeetingRecurrenceSerializer):
+    """Read model of ONE personally relevant recurring Series for the
+    Meetings Series overview.
+
+    Carries the canonical recurrence representation EXACTLY like the
+    create/read contract (``id``, ``title``, ``meetingSeriesId``,
+    ``scope``, ``researchGroupId``, ``projectId``, and the V1 rule
+    ``frequency`` / ``interval`` / ``weekdays`` / ``startDate`` /
+    ``localTime`` / ``timezone`` / ``endDate`` / ``count``) plus the
+    minimal Series-overview context:
+
+    - ``creator`` — the repository's canonical minimal User summary
+      (``id``, ``username``, ``firstName``, ``lastName``), enough to
+      render "Created by <display name>" without a second User DTO;
+    - ``peopleCount`` — the exact people semantics a future
+      materialized Meeting gets: the creator plus the unique persisted
+      recurrence participants, creator duplication removed (never
+      Research Group / Project membership);
+    - ``status`` — a DERIVED presentation state, not a persisted
+      lifecycle: ``"active"`` iff ``nextOccurrenceScheduledAt`` is
+      non-null, ``"ended"`` otherwise (exclusions, cancellations, and
+      finite rules are all reflected through it);
+    - ``nextOccurrenceScheduledAt`` — the earliest effective,
+      non-cancelled occurrence of the series whose effective scheduled
+      time is at or after the server's current instant (aware ISO
+      timestamp; a rescheduled materialized occurrence uses its
+      effective moved Meeting time), or ``null`` when the series has
+      no further effective occurrence.
+    """
+
+    creator = serializers.SerializerMethodField()
+    peopleCount = serializers.SerializerMethodField()
+    status = serializers.SerializerMethodField()
+    nextOccurrenceScheduledAt = serializers.SerializerMethodField()
+
+    class Meta(MeetingRecurrenceSerializer.Meta):
+        fields = [
+            *MeetingRecurrenceSerializer.Meta.fields,
+            "creator",
+            "peopleCount",
+            "status",
+            "nextOccurrenceScheduledAt",
+        ]
+
+    def get_creator(self, obj):
+        creator = obj.created_by
+        return {
+            "id": creator.pk,
+            "username": creator.username,
+            "firstName": creator.first_name,
+            "lastName": creator.last_name,
+        }
+
+    def get_peopleCount(self, obj):
+        return self.context["people_count"]
+
+    def get_status(self, obj):
+        return self.context["status"]
+
+    def get_nextOccurrenceScheduledAt(self, obj):
+        value = self.context["next_scheduled_at"]
+        if value is None:
+            return None
+        # Aware UTC: DRF's JSON encoder renders this as the
+        # repository's ISO-8601 ``...Z`` convention.
+        return value.astimezone(dt_timezone.utc)
 
 
 class MeetingRecurrenceCreateSerializer(serializers.Serializer):

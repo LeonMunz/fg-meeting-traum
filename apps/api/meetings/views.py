@@ -55,6 +55,7 @@ from .serializers import (
     MeetingRecurrenceOccurrenceExcludeSerializer,
     MeetingRecurrenceOccurrenceQuerySerializer,
     MeetingRecurrenceOccurrenceSerializer,
+    MeetingRecurrenceOverviewSerializer,
     MeetingRecurrencePersonalOccurrenceSerializer,
     MeetingRecurrenceRescheduleSerializer,
     MeetingRecurrenceSerializer,
@@ -102,6 +103,7 @@ from .services import (
     exclude_meeting_recurrence_occurrence,
     materialize_meeting_recurrence_occurrence,
     list_meeting_item_notes,
+    list_personal_meeting_recurrence_overviews,
     reopen_meeting,
     reorder_meeting_sections,
     reorder_series_sections,
@@ -2351,11 +2353,25 @@ class MeetingNoteDetailView(APIView):
 # ── MeetingRecurrence endpoints ─────────────────────────────────
 
 
-class MeetingRecurrenceCreateView(APIView):
-    """POST /api/meeting-recurrences/
+class MeetingRecurrenceListCreateView(APIView):
+    """GET / POST /api/meeting-recurrences/
 
-    Create a recurring-meeting schedule from an existing Meeting
-    Template plus an explicit series title and a V1 recurrence rule.
+    GET — the personal recurring-SERIES overview: exactly ONE record
+    per personally relevant ``MeetingRecurrence`` (never one row per
+    occurrence), each carrying the canonical recurrence
+    representation plus the minimal overview context (creator,
+    peopleCount, derived ``active``/``ended`` status, and the next
+    effective occurrence). Delegates ENTIRELY to the read model
+    ``list_personal_meeting_recurrence_overviews`` — personal
+    relevance (creator or persisted intended participant), the
+    batched read queries, the next-effective-occurrence computation,
+    and the deterministic ordering all stay in the domain service;
+    the view only serializes. Strictly read-only: the GET creates no
+    Meeting rows and mutates nothing.
+
+    POST — create a recurring-meeting schedule from an existing
+    Meeting Template plus an explicit series title and a V1
+    recurrence rule.
 
     The selected MeetingSeries is the canonical content source and
     DETERMINES the recurrence's group/project scope: the client never
@@ -2377,6 +2393,24 @@ class MeetingRecurrenceCreateView(APIView):
     """
 
     permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        rows = list_personal_meeting_recurrence_overviews(
+            user=request.user,
+        )
+        return Response(
+            [
+                MeetingRecurrenceOverviewSerializer(
+                    row.recurrence,
+                    context={
+                        "people_count": row.people_count,
+                        "status": row.status,
+                        "next_scheduled_at": row.next_scheduled_at,
+                    },
+                ).data
+                for row in rows
+            ]
+        )
 
     def post(self, request):
         serializer = MeetingRecurrenceCreateSerializer(data=request.data)

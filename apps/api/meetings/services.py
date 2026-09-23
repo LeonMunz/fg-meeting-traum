@@ -1,10 +1,11 @@
-from datetime import datetime as dt_datetime, timezone as dt_timezone
+from dataclasses import dataclass
+from datetime import datetime as dt_datetime, timedelta, timezone as dt_timezone
 
 from zoneinfo import ZoneInfo
 
 from django.db import IntegrityError, models, transaction
+from django.db.models import Max, Prefetch, Q
 from django.utils import timezone
-from django.db.models import Max
 
 from audit_history.services import record_audit_event
 from authorization.capabilities import Capability
@@ -699,6 +700,390 @@ def expand_effective_meeting_recurrence_occurrences(
         for occurrence in occurrences
         if occurrence.original_start not in excluded_starts
     ]
+
+
+def _current_instant() -> dt_datetime:
+    """Observe the current application time EXACTLY ONCE per personal
+    Series-overview read.
+
+    Every time judgment of the read (the effective-occurrence horizon,
+    the batched exclusion / materialization selection, the next-
+    occurrence selection) derives from this single observation, and
+    tests freeze this one function (the repository's clock-observation
+    convention).
+    """
+    return timezone.now()
+
+
+def _next_occurrence_horizon(meeting_recurrence, window_start):
+    """Bound on a window ``[window_start, window_start + bound)`` that
+    is GUARANTEED to contain at least one RAW rule-produced candidate
+    date when the schedule still produces candidates at or after
+    ``window_start``.
+
+    The bound is deliberately LOOSE: it only has to exceed the maximum
+    gap between consecutive rule-produced candidate dates (plus the
+    distance to the start date while the schedule starts after
+    ``window_start``). Looseness merely widens the expansion window;
+    tightness is irrelevant to correctness.
+
+    - daily: candidates are exactly ``interval`` days apart;
+    - weekly: every anchor week contains the start date's weekday, so
+      the next candidate is at most one anchor step (``interval``
+      weeks) away;
+    - monthly: the same calendar day every ``interval`` absolute
+      months with months lacking that day skipped; the longest skip
+      run of the month-length pattern (leap cycle included) is bounded
+      by ``4 * interval + 12`` months.
+    """
+    interval = meeting_recurrence.interval
+    if meeting_recurrence.frequency == MeetingRecurrence.Frequency.DAILY:
+        gap = timedelta(days=interval)
+    elif meeting_recurrence.frequency == MeetingRecurrence.Frequency.WEEKLY:
+        gap = timedelta(days=interval * 7)
+    else:  # MONTHLY
+        gap = timedelta(days=(4 * interval + 12) * 31)
+
+    window_start_local = window_start.astimezone(
+        ZoneInfo(meeting_recurrence.timezone_name)
+    )
+    days_to_start = (
+        meeting_recurrence.start_date - window_start_local.date()
+    ).days
+    if days_to_start > 0:
+        gap = max(gap, timedelta(days=days_to_start + 1))
+
+    # One day of slack for wall-clock time-of-day effects.
+    return gap + timedelta(days=1)
+
+
+def next_effective_meeting_recurrence_occurrence(
+    *,
+    meeting_recurrence,
+    now,
+    excluded_starts=None,
+    materialized_meetings=None,
+):
+    """The earliest EFFECTIVE, non-cancelled occurrence of ONE
+    recurrence whose effective scheduled time is ``>= now``.
+
+    Returns the effective scheduled start as a timezone-aware
+    datetime, or ``None`` when the series has no further effective
+    occurrence (finite schedule exhausted, or every remaining
+    occurrence excluded/cancelled).
+
+    "Effective" reuses the canonical effective-occurrence semantics —
+    there is NO second recurrence engine:
+
+    - the RAW candidate sequence is always the canonical bounded
+      expansion (``expand_meeting_recurrence_occurrences``), so full
+      recurrence-rule semantics apply (daily / weekly / monthly,
+      interval, weekdays, start date, local time, timezone, inclusive
+      end date, count including the first, skipped invalid monthly
+      dates, stable occurrence identity);
+    - a persisted single-occurrence EXCLUSION removes its occurrence
+      from the effective set (no replacement — a COUNT-limited series
+      does not grow); a CANCELLED materialized occurrence carries the
+      exclusion its cancellation persisted, so it is absent exactly
+      like an excluded virtual occurrence;
+    - a MATERIALIZED occurrence's effective time is its concrete
+      Meeting's own ``scheduled_at``: a rescheduled Meeting reports
+      its moved time (which may be earlier or later than its sibling
+      occurrences), while a Meeting whose moved time already lies in
+      the past simply no longer takes place.
+
+    The read is horizon-free: no fixed "today → +N days" window is
+    assumed. The canonical expansion is bounded (an unbounded
+    expansion is impossible by API shape), so the search proceeds in
+    sliding bounded windows of the guaranteed candidate horizon:
+
+    - an empty expansion proves the rule produced no candidate at or
+      after the window start (end date passed / count consumed), so
+      the answer is whatever future materialized Meeting remains;
+    - a window whose candidates are all absent — excluded, or
+      materialized (whose effective time is judged globally and may
+      lie anywhere) — slides the window past them; the loop
+      terminates for every finite schedule, and for an open-ended
+      schedule as soon as one non-excluded virtual candidate is found.
+
+    ``excluded_starts`` is an OPTIONAL preloaded set of excluded
+    original scheduled starts for THIS recurrence at or after
+    ``now`` (a superset is harmless: it can only remove occurrences
+    the rule itself produced) — the same batching convention as
+    ``expand_effective_meeting_recurrence_occurrences``. When omitted,
+    the canonical bounded exclusion query is executed for this
+    recurrence.
+
+    ``materialized_meetings`` is an OPTIONAL preloaded mapping of
+    ``original_scheduled_at`` → ``(scheduled_at, status)`` over this
+    recurrence's relevant concrete Meetings (original start at or
+    after ``now``, or a Meeting whose planned time was moved to or
+    after ``now``). When omitted, the canonical bounded Meeting query
+    is executed for this recurrence.
+
+    Read-only: creates or mutates no persistence state. Access to the
+    recurrence row is the caller's responsibility, exactly like the
+    raw expansion.
+    """
+    if meeting_recurrence.pk is None:
+        raise MeetingDomainError(
+            "Only persisted recurrences can be expanded: stable "
+            "occurrence identities require a schedule id."
+        )
+    if now is None or now.tzinfo is None:
+        raise MeetingDomainError(
+            "The next-occurrence instant must be timezone-aware."
+        )
+
+    if excluded_starts is None:
+        excluded_starts = set(
+            MeetingRecurrenceExclusion.objects
+            .filter(
+                recurrence=meeting_recurrence,
+                original_scheduled_at__gte=now,
+            )
+            .values_list("original_scheduled_at", flat=True)
+        )
+
+    if materialized_meetings is None:
+        materialized_meetings = {
+            row.original_scheduled_at: (row.scheduled_at, row.status)
+            for row in Meeting.objects.filter(
+                recurrence=meeting_recurrence,
+            ).filter(
+                Q(original_scheduled_at__gte=now)
+                | Q(scheduled_at__gte=now),
+            ).values("original_scheduled_at", "scheduled_at", "status")
+        }
+
+    # The earliest materialized occurrence whose EFFECTIVE (Meeting-
+    # owned) time still lies in the future; a cancelled Meeting never
+    # counts.
+    best_materialized = min(
+        (
+            scheduled_at
+            for scheduled_at, status in materialized_meetings.values()
+            if status != Meeting.Status.CANCELLED
+            and scheduled_at >= now
+        ),
+        default=None,
+    )
+
+    window_start = now
+    while True:
+        occurrences = expand_meeting_recurrence_occurrences(
+            meeting_recurrence=meeting_recurrence,
+            range_start=window_start,
+            range_end=window_start
+            + _next_occurrence_horizon(meeting_recurrence, window_start),
+        )
+        if not occurrences:
+            # The rule produced no candidate at or after the window
+            # start: the schedule is exhausted (end date passed, count
+            # consumed) — only a rescheduled-forward materialized
+            # Meeting can remain.
+            return best_materialized
+
+        # Virtual candidates report their original scheduled start;
+        # occurrences are ascending, so the FIRST eligible one is the
+        # earliest virtual candidate of the WHOLE schedule (earlier
+        # windows have already been scanned).
+        best_virtual = None
+        for occurrence in occurrences:
+            if occurrence.original_start in excluded_starts:
+                continue
+            if occurrence.original_start in materialized_meetings:
+                # Materialized: its effective time is the Meeting's
+                # own planned time, judged GLOBALLY through
+                # ``best_materialized`` — which may lie earlier or
+                # later than this window (a rescheduled occurrence),
+                # so this candidate neither answers nor blocks the
+                # virtual scan.
+                continue
+            best_virtual = occurrence.original_start
+            break
+
+        if best_virtual is not None:
+            best = best_materialized
+            if best is None or best_virtual < best:
+                best = best_virtual
+            return best
+
+        # Every candidate inside the window is absent (excluded, or
+        # materialized — whose effective time is judged globally):
+        # slide past them. A finite schedule terminates on an empty
+        # expansion; an open-ended schedule terminates on its first
+        # non-excluded virtual candidate.
+        window_start = occurrences[-1].original_start + timedelta(
+            microseconds=1,
+        )
+
+
+@dataclass(frozen=True)
+class MeetingRecurrenceOverview:
+    """One Series-overview read-model row for one personally relevant
+    MeetingRecurrence.
+
+    ``status`` is a DERIVED presentation state, not a persisted domain
+    lifecycle: ``"active"`` iff ``next_scheduled_at`` is non-null
+    (the series still has an effective future occurrence, exclusions
+    and cancellations included), ``"ended"`` otherwise. ``people_count``
+    is the exact people semantics a future materialized Meeting gets:
+    the creator plus the unique persisted recurrence participants,
+    creator duplication removed.
+    """
+
+    recurrence: MeetingRecurrence
+    people_count: int
+    status: str
+    next_scheduled_at: dt_datetime | None
+
+
+_MAX_AWARE_INSTANT = dt_datetime.max.replace(tzinfo=dt_timezone.utc)
+
+
+def list_personal_meeting_recurrence_overviews(*, user):
+    """The personal recurring-SERIES overview of one user, as ONE read
+    model: exactly ONE row per personally relevant MeetingRecurrence
+    (never one row per occurrence, never derived from an occurrence
+    window), each carrying its canonical rule representation plus the
+    derived overview context (creator, people count, active/ended
+    state, next effective occurrence).
+
+    Personal relevance is the established personal-recurrence
+    semantics (the rule behind the bounded personal occurrence feed):
+    the user is the recurrence CREATOR or a persisted intended
+    PARTICIPANT (``MeetingRecurrenceParticipant``). Scope-level
+    visibility alone (Research Group / Project read access,
+    ``MEETING_RECURRENCE_READ``) does NOT make a recurrence part of
+    the personal overview, and the overview never leaks the existence,
+    title, or timing of unrelated recurrences: a user without
+    relevant recurrences receives an empty list. Duplicate
+    relationships cannot duplicate a row: the relevance selection is
+    ``distinct``, and ``(recurrence, user)`` participant rows are
+    database-unique.
+
+    Read efficiency (constant in BOTH the number of relevant
+    recurrences and the number of generated occurrence dates — the
+    canonical expansion's Python iteration is bounded by the sliding
+    horizon, never by a fixed window):
+
+    - ONE relevance query (creator OR intended participant) with the
+      creator eager and the participant intent prefetched (the
+      people-count source);
+    - ONE batched exclusion query across every relevant recurrence
+      (future exclusions only), grouped in memory and handed to the
+      next-occurrence search as preloaded sets;
+    - ONE batched materialized-Meeting query across every relevant
+      recurrence (original start at or after now, or a planned time
+      moved to or after now), grouped in memory.
+
+    Strictly read-only: creates no Meeting rows, Sections,
+    participants, exclusions, or audit events, and mutates no
+    recurrence.
+    """
+    now = _current_instant()
+
+    recurrences = list(
+        MeetingRecurrence.objects
+        .filter(
+            Q(created_by=user)
+            | Q(participant_relations__user=user),
+        )
+        .select_related("created_by")
+        .prefetch_related(Prefetch("participant_relations"))
+        .distinct()
+    )
+    if not recurrences:
+        return []
+
+    recurrence_ids = [recurrence.pk for recurrence in recurrences]
+
+    # ONE batched exclusion query across every relevant recurrence:
+    # only exclusions at or after ``now`` can affect the next
+    # occurrence.
+    exclusions_by_recurrence: dict[int, set[dt_datetime]] = {}
+    for recurrence_id, original_start in (
+        MeetingRecurrenceExclusion.objects
+        .filter(
+            recurrence_id__in=recurrence_ids,
+            original_scheduled_at__gte=now,
+        )
+        .values_list("recurrence_id", "original_scheduled_at")
+    ):
+        exclusions_by_recurrence.setdefault(
+            recurrence_id, set(),
+        ).add(original_start)
+
+    # ONE batched materialized-Meeting query across every relevant
+    # recurrence: (recurrence, original_scheduled_at) is unique, so
+    # the per-recurrence original-start mapping is exact.
+    materialized_by_recurrence: dict[int, dict[dt_datetime, tuple]] = {}
+    for recurrence_id, original_start, scheduled_at, status_value in (
+        Meeting.objects
+        .filter(recurrence_id__in=recurrence_ids)
+        .filter(
+            Q(original_scheduled_at__gte=now)
+            | Q(scheduled_at__gte=now),
+        )
+        .values_list(
+            "recurrence_id", "original_scheduled_at", "scheduled_at",
+            "status",
+        )
+    ):
+        materialized_by_recurrence.setdefault(
+            recurrence_id, {},
+        )[original_start] = (scheduled_at, status_value)
+
+    rows = []
+    for recurrence in recurrences:
+        participant_ids = {
+            relation.user_id
+            for relation in recurrence.participant_relations.all()
+        }
+        # The exact people semantics of a future materialized Meeting:
+        # creator + unique persisted participants, creator
+        # duplication removed (the creator-first initialization
+        # deduplicates through the same set).
+        people_count = 1 + len(
+            participant_ids - {recurrence.created_by_id}
+        )
+        next_scheduled_at = (
+            next_effective_meeting_recurrence_occurrence(
+                meeting_recurrence=recurrence,
+                now=now,
+                excluded_starts=exclusions_by_recurrence.get(
+                    recurrence.pk, frozenset(),
+                ),
+                materialized_meetings=materialized_by_recurrence.get(
+                    recurrence.pk, {},
+                ),
+            )
+        )
+        rows.append(
+            MeetingRecurrenceOverview(
+                recurrence=recurrence,
+                people_count=people_count,
+                status=(
+                    "active"
+                    if next_scheduled_at is not None
+                    else "ended"
+                ),
+                next_scheduled_at=next_scheduled_at,
+            )
+        )
+
+    # Deterministic overview order: active Series first by next
+    # occurrence ascending, Series without a next occurrence after
+    # them, the stable recurrence id as the final tie-breaker.
+    rows.sort(
+        key=lambda row: (
+            row.next_scheduled_at is None,
+            row.next_scheduled_at or _MAX_AWARE_INSTANT,
+            row.recurrence.pk,
+        )
+    )
+    return rows
 
 
 def _require_valid_recurrence_occurrence(*, recurrence, occurrence):

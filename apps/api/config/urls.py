@@ -86,7 +86,7 @@ from meetings.views import (
     MeetingNoteDetailView,
     MeetingParticipantDetailView,
     MeetingParticipantListCreateView,
-    MeetingRecurrenceCreateView,
+    MeetingRecurrenceListCreateView,
     MeetingRecurrenceOccurrenceListView,
     MeetingRecurrenceOccurrenceExcludeView,
     MeetingRecurrenceOccurrenceMaterializeView,
@@ -214,9 +214,10 @@ urlpatterns = [
     path('api/meeting-series/<int:series_id>/participant-candidates/', MeetingSeriesParticipantCandidateListView.as_view(), name='meeting-series-participant-candidates'),
     path('api/meeting-series-sections/<int:section_id>/', MeetingSeriesSectionDetailView.as_view(), name='meeting-series-section-detail'),
 
-    # Meeting Recurrences (bounded occurrence read + bounded personal
-    # recurring-occurrence feed + idempotent occurrence materialization)
-    path('api/meeting-recurrences/', MeetingRecurrenceCreateView.as_view(), name='meeting-recurrence-create'),
+    # Meeting Recurrences (personal Series overview + creation,
+    # bounded occurrence read + bounded personal recurring-occurrence
+    # feed + idempotent occurrence materialization)
+    path('api/meeting-recurrences/', MeetingRecurrenceListCreateView.as_view(), name='meeting-recurrences-list'),
     path('api/meeting-recurrences/occurrences/', MeetingRecurrencePersonalOccurrenceListView.as_view(), name='meeting-recurrence-personal-occurrences'),
     path('api/meeting-recurrences/<int:recurrence_id>/occurrences/', MeetingRecurrenceOccurrenceListView.as_view(), name='meeting-recurrence-occurrences'),
     path('api/meeting-recurrences/<int:recurrence_id>/occurrences/exclude/', MeetingRecurrenceOccurrenceExcludeView.as_view(), name='meeting-recurrence-occurrence-exclude'),
