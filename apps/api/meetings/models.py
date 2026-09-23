@@ -127,6 +127,15 @@ class MeetingRecurrence(models.Model):
       Deleting the referenced Template preserves the Recurrence
       (``SET_NULL``, the same semantics as ``Meeting.series``); the
       recurrence then behaves like a legacy template-less recurrence.
+    - The recurrence owns a persisted set of intended PARTICIPANTS for
+      its FUTURE materialized occurrences (``MeetingRecurrenceParticipant``):
+      participant IDENTITY only — no per-occurrence attendance, RSVP, or
+      presence state. Materialization snapshots the recurrence's CURRENT
+      set into concrete ``MeetingParticipant`` rows through the canonical
+      Meeting-participant initialization (alongside the creator, which is
+      never duplicated); a materialized Meeting is an independent snapshot,
+      so changing the set later never rewrites any already-materialized
+      Meeting — only FUTURE materializations pick up the new set.
     - Occurrences are derived values, never persisted Meetings: creating or
       expanding a recurrence must not pre-create Meeting rows.
     - The start date is the first actual occurrence (a weekly schedule's
@@ -360,6 +369,69 @@ class MeetingRecurrenceExclusion(models.Model):
         return (
             f"Excluded occurrence {self.original_scheduled_at} "
             f"of recurrence {self.recurrence_id}"
+        )
+
+
+
+class MeetingRecurrenceParticipant(models.Model):
+    """One persisted intended participant of a MeetingRecurrence.
+
+    A recurrence owns a set of intended Participants for its FUTURE
+    materialized occurrences: the users who become concrete
+    ``MeetingParticipant``s when a future occurrence is materialized.
+    This relation persists participant IDENTITY ONLY — no per-occurrence
+    attendance, RSVP, or presence state, and no historical
+    ``MeetingParticipant`` rows. Materialization snapshots the
+    recurrence's CURRENT set into the new Meeting through the canonical
+    Meeting-participant initialization (``_create_initial_meeting_
+    participants``); an already-materialized Meeting is an independent
+    snapshot, so later changes to this set never rewrite it.
+
+    Invariants:
+
+    - At most one intended participant per ``(recurrence, user)``
+      (database unique constraint; duplicate inputs are normalized at
+      the domain service level, exactly like Meeting creation).
+    - The eligible users are exactly the canonical Meeting-participant
+      eligibility: ANY existing application user — Research Group
+      membership, Project membership, or a Project role is NOT a
+      requirement (the same rule ordinary Meeting creation applies).
+      Persistence of the intent grants the user no access to the
+      recurrence itself, and no Research Group or Project permission.
+    - The creator MAY appear in the set: materialization deduplicates
+      through the canonical creator-first initialization, so it can
+      never produce duplicate ``MeetingParticipant`` rows.
+    - Deleting the owning recurrence removes its participant intent
+      (CASCADE, the same owner-deletion semantics as the recurrence's
+      other owned relations); deleting a User is blocked while a
+      reference exists (RESTRICT, the same convention as
+      ``MeetingParticipant.user``).
+    """
+
+    recurrence = models.ForeignKey(
+        MeetingRecurrence,
+        on_delete=models.CASCADE,
+        related_name="participant_relations",
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        related_name="recurrence_participations",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "meetings_recurrence_participant"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["recurrence", "user"],
+                name="meetings_recurrence_participant_unique_recurrence_user",
+            )
+        ]
+
+    def __str__(self):
+        return (
+            f"{self.user.username} → recurrence {self.recurrence_id}"
         )
 
 

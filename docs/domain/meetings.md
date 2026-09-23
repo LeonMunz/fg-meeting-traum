@@ -344,9 +344,10 @@ creation/editing remain domain-only operations, and there is no
 Recurrence UI. Occurrence Meetings are never auto-created outside the
 explicit materialization operation.
 
-A Recurrence owns three persisted values: the recurrence RULE, the
-canonical title of the recurring SERIES, and the canonical MEETING
-TEMPLATE reference. The title identifies the series even when zero
+A Recurrence owns four persisted values: the recurrence RULE, the
+canonical title of the recurring SERIES, the canonical MEETING
+TEMPLATE reference, and the intended PARTICIPANT set for future
+occurrences. The title identifies the series even when zero
 occurrences have been materialized and is the DEFAULT title of a
 `Meeting` when a future occurrence is materialized. Once a `Meeting`
 exists, its title and content are Meeting-owned: changing
@@ -358,7 +359,15 @@ snapshot the Template's active Sections (normal Meeting-from-Template
 semantics), while already-materialized `Meeting`s remain independent
 snapshots. The title is independent of the Template's title: it is
 never derived from a Template, and renaming a Template never changes
-the recurrence title.
+the recurrence title. The participant set is the same snapshot
+principle applied to people: `MeetingRecurrence` owns the intended
+Participants for future materialized occurrences, materialization
+snapshots the recurrence's CURRENT set into `MeetingParticipant`
+rows (alongside the canonical creator semantics), and existing
+materialized `Meeting`s are immutable snapshots with respect to later
+recurrence participant changes — only FUTURE materializations pick up
+the new set (see "Recurring-series participants (implemented)"
+below).
 
 ### V1 recurrence language (implemented)
 
@@ -465,6 +474,37 @@ content source). On Template deletion the reference is cleared
 the recurrence, its rule, and its materialized Meetings survive, and
 the recurrence then behaves like a legacy template-less recurrence.
 
+**Intended participants (migration `meetings/0020`).** A recurrence
+owns a persisted set of intended Participants for its FUTURE
+materialized occurrences, stored as `meetings.MeetingRecurrenceParticipant`
+(table `meetings_recurrence_participant`):
+
+```text
+id
+recurrence_id          (CASCADE) — deleting the recurrence removes its intent
+user_id                (RESTRICT) — same convention as MeetingParticipant.user
+created_at
+```
+
+Constraint: `UNIQUE(recurrence_id, user_id)` — at most one intended
+participant per user per recurrence.
+
+The relation persists participant **identity only** — no per-occurrence
+attendance, RSVP, or presence state, and no historical
+`MeetingParticipant` rows. It is the canonical content source for the
+participant snapshot of future materializations, exactly analogous to
+the Template reference being the content source for future Section
+snapshots. The migration is a pure table creation with NO data step:
+every existing recurrence row legitimately predates the linkage and
+therefore carries an EMPTY participant set (a documented legacy
+compatibility state — the migration does not backfill the creator or
+any Meeting participant into historical recurrences). Every NEW
+recurrence persists its intended set through the domain creation
+service (see below), and Template deletion preserves the participant
+intent exactly as it preserves the rule and title (`SET_NULL` on the
+Template reference; the `MeetingRecurrenceParticipant` rows are
+recurrence-owned and untouched).
+
 Database check constraints enforce: scope/Project consistency (group →
 no Project, project → Project), `interval >= 1`, end-mode field
 consistency (exactly the fields of the selected mode are set),
@@ -499,6 +539,26 @@ before any row is written:
 - simultaneous `count` and `end_date` (in either mode);
 - an `end_date` before the `start_date`;
 - any other field incompatible with the selected end mode.
+- the intended participant set is provided as the canonical
+  Meeting-participant domain representation (persisted application
+  User instances, the same representation `create_meeting` accepts):
+  omitted or empty is valid; every entry must be an EXISTING
+  application user (an unsaved/dangling user is rejected before any
+  row is written); eligibility is exactly the canonical
+  Meeting-participant rule — Research Group membership, Project
+  membership, and Project role are NOT requirements (no scope
+  broadening, no access granted to anyone); duplicate entries are
+  normalized to one persisted intent each. The intent is persisted
+  atomically with the recurrence (a failed creation leaves no
+  recurrence and no participant intents behind).
+
+**Recurring-series participants.** The creation service persists the
+intended participant set on the recurrence (one
+`MeetingRecurrenceParticipant` row per unique user). It is participant
+identity for future occurrences only — the creator is NOT force-added
+to the set (canonical creator semantics apply at materialization), and
+no `Meeting`, Section, or `MeetingParticipant` row is created. A later
+change of the set never rewrites any already-materialized `Meeting`.
 
 ### Creation HTTP API (implemented)
 
@@ -764,6 +824,20 @@ participant. The default TITLE still comes from the recurrence
 (canonical series title, Slice-10 semantics) — never from the
 Template.
 
+**Participants:** the recurrence's persisted intended participant
+set is SNAPSHOTTED into the new Meeting as concrete
+`MeetingParticipant` rows through the SAME canonical
+Meeting-participant initialization as ordinary Meeting creation: the
+creator is always included, and every intended participant is
+included exactly once (a creator who is also an intended participant
+never produces a duplicate row). The snapshot is taken at FIRST
+materialization only: an idempotent replay returns the existing
+Meeting without re-snapshotting, and a later change of the
+recurrence's participant set never rewrites any already-materialized
+Meeting (the snapshot is Meeting-owned, exactly like the Template
+Section snapshots). A recurrence with an EMPTY set yields exactly the
+creator as participant.
+
 **Template-less recurrences (legacy compatibility state).** A
 recurrence whose `series` reference is NULL — a row created before the
 Template linkage existed, or one whose Template was later deleted
@@ -813,6 +887,82 @@ window still create zero `Meeting` rows; only the explicit operation
 above creates a concrete occurrence Meeting. The operation is exposed
 through one idempotent HTTP action (see "Occurrence materialization
 API" below); there is no UI for it yet.
+
+### Recurring-series participants (implemented)
+
+`MeetingRecurrence` owns the participant intent for future
+occurrences. This is a persistent domain invariant, established by
+`meetings.MeetingRecurrenceParticipant` (migration `meetings/0020`) and
+the domain creation / materialization services. It is the same
+snapshot principle already used for Template content, applied to
+people.
+
+**Canonical invariant.**
+
+```text
+MeetingRecurrence owns the participant intent for future occurrences.
+
+Materialization snapshots the recurrence's current participant set
+into MeetingParticipant rows.
+
+Existing materialized Meetings are immutable snapshots with respect
+to later recurrence participant changes.
+```
+
+Concretely:
+
+- **Persist intent for the future.** Creating a recurrence may attach
+  zero or more intended Participants. The relation stores participant
+  **identity only** (who will be a participant of a future
+  materialized Meeting) — it is NOT per-occurrence attendance, RSVP,
+  or Meeting presence state, and it is NOT a copy of
+  `MeetingParticipant` rows. The creator is not force-added to the
+  intent set.
+- **Snapshot at materialization.** When an occurrence is FIRST
+  materialized, the recurrence's CURRENT participant set is snapshotted
+  into the new Meeting's `MeetingParticipant` rows through the SAME
+  canonical initialization used by ordinary Meeting creation
+  (`_create_initial_meeting_participants`): the creator is always a
+  participant, and each intended participant is added exactly once.
+  If the creator is also an intended participant, exactly ONE
+  `MeetingParticipant` row results (no duplicate).
+- **Change later → affects only future materializations.** Changing
+  the recurrence's participant set after a Meeting exists NEVER
+  rewrites that Meeting's participants; only occurrences materialized
+  AFTER the change pick up the new set.
+- **Replay is idempotent.** Re-materializing / replaying an already
+  materialized occurrence returns the same Meeting and does NOT
+  re-snapshot (a later-changed set is never written into it), and it
+  never duplicates `MeetingParticipant` rows. The first-materialization
+  boundary is authoritative.
+- **Eligibility is unchanged.** The intended participants follow the
+  same canonical Meeting-participant rule: any EXISTING application
+  user is eligible; Research Group / Project membership is not a
+  requirement; and the intent grants no access by itself.
+- **No participant rows for virtual operations.** Excluding a virtual
+  occurrence creates zero `MeetingParticipant` rows; rescheduling or
+  cancelling an already-materialized occurrence preserves its
+  participant snapshot; and an excluded occurrence cannot be
+  re-materialized (creating a second Meeting) by a later participant
+  change.
+- **Template independence.** Participants are not Template Sections.
+  Template deletion clears the recurrence's Template reference
+  (`SET_NULL`) but preserves the participant intent; a legacy
+  template-less recurrence can still carry a readable/persisted
+  participant set, and the existing rule that a template-less
+  recurrence cannot materialize a still-virtual occurrence is
+  unchanged (participant support does not bypass the Template
+  requirement).
+- **Deletion follows existing conventions.** Deleting a recurrence
+  removes its participant intent (CASCADE); deleting a User is
+  blocked while an intent references it (RESTRICT, the same
+  `MeetingParticipant.user` convention). No stronger retention policy
+  is introduced.
+
+HTTP `participantIds` on recurrence creation, a response participant
+field, frontend submission, a participant-edit API, and Template
+default participants are NOT part of this slice (see "Not
+implemented (deferred)" below).
 
 ### Occurrence materialization API (implemented)
 
@@ -1371,6 +1521,14 @@ unimplemented:
 - whole-series (whole-recurrence) editing semantics and schedule
   revisions/segments (including changing a recurrence's Template
   association — domain/model-level today, no public edit-series API);
+- recurrence participant HTTP/UX surface: `participantIds` on the
+  recurrence creation HTTP request, a recurrence-response participant
+  field, frontend participant submission (and removal of the current
+  recurring-participant UI safety gate), a recurrence participant
+  editing API, and Template default participants. (The DOMAIN
+  persistence of the recurrence participant intent and the
+  materialization participant snapshot ARE implemented — see
+  "Recurring-series participants (implemented)" above.)
 - `.ics` export, calendar (Google/Outlook) sync, arbitrary RRULE input,
   yearly recurrence, nth-weekday monthly recurrence.
 

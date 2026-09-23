@@ -30,6 +30,7 @@ from .models import (
     MeetingParticipant,
     MeetingRecurrence,
     MeetingRecurrenceExclusion,
+    MeetingRecurrenceParticipant,
     MeetingSection,
     MeetingSeries,
     MeetingSeriesSection,
@@ -394,6 +395,7 @@ def create_meeting_recurrence(
     end_mode=MeetingRecurrence.EndMode.NO_END,
     end_date=None,
     occurrence_count=None,
+    participants=(),
 ):
     """Persist one recurring-meeting schedule (V1 recurrence language).
 
@@ -420,6 +422,25 @@ def create_meeting_recurrence(
     the canonical Template write rule of that scope (the same scoped
     write rule the recurrence itself requires — a read-only/viewer
     actor can never bind a Template).
+
+    ``participants`` is the optional intended participant set of the
+    recurring SERIES (default: empty): the users who become concrete
+    ``MeetingParticipant``s of a Meeting when a FUTURE occurrence is
+    materialized. Omitted or empty is valid. It carries participant
+    IDENTITY only — no attendance, RSVP, or presence state. Eligibility
+    is exactly the canonical Meeting-participant rule: every entry must
+    be an EXISTING application user — Research Group membership,
+    Project membership, and Project role are NOT requirements (the same
+    rule ordinary Meeting creation applies; no authorization is
+    broadened or granted by the intent). Duplicate entries are
+    normalized to one persisted intent each (the same convention as
+    create-time Meeting participants). The creator MAY be included in
+    the set: materialization deduplicates through the canonical
+    creator-first participant initialization, so it never creates
+    duplicate ``MeetingParticipant`` rows. The intent is persisted
+    atomically with the recurrence, and a later change of the set never
+    rewrites any already-materialized Meeting — only FUTURE
+    materializations pick it up.
 
     The V1 definition is validated before anything is persisted and must
     be internally consistent:
@@ -501,23 +522,49 @@ def create_meeting_recurrence(
     except RecurrenceError as exc:
         raise MeetingDomainError(str(exc)) from exc
 
-    return MeetingRecurrence.objects.create(
-        research_group=research_group,
-        scope=scope,
-        project=project,
-        title=title,
-        series=template,
-        frequency=frequency,
-        interval=interval,
-        weekdays=list(normalized_weekdays),
-        start_date=start_date,
-        local_time=local_time,
-        timezone_name=timezone_name,
-        end_mode=end_mode,
-        end_date=end_date,
-        occurrence_count=occurrence_count,
-        created_by=actor,
-    )
+    # The intended participant set is validated BEFORE anything is
+    # persisted, with exactly the canonical Meeting-participant
+    # eligibility: every participant must be an EXISTING application
+    # user — Research Group membership, Project membership, and Project
+    # role are NOT requirements (the same rule ordinary Meeting
+    # creation applies). The set is a SET: duplicate entries are
+    # normalized to one persisted intent each. This validation grants
+    # no access to anyone and broadens no authorization.
+    participants_by_id = {}
+    for participant in participants:
+        if participant.pk is None:
+            raise MeetingDomainError(
+                "Every recurrence participant must be an existing "
+                "application user."
+            )
+        participants_by_id[participant.pk] = participant
+
+    # The intent is persisted atomically with the recurrence: a failed
+    # creation leaves no recurrence and no participant intents behind.
+    with transaction.atomic():
+        recurrence = MeetingRecurrence.objects.create(
+            research_group=research_group,
+            scope=scope,
+            project=project,
+            title=title,
+            series=template,
+            frequency=frequency,
+            interval=interval,
+            weekdays=list(normalized_weekdays),
+            start_date=start_date,
+            local_time=local_time,
+            timezone_name=timezone_name,
+            end_mode=end_mode,
+            end_date=end_date,
+            occurrence_count=occurrence_count,
+            created_by=actor,
+        )
+        MeetingRecurrenceParticipant.objects.bulk_create([
+            MeetingRecurrenceParticipant(recurrence=recurrence, user=user)
+            for user in participants_by_id.values()
+        ])
+
+    return recurrence
 
 
 def expand_meeting_recurrence_occurrences(
@@ -740,6 +787,23 @@ def materialize_meeting_recurrence_occurrence(
     Meeting Template (see **Template** below) with the creator as
     participant.
 
+    **Participants:** the recurrence's persisted intended participant
+    set (``MeetingRecurrenceParticipant``) is SNAPSHOT into the new
+    Meeting as concrete ``MeetingParticipant`` rows through the SAME
+    canonical Meeting-participant initialization as ordinary Meeting
+    creation (``_create_initial_meeting_participants``): the creator is
+    always included, and every intended participant is included exactly
+    once (if the creator is also an intended participant, no duplicate
+    row is created). The snapshot is taken from the recurrence row
+    locked for this materialization — the set's CURRENT state at first
+    materialization — and is the ONLY time the recurrence's set feeds a
+    Meeting: an idempotent replay returns the existing Meeting without
+    re-snapshotting, and a later change of the recurrence's participant
+    set never rewrites any already-materialized Meeting (the snapshot is
+    Meeting-owned, exactly like the Template Section snapshots). A
+    recurrence with an EMPTY set yields exactly the creator as
+    participant, exactly as before this snapshot existed.
+
     **Title:** the Recurrence owns the canonical series title. A newly
     materialized Meeting DEFAULTS its title to ``recurrence.title``; an
     explicitly supplied non-blank ``title`` is a creation-time override
@@ -905,10 +969,27 @@ def materialize_meeting_recurrence_occurrence(
                 meeting_series=meeting_series,
             )
 
+            # The recurrence's persisted intended participant set is
+            # snapshotted into concrete MeetingParticipant rows
+            # through the canonical Meeting-participant initialization
+            # (creator first, then the unique intended participants —
+            # a creator who is also an intended participant yields
+            # exactly one row). The set is read under the recurrence
+            # row lock already held for this materialization: it is
+            # the authoritative CURRENT set for the FIRST creation
+            # only — a replay returns above, and a later change of the
+            # set never rewrites this Meeting.
+            initial_participants = [
+                relation.user
+                for relation in MeetingRecurrenceParticipant.objects.filter(
+                    recurrence_id=locked_recurrence.pk,
+                ).select_related("user").order_by("id")
+            ]
+
             _create_initial_meeting_participants(
                 meeting=meeting,
                 actor=actor,
-                participants=(),
+                participants=initial_participants,
             )
 
             # Recorded inside the same atomic block as the creation: a
