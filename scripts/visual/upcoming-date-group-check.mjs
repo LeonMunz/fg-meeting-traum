@@ -8,8 +8,25 @@
  * `groupUpcomingByDate` labels) plus the REAL `SeriesCreatedToast`
  * against the REAL production CSS (fresh `vite build`) inside a
  * shell that mirrors the app's width chain (fixed 240px sidebar +
- * page padding px-6 / lg:px-8), and verifies the computed layout at
- * the acceptance viewports: 1440 / 900 / 390.
+ * page padding px-6 / lg:px-8 — the real AppShell keeps the fixed
+ * 240px sidebar at EVERY viewport, including 390px), and verifies
+ * the computed layout at the acceptance viewports: 1440 / 900 /
+ * 390.
+ *
+ * Shell fidelity notes:
+ *   - the harness mount is `#visual-root`, NOT `#root`: the app's
+ *     base CSS applies `min-width: 320px` to `#root`, which would
+ *     inflate the 390px shell column (240px sidebar + px-6 =
+ *     102px) to 320px and create an artificial 584px-wide document
+ *     (264 + 320). In the real app `#root` is the full-width
+ *     top-level root (>= 320px at every acceptance viewport), so
+ *     the min-width is inert there and the mobile list column is a
+ *     plain 102px div.
+ *   - the toast toggle button is capped at the shell column width
+ *     (max-w-full) so this harness-only chrome can never overflow
+ *     the mobile column (an overflowing clicked button scrolls the
+ *     document horizontally and shifts every viewport-relative
+ *     measurement).
  *
  * Checks performed (per viewport):
  *   - header copy: `Today · Wed, Sep 23` / `Tomorrow · Thu, Sep 24`
@@ -23,10 +40,21 @@
  *     exactly the group wrappers — no per-day cards;
  *   - group separation: first group has NO leading margin, every
  *     later group has an 8px margin-top before its header;
- *   - ordinary row dividers stay subtle (border-border-subtle);
- *   - row geometry unchanged: 4 desktop / 3 tablet / 1 mobile
- *     tracks, compact ~68px rows;
- *   - no horizontal overflow at any viewport;
+ *   - ordinary row dividers stay subtle: the visible 1px line
+ *     (Tailwind v4 `divide-y` = border-bottom of every
+ *     :not(:last-child) row, border-top 0px) resolves to the
+ *     canonical `--color-border-subtle` token; the group header
+ *     underline uses the SAME subtle token (the group boundary is
+ *     distinguished by its header surface, not a stronger border);
+ *   - row geometry: 4 desktop / 3 tablet / 1 mobile tracks;
+ *     compact 60–74px rows at desktop + tablet; mobile rows are
+ *     intentionally stacked (time / title+metadata / actions) and
+ *     are asserted behaviorally — single track, stacked regions
+ *     without overlap, compact py-3/px-4 padding, min-height floor
+ *     kept, no row-internal horizontal overflow (NO desktop height
+ *     band on the stacked mobile row);
+ *   - no horizontal overflow at any viewport, and the list stays
+ *     inside the viewport;
  *   - the toast is position:fixed in the TOP-RIGHT (below the
  *     sticky header), fits the viewport, and its appearance does NOT
  *     shift the Upcoming list (list bounding box measured with and
@@ -239,6 +267,7 @@ function Harness() {
       <button
         type="button"
         id="toast-toggle"
+        className="max-w-full"
         onClick={() =>
           setToastVisible((current) => !current)
         }
@@ -262,7 +291,7 @@ function Harness() {
 }
 
 createRoot(
-  document.getElementById('root') as HTMLElement,
+  document.getElementById('visual-root') as HTMLElement,
 ).render(<Harness />)
 `,
 )
@@ -367,7 +396,7 @@ writeFileSync(
 </style>
 </head>
 <body>
-<div id="shell"><div id="root"></div></div>
+<div id="shell"><div id="visual-root"></div></div>
 <script src="${path.join(OUT, 'assets', bundleFile).replace(/\\\\/g, '/')}" ></script>
 </body>
 </html>
@@ -421,6 +450,10 @@ try {
       ]),
     )
 
+    // Pin the scroll origin so every measurement is taken from
+    // the same viewport reference point.
+    await page.evaluate(() => window.scrollTo(0, 0))
+
     const m = await page.evaluate(() => {
       const section = document.querySelector(
         '[aria-label="Upcoming meetings"]',
@@ -446,6 +479,12 @@ try {
           .textTransform,
         height: h.offsetHeight,
         color: getComputedStyle(h).color,
+        borderBottomColor:
+          getComputedStyle(h)
+            .borderBottomColor,
+        borderBottomWidth:
+          getComputedStyle(h)
+            .borderBottomWidth,
       }))
       const wrappers = Array.from(
         section.children,
@@ -456,17 +495,76 @@ try {
       }))
       const rows = Array.from(
         section.querySelectorAll('div[class*="min-h-[68px]"]'),
-      ).map((row) => ({
-        columns:
-          getComputedStyle(row).gridTemplateColumns,
-        height: row.getBoundingClientRect().height,
-        trackCount:
-          getComputedStyle(row).gridTemplateColumns
-            .trim().split(/\s+/).length,
-      }))
-      const divider = section.querySelector(
-        '.divide-y > div + div',
-      )
+      ).map((row) => {
+        const r = row.getBoundingClientRect()
+        return {
+          columns:
+            getComputedStyle(row).gridTemplateColumns,
+          height: row.getBoundingClientRect().height,
+          top: r.top,
+          trackCount:
+            getComputedStyle(row).gridTemplateColumns
+              .trim().split(/\s+/).length,
+          paddingTop: getComputedStyle(row).paddingTop,
+          paddingBottom: getComputedStyle(row).paddingBottom,
+          paddingLeft: getComputedStyle(row).paddingLeft,
+          paddingRight: getComputedStyle(row).paddingRight,
+          rowScrollWidth: row.scrollWidth,
+          rowClientWidth: row.clientWidth,
+          children: Array.from(row.children).map(
+            (c) => {
+              const cr = c.getBoundingClientRect()
+              return {
+                display: getComputedStyle(c).display,
+                top: cr.top,
+                bottom: cr.bottom,
+                height: cr.height,
+              }
+            },
+          ),
+        }
+      })
+      // Tailwind v4 draws `divide-y` as a 1px border-BOTTOM on
+      // every :not(:last-child) row (border-top stays 0px), so
+      // the visible line is measured on the rows that actually
+      // carry it — never the border-top of the following row
+      // (which has no divider rule and would fall back to
+      // currentColor).
+      const divideContainers = Array.from(
+        section.querySelectorAll('.divide-y'),
+      ).map((c) => {
+        const groupRows = Array.from(c.children)
+        const nonLast =
+          groupRows.slice(0, -1)
+        const cs = (el, prop) =>
+          getComputedStyle(el)[prop]
+        return {
+          rowCount: groupRows.length,
+          lineColor: nonLast.map((r) =>
+            cs(r, 'borderBottomColor')),
+          lineWidth: nonLast.map((r) =>
+            cs(r, 'borderBottomWidth')),
+          topWidth: nonLast.map((r) =>
+            cs(r, 'borderTopWidth')),
+          lastBottomWidth:
+            groupRows.length > 0
+              ? cs(
+                  groupRows[groupRows.length - 1],
+                  'borderBottomWidth',
+                )
+              : null,
+        }
+      })
+      // Resolve the canonical subtle-border token through a
+      // probe element so the comparison uses the same color
+      // space as the computed border colors.
+      const probe = document.createElement('div')
+      probe.style.borderTopColor =
+        'var(--color-border-subtle)'
+      document.body.appendChild(probe)
+      const subtleToken =
+        getComputedStyle(probe).borderTopColor
+      probe.remove()
       return {
         viewportWidth: window.innerWidth,
         scrollWidth:
@@ -475,10 +573,8 @@ try {
         headers,
         wrappers,
         rows,
-        dividerColor: divider
-          ? getComputedStyle(divider)
-              .borderTopColor
-          : null,
+        divideContainers,
+        subtleToken,
       }
     })
 
@@ -491,6 +587,10 @@ try {
     /* Toggle the toast and re-measure: the list must NOT move. */
     await page.click('#toast-toggle')
     await page.waitForSelector('[role="status"]')
+    // Pin the scroll origin again so the before/after boxes
+    // share one viewport reference (the invariant under test
+    // is the list NOT moving, not a scroll offset).
+    await page.evaluate(() => window.scrollTo(0, 0))
     const toast = await page.evaluate(() => {
       const section = document.querySelector(
         '[aria-label="Upcoming meetings"]',
@@ -601,39 +701,150 @@ try {
         m.wrappers[2]?.marginTop === '8px',
       `${m.wrappers[1]?.marginTop} / ${m.wrappers[2]?.marginTop}`,
     )
+    // Row dividers: the visible line is the border-bottom of
+    // every non-last row (Tailwind v4 divide-y contract); it
+    // must resolve to the canonical subtle token — the same
+    // token as the group header underline. The group boundary
+    // is distinguished by its header surface, not a stronger
+    // border.
+    const dividersOk =
+      m.divideContainers.length === m.wrappers.length &&
+      m.divideContainers.every(
+        (c) =>
+          c.rowCount >= 1 &&
+          c.lineColor.every(
+            (col) => col === m.subtleToken,
+          ) &&
+          c.lineWidth.every((w) => w === '1px') &&
+          c.topWidth.every((w) => w === '0px') &&
+          c.lastBottomWidth === '0px',
+      )
     check(
       'row dividers stay subtle (border-border-subtle)',
-      m.dividerColor === 'rgb(224, 225, 230)',
-      m.dividerColor,
+      dividersOk &&
+        m.subtleToken === 'rgb(224, 225, 230)',
+      `token=${m.subtleToken} containers=${JSON.stringify(m.divideContainers)}`,
+    )
+    check(
+      'group boundary underline uses the same subtle token',
+      m.headers.every(
+        (h) =>
+          h.borderBottomColor === m.subtleToken &&
+          h.borderBottomWidth === '1px',
+      ),
+      m.headers
+        .map((h) => h.borderBottomColor)
+        .join(' / '),
     )
 
-    const expectedTracks =
-      width >= 1100 ? 4 : width >= 768 ? 3 : 1
-    check(
-      `row grid unchanged at ${width}px (${expectedTracks} tracks, compact rows)`,
-      m.rows.length === 4 &&
+    if (width >= 768) {
+      const expectedTracks =
+        width >= 1100 ? 4 : 3
+      check(
+        `row grid unchanged at ${width}px (${expectedTracks} tracks, compact rows)`,
+        m.rows.length === 4 &&
+          m.rows.every(
+            (row) =>
+              row.trackCount === expectedTracks &&
+              row.height >= 60 &&
+              row.height <= 74,
+          ),
+        m.rows
+          .map(
+            (row) =>
+              `${row.trackCount}t/${Math.round(row.height)}px`,
+          )
+          .join(' '),
+      )
+      if (width >= 1100) {
+        check(
+          `desktop tracks start 104px and end 96px/48px at ${width}px`,
+          m.rows.every((row) =>
+            /^104px\s+[\d.]+px\s+96px\s+48px$/.test(
+              row.columns,
+            ),
+          ),
+          m.rows[0]?.columns,
+        )
+      }
+    } else {
+      /* Mobile: the row is intentionally stacked
+         (time / title+metadata / actions) — assert
+         BEHAVIORAL geometry, never the desktop
+         60–74px band. */
+      check(
+        `mobile rows: single track at ${width}px`,
+        m.rows.length === 4 &&
+          m.rows.every((row) => row.trackCount === 1),
+        m.rows.map((r) => `${r.trackCount}t`).join(' '),
+      )
+      check(
+        'mobile rows: stacked regions, no overlap, single gap slots',
+        m.rows.every((row) => {
+          const visible = row.children.filter(
+            (c) => c.display !== 'none',
+          )
+          if (visible.length < 2) {
+            return false
+          }
+          for (let i = 1; i < visible.length; i++) {
+            const gap =
+              visible[i].top - visible[i - 1].bottom
+            if (gap < -0.5 || gap > 13) {
+              return false
+            }
+          }
+          const firstOffset =
+            visible[0].top - row.top
+          return (
+            firstOffset >=
+              parseFloat(row.paddingTop) - 1 &&
+            firstOffset <=
+              parseFloat(row.paddingTop) + 1
+          )
+        }),
+        m.rows
+          .map((row) =>
+            row.children
+              .filter((c) => c.display !== 'none')
+              .map(
+                (c) =>
+                  `${Math.round(c.top)}-${Math.round(c.bottom)}`,
+              )
+              .join(','),
+          )
+          .join(' | '),
+      )
+      check(
+        'mobile rows: min-height floor kept, no accidental blank row',
         m.rows.every(
           (row) =>
-            row.trackCount === expectedTracks &&
-            row.height >= 60 &&
-            row.height <= 74,
+            row.height >= 68 && row.height <= 180,
         ),
-      m.rows
-        .map(
-          (row) =>
-            `${row.trackCount}t/${Math.round(row.height)}px`,
-        )
-        .join(' '),
-    )
-    if (width >= 1100) {
+        m.rows.map((r) => `${Math.round(r.height)}px`).join(' '),
+      )
       check(
-        `desktop tracks start 104px and end 96px/48px at ${width}px`,
-        m.rows.every((row) =>
-          /^104px\s+[\d.]+px\s+96px\s+48px$/.test(
-            row.columns,
-          ),
+        'mobile rows: compact py-3 / px-4 padding',
+        m.rows.every(
+          (row) =>
+            row.paddingTop === '12px' &&
+            row.paddingBottom === '12px' &&
+            row.paddingLeft === '16px' &&
+            row.paddingRight === '16px',
         ),
-        m.rows[0]?.columns,
+        m.rows
+          .map((r) => `${r.paddingTop}/${r.paddingLeft}`)
+          .join(' '),
+      )
+      check(
+        `mobile rows: no horizontal overflow within a row at ${width}px`,
+        m.rows.every(
+          (row) =>
+            row.rowScrollWidth <= row.rowClientWidth,
+        ),
+        m.rows
+          .map((r) => `${r.rowScrollWidth}/${r.rowClientWidth}`)
+          .join(' '),
       )
     }
 
@@ -641,6 +852,11 @@ try {
       `no horizontal overflow at ${width}px (list)`,
       m.scrollWidth <= width,
       `scrollWidth=${m.scrollWidth}`,
+    )
+    check(
+      `list stays inside the viewport at ${width}px`,
+      m.section.right <= width,
+      `right=${m.section.right} (viewport ${width})`,
     )
 
     check(
