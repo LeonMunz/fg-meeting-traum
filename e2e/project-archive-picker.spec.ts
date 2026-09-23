@@ -5,6 +5,7 @@ import {
 } from '@playwright/test'
 
 import {
+  datePartPlusDays,
   login,
   openProjects,
 } from './helpers'
@@ -240,9 +241,14 @@ test(
     )
 
     await page
-      .getByRole('button', {
-        name: /New meeting/,
+      .locator('header')
+      .filter({
+        has: page.getByRole('heading', {
+          name: 'Meetings',
+          exact: true,
+        }),
       })
+      .getByRole('button', { name: /New meeting/ })
       .click()
 
     await page
@@ -251,7 +257,7 @@ test(
 
     await page
       .getByLabel('Date and time')
-      .fill('2030-04-05T10:00')
+      .fill(`${datePartPlusDays(8)}T10:00`)
 
     await page
       .locator('form')

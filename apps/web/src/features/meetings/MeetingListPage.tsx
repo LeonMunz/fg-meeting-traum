@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react'
 import { useNavigate } from 'react-router'
@@ -12,24 +13,34 @@ import {
   createMeetingFromSeries,
   createMeetingRecurrence,
   listMeetings,
+  listPersonalMeetingRecurrenceOccurrences,
 } from '../../api/meetings'
 import type {
   ApiMeeting,
-  ApiMeetingStatus,
   ApiCreateMeetingRecurrenceInput,
+  ApiMeetingRecurrenceOccurrence,
 } from '../../api/types'
 import { useResearchGroupListScope } from '../research-group/useResearchGroupListScope'
 import {
   CreateMeetingDialog,
   type CreateMeetingInput,
 } from './CreateMeetingDialog'
+import {
+  buildUpcomingList,
+  selectUpcomingConcreteMeetings,
+  selectUpcomingWindowRows,
+  upcomingRequestWindow,
+} from './upcomingModel'
+import { groupUpcomingByDate } from './upcomingGroups'
+import { UpcomingMeetingsList } from './UpcomingMeetings'
 
-const statusLabels: Record<ApiMeetingStatus, string> = {
-  upcoming: 'Upcoming',
-  live: 'Live',
-  completed: 'Completed',
-  cancelled: 'Cancelled',
-}
+const MEETINGS_TABS = [
+  { id: 'upcoming', label: 'Upcoming' },
+  { id: 'series', label: 'Series' },
+  { id: 'past', label: 'Past' },
+] as const
+
+type MeetingsTabId = (typeof MEETINGS_TABS)[number]['id']
 
 function getErrorMessage(
   error: unknown,
@@ -57,17 +68,35 @@ function getErrorMessage(
   return fallback
 }
 
-function formatMeetingDate(value: string) {
-  const date = new Date(value)
+/**
+ * Clearly intentional placeholder shell for the tabs that this
+ * checkpoint does not implement yet (Series overview, Past). No data
+ * is requested and no product behavior is simulated.
+ */
+function ComingSoonPanel({
+  icon,
+  title,
+  description,
+}: {
+  icon: string
+  title: string
+  description: string
+}) {
+  return (
+    <div className="flex min-h-64 flex-col items-center justify-center rounded-[10px] border border-dashed border-border-default bg-surface-quiet px-6 py-12 text-center">
+      <span className="material-symbols-outlined text-[28px] text-text-muted">
+        {icon}
+      </span>
 
-  if (Number.isNaN(date.getTime())) {
-    return value
-  }
+      <h2 className="mt-3 text-base font-semibold text-text">
+        {title}
+      </h2>
 
-  return new Intl.DateTimeFormat('en', {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  }).format(date)
+      <p className="mt-1 max-w-md text-sm text-text-muted">
+        {description}
+      </p>
+    </div>
+  )
 }
 
 export function MeetingListPage() {
@@ -80,62 +109,117 @@ export function MeetingListPage() {
     error: researchGroupsError,
   } = useResearchGroupListScope()
 
+  const [activeTab, setActiveTab] =
+    useState<MeetingsTabId>('upcoming')
+  const tabRefs = useRef<Map<MeetingsTabId, HTMLButtonElement>>(
+    new Map(),
+  )
+
+  // `null` = still loading; the load state is derived from the data
+  // itself so the page can keep rendering what already arrived.
   const [meetings, setMeetings] =
-    useState<ApiMeeting[]>([])
-  const [loading, setLoading] = useState(false)
-  const [error, setError] =
+    useState<ApiMeeting[] | null>(null)
+  const [meetingsError, setMeetingsError] =
+    useState<string | null>(null)
+  const [occurrences, setOccurrences] =
+    useState<ApiMeetingRecurrenceOccurrence[] | null>(null)
+  const [occurrencesError, setOccurrencesError] =
     useState<string | null>(null)
   const [createDialogOpen, setCreateDialogOpen] =
     useState(false)
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] =
     useState<string | null>(null)
-  // Success signal for a created recurring series: the Meetings list cannot
-  // show virtual (not materialized) occurrences, so the confirmation is a
-  // dismissible page banner — never a fabricated Meeting row.
+  // Success signal for a created recurring series: no concrete
+  // Meeting is created, so the confirmation is a dismissible page
+  // banner — the series' occurrences appear in Upcoming from the
+  // feed refetch.
   const [seriesSuccess, setSeriesSuccess] =
     useState<string | null>(null)
+
+  // One request window per page session: today → +42 days (local).
+  const requestWindow = useMemo(
+    () => upcomingRequestWindow(),
+    [],
+  )
 
   const loadMeetings = useCallback(async () => {
     if (activeResearchGroupId == null) {
       setMeetings([])
-      setLoading(false)
+      setMeetingsError(null)
       return
     }
 
-    setLoading(true)
-    setError(null)
+    setMeetings(null)
+    setMeetingsError(null)
 
     try {
-      const nextMeetings = await listMeetings(
-        activeResearchGroupId,
+      setMeetings(
+        await listMeetings(activeResearchGroupId),
       )
-
-      setMeetings(nextMeetings)
     } catch (loadError) {
-      setMeetings([])
-      setError(
+      setMeetingsError(
         getErrorMessage(
           loadError,
           'Meetings could not be loaded.',
         ),
       )
-    } finally {
-      setLoading(false)
     }
   }, [activeResearchGroupId])
 
-  useEffect(() => {
-    void loadMeetings()
-  }, [loadMeetings])
+  const loadOccurrences = useCallback(async () => {
+    setOccurrences(null)
+    setOccurrencesError(null)
 
-  const sortedMeetings = useMemo(
-    () =>
-      [...meetings].sort((a, b) =>
-        a.scheduledAt.localeCompare(b.scheduledAt),
+    try {
+      setOccurrences(
+        await listPersonalMeetingRecurrenceOccurrences(
+          requestWindow.from,
+          requestWindow.to,
+        ),
+      )
+    } catch (loadError) {
+      setOccurrencesError(
+        getErrorMessage(
+          loadError,
+          'Recurring meetings could not be loaded.',
+        ),
+      )
+    }
+  }, [requestWindow])
+
+  useEffect(() => {
+    if (activeResearchGroupId == null) {
+      return
+    }
+
+    void loadMeetings()
+    void loadOccurrences()
+  }, [
+    activeResearchGroupId,
+    loadMeetings,
+    loadOccurrences,
+  ])
+
+  const upcomingGroups = useMemo(() => {
+    if (meetings == null) {
+      return null
+    }
+
+    return groupUpcomingByDate(
+      // One canonical visible window over the EFFECTIVE displayed
+      // time of every row kind (concrete + recurring): local today →
+      // +42 days, the same value and boundary semantics as the feed
+      // request. Applied post-merge, after deduplication.
+      selectUpcomingWindowRows(
+        buildUpcomingList(
+          selectUpcomingConcreteMeetings(meetings),
+          occurrences ?? [],
+        ),
+        requestWindow,
       ),
-    [meetings],
-  )
+    )
+  }, [meetings, occurrences, requestWindow])
 
   const handleCreateMeeting = async (
     input: CreateMeetingInput,
@@ -143,7 +227,6 @@ export function MeetingListPage() {
     if (activeResearchGroupId == null) {
       return
     }
-
 
     setCreating(true)
     setCreateError(null)
@@ -171,7 +254,7 @@ export function MeetingListPage() {
             )
 
       setMeetings((current) => [
-        ...current.filter(
+        ...(current ?? []).filter(
           (candidate) =>
             candidate.id !== meeting.id,
         ),
@@ -201,12 +284,13 @@ export function MeetingListPage() {
       const recurrence =
         await createMeetingRecurrence(input)
 
-      // No concrete Meeting was created: nothing is inserted into the
-      // list, and the user is told a RECURRING SERIES was created.
+      // No concrete Meeting was created. The new series' effective
+      // occurrences become visible through the feed refetch.
       setCreateDialogOpen(false)
       setSeriesSuccess(
         `Recurring series “${recurrence.title}” created.`,
       )
+      void loadOccurrences()
     } catch (createSeriesError) {
       // The dialog stays open with all recurrence fields preserved;
       // there is no fallback to ordinary Meeting creation.
@@ -221,237 +305,293 @@ export function MeetingListPage() {
     }
   }
 
-  const pageLoading =
-    researchGroupsLoading || loading
+  const openCreateDialog = () => {
+    setCreateError(null)
+    setSeriesSuccess(null)
+    setCreateDialogOpen(true)
+  }
+
+  const handleTabKeyDown = (
+    event: React.KeyboardEvent,
+    current: MeetingsTabId,
+  ) => {
+    if (
+      event.key !== 'ArrowRight' &&
+      event.key !== 'ArrowLeft'
+    ) {
+      return
+    }
+
+    event.preventDefault()
+
+    const ids = MEETINGS_TABS.map(
+      (tab) => tab.id,
+    )
+    const index = ids.indexOf(current)
+    const nextId = ids[
+      (index +
+        (event.key === 'ArrowRight' ? 1 : -1) +
+        ids.length) %
+      ids.length
+    ]
+
+    setActiveTab(nextId)
+    tabRefs.current.get(nextId)?.focus()
+  }
+
+  const groupUnavailable =
+    activeResearchGroupId == null
 
   const pageError =
-    researchGroupsError || error
+    researchGroupsError || meetingsError
+
+  const listLoading =
+    researchGroupsLoading || meetings == null
+
+  const recurrencePending =
+    !listLoading &&
+    meetings != null &&
+    !pageError &&
+    occurrences == null &&
+    occurrencesError == null
 
   return (
-    <div className="w-full px-6 py-8 lg:px-8 lg:py-10 xl:px-10">
-      <header className="flex items-start justify-between gap-6">
-        <div>
+    <div className="w-full px-6 py-8 lg:px-8">
+      <header className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
+        <div className="min-w-0">
           <h1 className="text-3xl font-semibold tracking-tight text-text">
             Meetings
           </h1>
 
-          <p className="mt-1.5 text-sm leading-6 text-text-muted">
+          <p className="mt-1 text-sm leading-6 text-text-muted">
             {activeResearchGroup
-              ? `Meetings in ${activeResearchGroup.name}.`
+              ? `Your meetings in ${activeResearchGroup.name}.`
               : 'Research Group Meetings and follow-up work.'}
           </p>
         </div>
 
-        <button
-          type="button"
-          disabled={
-            activeResearchGroupId == null ||
-            pageLoading
-          }
-          onClick={() => {
-            setCreateError(null)
-            setSeriesSuccess(null)
-            setCreateDialogOpen(true)
-          }}
-          className="inline-flex h-10 shrink-0 items-center gap-2 rounded-lg bg-accent px-4 text-sm font-semibold text-text-inverse shadow-sm transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-45"
-        >
-          <span
-            aria-hidden="true"
-            className="material-symbols-outlined text-[19px]"
-          >
-            add
-          </span>
-          New meeting
-        </button>
-
-        <button
-          type="button"
-          onClick={() => navigate('/meetings/series')}
-          className="inline-flex h-10 shrink-0 items-center gap-2 rounded-lg border border-border-subtle bg-surface px-4 text-sm font-semibold text-text transition hover:bg-surface-hover"
-        >
-          <span className="material-symbols-outlined text-[19px]">
-            event_repeat
-          </span>
-          Meeting Templates
-        </button>
-      </header>
-
-      {seriesSuccess && (
-        <div
-          role="status"
-          className="mt-6 flex items-center justify-between gap-4 rounded-xl border border-border-subtle bg-surface px-5 py-3.5"
-        >
-          <div className="flex min-w-0 items-start gap-2.5">
-            <span
-              aria-hidden="true"
-              className="material-symbols-outlined mt-0.5 shrink-0 text-[20px] text-accent-text"
-            >
-              repeat
-            </span>
-
-            <div className="min-w-0">
-              <p className="truncate text-sm font-medium text-text">
-                {seriesSuccess}
-              </p>
-              <p className="mt-0.5 text-xs text-text-muted">
-                Its occurrences are virtual until materialized and are not
-                listed in the Meetings list yet.
-              </p>
-            </div>
-          </div>
-
+        <div className="flex shrink-0 items-center gap-2">
           <button
             type="button"
-            aria-label="Dismiss"
-            onClick={() => setSeriesSuccess(null)}
-            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-text-muted transition hover:bg-surface-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-          >
-            <span
-              aria-hidden="true"
-              className="material-symbols-outlined text-[16px]"
-            >
-              close
-            </span>
-          </button>
-        </div>
-      )}
-
-      {pageLoading ? (
-        <div className="mt-8 flex min-h-64 items-center justify-center rounded-xl border border-border-subtle bg-surface-quiet">
-          <span className="material-symbols-outlined mr-2 animate-spin text-[20px] text-text-muted">
-            refresh
-          </span>
-
-          <span className="text-sm text-text-muted">
-            Loading meetings…
-          </span>
-        </div>
-      ) : pageError ? (
-        <div
-          role="alert"
-          className="mt-8 flex min-h-64 flex-col items-center justify-center rounded-xl border border-border-subtle bg-surface-quiet px-6 py-10 text-center"
-        >
-          <span className="material-symbols-outlined text-[28px] text-danger">
-            cloud_off
-          </span>
-
-          <h2 className="mt-3 text-base font-semibold text-text">
-            Meetings couldn't be loaded
-          </h2>
-
-          <p className="mt-1 max-w-md text-sm text-text-muted">
-            {pageError}
-          </p>
-
-          <button
-            type="button"
-            onClick={() => void loadMeetings()}
-            className="mt-4 inline-flex h-9 items-center gap-2 rounded-lg border border-border-subtle px-4 text-sm font-semibold text-text transition hover:bg-surface-hover"
+            onClick={() => navigate('/meetings/series')}
+            className="inline-flex h-9 items-center gap-2 rounded-lg border border-border-subtle bg-surface px-3.5 text-sm font-semibold text-text transition hover:bg-surface-hover"
           >
             <span className="material-symbols-outlined text-[18px]">
-              refresh
+              event_repeat
             </span>
-            Try again
+            Meeting Templates
           </button>
-        </div>
-      ) : activeResearchGroupId == null ? (
-        <div className="mt-8 rounded-xl border border-dashed border-border-default bg-surface-quiet px-6 py-12 text-center">
-          <p className="text-sm text-text-muted">
-            No research group is currently available.
-          </p>
-        </div>
-      ) : sortedMeetings.length === 0 ? (
-        <div className="mt-8 flex min-h-64 flex-col items-center justify-center rounded-xl border border-dashed border-border-default bg-surface-quiet px-6 py-12 text-center">
-          <span className="material-symbols-outlined text-[30px] text-text-muted">
-            groups
-          </span>
 
-          <h2 className="mt-3 text-base font-semibold text-text">
-            No meetings yet
-          </h2>
-
-          <p className="mt-1 text-sm text-text-muted">
-            Create the first meeting for this research group.
-          </p>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setCreateError(null)
-                  setSeriesSuccess(null)
-                  setCreateDialogOpen(true)
-                }}
-                className="mt-5 inline-flex h-9 items-center gap-2 rounded-lg bg-accent px-4 text-sm font-semibold text-text-inverse"
-              >
+          <button
+            type="button"
+            disabled={groupUnavailable || listLoading}
+            onClick={openCreateDialog}
+            className="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg bg-accent px-3.5 text-sm font-semibold text-text-inverse shadow-sm transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-45"
+          >
             <span
               aria-hidden="true"
               className="material-symbols-outlined text-[18px]"
             >
               add
             </span>
-            Create meeting
+            New meeting
           </button>
         </div>
-      ) : (
-        <section className="mt-8 overflow-hidden rounded-xl border border-border-subtle bg-surface-quiet">
-          <div className="grid grid-cols-[minmax(280px,1fr)_220px_140px_120px] border-b border-border-subtle bg-surface-header px-6 py-2.5">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-text-muted">
-              Meeting
-            </div>
+      </header>
 
-            <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-text-muted">
-              Scheduled
-            </div>
+      <div
+        role="tablist"
+        aria-label="Meetings"
+        className="mt-6 flex h-10 items-stretch gap-6 border-b border-border-subtle"
+      >
+        {MEETINGS_TABS.map((tab) => {
+          const selected = activeTab === tab.id
 
-            <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-text-muted">
-              Status
-            </div>
-
-            <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-text-muted">
-              People
-            </div>
-          </div>
-
-          <div className="divide-y divide-border-subtle">
-            {sortedMeetings.map((meeting) => (
-              <button
-                key={meeting.id}
-                type="button"
-                onClick={() =>
-                  navigate(`/meetings/${meeting.id}`)
+          return (
+            <button
+              key={tab.id}
+              ref={(node) => {
+                if (node) {
+                  tabRefs.current.set(tab.id, node)
                 }
-                className="grid w-full grid-cols-[minmax(280px,1fr)_220px_140px_120px] items-center gap-4 px-6 py-4 text-left transition hover:bg-surface-hover"
+              }}
+              type="button"
+              role="tab"
+              id={`meetings-tab-${tab.id}`}
+              aria-selected={selected}
+              aria-controls={`meetings-panel-${tab.id}`}
+              tabIndex={selected ? 0 : -1}
+              onClick={() => setActiveTab(tab.id)}
+              onKeyDown={(event) =>
+                handleTabKeyDown(event, tab.id)
+              }
+              className={[
+                '-mb-px border-b-2 px-0.5 text-sm font-medium outline-none transition focus-visible:ring-2 focus-visible:ring-focus',
+                selected
+                  ? 'border-tab-active text-text'
+                  : 'border-transparent text-text-muted hover:text-text',
+              ].join(' ')}
+            >
+              {tab.label}
+            </button>
+          )
+        })}
+      </div>
+
+      <div
+        role="tabpanel"
+        id={`meetings-panel-${activeTab}`}
+        aria-labelledby={`meetings-tab-${activeTab}`}
+        className="mt-4"
+      >
+        {activeTab === 'upcoming' &&
+          (pageError ? (
+            <div
+              role="alert"
+              className="flex min-h-64 flex-col items-center justify-center rounded-[10px] border border-border-subtle bg-surface-quiet px-6 py-10 text-center"
+            >
+              <span className="material-symbols-outlined text-[28px] text-danger">
+                cloud_off
+              </span>
+
+              <h2 className="mt-3 text-base font-semibold text-text">
+                Meetings couldn't be loaded
+              </h2>
+
+              <p className="mt-1 max-w-md text-sm text-text-muted">
+                {pageError}
+              </p>
+
+              <button
+                type="button"
+                onClick={() => {
+                  void loadMeetings()
+                  void loadOccurrences()
+                }}
+                className="mt-4 inline-flex h-9 items-center gap-2 rounded-lg border border-border-subtle px-4 text-sm font-semibold text-text transition hover:bg-surface-hover"
               >
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-semibold text-text">
-                    {meeting.title}
-                  </div>
-
-                  <div className="mt-1 text-xs text-text-muted">
-                    Meeting #{meeting.id}
-                  </div>
-                </div>
-
-                <div className="text-sm text-text-muted">
-                  {formatMeetingDate(
-                    meeting.scheduledAt,
-                  )}
-                </div>
-
-                <div>
-                  <span className="inline-flex rounded-full bg-surface-muted px-2.5 py-1 text-xs font-medium text-text">
-                    {statusLabels[meeting.status]}
-                  </span>
-                </div>
-
-                <div className="text-sm text-text-muted">
-                  {meeting.participantIds.length}
-                </div>
+                <span className="material-symbols-outlined text-[18px]">
+                  refresh
+                </span>
+                Try again
               </button>
-            ))}
-          </div>
-        </section>
-      )}
+            </div>
+          ) : groupUnavailable ? (
+            <div className="rounded-[10px] border border-dashed border-border-default bg-surface-quiet px-6 py-12 text-center">
+              <p className="text-sm text-text-muted">
+                No research group is currently available.
+              </p>
+            </div>
+          ) : (
+            <>
+              {seriesSuccess && (
+                <div
+                  role="status"
+                  className="mb-4 flex items-center justify-between gap-4 rounded-[10px] border border-border-subtle bg-surface px-4 py-3"
+                >
+                  <div className="flex min-w-0 items-start gap-2.5">
+                    <span
+                      aria-hidden="true"
+                      className="material-symbols-outlined mt-0.5 shrink-0 text-[18px] text-accent-text"
+                    >
+                      repeat
+                    </span>
+
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-text">
+                        {seriesSuccess}
+                      </p>
+                      <p className="mt-0.5 text-xs text-text-muted">
+                        Its occurrences now appear in Upcoming.
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    aria-label="Dismiss"
+                    onClick={() =>
+                      setSeriesSuccess(null)
+                    }
+                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-text-muted transition hover:bg-surface-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+                  >
+                    <span
+                      aria-hidden="true"
+                      className="material-symbols-outlined text-[16px]"
+                    >
+                      close
+                    </span>
+                  </button>
+                </div>
+              )}
+
+              {occurrencesError && (
+                <div
+                  role="alert"
+                  className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-[10px] border border-border-subtle bg-warning-bg px-4 py-3"
+                >
+                  <span className="flex min-w-0 items-center gap-2 text-sm text-text">
+                    <span
+                      aria-hidden="true"
+                      className="material-symbols-outlined shrink-0 text-[18px] text-warning"
+                    >
+                      error_outline
+                    </span>
+                    <span className="min-w-0">
+                      Some recurring meetings
+                      couldn't be loaded:
+                    </span>
+                    <span className="min-w-0 truncate text-text-muted">
+                      {occurrencesError}
+                    </span>
+                  </span>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void loadOccurrences()
+                    }
+                    className="ml-auto inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-border-subtle bg-surface px-3 text-xs font-semibold text-text transition hover:bg-surface-hover"
+                  >
+                    <span
+                      aria-hidden="true"
+                      className="material-symbols-outlined text-[16px]"
+                    >
+                      refresh
+                    </span>
+                    Retry
+                  </button>
+                </div>
+              )}
+
+              <UpcomingMeetingsList
+                groups={upcomingGroups ?? []}
+                loading={listLoading}
+                recurrenceLoading={recurrencePending}
+                onNewMeeting={openCreateDialog}
+                onOpenMeeting={(meetingId) =>
+                  navigate(`/meetings/${meetingId}`)
+                }
+              />
+            </>
+          ))}
+
+        {activeTab === 'series' && (
+          <ComingSoonPanel
+            icon="repeat"
+            title="Series overview is coming soon"
+            description="Recurring series you create will appear here, with their rule and upcoming occurrences."
+          />
+        )}
+
+        {activeTab === 'past' && (
+          <ComingSoonPanel
+            icon="history"
+            title="Past view is coming soon"
+            description="Completed meetings will appear here so you can review what happened."
+          />
+        )}
+      </div>
 
       <CreateMeetingDialog
         open={createDialogOpen}

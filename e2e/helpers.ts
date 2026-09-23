@@ -164,3 +164,17 @@ export async function openProject(
     ).first(),
   ).toBeVisible()
 }
+
+/**
+ * Local calendar date (`YYYY-MM-DD`) `days` days after today. The
+ * Upcoming view only shows effective meetings inside the canonical
+ * initial window (local today → +42 days), so E2E fixtures that must
+ * appear in the Meetings overview derive their date from the current
+ * date instead of hard-coding a far-future day.
+ */
+export function datePartPlusDays(days: number): string {
+  const d = new Date()
+  d.setDate(d.getDate() + days)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}

@@ -5,6 +5,7 @@ import {
 } from '@playwright/test'
 
 import {
+  datePartPlusDays,
   login,
   logout,
   openProject,
@@ -71,6 +72,25 @@ export async function quickAddAgendaItem(
   ).toBeVisible()
 }
 
+/**
+ * The Meetings page header CTA. Scoped to the page <header> because
+ * the empty Upcoming state renders its own "New meeting" CTA.
+ */
+async function clickHeaderNewMeeting(page: Page) {
+  const header = page
+    .locator('header')
+    .filter({
+      has: page.getByRole('heading', {
+        name: 'Meetings',
+        exact: true,
+      }),
+    })
+
+  await header
+    .getByRole('button', { name: /New meeting/ })
+    .click()
+}
+
 const MEETING_TITLE =
   'E2E FG Weekly'
 
@@ -103,11 +123,7 @@ test(
       }),
     ).toBeVisible()
 
-    await page
-      .getByRole('button', {
-        name: /New meeting/,
-      })
-      .click()
+    await clickHeaderNewMeeting(page)
 
     const createMeetingDialog = page.getByRole('dialog', {
       name: 'New meeting',
@@ -136,7 +152,7 @@ test(
 
     await page
       .getByLabel('Date')
-      .fill('2030-01-02')
+      .fill(datePartPlusDays(7))
 
     await page
       .getByLabel('Time')
@@ -433,9 +449,9 @@ test(
     ).toBeVisible()
 
     // The list row's accessible name starts with the Meeting title
-    // (then "Meeting #id", date, status, participant count). Activity
-    // event rows name the actor first, so an anchored title match can
-    // only ever select the Meeting row itself.
+    // (then the effective clock time). Activity event rows name the
+    // actor first, so an anchored title match can only ever select
+    // the Meeting row itself.
     const invitedMeetingRow = page
       .getByRole('button', {
         name: new RegExp(
@@ -594,11 +610,7 @@ test(
       /\/meetings\?group=\d+$/,
     )
 
-    await page
-      .getByRole('button', {
-        name: /New meeting/,
-      })
-      .click()
+    await clickHeaderNewMeeting(page)
 
     await page
       .getByLabel('Title')
@@ -606,7 +618,7 @@ test(
 
     await page
       .getByLabel('Date')
-      .fill('2030-02-03')
+      .fill(datePartPlusDays(10))
 
     await page
       .getByLabel('Time')
@@ -806,11 +818,7 @@ test(
       })
       .click()
 
-    await page
-      .getByRole('button', {
-        name: /New meeting/,
-      })
-      .click()
+    await clickHeaderNewMeeting(page)
 
     await page
       .getByLabel('Title')
@@ -818,7 +826,7 @@ test(
 
     await page
       .getByLabel('Date')
-      .fill('2030-01-05')
+      .fill(datePartPlusDays(12))
 
     await page
       .getByLabel('Time')
@@ -932,11 +940,7 @@ test(
       })
       .click()
 
-    await page
-      .getByRole('button', {
-        name: /New meeting/,
-      })
-      .click()
+    await clickHeaderNewMeeting(page)
 
     // Default: active research group, no project.
     await page
@@ -945,7 +949,7 @@ test(
 
     await page
       .getByLabel('Date')
-      .fill('2030-02-01')
+      .fill(datePartPlusDays(14))
 
     await page
       .getByLabel('Time')
@@ -1311,11 +1315,7 @@ test(
       })
       .click()
 
-    await page
-      .getByRole('button', {
-        name: /New meeting/,
-      })
-      .click()
+    await clickHeaderNewMeeting(page)
 
     // The dialog exposes a "Meeting template" select with a
     // "No template" default, and the group-scoped template we
@@ -1344,7 +1344,7 @@ test(
 
     await page
       .getByLabel('Date')
-      .fill('2030-04-01')
+      .fill(datePartPlusDays(16))
 
     await page
       .getByLabel('Time')
@@ -1398,11 +1398,7 @@ test(
     // 1. Create a Meeting.
     // --------------------------------------------------------
 
-    await page
-      .getByRole('button', {
-        name: /New meeting/,
-      })
-      .click()
+    await clickHeaderNewMeeting(page)
 
     await page
       .getByLabel('Title')
@@ -1410,7 +1406,7 @@ test(
 
     await page
       .getByLabel('Date')
-      .fill('2030-02-03')
+      .fill(datePartPlusDays(18))
 
     await page
       .getByLabel('Time')
@@ -1813,11 +1809,7 @@ test(
       })
       .click()
 
-    await page
-      .getByRole('button', {
-        name: /New meeting/,
-      })
-      .click()
+    await clickHeaderNewMeeting(page)
 
     await page
       .getByLabel('Title')
@@ -1825,7 +1817,7 @@ test(
 
     await page
       .getByLabel('Date')
-      .fill('2030-03-01')
+      .fill(datePartPlusDays(20))
 
     await page
       .getByLabel('Time')
@@ -2157,11 +2149,7 @@ test(
       })
       .click()
 
-    await page
-      .getByRole('button', {
-        name: /New meeting/,
-      })
-      .click()
+    await clickHeaderNewMeeting(page)
 
     await page
       .getByLabel('Title')
@@ -2169,7 +2157,7 @@ test(
 
     await page
       .getByLabel('Date')
-      .fill('2030-04-01')
+      .fill(datePartPlusDays(22))
 
     await page
       .getByLabel('Time')
@@ -2604,11 +2592,7 @@ test(
       })
       .click()
 
-    await page
-      .getByRole('button', {
-        name: /New meeting/,
-      })
-      .click()
+    await clickHeaderNewMeeting(page)
 
     const newMeetingDialog =
       page.getByRole('dialog', {
@@ -2627,7 +2611,7 @@ test(
 
     await newMeetingDialog
       .getByLabel('Date')
-      .fill('2030-05-02')
+      .fill(datePartPlusDays(24))
 
     await newMeetingDialog
       .getByLabel('Time')
@@ -2762,11 +2746,7 @@ test(
       })
       .click()
 
-    await page
-      .getByRole('button', {
-        name: /New meeting/,
-      })
-      .click()
+    await clickHeaderNewMeeting(page)
 
     await page
       .getByLabel('Title')
@@ -2774,7 +2754,7 @@ test(
 
     await page
       .getByLabel('Date')
-      .fill('2030-03-02')
+      .fill(datePartPlusDays(26))
 
     await page
       .getByLabel('Time')
@@ -2938,7 +2918,7 @@ test(
 
     // Add a second, unrelated candidate to exercise explicit selection.
     await page.getByRole('link', { name: /Meetings/ }).click()
-    await page.getByRole('button', { name: /New meeting/ }).click()
+    await clickHeaderNewMeeting(page)
     await page.getByLabel('Title').fill('E2E Explicit Follow-up Target')
     await page
       .getByLabel('Date')
@@ -3043,11 +3023,7 @@ test(
       .click()
 
     // Create an explicit future destination before the Live source.
-    await page
-      .getByRole('button', {
-        name: /New meeting/,
-      })
-      .click()
+    await clickHeaderNewMeeting(page)
 
     await page
       .getByLabel('Title')
@@ -3074,11 +3050,7 @@ test(
       })
       .click()
 
-    await page
-      .getByRole('button', {
-        name: /New meeting/,
-      })
-      .click()
+    await clickHeaderNewMeeting(page)
 
     await page
       .getByLabel('Title')
@@ -3086,7 +3058,7 @@ test(
 
     await page
       .getByLabel('Date')
-      .fill('2030-02-03')
+      .fill(datePartPlusDays(28))
 
     await page
       .getByLabel('Time')

@@ -4,7 +4,7 @@ import {
   type Page,
 } from './diagnostics/failure-diagnostics'
 
-import { login } from './helpers'
+import { datePartPlusDays, login } from './helpers'
 
 async function selectResearchGroup(
   page: Page,
@@ -369,9 +369,14 @@ test(
     )
 
     await page
-      .getByRole('button', {
-        name: /New meeting/,
+      .locator('header')
+      .filter({
+        has: page.getByRole('heading', {
+          name: 'Meetings',
+          exact: true,
+        }),
       })
+      .getByRole('button', { name: /New meeting/ })
       .click()
 
     await page
@@ -382,7 +387,7 @@ test(
 
     await page
       .getByLabel('Date')
-      .fill('2030-03-04')
+      .fill(datePartPlusDays(9))
 
     await page
       .getByLabel('Time')

@@ -916,7 +916,42 @@ heuristic — so a materialized occurrence appears exactly once (the
 richer concrete representation wins, retaining the feed's recurrence
 metadata), a virtual occurrence becomes a normal row (no fabricated
 Meeting id), and a cancelled concrete Meeting is dropped. Only the
-visual Meetings-page / Upcoming UI integration remains deferred.
+visual Meetings-page / Upcoming UI integration remains deferred at
+the model level — the visible Upcoming Meeting-page integration
+IS implemented (frontend-only): the Meetings page defaults to the
+`Upcoming` tab and renders one chronological list from
+`buildUpcomingList(concreteMeetings, feedOccurrences)` — one-time
+and recurring occurrences together, grouped by LOCAL calendar date
+(`TODAY` / `TOMORROW` / `THU, SEP 24` headers, groups and rows
+ascending by effective start), with the canonical initial Upcoming
+window applied uniformly to both data sources:
+`upcomingRequestWindow()` (local today → +42 local days, inclusive
+`[from, to]`) is both the feed request window and the visible
+window — applied once, post-merge, to every row's EFFECTIVE
+displayed `scheduledAt` (one-time concrete Meetings, materialized
+recurring Meetings, virtual recurring occurrences, rescheduled
+occurrences judged by the effective time, never the original slot),
+with no unbounded exception for `live` Meetings, so a Meeting
+scheduled in the past or beyond +42 days never appears in the
+initial Upcoming view; the concrete list is additionally scoped to
+the Meetings that still take place (`upcoming` / `live`; `completed`
+and terminal `cancelled` excluded). A recurring
+occurrence looks like a normal Meeting (a subtle "Recurring"
+indicator — no rule string, because the feed DTO carries no
+frequency/weekday data; rendering "Every Tuesday" is follow-up
+scope behind a rule-display contract). A rescheduled occurrence
+appears only at its effective `scheduledAt` with a `Rescheduled`
+badge and an optional "Originally …" line; a `live` Meeting shows
+an `In progress` badge; a concrete row opens the existing Meeting
+detail, while a virtual occurrence row is visually normal but
+non-navigating and never materializes on render/click (row actions
+requiring concrete Meeting state are omitted by absence).
+Participants render only from the concrete Meeting's
+`participantIds` (never fabricated for virtual occurrences — the
+feed carries no participant data; the asymmetric contract is a
+known follow-up). `Series` and `Past` exist as structural tabs
+with explicit coming-soon shells; their product behavior remains
+deferred.
 
 ### Materialization (implemented)
 

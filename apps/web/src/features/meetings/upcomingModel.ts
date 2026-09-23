@@ -18,6 +18,7 @@
 import type {
   ApiMeeting,
   ApiMeetingRecurrenceOccurrence,
+  ApiMeetingStatus,
 } from '../../api/types'
 
 /**
@@ -87,6 +88,13 @@ export interface UpcomingMeeting {
    */
   meetingId: number | null
   /**
+   * Concrete Meeting lifecycle status when this row is backed by a
+   * concrete Meeting (one-time or materialized); null for a virtual
+   * occurrence (the feed carries no Meeting state). Presentation uses
+   * it only for the `live` → "In progress" badge.
+   */
+  status: ApiMeetingStatus | null
+  /**
    * Owning recurrence id when this row is a recurring occurrence; null for a
    * one-time concrete Meeting.
    */
@@ -116,6 +124,95 @@ export interface UpcomingMeeting {
    * (the feed carries no participant data) — never fabricated.
    */
   participantIds: number[]
+}
+
+/**
+ * Concrete Meetings that belong in the Upcoming view: the ones that
+ * have not yet taken place — status `upcoming`, plus `live` (still in
+ * progress). `completed` Meetings are over and terminal `cancelled`
+ * Meetings no longer take place, so neither appears in Upcoming.
+ *
+ * The visible date window is NOT applied here — it is applied once,
+ * post-merge, by `selectUpcomingWindowRows` over the EFFECTIVE
+ * displayed time of every row kind (one-time concrete, materialized
+ * recurring, virtual, rescheduled), using the same window value and
+ * boundary semantics as the bounded recurrence feed request
+ * (`upcomingRequestWindow()`). `live` gets no unbounded exception.
+ */
+export function selectUpcomingConcreteMeetings(
+  meetings: readonly ApiMeeting[],
+): ApiMeeting[] {
+  return meetings.filter(
+    (meeting) =>
+      meeting.status === 'upcoming' ||
+      meeting.status === 'live',
+  )
+}
+
+/**
+ * The canonical initial Upcoming window, as produced by
+ * `upcomingRequestWindow()`: `from` = local midnight of today,
+ * `to` = local midnight of +42 local calendar days.
+ */
+export interface UpcomingWindow {
+  from: string
+  to: string
+}
+
+/**
+ * Whether an effective scheduled start lies inside the initial
+ * Upcoming window.
+ *
+ * Boundary semantics are the established `[from, to]` contract of
+ * the bounded occurrence read: BOTH boundaries are INCLUSIVE.
+ * Membership is judged on the effective displayed time only — a
+ * rescheduled occurrence is judged by its moved `scheduledAt`, never
+ * by `originalScheduledAt`.
+ */
+export function isWithinUpcomingWindow(
+  scheduledAt: string,
+  window: UpcomingWindow,
+): boolean {
+  const time = Date.parse(scheduledAt)
+  const from = Date.parse(window.from)
+  const to = Date.parse(window.to)
+
+  if (
+    Number.isNaN(time) ||
+    Number.isNaN(from) ||
+    Number.isNaN(to)
+  ) {
+    return false
+  }
+
+  return time >= from && time <= to
+}
+
+/**
+ * The visible-window half of Upcoming selection: keep only rows whose
+ * EFFECTIVE displayed `scheduledAt` lies inside the initial window
+ * (local today → +42 days, inclusive boundaries).
+ *
+ * Applied AFTER `buildUpcomingList`, so ONE rule covers every row
+ * kind: one-time concrete Meetings, materialized recurring Meetings
+ * (merged rows — a far-future concrete Meeting cannot bypass the
+ * window merely because it exists in the concrete Meeting endpoint,
+ * and a feed occurrence cannot resurrect it), virtual occurrences,
+ * and rescheduled occurrences:
+ *
+ *   original inside → rescheduled outside  =>  absent
+ *   effective time inside the window       =>  present
+ *
+ * `live` rows receive no separate unbounded exception. The filter
+ * preserves the deterministic input ordering.
+ */
+export function selectUpcomingWindowRows(
+  rows: readonly UpcomingMeeting[],
+  window: UpcomingWindow,
+): UpcomingMeeting[] {
+  return rows.filter((row) =>
+    isWithinUpcomingWindow(row.scheduledAt, window),
+  )
 }
 
 function parseInstant(iso: string): number {
@@ -242,6 +339,7 @@ function recurringRowFromMeeting(
     title: meeting.title,
     scheduledAt: meeting.scheduledAt,
     meetingId: meeting.id,
+    status: meeting.status,
     recurrenceId: recurrence.recurrenceId,
     recurring: true,
     occurrenceId: recurrence.occurrenceId,
@@ -262,6 +360,7 @@ function rowFromMeeting(meeting: ApiMeeting): UpcomingMeeting {
     title: meeting.title,
     scheduledAt: meeting.scheduledAt,
     meetingId: meeting.id,
+    status: meeting.status,
     recurrenceId: null,
     recurring: false,
     occurrenceId: null,
@@ -285,6 +384,7 @@ function rowFromOccurrence(
     title: occurrence.title,
     scheduledAt: occurrence.scheduledAt,
     meetingId: occurrence.meetingId,
+    status: null,
     recurrenceId: occurrence.recurrenceId,
     recurring: true,
     occurrenceId: occurrence.occurrenceId,

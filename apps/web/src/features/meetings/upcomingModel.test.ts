@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest'
 
 import {
   buildUpcomingList,
+  isWithinUpcomingWindow,
+  selectUpcomingConcreteMeetings,
+  selectUpcomingWindowRows,
   upcomingRequestWindow,
   UPCOMING_WINDOW_DAYS,
 } from './upcomingModel'
@@ -513,5 +516,292 @@ describe('upcomingRequestWindow — the initial 42-day request window', () => {
     // 2026-12-30 + 42 days = 2027-02-10.
     expect(window.to).toBe(new Date(2026, 11, 72).toISOString())
     expect(new Date(window.to).getFullYear()).toBe(2027)
+  })
+})
+
+describe('selectUpcomingConcreteMeetings — Upcoming view scoping', () => {
+  it('keeps upcoming Meetings and live (in-progress) Meetings', () => {
+    const upcoming = makeMeeting({
+      id: 1,
+      status: 'upcoming',
+    })
+    const live = makeMeeting({ id: 2, status: 'live' })
+
+    expect(
+      selectUpcomingConcreteMeetings([upcoming, live]).map(
+        (m) => m.id,
+      ),
+    ).toEqual([1, 2])
+  })
+
+  it('drops completed and cancelled Meetings (they no longer take place)', () => {
+    const completed = makeMeeting({
+      id: 3,
+      status: 'completed',
+    })
+    const cancelled = makeMeeting({
+      id: 4,
+      status: 'cancelled',
+    })
+    const upcoming = makeMeeting({ id: 5, status: 'upcoming' })
+
+    expect(
+      selectUpcomingConcreteMeetings([
+        completed,
+        cancelled,
+        upcoming,
+      ]).map((m) => m.id),
+    ).toEqual([5])
+  })
+})
+
+describe('buildUpcomingList — lifecycle status on rows', () => {
+  it('carries the concrete Meeting status onto one-time rows', () => {
+    const rows = buildUpcomingList(
+      [makeMeeting({ id: 1, status: 'upcoming' })],
+      [],
+    )
+
+    expect(rows[0].status).toBe('upcoming')
+  })
+
+  it('carries the concrete Meeting status onto materialized recurring rows', () => {
+    const meeting = makeMeeting({
+      id: 9,
+      title: 'Live recurring',
+      status: 'live',
+    })
+    const occurrence = makeOccurrence({
+      occurrenceId: 'live-1',
+      materialized: true,
+      meetingId: 9,
+      scheduledAt: meeting.scheduledAt,
+    })
+
+    const rows = buildUpcomingList([meeting], [occurrence])
+
+    expect(rows).toHaveLength(1)
+    expect(rows[0].status).toBe('live')
+    expect(rows[0].recurring).toBe(true)
+  })
+
+  it('leaves the status null for virtual occurrences (no fabricated Meeting state)', () => {
+    const rows = buildUpcomingList([], [
+      makeOccurrence({ occurrenceId: 'v' }),
+    ])
+
+    expect(rows[0].status).toBeNull()
+  })
+})
+
+describe('isWithinUpcomingWindow / selectUpcomingWindowRows — the canonical visible window', () => {
+  // Fixed reference point: Wednesday, September 23, 2026, 09:00 local.
+  const NOW = new Date(2026, 8, 23, 9, 0)
+  const WINDOW = upcomingRequestWindow(NOW)
+
+  const at = (
+    iso: string,
+    ms = 0,
+  ): string =>
+    new Date(Date.parse(iso) + ms).toISOString()
+
+  const local = (
+    year: number,
+    month: number,
+    day: number,
+    hour: number,
+    minute: number,
+  ): string =>
+    new Date(year, month - 1, day, hour, minute).toISOString()
+
+  function makeRow(
+    overrides: Partial<UpcomingMeeting> & {
+      id: string
+      scheduledAt: string
+    },
+  ): UpcomingMeeting {
+    return {
+      title: `Row ${overrides.id}`,
+      meetingId: null,
+      status: null,
+      recurrenceId: null,
+      recurring: false,
+      occurrenceId: null,
+      originalScheduledAt: null,
+      rescheduled: false,
+      researchGroupId: 1,
+      projectId: null,
+      participantIds: [],
+      ...overrides,
+    }
+  }
+
+  it('includes a Meeting today and one near the far edge of the window', () => {
+    expect(
+      isWithinUpcomingWindow(local(2026, 9, 23, 10, 0), WINDOW),
+    ).toBe(true)
+    // +41 local days at 10:00 is still before the `to` boundary
+    // (local midnight of +42 days).
+    expect(
+      isWithinUpcomingWindow(local(2026, 9, 64, 10, 0), WINDOW),
+    ).toBe(true)
+  })
+
+  it('excludes far-future and past Meetings', () => {
+    // Beyond the window (+43 days).
+    expect(
+      isWithinUpcomingWindow(local(2026, 9, 66, 10, 0), WINDOW),
+    ).toBe(false)
+    // Arbitrarily far in the future (the stale 2030 fixtures).
+    expect(
+      isWithinUpcomingWindow('2030-01-02T09:00:00Z', WINDOW),
+    ).toBe(false)
+    // Past.
+    expect(
+      isWithinUpcomingWindow(local(2026, 9, 22, 23, 0), WINDOW),
+    ).toBe(false)
+  })
+
+  it('pins the inclusive [from, to] boundary semantics', () => {
+    // Exactly `from` (local midnight of today): inside.
+    expect(isWithinUpcomingWindow(WINDOW.from, WINDOW)).toBe(true)
+    // One millisecond before `from`: outside.
+    expect(isWithinUpcomingWindow(at(WINDOW.from, -1), WINDOW)).toBe(false)
+    // Exactly `to` (local midnight of +42 days): inside.
+    expect(isWithinUpcomingWindow(WINDOW.to, WINDOW)).toBe(true)
+    // One millisecond after `to`: outside.
+    expect(isWithinUpcomingWindow(at(WINDOW.to, 1), WINDOW)).toBe(false)
+  })
+
+  it('excludes unparseable instants rather than guessing', () => {
+    expect(
+      isWithinUpcomingWindow('not-a-date', WINDOW),
+    ).toBe(false)
+  })
+
+  it('keeps only rows whose EFFECTIVE time is inside the window, preserving order', () => {
+    const insideEarly = makeRow({
+      id: 'a',
+      scheduledAt: local(2026, 9, 23, 10, 0),
+    })
+    const insideLate = makeRow({
+      id: 'b',
+      scheduledAt: local(2026, 9, 64, 10, 0),
+    })
+    const farFuture = makeRow({
+      id: 'c',
+      scheduledAt: '2030-01-02T09:00:00Z',
+    })
+    const past = makeRow({
+      id: 'd',
+      scheduledAt: local(2026, 9, 22, 10, 0),
+    })
+
+    const rows = selectUpcomingWindowRows(
+      [insideEarly, farFuture, insideLate, past],
+      WINDOW,
+    )
+
+    expect(rows.map((row) => row.id)).toEqual(['a', 'b'])
+  })
+
+  it('gives live rows no unbounded window exception', () => {
+    const liveFarFuture = makeRow({
+      id: 'live-far',
+      scheduledAt: local(2026, 9, 66, 10, 0),
+      status: 'live',
+    })
+    const liveInside = makeRow({
+      id: 'live-in',
+      scheduledAt: local(2026, 9, 23, 8, 30),
+      status: 'live',
+    })
+
+    const rows = selectUpcomingWindowRows(
+      [liveFarFuture, liveInside],
+      WINDOW,
+    )
+
+    expect(rows.map((row) => row.id)).toEqual(['live-in'])
+  })
+
+  it('judges rescheduled occurrences by their effective time, never the original slot', () => {
+    // Original inside the window, rescheduled OUTSIDE => absent.
+    const rescheduledOutside = makeRow({
+      id: 'r-out',
+      scheduledAt: local(2026, 9, 66, 9, 30),
+      recurring: true,
+      recurrenceId: 10,
+      occurrenceId: 'r-out',
+      originalScheduledAt: local(2026, 9, 26, 10, 0),
+      rescheduled: true,
+    })
+    // Effective time inside the window (rescheduled IN) => present.
+    const rescheduledInside = makeRow({
+      id: 'r-in',
+      scheduledAt: local(2026, 9, 26, 9, 30),
+      recurring: true,
+      recurrenceId: 11,
+      occurrenceId: 'r-in',
+      originalScheduledAt: local(2026, 9, 66, 10, 0),
+      rescheduled: true,
+    })
+
+    const rows = selectUpcomingWindowRows(
+      [rescheduledOutside, rescheduledInside],
+      WINDOW,
+    )
+
+    expect(rows.map((row) => row.id)).toEqual(['r-in'])
+  })
+
+  it('lets no far-future concrete Meeting bypass the recurrence window semantics after the merge', () => {
+    const farFutureMeeting = makeMeeting({
+      id: 900,
+      title: 'Far future recurring',
+      scheduledAt: '2030-06-01T09:00:00Z',
+    })
+    const farFutureOccurrence = makeOccurrence({
+      occurrenceId: 'occ-far',
+      title: 'Far future recurring',
+      originalScheduledAt: '2030-06-01T09:00:00Z',
+      scheduledAt: '2030-06-01T09:00:00Z',
+      materialized: true,
+      meetingId: 900,
+    })
+
+    // The merge yields exactly one (deduplicated) row…
+    const merged = buildUpcomingList(
+      [farFutureMeeting],
+      [farFutureOccurrence],
+    )
+    expect(merged).toHaveLength(1)
+    // …and the canonical window removes it from Upcoming.
+    expect(
+      selectUpcomingWindowRows(merged, WINDOW),
+    ).toHaveLength(0)
+  })
+
+  it('keeps an in-window materialized occurrence exactly once through the window filter', () => {
+    const meeting = makeMeeting({
+      id: 901,
+      title: 'In-window recurring',
+      scheduledAt: local(2026, 9, 24, 14, 0),
+    })
+    const occurrence = makeOccurrence({
+      occurrenceId: 'occ-in',
+      title: 'In-window recurring',
+      originalScheduledAt: local(2026, 9, 24, 14, 0),
+      scheduledAt: local(2026, 9, 24, 14, 0),
+      materialized: true,
+      meetingId: 901,
+    })
+
+    const merged = buildUpcomingList([meeting], [occurrence])
+    const rows = selectUpcomingWindowRows(merged, WINDOW)
+
+    expect(rows).toHaveLength(1)
+    expect(rows[0].recurring).toBe(true)
+    expect(rows[0].meetingId).toBe(901)
   })
 })

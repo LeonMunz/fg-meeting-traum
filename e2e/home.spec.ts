@@ -34,6 +34,13 @@ async function createMeetingToday(page: Page) {
     .click()
 
   await page
+    .locator('header')
+    .filter({
+      has: page.getByRole('heading', {
+        name: 'Meetings',
+        exact: true,
+      }),
+    })
     .getByRole('button', { name: /New meeting/ })
     .click()
 
