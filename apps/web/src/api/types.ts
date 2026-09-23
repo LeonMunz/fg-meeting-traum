@@ -718,6 +718,43 @@ export interface ApiMeetingRecurrence {
 }
 
 /**
+ * Derived read-model state of a recurring Series in the personal Series
+ * overview. NOT a persisted lifecycle: `active` iff the series still has a
+ * further effective occurrence, `ended` otherwise (a finite rule exhausted
+ * or every remaining occurrence excluded / cancelled).
+ */
+export type ApiMeetingRecurrenceStatus =
+  | 'active'
+  | 'ended'
+
+/**
+ * One personally relevant recurring Series from the window-free personal
+ * Series overview (`GET /api/meeting-recurrences/`).
+ *
+ * Extends the canonical recurrence representation
+ * (`ApiMeetingRecurrence`) with the minimal Series-overview read-model
+ * context. Unlike the window-bounded occurrence feed, this is
+ * SERIES-oriented: exactly ONE record per relevant recurrence, present even
+ * when its next occurrence lies beyond the Upcoming window. `creator`
+ * reuses the repository's canonical minimal User summary; timestamps stay
+ * aware ISO-8601 strings (no `Date` conversion at the API layer).
+ */
+export interface ApiMeetingRecurrenceOverview extends ApiMeetingRecurrence {
+  /** Canonical minimal User summary of the series creator. */
+  creator: ApiMeetingParticipantUser
+  /** Creator + the unique persisted recurrence participants, creator
+   * duplication removed — the exact people semantics a future materialized
+   * Meeting would have (membership is never counted). */
+  peopleCount: number
+  /** Derived read-model state: `active` iff a next occurrence exists. */
+  status: ApiMeetingRecurrenceStatus
+  /** Earliest effective, non-cancelled occurrence at/after the server's
+   * current instant (aware ISO-8601), or null when the series has no
+   * further effective occurrence. */
+  nextOccurrenceScheduledAt: string | null
+}
+
+/**
  * One effective recurring occurrence from the bounded current-user
  * recurring-occurrence feed (`GET /api/meeting-recurrences/occurrences/`).
  *

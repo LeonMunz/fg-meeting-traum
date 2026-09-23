@@ -24,6 +24,7 @@ import type {
   ApiMeetingParticipantCandidate,
   ApiMeetingRecurrence,
   ApiMeetingRecurrenceOccurrence,
+  ApiMeetingRecurrenceOverview,
   ApiMeetingSection,
   ApiMeetingSeries,
   ApiMeetingSeriesSection,
@@ -381,6 +382,17 @@ export async function createMeetingRecurrence(
   return apiPost<ApiMeetingRecurrence>(
     '/api/meeting-recurrences/',
     input,
+  )
+}
+
+export async function listMeetingRecurrences(): Promise<
+  ApiMeetingRecurrenceOverview[]
+> {
+  // The window-free personal Series overview: exactly ONE record per
+  // personally relevant recurrence. Personal relevance / scoping is
+  // backend-owned, so this sends NO occurrence-window parameters.
+  return apiGet<ApiMeetingRecurrenceOverview[]>(
+    '/api/meeting-recurrences/',
   )
 }
 

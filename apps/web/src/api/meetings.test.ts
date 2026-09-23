@@ -16,6 +16,7 @@ import {
   createMeeting,
   createMeetingFromSeries,
   createMeetingRecurrence,
+  listMeetingRecurrences,
   listPersonalMeetingRecurrenceOccurrences,
   getMeetingItemFollowUpTargets,
   markMeetingItemFollowUp,
@@ -30,6 +31,7 @@ import type {
   ApiCreateMeetingRecurrenceInput,
   ApiMeetingRecurrence,
   ApiMeetingRecurrenceOccurrence,
+  ApiMeetingRecurrenceOverview,
   ApiMeetingItem,
   ApiMeetingItemFollowUpSchedule,
   ApiMeetingItemFollowUpTargets,
@@ -396,6 +398,171 @@ describe('Meeting recurrence API client', () => {
       '/api/meeting-recurrences/',
       expect.objectContaining({ participantIds: [12, 34] }),
     )
+  })
+})
+
+describe('Meeting recurrence Series overview API client', () => {
+  beforeEach(() => {
+    vi.mocked(apiGet).mockReset()
+    vi.mocked(apiPost).mockReset()
+  })
+
+  const creator = {
+    id: 2,
+    username: 'leo',
+    firstName: 'Leon',
+    lastName: 'Munz',
+  }
+
+  // A group-scoped, open-ended, ACTIVE series: null projectId, null
+  // endDate/count, and a non-null next occurrence.
+  const activeSeries: ApiMeetingRecurrenceOverview = {
+    id: 500,
+    title: 'Weekly Sync',
+    meetingSeriesId: 7,
+    researchGroupId: 3,
+    scope: 'group',
+    projectId: null,
+    frequency: 'weekly',
+    interval: 1,
+    weekdays: [0],
+    startDate: '2030-01-07',
+    localTime: '10:30',
+    timezone: 'Europe/Berlin',
+    endDate: null,
+    count: null,
+    creator,
+    peopleCount: 4,
+    status: 'active',
+    nextOccurrenceScheduledAt: '2026-09-29T08:30:00Z',
+  }
+
+  it('reads the window-free Series overview through a GET — no from/to window', async () => {
+    vi.mocked(apiGet).mockResolvedValue([activeSeries])
+
+    await expect(listMeetingRecurrences()).resolves.toEqual([activeSeries])
+
+    // A read against the collection endpoint with NO occurrence-window
+    // parameters — personal relevance/scoping is backend-owned, and the
+    // client issues no materializing write.
+    expect(apiGet).toHaveBeenCalledTimes(1)
+    expect(apiGet).toHaveBeenCalledWith('/api/meeting-recurrences/')
+    expect(apiGet).not.toHaveBeenCalledWith(
+      expect.stringContaining('from='),
+    )
+    expect(apiGet).not.toHaveBeenCalledWith(
+      expect.stringContaining('to='),
+    )
+    expect(apiPost).not.toHaveBeenCalled()
+  })
+
+  it('preserves one backend object as one frontend Series record', async () => {
+    vi.mocked(apiGet).mockResolvedValue([activeSeries])
+
+    const result = await listMeetingRecurrences()
+
+    expect(result).toHaveLength(1)
+    expect(result[0]).toEqual(activeSeries)
+  })
+
+  it('preserves the structured recurrence fields verbatim', async () => {
+    vi.mocked(apiGet).mockResolvedValue([activeSeries])
+
+    const [record] = await listMeetingRecurrences()
+
+    expect(record.id).toBe(500)
+    expect(record.title).toBe('Weekly Sync')
+    expect(record.meetingSeriesId).toBe(7)
+    expect(record.researchGroupId).toBe(3)
+    expect(record.scope).toBe('group')
+    expect(record.frequency).toBe('weekly')
+    expect(record.interval).toBe(1)
+    expect(record.weekdays).toEqual([0])
+    expect(record.startDate).toBe('2030-01-07')
+    expect(record.localTime).toBe('10:30')
+    expect(record.timezone).toBe('Europe/Berlin')
+  })
+
+  it('preserves the canonical minimal creator summary', async () => {
+    vi.mocked(apiGet).mockResolvedValue([activeSeries])
+
+    const [record] = await listMeetingRecurrences()
+
+    expect(record.creator).toEqual(creator)
+  })
+
+  it('preserves peopleCount', async () => {
+    vi.mocked(apiGet).mockResolvedValue([activeSeries])
+
+    const [record] = await listMeetingRecurrences()
+
+    expect(record.peopleCount).toBe(4)
+  })
+
+  it('preserves status: active with a non-null next occurrence', async () => {
+    vi.mocked(apiGet).mockResolvedValue([activeSeries])
+
+    const [record] = await listMeetingRecurrences()
+
+    expect(record.status).toBe('active')
+    expect(record.nextOccurrenceScheduledAt).toBe('2026-09-29T08:30:00Z')
+  })
+
+  it('preserves status: ended with a null next occurrence', async () => {
+    const endedSeries: ApiMeetingRecurrenceOverview = {
+      ...activeSeries,
+      id: 501,
+      meetingSeriesId: 8,
+      scope: 'project',
+      projectId: 14,
+      creator: {
+        id: 5,
+        username: 'sam',
+        firstName: 'Sam',
+        lastName: 'Kim',
+      },
+      peopleCount: 1,
+      status: 'ended',
+      nextOccurrenceScheduledAt: null,
+    }
+    vi.mocked(apiGet).mockResolvedValue([endedSeries])
+
+    const [record] = await listMeetingRecurrences()
+
+    expect(record.status).toBe('ended')
+    expect(record.nextOccurrenceScheduledAt).toBeNull()
+  })
+
+  it('preserves the nullable Project / end / count fields when set', async () => {
+    const projectSeries: ApiMeetingRecurrenceOverview = {
+      ...activeSeries,
+      id: 502,
+      scope: 'project',
+      projectId: 21,
+      meetingSeriesId: 9,
+      endDate: '2026-11-30',
+      count: 12,
+    }
+    vi.mocked(apiGet).mockResolvedValue([projectSeries])
+
+    const [record] = await listMeetingRecurrences()
+
+    expect(record.scope).toBe('project')
+    expect(record.projectId).toBe(21)
+    expect(record.meetingSeriesId).toBe(9)
+    expect(record.endDate).toBe('2026-11-30')
+    expect(record.count).toBe(12)
+  })
+
+  it('preserves the nullable Project / end / count fields when null', async () => {
+    vi.mocked(apiGet).mockResolvedValue([activeSeries])
+
+    const [record] = await listMeetingRecurrences()
+
+    expect(record.scope).toBe('group')
+    expect(record.projectId).toBeNull()
+    expect(record.endDate).toBeNull()
+    expect(record.count).toBeNull()
   })
 })
 
