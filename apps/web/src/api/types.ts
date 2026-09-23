@@ -366,6 +366,7 @@ export type ApiMeetingStatus =
   | 'upcoming'
   | 'live'
   | 'completed'
+  | 'cancelled'
 
 export type ApiMeetingScope =
   | 'group'
@@ -716,6 +717,43 @@ export interface ApiMeetingRecurrence {
   count: number | null
 }
 
+/**
+ * One effective recurring occurrence from the bounded current-user
+ * recurring-occurrence feed (`GET /api/meeting-recurrences/occurrences/`).
+ *
+ * A minimal Meeting-overview contract, faithfully mirroring the backend
+ * DTO — deliberately NOT a full Meeting-detail representation. The stable
+ * occurrence identity (`occurrenceId`) is the same value for a virtual and
+ * a materialized occurrence. `scheduledAt` is the ACTUAL scheduled time
+ * (the concrete Meeting's planned time when materialized, the original
+ * scheduled start while virtual); `originalScheduledAt` is the immutable
+ * original slot. `materialized` / `meetingId` let the Upcoming merge
+ * distinguish a virtual occurrence from a materialized one (a materialized
+ * occurrence appears exactly once, here, and the Meeting list keeps
+ * reporting the concrete Meeting separately).
+ */
+export interface ApiMeetingRecurrenceOccurrence {
+  /** Stable occurrence identity (same for virtual and materialized). */
+  occurrenceId: string
+  /** Owning recurrence id. */
+  recurrenceId: number
+  /** Effective title (the Meeting's own title when materialized, the
+   * canonical series title while virtual). */
+  title: string
+  /** Immutable original scheduled start (timezone-aware ISO-8601). */
+  originalScheduledAt: string
+  /** Actual scheduled time (timezone-aware ISO-8601). */
+  scheduledAt: string
+  /** True when this occurrence already has a concrete Meeting. */
+  materialized: boolean
+  /** Concrete Meeting id when materialized, null while virtual. */
+  meetingId: number | null
+  /** Meeting Template id (null for legacy template-less recurrences). */
+  meetingSeriesId: number | null
+  researchGroupId: number
+  /** Owning Project id (null for group scope). */
+  projectId: number | null
+}
 
 export interface ApiResearchGroupMembership {
   id: number

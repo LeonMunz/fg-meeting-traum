@@ -103,7 +103,7 @@ import type {
 } from '../../api/types'
 import { useSyncResearchGroupContext } from '../research-group/useSyncResearchGroupContext'
 
-type MeetingState = 'upcoming' | 'live' | 'completed'
+type MeetingState = 'upcoming' | 'live' | 'completed' | 'cancelled'
 
 function getErrorMessage(
   error: unknown,

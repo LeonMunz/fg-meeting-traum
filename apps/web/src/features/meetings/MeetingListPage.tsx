@@ -28,6 +28,7 @@ const statusLabels: Record<ApiMeetingStatus, string> = {
   upcoming: 'Upcoming',
   live: 'Live',
   completed: 'Completed',
+  cancelled: 'Cancelled',
 }
 
 function getErrorMessage(

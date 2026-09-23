@@ -16,6 +16,7 @@ import {
   createMeeting,
   createMeetingFromSeries,
   createMeetingRecurrence,
+  listPersonalMeetingRecurrenceOccurrences,
   getMeetingItemFollowUpTargets,
   markMeetingItemFollowUp,
   reopenMeetingItem,
@@ -28,6 +29,7 @@ import type {
   ApiCancelMeetingItemFollowUpResult,
   ApiCreateMeetingRecurrenceInput,
   ApiMeetingRecurrence,
+  ApiMeetingRecurrenceOccurrence,
   ApiMeetingItem,
   ApiMeetingItemFollowUpSchedule,
   ApiMeetingItemFollowUpTargets,
@@ -394,5 +396,44 @@ describe('Meeting recurrence API client', () => {
       '/api/meeting-recurrences/',
       expect.objectContaining({ participantIds: [12, 34] }),
     )
+  })
+})
+
+describe('Personal recurring-occurrence feed API client', () => {
+  beforeEach(() => {
+    vi.mocked(apiGet).mockReset()
+    vi.mocked(apiPost).mockReset()
+  })
+
+  it('reads the bounded feed through a GET — never a materializing write', async () => {
+    const feed: ApiMeetingRecurrenceOccurrence[] = [
+      {
+        occurrenceId: 'o-1',
+        recurrenceId: 10,
+        title: 'Weekly Sync',
+        originalScheduledAt: '2026-09-29T10:00:00Z',
+        scheduledAt: '2026-09-29T10:00:00Z',
+        materialized: false,
+        meetingId: null,
+        meetingSeriesId: 7,
+        researchGroupId: 1,
+        projectId: null,
+      },
+    ]
+    vi.mocked(apiGet).mockResolvedValue(feed)
+
+    await expect(
+      listPersonalMeetingRecurrenceOccurrences(
+        '2026-09-23T00:00:00.000Z',
+        '2026-11-04T00:00:00.000Z',
+      ),
+    ).resolves.toEqual(feed)
+
+    // A GET read against the personal feed endpoint — the client issues no
+    // materialization (no POST / unsafe write) and passes the window verbatim.
+    expect(apiGet).toHaveBeenCalledWith(
+      '/api/meeting-recurrences/occurrences/?from=2026-09-23T00%3A00%3A00.000Z&to=2026-11-04T00%3A00%3A00.000Z',
+    )
+    expect(apiPost).not.toHaveBeenCalled()
   })
 })

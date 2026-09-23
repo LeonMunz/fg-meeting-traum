@@ -23,6 +23,7 @@ import type {
   ApiMeetingParticipant,
   ApiMeetingParticipantCandidate,
   ApiMeetingRecurrence,
+  ApiMeetingRecurrenceOccurrence,
   ApiMeetingSection,
   ApiMeetingSeries,
   ApiMeetingSeriesSection,
@@ -380,6 +381,17 @@ export async function createMeetingRecurrence(
   return apiPost<ApiMeetingRecurrence>(
     '/api/meeting-recurrences/',
     input,
+  )
+}
+
+export async function listPersonalMeetingRecurrenceOccurrences(
+  from: string,
+  to: string,
+): Promise<ApiMeetingRecurrenceOccurrence[]> {
+  const params = new URLSearchParams({ from, to })
+
+  return apiGet<ApiMeetingRecurrenceOccurrence[]>(
+    `/api/meeting-recurrences/occurrences/?${params.toString()}`,
   )
 }
 

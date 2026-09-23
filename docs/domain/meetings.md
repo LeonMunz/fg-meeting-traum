@@ -791,6 +791,133 @@ materialized Meeting's editable `scheduled_at`: moving the Meeting's
 planned time changes neither the occurrence identity nor its
 materialization mapping.
 
+### Bounded current-user recurring-occurrence feed (implemented)
+
+`GET /api/meeting-recurrences/occurrences/` is the read contract the
+Meeting overview needs to display virtual recurring occurrences
+alongside concrete Meetings without materializing them. It is a
+collection-level read for the current authenticated user — it takes
+NO recurrence id — and the per-recurrence bounded occurrence read
+(`GET /api/meeting-recurrences/{recurrenceId}/occurrences/`) is
+unchanged.
+
+- **Window contract:** identical to the per-recurrence bounded
+  occurrence read: `from` and `to` are BOTH mandatory, timezone-aware
+  ISO-8601 datetimes, and `from < to`. Missing values, invalid
+  syntax, naive datetimes, and `from >= to` are rejected with the
+  same `400` conventions (no default range is ever substituted; no
+  unbounded "all future occurrences" read exists). The window is
+  interpreted over the ORIGINAL scheduled starts (the rule-produced
+  wall-clock starts in the stored timezone), exactly like the
+  per-recurrence read: a rescheduled materialized occurrence keeps
+  its original identity inside the window even when its concrete
+  `scheduled_at` moved outside it. There is deliberately NO maximum
+  window size in V1 (the same pending product/API decision as the
+  per-recurrence read).
+- **Personal relevance (feed inclusion):** the feed contains only
+  the recurrences the user is personally relevant to, mirroring the
+  canonical Meeting read-access invariant ("Meeting participants and
+  access boundary"): the user is the recurrence CREATOR
+  (`created_by`) or a persisted intended PARTICIPANT
+  (`MeetingRecurrenceParticipant`). This is a DELIBERATE distinction
+  from authorization visibility: the scope-level read rule for one
+  recurrence (Research Group membership / Project membership,
+  `MEETING_RECURRENCE_READ`) decides whether a user may INSPECT a
+  specific recurrence through the per-recurrence read APIs; it does
+  NOT make that recurrence part of the user's personal Meeting feed.
+  A user who can read a Project-scoped recurrence as a Project
+  viewer sees nothing of it in their feed unless they are its
+  creator or an intended participant — and the converse holds: an
+  outsider listed as an intended participant sees the series in
+  their feed (participant identity, not scope membership, is the
+  personal relationship — exactly like a concrete Meeting
+  participant who does not belong to the Meeting's Research Group).
+  Membership/visibility alone therefore never broadens the feed, and
+  the feed never leaks the existence, title, or timing of unrelated
+  recurrences: a user without relevant recurrences receives an empty
+  list.
+- **Effective semantics:** every relevant recurrence is expanded
+  with the canonical EFFECTIVE expansion
+  (`expand_effective_meeting_recurrence_occurrences`) — full
+  recurrence-rule semantics (frequency, interval, weekdays, start
+  date, inclusive end date / count, monthly skipped invalid dates,
+  stable occurrence identity) with persisted single-occurrence
+  exclusions filtered out AFTER rule generation. No second
+  recurrence expansion algorithm exists in this endpoint.
+- **Exclusion / cancellation:** an excluded virtual occurrence is
+  absent from the feed (no replacement occurrence — a COUNT-limited
+  series does not grow). A cancelled materialized occurrence is
+  likewise absent: the terminal cancellation persists the
+  `MeetingRecurrenceExclusion` that removes the occurrence from the
+  effective set, so the feed matches the canonical per-recurrence
+  occurrence GET exactly for the same recurrence/window (the
+  cancelled Meeting row itself survives with `status: cancelled`,
+  unchanged).
+- **Materialization handling:** which effective occurrences already
+  have a concrete Meeting is resolved from the persisted provenance
+  (`Meeting.recurrence` + `Meeting.original_scheduled_at`, unique per
+  recurrence) with ONE bounded query over ALL relevant recurrences
+  and the requested window — no per-occurrence lookup, and no
+  Meeting is created or mutated by the read (the feed is strictly
+  read-only: no Meeting rows, Sections, participants, or audit
+  events). A materialized occurrence appears EXACTLY ONCE: as the
+  feed item with `materialized: true` and its concrete `meetingId` —
+  never both a virtual feed item and a duplicate concrete item.
+- **Ordering:** the feed is ONE flat chronological list across all
+  relevant recurrences (never grouped by series), ordered by the
+  ACTUAL `scheduledAt` ascending — the concrete Meeting's editable
+  planned time when materialized (a rescheduled Meeting keeps its
+  stable occurrence identity but reports and sorts by its moved
+  time), the original scheduled start while virtual. The stable
+  occurrence identity (`occurrenceId`, ascending) is the
+  deterministic tie-breaker for identical timestamps.
+- **Read efficiency:** the personal-relevance selection is one
+  batched query (creator OR intended participant), ALL exclusions the
+  requested window can be affected by are loaded with ONE batched
+  query across every relevant recurrence (grouped in memory by
+  recurrence and handed to the canonical effective expansion as a
+  preloaded set — no per-recurrence exclusion query), and
+  materialization is one batched query — the query count is constant
+  in BOTH the number of relevant recurrences and the number of
+  occurrences in the window (pinned by window-size and
+  recurrence-count query-count regression tests).
+
+The response is a JSON array (the repository's list convention) of
+compact occurrence objects:
+
+```text
+occurrenceId          stable occurrence identity (UUIDv5; the SAME
+                      value the per-recurrence read reports)
+recurrenceId          owning MeetingRecurrence id
+title                 effective title: the materialized Meeting's
+                      own title when materialized, the canonical
+                      series title while virtual
+originalScheduledAt   immutable original scheduled start (aware,
+                      UTC ISO-8601)
+scheduledAt           actual scheduled time (aware, UTC ISO-8601):
+                      the concrete Meeting's planned time when
+                      materialized, the original start while virtual
+materialized          bool
+meetingId             concrete Meeting id, or null while virtual
+meetingSeriesId       canonical Meeting Template id, or null for
+                      legacy template-less recurrences
+researchGroupId       Research Group id
+projectId             Project id, or null for group scope
+```
+
+The feed is a minimal Meeting-overview contract: it is deliberately
+NOT a full Meeting-detail DTO (no status, participants, sections, or
+other concrete-Meeting fields beyond `meetingId`). The frontend
+client contract and pure normalization for the effective Upcoming
+model ARE implemented (frontend-only): the typed feed client plus
+`buildUpcomingList` merge the feed with the concrete Meeting list by
+`meetingId` — the canonical Meeting identity, NEVER a title/date
+heuristic — so a materialized occurrence appears exactly once (the
+richer concrete representation wins, retaining the feed's recurrence
+metadata), a virtual occurrence becomes a normal row (no fabricated
+Meeting id), and a cancelled concrete Meeting is dropped. Only the
+visual Meetings-page / Upcoming UI integration remains deferred.
+
 ### Materialization (implemented)
 
 A calculated occurrence remains virtual until persistent meeting state
@@ -1522,6 +1649,14 @@ unimplemented:
   UI (including the occurrence preview UI); an explicit maximum window
   size for the bounded occurrence read API (pending product/API
   decision);
+
+  The bounded current-user recurring-occurrence feed backend read
+  contract IS implemented (see
+  "Bounded current-user recurring-occurrence feed (implemented)"
+  above). The frontend Meeting-list integration that renders virtual
+  recurring occurrences alongside concrete Meetings (merging the feed
+  with the concrete Meeting list by `meetingId`) is still
+  unimplemented.
 
   The creation HTTP API IS implemented (see "Creation HTTP API
   (implemented)"), and the frontend client foundation for it (typed
