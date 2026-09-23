@@ -372,4 +372,27 @@ describe('Meeting recurrence API client', () => {
       }),
     )
   })
+
+  it('posts the optional participantIds on the same creation request', async () => {
+    vi.mocked(apiPost).mockResolvedValue(
+      {} as ApiMeetingRecurrence,
+    )
+
+    await createMeetingRecurrence({
+      meetingSeriesId: 7,
+      title: 'Weekly Sync',
+      frequency: 'weekly',
+      interval: 1,
+      weekdays: [1],
+      startDate: '2030-01-07',
+      localTime: '10:30',
+      timezone: 'Europe/Berlin',
+      participantIds: [12, 34],
+    })
+
+    expect(apiPost).toHaveBeenCalledWith(
+      '/api/meeting-recurrences/',
+      expect.objectContaining({ participantIds: [12, 34] }),
+    )
+  })
 })

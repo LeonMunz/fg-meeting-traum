@@ -1547,14 +1547,17 @@ unimplemented:
 - whole-series (whole-recurrence) editing semantics and schedule
   revisions/segments (including changing a recurrence's Template
   association — domain/model-level today, no public edit-series API);
-- recurrence participant HTTP/UX surface: `participantIds` on the
-  recurrence creation HTTP request, a recurrence-response participant
-  field, frontend participant submission (and removal of the current
-  recurring-participant UI safety gate), a recurrence participant
+- the remainder of the recurrence participant surface: a
+  recurrence-response participant field, a recurrence participant
   editing API, and Template default participants. (The DOMAIN
   persistence of the recurrence participant intent and the
   materialization participant snapshot ARE implemented — see
-  "Recurring-series participants (implemented)" above.)
+  "Recurring-series participants (implemented)" above — and the
+  `participantIds` creation input on the recurrence creation HTTP
+  request IS implemented, including the frontend submission of the
+  Meeting Create dialog's participant selection for a recurring series
+  and the removal of the recurring-participant UI safety gate that
+  existed only while that HTTP field was missing.)
 - `.ics` export, calendar (Google/Outlook) sync, arbitrary RRULE input,
   yearly recurrence, nth-weekday monthly recurrence.
 

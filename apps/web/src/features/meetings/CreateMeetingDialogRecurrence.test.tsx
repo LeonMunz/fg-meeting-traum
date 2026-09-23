@@ -5,7 +5,6 @@ import {
   fireEvent,
   render,
   screen,
-  waitFor,
 } from '@testing-library/react'
 import {
   afterEach,
@@ -58,6 +57,13 @@ const chris: ApiMeetingParticipantCandidate = {
   id: 4,
   username: 'chris',
   firstName: 'Chris',
+  lastName: 'Example',
+}
+
+const dana: ApiMeetingParticipantCandidate = {
+  id: 5,
+  username: 'dana',
+  firstName: 'Dana',
   lastName: 'Example',
 }
 
@@ -619,6 +625,7 @@ describe('CreateMeetingDialog recurring submit contract', () => {
       timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       endDate: null,
       count: null,
+      participantIds: [],
     })
     // No one-time Meeting creation, no fabricated Meeting.
     expect(onCreate).not.toHaveBeenCalled()
@@ -774,8 +781,31 @@ describe('CreateMeetingDialog recurring submit contract', () => {
   })
 })
 
-describe('CreateMeetingDialog recurring participant gate', () => {
-  it('never discards selected participants: recurring submit stays disabled with an explanation', async () => {
+describe('CreateMeetingDialog recurring participants', () => {
+  it('creates the recurring series with an empty participantIds when no participant is selected', async () => {
+    const { onCreate, onCreateSeries } = renderDialog()
+    await selectTemplate()
+    setBaseForm()
+    enableRepeat()
+
+    // A candidate is searched but never selected.
+    fireEvent.change(screen.getByLabelText('Participants'), {
+      target: { value: 'ch' },
+    })
+    await screen.findByRole('button', {
+      name: /Chris Example.*@chris.*Add/,
+    })
+
+    submitForm()
+
+    expect(onCreateSeries).toHaveBeenCalledTimes(1)
+    expect(onCreateSeries).toHaveBeenCalledWith(
+      expect.objectContaining({ participantIds: [] }),
+    )
+    expect(onCreate).not.toHaveBeenCalled()
+  })
+
+  it('sends the selected participant id in participantIds without blocking submission', async () => {
     const { onCreate, onCreateSeries } = renderDialog()
     await selectTemplate()
     setBaseForm()
@@ -784,33 +814,14 @@ describe('CreateMeetingDialog recurring participant gate', () => {
     fireEvent.change(screen.getByLabelText('Participants'), {
       target: { value: 'ch' },
     })
-    await waitFor(() => {
-      expect(
-        meetingsApi.searchMeetingSeriesParticipantCandidates,
-      ).toHaveBeenCalledWith(7, 'ch')
-    })
-    const addButton = await screen.findByRole('button', {
-      name: /Chris Example.*@chris.*Add/,
-    })
-    fireEvent.click(addButton)
-
-    expect(
-      screen.getByText(
-        /Recurring series can't be created with participants yet/,
-      ),
-    ).toBeVisible()
-    expect(
-      screen.getByRole('button', { name: 'Create series' }),
-    ).toBeDisabled()
-
-    submitForm()
-    expect(onCreateSeries).not.toHaveBeenCalled()
-    expect(onCreate).not.toHaveBeenCalled()
-
-    // Removing the participant restores recurring submission.
     fireEvent.click(
-      screen.getByRole('button', { name: 'Remove Chris Example' }),
+      await screen.findByRole('button', {
+        name: /Chris Example.*@chris.*Add/,
+      }),
     )
+
+    // The obsolete safety gate (warning + disabled submit) is gone:
+    // the recurring submit stays enabled and no blocker is shown.
     expect(
       screen.queryByText(
         /Recurring series can't be created with participants yet/,
@@ -821,7 +832,48 @@ describe('CreateMeetingDialog recurring participant gate', () => {
     ).toBeEnabled()
 
     submitForm()
+
     expect(onCreateSeries).toHaveBeenCalledTimes(1)
+    expect(onCreateSeries).toHaveBeenCalledWith(
+      expect.objectContaining({
+        meetingSeriesId: 7,
+        title: 'Weekly Sync',
+        participantIds: [4],
+      }),
+    )
+    expect(onCreate).not.toHaveBeenCalled()
+  })
+
+  it('sends the complete participantIds array for multiple selected participants', async () => {
+    vi.mocked(
+      meetingsApi.searchMeetingSeriesParticipantCandidates,
+    ).mockResolvedValue([chris, dana])
+
+    const { onCreate, onCreateSeries } = renderDialog()
+    await selectTemplate()
+    setBaseForm()
+    enableRepeat()
+
+    fireEvent.change(screen.getByLabelText('Participants'), {
+      target: { value: 'ex' },
+    })
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: /Chris Example.*@chris.*Add/,
+      }),
+    )
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: /Dana Example.*@dana.*Add/,
+      }),
+    )
+
+    submitForm()
+
+    expect(onCreateSeries).toHaveBeenCalledTimes(1)
+    expect(onCreateSeries).toHaveBeenCalledWith(
+      expect.objectContaining({ participantIds: [4, 5] }),
+    )
     expect(onCreate).not.toHaveBeenCalled()
   })
 

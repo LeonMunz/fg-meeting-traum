@@ -587,13 +587,6 @@ export function CreateMeetingDialog({
           : null
       : null
 
-  // Hard rule: selected Participants must never be silently discarded by a
-  // recurring submit. The recurrence contract has no participant
-  // persistence semantics yet, so recurring creation is gated (with an
-  // explicit explanation) while any participant is selected.
-  const participantsBlockRecurrence =
-    recurrenceActive && selectedParticipants.length > 0
-
   const recurrenceValid =
     title.trim() !== '' &&
     researchGroupId !== '' &&
@@ -603,7 +596,6 @@ export function CreateMeetingDialog({
     weeklyWeekdaysValid &&
     (endMode !== 'date' || endDateValid) &&
     (endMode !== 'count' || countValue !== null) &&
-    !participantsBlockRecurrence &&
     onCreateSeries != null
 
   const recurrenceSummaryValid =
@@ -663,6 +655,13 @@ export function CreateMeetingDialog({
         timezone: currentIanaTimezone(),
         endDate: endMode === 'date' ? endDateText : null,
         count: endMode === 'count' ? (countValue as number) : null,
+        // The recurring SERIES carries the same selected participant
+        // identity as the one-time flow (User PKs, selection order).
+        // The backend owns normalization: duplicates are reduced to one
+        // intent each, and the creator is deduplicated at materialization.
+        participantIds: selectedParticipants.map(
+          (participant) => participant.id,
+        ),
       })
 
       return
@@ -1352,16 +1351,6 @@ export function CreateMeetingDialog({
                 </div>
               )}
 
-              {participantsBlockRecurrence && (
-                <p
-                  id="create-meeting-participants-recurrence-note"
-                  className="mt-2 text-xs text-danger"
-                >
-                  Recurring series can't be created with participants yet.
-                  Remove participants, or turn off repeat to create a single
-                  meeting.
-                </p>
-              )}
             </div>
 
             <div className="border-t border-border-subtle pt-5">
@@ -1602,12 +1591,7 @@ export function CreateMeetingDialog({
                   !researchGroupId ||
                   (recurrenceActive && !recurrenceValid)
                 }
-                aria-describedby={
-                  participantsBlockRecurrence
-                    ? 'create-meeting-participants-recurrence-note'
-                    : undefined
-                }
-              className="inline-flex h-9 items-center gap-2 rounded-lg bg-accent px-4 text-sm font-semibold text-text-inverse shadow-sm transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-45"
+                className="inline-flex h-9 items-center gap-2 rounded-lg bg-accent px-4 text-sm font-semibold text-text-inverse shadow-sm transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-45"
               >
                 <span
                   aria-hidden="true"

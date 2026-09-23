@@ -689,6 +689,14 @@ export interface ApiCreateMeetingRecurrenceInput {
   timezone: string
   endDate?: string | null
   count?: number | null
+  /**
+   * Intended participants of the recurring SERIES (User PKs). Optional:
+   * omitted or `[]` creates a valid empty participant intent. The
+   * backend normalizes duplicates and deduplicates the creator at
+   * materialization; the frontend sends the selected IDs as-is, using
+   * the same participant identity as ordinary Meeting creation.
+   */
+  participantIds?: number[]
 }
 
 export interface ApiMeetingRecurrence {
