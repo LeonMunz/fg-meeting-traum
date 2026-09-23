@@ -15,7 +15,13 @@ import type { UpcomingMeeting } from './upcomingModel'
 export interface UpcomingDateGroup {
   /** Local calendar date (`YYYY-MM-DD`) identifying the group. */
   date: string
-  /** Group label: 'Today' / 'Tomorrow' / 'Thu, Sep 24' (the UI renders it uppercase). */
+  /**
+   * Group kind for presentation emphasis: 'today' / 'tomorrow' / 'date'.
+   */
+  kind: 'today' | 'tomorrow' | 'date'
+  /**
+   * Group label: 'Today · Wed, Sep 23' / 'Tomorrow · Thu, Sep 24' / 'Fri, Sep 25'.
+   */
   label: string
   /** Items of the group, ascending by effective start. */
   items: UpcomingMeeting[]
@@ -50,20 +56,29 @@ const LATER_GROUP_LABEL = new Intl.DateTimeFormat('en', {
 })
 
 /**
- * Group heading for a local calendar date: 'Today', 'Tomorrow', or the
- * short explicit date (e.g. 'Thu, Sep 24'). The UI renders the label
- * uppercase ('TODAY', 'THU, SEP 24').
+ * Group heading for a local calendar date: 'Today · Wed, Sep 23',
+ * 'Tomorrow · Thu, Sep 24', or the short explicit date (e.g. 'Fri, Sep 25').
+ * Today and Tomorrow carry the relative word PLUS the absolute date; later
+ * groups carry the absolute date only.
  */
 export function upcomingGroupLabel(
   calendarDate: string,
   now: Date = new Date(),
 ): string {
-  if (calendarDate === localDateKey(now)) return 'Today'
+  if (calendarDate === localDateKey(now)) {
+    return `Today · ${LATER_GROUP_LABEL.format(now)}`
+  }
+
   if (
     calendarDate ===
     localDateKeyAfterDays(now, 1)
   ) {
-    return 'Tomorrow'
+    const tomorrow = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate() + 1,
+    )
+    return `Tomorrow · ${LATER_GROUP_LABEL.format(tomorrow)}`
   }
 
   const [year, month, day] = calendarDate.split('-').map(
@@ -78,6 +93,25 @@ export function upcomingGroupLabel(
   }
 
   return LATER_GROUP_LABEL.format(date)
+}
+
+/**
+ * The presentation kind of a local calendar date relative to `now`:
+ * 'today', 'tomorrow', or 'date' (absolute-date groups).
+ */
+export function upcomingGroupKind(
+  calendarDate: string,
+  now: Date = new Date(),
+): 'today' | 'tomorrow' | 'date' {
+  if (calendarDate === localDateKey(now)) {
+    return 'today'
+  }
+
+  if (calendarDate === localDateKeyAfterDays(now, 1)) {
+    return 'tomorrow'
+  }
+
+  return 'date'
 }
 
 /**
@@ -114,6 +148,7 @@ export function groupUpcomingByDate(
 
   return orderedKeys.map((key) => ({
     date: key,
+    kind: upcomingGroupKind(key, now),
     label: upcomingGroupLabel(key, now),
     items: itemsByKey.get(key) ?? [],
   }))

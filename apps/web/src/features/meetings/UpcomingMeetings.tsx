@@ -452,9 +452,24 @@ export function UpcomingMeetingsList({
       aria-label="Upcoming meetings"
       className="overflow-hidden rounded-[10px] border border-border-subtle bg-surface-quiet"
     >
-      {groups.map((group) => (
-        <div key={group.date}>
-          <h3 className="flex h-8 items-center border-b border-border-subtle bg-surface-header px-4 text-[11px] font-semibold uppercase tracking-[0.07em] text-text-muted">
+      {groups.map((group, index) => (
+        // ONE shared list container for every group: the date-group
+        // hierarchy comes from spacing + the header surface +
+        // typography — an ~8px gap before every group AFTER the
+        // first, no per-day cards, no strong borders, and no
+        // artificial leading gap before the first group.
+        <div key={group.date} className={index > 0 ? 'mt-2' : ''}>
+          <h3
+            className={[
+              'flex h-8 items-center border-b border-border-subtle bg-surface-header px-4 text-xs font-semibold',
+              // The Today group gets slightly stronger text
+              // emphasis (no badge, no accent bar); the other
+              // groups stay secondary.
+              group.kind === 'today'
+                ? 'text-text'
+                : 'text-text-muted',
+            ].join(' ')}
+          >
             {group.label}
           </h3>
 

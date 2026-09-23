@@ -6,6 +6,7 @@ import {
   groupUpcomingByDate,
   localDateKey,
   peopleLabel,
+  upcomingGroupKind,
   upcomingGroupLabel,
 } from './upcomingGroups'
 
@@ -53,13 +54,16 @@ function makeItem(
 }
 
 describe('localDateKey / upcomingGroupLabel', () => {
-  it('labels today and tomorrow with local date arithmetic', () => {
+  it('labels Today with the relative word plus the absolute date', () => {
     expect(
       upcomingGroupLabel(
         localDateKey(NOW),
         NOW,
       ),
-    ).toBe('Today')
+    ).toBe('Today · Wed, Sep 23')
+  })
+
+  it('labels Tomorrow with the relative word plus the absolute date', () => {
     expect(
       upcomingGroupLabel(
         localDateKey(
@@ -67,13 +71,26 @@ describe('localDateKey / upcomingGroupLabel', () => {
         ),
         NOW,
       ),
-    ).toBe('Tomorrow')
+    ).toBe('Tomorrow · Thu, Sep 24')
+  })
+
+  it('labels later dates with the absolute date only', () => {
+    expect(
+      upcomingGroupLabel('2026-09-25', NOW),
+    ).toBe('Fri, Sep 25')
+    expect(
+      upcomingGroupLabel('2026-10-01', NOW),
+    ).toBe('Thu, Oct 1')
+    // No relative word leaks into later groups.
+    expect(
+      upcomingGroupLabel('2026-09-25', NOW),
+    ).not.toMatch(/Today|Tomorrow/i)
   })
 
   it('labels later dates as short weekday + month + day', () => {
     expect(
       upcomingGroupLabel('2026-09-24', NOW),
-    ).toBe('Tomorrow')
+    ).toBe('Tomorrow · Thu, Sep 24')
     expect(
       upcomingGroupLabel('2026-09-25', NOW),
     ).toBe('Fri, Sep 25')
@@ -92,7 +109,21 @@ describe('localDateKey / upcomingGroupLabel', () => {
         localDateKey(new Date(2026, 8, 24, 6, 0)),
         late,
       ),
-    ).toBe('Tomorrow')
+    ).toBe('Tomorrow · Thu, Sep 24')
+  })
+})
+
+describe('upcomingGroupKind', () => {
+  it('classifies today / tomorrow / later local dates', () => {
+    expect(
+      upcomingGroupKind(localDateKey(NOW), NOW),
+    ).toBe('today')
+    expect(
+      upcomingGroupKind('2026-09-24', NOW),
+    ).toBe('tomorrow')
+    expect(
+      upcomingGroupKind('2026-09-25', NOW),
+    ).toBe('date')
   })
 })
 
@@ -134,10 +165,17 @@ describe('groupUpcomingByDate', () => {
       '2026-09-24',
       '2026-09-25',
     ])
+    // Today / Tomorrow carry relative + absolute; later groups
+    // carry the absolute date only.
     expect(groups.map((g) => g.label)).toEqual([
-      'Today',
-      'Tomorrow',
+      'Today · Wed, Sep 23',
+      'Tomorrow · Thu, Sep 24',
       'Fri, Sep 25',
+    ])
+    expect(groups.map((g) => g.kind)).toEqual([
+      'today',
+      'tomorrow',
+      'date',
     ])
 
     // Items keep their input (ascending) order inside the group.

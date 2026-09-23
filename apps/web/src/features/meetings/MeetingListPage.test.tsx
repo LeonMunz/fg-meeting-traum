@@ -443,7 +443,7 @@ describe('MeetingListPage — Upcoming data', () => {
 
     renderPage()
 
-    await screen.findByRole('heading', { name: 'Today' })
+    await screen.findByRole('heading', { name: 'Today · Wed, Sep 23' })
 
     // One-time concrete Meeting.
     expect(screen.getByText('Team Sync')).toBeVisible()
@@ -467,7 +467,7 @@ describe('MeetingListPage — Upcoming data', () => {
     ).mockResolvedValue(occurrences)
 
     const { container } = renderPage()
-    await screen.findByRole('heading', { name: 'Today' })
+    await screen.findByRole('heading', { name: 'Today · Wed, Sep 23' })
 
     const text = container.textContent ?? ''
 
@@ -518,7 +518,7 @@ describe('MeetingListPage — Upcoming data', () => {
     ])
 
     renderPage()
-    await screen.findByRole('heading', { name: 'Today' })
+    await screen.findByRole('heading', { name: 'Today · Wed, Sep 23' })
 
     expect(
       screen.queryByText('Recurring'),
@@ -535,17 +535,107 @@ describe('MeetingListPage — Upcoming data', () => {
     ).mockResolvedValue(occurrences)
 
     const { container } = renderPage()
-    await screen.findByRole('heading', { name: 'Today' })
+    await screen.findByRole('heading', { name: 'Today · Wed, Sep 23' })
 
     const headings = [
       ...container.querySelectorAll('h3'),
     ].map((h) => h.textContent)
 
+    // Today / Tomorrow: relative word PLUS absolute date; later
+    // groups: absolute date only. Ascending by local calendar date.
     expect(headings).toEqual([
-      'Today',
-      'Tomorrow',
+      'Today · Wed, Sep 23',
+      'Tomorrow · Thu, Sep 24',
       'Fri, Sep 25',
     ])
+  })
+
+  it('renders date headers without the all-caps tracking treatment, at 12px/600 on the 32px band, with subtle Today emphasis only', async () => {
+    const { meetings, occurrences } = richFixtures()
+    vi.mocked(meetingsApi.listMeetings).mockResolvedValue(
+      meetings,
+    )
+    vi.mocked(
+      meetingsApi.listPersonalMeetingRecurrenceOccurrences,
+    ).mockResolvedValue(occurrences)
+
+    const { container } = renderPage()
+    await screen.findByRole('heading', { name: 'Today · Wed, Sep 23' })
+
+    const headings = [...container.querySelectorAll('h3')]
+    expect(headings).toHaveLength(3)
+    for (const heading of headings) {
+      // No all-caps / wide-tracking treatment anymore; 12px /
+      // 600 on the 32px header band.
+      expect(heading.className).not.toContain(
+        'uppercase',
+      )
+      expect(heading.className).not.toContain(
+        'tracking-',
+      )
+      expect(heading.className).toContain('text-xs')
+      expect(heading.className).toContain(
+        'font-semibold',
+      )
+      expect(heading.className).toContain('h-8')
+    }
+
+    // The Today group gets slightly stronger text emphasis —
+    // and only it (no badge, no accent bar).
+    expect(headings[0].className).toContain(
+      'text-text',
+    )
+    expect(headings[0].className).not.toContain(
+      'text-text-muted',
+    )
+    expect(headings[1].className).toContain(
+      'text-text-muted',
+    )
+    expect(headings[2].className).toContain(
+      'text-text-muted',
+    )
+  })
+
+  it('keeps ONE shared list container: no leading gap before the first group, ~8px separation before later groups, no per-day cards', async () => {
+    const { meetings, occurrences } = richFixtures()
+    vi.mocked(meetingsApi.listMeetings).mockResolvedValue(
+      meetings,
+    )
+    vi.mocked(
+      meetingsApi.listPersonalMeetingRecurrenceOccurrences,
+    ).mockResolvedValue(occurrences)
+
+    const { container } = renderPage()
+    await screen.findByRole('heading', { name: 'Today · Wed, Sep 23' })
+
+    const list = container.querySelector(
+      '[aria-label="Upcoming meetings"]',
+    )!
+
+    // The section's direct children are exactly the group
+    // wrappers — one container, no extra per-day card.
+    const groupWrappers = [...list.children] as HTMLElement[]
+    expect(groupWrappers).toHaveLength(3)
+    for (const wrapper of groupWrappers) {
+      expect(wrapper.querySelector('h3')).not.toBeNull()
+    }
+
+    // No artificial leading gap before the first group; every
+    // later group gets the ~8px visual separation before its
+    // header.
+    expect(groupWrappers[0].className).not.toContain(
+      'mt-',
+    )
+    expect(groupWrappers[1].className).toContain('mt-2')
+    expect(groupWrappers[2].className).toContain('mt-2')
+
+    // Ordinary row dividers stay subtle (unchanged treatment).
+    const rowDividers = groupWrappers[1].querySelector(
+      '.divide-y',
+    )!
+    expect(rowDividers.className).toContain(
+      'divide-border-subtle',
+    )
   })
 
   it('sorts rows ascending by effective start inside a group', async () => {
@@ -558,11 +648,11 @@ describe('MeetingListPage — Upcoming data', () => {
     ).mockResolvedValue(occurrences)
 
     renderPage()
-    await screen.findByRole('heading', { name: 'Today' })
+    await screen.findByRole('heading', { name: 'Today · Wed, Sep 23' })
 
     const tomorrowGroup = within(
       screen
-        .getByRole('heading', { name: 'Tomorrow' })
+        .getByRole('heading', { name: 'Tomorrow · Thu, Sep 24' })
         .closest('div')!,
     )
 
@@ -590,7 +680,7 @@ describe('MeetingListPage — Upcoming data', () => {
     ).mockResolvedValue(occurrences)
 
     renderPage()
-    await screen.findByRole('heading', { name: 'Today' })
+    await screen.findByRole('heading', { name: 'Today · Wed, Sep 23' })
 
     expect(
       screen.queryByText('Cancelled one'),
@@ -629,7 +719,7 @@ describe('MeetingListPage — Upcoming data', () => {
     ).mockResolvedValue(occurrences)
 
     renderPage()
-    await screen.findByRole('heading', { name: 'Today' })
+    await screen.findByRole('heading', { name: 'Today · Wed, Sep 23' })
 
     // No group for the original slot (Sep 29).
     expect(
@@ -664,11 +754,11 @@ describe('MeetingListPage — Upcoming data', () => {
     ])
 
     renderPage()
-    await screen.findByRole('heading', { name: 'Today' })
+    await screen.findByRole('heading', { name: 'Today · Wed, Sep 23' })
 
     const todayGroup = within(
       screen
-        .getByRole('heading', { name: 'Today' })
+        .getByRole('heading', { name: 'Today · Wed, Sep 23' })
         .closest('div')!,
     )
 
@@ -687,7 +777,7 @@ describe('MeetingListPage — Upcoming data', () => {
     ])
 
     renderPage()
-    await screen.findByRole('heading', { name: 'Today' })
+    await screen.findByRole('heading', { name: 'Today · Wed, Sep 23' })
 
     const row = screen
       .getByRole('button', {
@@ -755,7 +845,7 @@ describe('MeetingListPage — Upcoming data', () => {
     ])
 
     renderPage()
-    await screen.findByRole('heading', { name: 'Today' })
+    await screen.findByRole('heading', { name: 'Today · Wed, Sep 23' })
 
     expect(screen.getByText('Today meeting')).toBeVisible()
     expect(
@@ -813,11 +903,11 @@ describe('MeetingListPage — Upcoming data', () => {
     ])
 
     renderPage()
-    await screen.findByRole('heading', { name: 'Today' })
+    await screen.findByRole('heading', { name: 'Today · Wed, Sep 23' })
 
     const todayGroup = within(
       screen
-        .getByRole('heading', { name: 'Today' })
+        .getByRole('heading', { name: 'Today · Wed, Sep 23' })
         .closest('div')!,
     )
 
@@ -842,7 +932,7 @@ describe('MeetingListPage — row structure and interaction', () => {
     ])
 
     renderPage()
-    await screen.findByRole('heading', { name: 'Today' })
+    await screen.findByRole('heading', { name: 'Today · Wed, Sep 23' })
 
     // Time cell.
     expect(screen.getByText('10:00')).toBeVisible()
@@ -893,7 +983,7 @@ describe('MeetingListPage — row structure and interaction', () => {
     ])
 
     const { container } = renderPage()
-    await screen.findByRole('heading', { name: 'Today' })
+    await screen.findByRole('heading', { name: 'Today · Wed, Sep 23' })
 
     // The concrete row carries its people count in exactly the two
     // responsive slots; the virtual row carries none.
@@ -930,7 +1020,7 @@ describe('MeetingListPage — row structure and interaction', () => {
     ])
 
     const { container } = renderPage()
-    await screen.findByRole('heading', { name: 'Today' })
+    await screen.findByRole('heading', { name: 'Today · Wed, Sep 23' })
 
     const row = screen
       .getByRole('button', {
@@ -990,7 +1080,7 @@ describe('MeetingListPage — row structure and interaction', () => {
 
     // Date group header: compact 32px band, not a card.
     const dateHeader = screen.getByRole('heading', {
-      name: 'Today',
+      name: 'Today · Wed, Sep 23',
     })
     expect(dateHeader.className).toContain('h-8')
     expect(dateHeader.className).toContain('px-4')
@@ -1012,7 +1102,7 @@ describe('MeetingListPage — row structure and interaction', () => {
 
     renderPage()
     await screen.findByRole('heading', {
-      name: 'Today',
+      name: 'Today · Wed, Sep 23',
     })
 
     const row = screen.getByRole('button', {
@@ -1053,7 +1143,7 @@ describe('MeetingListPage — row structure and interaction', () => {
 
     renderPage()
     await screen.findByRole('heading', {
-      name: 'Today',
+      name: 'Today · Wed, Sep 23',
     })
 
     const row = screen.getByRole('button', {
@@ -1116,6 +1206,66 @@ describe('MeetingListPage — row structure and interaction', () => {
     ).not.toBeInTheDocument()
   })
 
+  it('keeps the generic "Recurring" metadata and never invents a rule string', async () => {
+    vi.mocked(
+      meetingsApi.listPersonalMeetingRecurrenceOccurrences,
+    ).mockResolvedValue([
+      makeOccurrence({
+        occurrenceId: 'occ-meta',
+        title: 'Weekly Research Sync',
+      }),
+    ])
+
+    renderPage()
+    await screen.findByText('Weekly Research Sync')
+
+    const row = screen
+      .getByText('Weekly Research Sync')
+      .parentElement! // Meeting content block
+      .parentElement! // the row grid
+    const meetingBlock = row.children[1] as HTMLElement
+    const metaLine = meetingBlock.children[1] as HTMLElement
+
+    // The generic indicator is preserved…
+    expect(
+      within(metaLine).getByText('Recurring'),
+    ).toBeVisible()
+    // …and NO recurrence rule string is invented — the feed DTO
+    // carries no rule data, and spacing must not be inferred.
+    expect(metaLine.textContent).not.toMatch(
+      /weekly|every\s+\d|bi-?weekly|bi-?monthly|monthly|yearly|annually/i,
+    )
+  })
+
+  it('renders no fabricated People count for a virtual occurrence', async () => {
+    vi.mocked(
+      meetingsApi.listPersonalMeetingRecurrenceOccurrences,
+    ).mockResolvedValue([
+      makeOccurrence({
+        occurrenceId: 'occ-people',
+        title: 'Weekly Research Sync',
+      }),
+    ])
+
+    renderPage()
+    await screen.findByText('Weekly Research Sync')
+
+    const row = screen
+      .getByText('Weekly Research Sync')
+      .parentElement! // Meeting content block
+      .parentElement! // the row grid
+
+    // The row-level People region (index 2) stays EMPTY — the feed
+    // carries no participant data, so no count is fabricated.
+    const peopleRegion =
+      row.children[2] as HTMLElement
+    expect(peopleRegion.textContent).toBe('')
+    // …and no "N person(s)" copy leaks anywhere in the row.
+    expect(row.textContent).not.toMatch(
+      /\d+\s+people?\b/i,
+    )
+  })
+
   it('does not trigger row navigation when the kebab is clicked', async () => {
     vi.mocked(meetingsApi.listMeetings).mockResolvedValue([
       makeMeeting({
@@ -1159,7 +1309,7 @@ describe('MeetingListPage — row structure and interaction', () => {
     ])
 
     renderPage()
-    await screen.findByRole('heading', { name: 'Today' })
+    await screen.findByRole('heading', { name: 'Today · Wed, Sep 23' })
 
     // One semantic string per responsive slot (the desktop People
     // column plus the secondary metadata); never a wrapped
@@ -1181,7 +1331,7 @@ describe('MeetingListPage — row structure and interaction', () => {
     ])
 
     renderPage()
-    await screen.findByRole('heading', { name: 'Today' })
+    await screen.findByRole('heading', { name: 'Today · Wed, Sep 23' })
 
     const row = screen.getByRole('button', {
       name: 'Plain upcoming · 10:00',
@@ -1381,7 +1531,7 @@ describe('MeetingListPage — states (empty / loading / error)', () => {
     )
 
     renderPage()
-    await screen.findByRole('heading', { name: 'Today' })
+    await screen.findByRole('heading', { name: 'Today · Wed, Sep 23' })
 
     // Concrete data is already rendered…
     expect(screen.getByText('Team Sync')).toBeVisible()
@@ -1503,7 +1653,7 @@ describe('MeetingListPage create dialog (unchanged behavior)', () => {
       meetingsApi.createMeetingRecurrence,
     ).mockResolvedValue(recurrence)
 
-    renderPage()
+    const { container } = renderPage()
     await openCreateDialog()
 
     fireEvent.change(screen.getByLabelText('Title'), {
@@ -1549,18 +1699,26 @@ describe('MeetingListPage create dialog (unchanged behavior)', () => {
       meetingsApi.createMeetingFromSeries,
     ).not.toHaveBeenCalled()
 
-    // The dialog closes and the SERIES success signal shows — with
-    // the feed refetched so the series' occurrences join Upcoming.
+    // The dialog closes and the SERIES success toast shows —
+    // non-modal, outside the list flow — with the feed refetched
+    // so the series' occurrences join Upcoming.
     expect(
       screen.queryByRole('dialog'),
     ).not.toBeInTheDocument()
-    expect(screen.getByRole('status')).toHaveTextContent(
-      'Recurring series “Weekly Sync” created.',
+    const toast = screen.getByRole('status')
+    expect(toast).toHaveTextContent('Series created')
+    expect(toast).toHaveTextContent(
+      'Upcoming occurrences are now available.',
     )
+    // The toast carries no action button…
     expect(
-      screen.getByRole('status'),
-    ).toHaveTextContent(
-      'Its occurrences now appear in Upcoming.',
+      within(toast).queryAllByRole('button'),
+    ).toHaveLength(0)
+    // …and it sits at the page root — outside the tab panel and
+    // therefore outside the Upcoming list flow (it cannot shift
+    // the agenda).
+    expect(toast.parentElement).toBe(
+      container.firstElementChild,
     )
     await waitFor(() => {
       expect(
@@ -1571,6 +1729,86 @@ describe('MeetingListPage create dialog (unchanged behavior)', () => {
     expect(
       screen.queryByRole('button', { name: /Weekly Sync/ }),
     ).not.toBeInTheDocument()
+  })
+
+  it('shows the series-success toast transiently: it auto-dismisses and the old persistent inline banner is gone', async () => {
+    const recurrence: ApiMeetingRecurrence = {
+      id: 43,
+      title: 'Weekly Sync',
+      meetingSeriesId: 7,
+      researchGroupId: 1,
+      scope: 'group',
+      projectId: null,
+      frequency: 'weekly',
+      interval: 1,
+      weekdays: [1],
+      startDate: '2026-09-24',
+      localTime: '10:30',
+      timezone: 'Europe/Berlin',
+      endDate: null,
+      count: null,
+    }
+    vi.mocked(
+      meetingsApi.createMeetingRecurrence,
+    ).mockResolvedValue(recurrence)
+
+    const { container } = renderPage()
+    await openCreateDialog()
+
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Weekly Sync' },
+    })
+    await selectTemplate()
+    fireEvent.change(screen.getByLabelText('Date'), {
+      target: { value: '2026-09-24' },
+    })
+    fireEvent.change(screen.getByLabelText('Time'), {
+      target: { value: '10:30' },
+    })
+    fireEvent.change(screen.getByLabelText('Repeat'), {
+      target: { value: 'weekly' },
+    })
+
+    fireEvent.submit(
+      screen.getByLabelText('Title').closest('form')!,
+    )
+
+    const toast = await screen.findByRole('status')
+    expect(toast).toHaveTextContent('Series created')
+    expect(toast).toHaveTextContent(
+      'Upcoming occurrences are now available.',
+    )
+
+    // The OLD persistent inline banner is absent: no old copy,
+    // no inline Dismiss action.
+    expect(
+      screen.queryByText(
+        /Recurring series “.*” created\./,
+      ),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByText(
+        'Its occurrences now appear in Upcoming.',
+      ),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Dismiss' }),
+    ).not.toBeInTheDocument()
+
+    // The toast lives at the page root — outside the tab panel
+    // (and thus outside the Upcoming list flow; fixed + non-modal).
+    expect(toast.parentElement).toBe(
+      container.firstElementChild,
+    )
+
+    // It auto-dismisses after ~4.5 s and then stays gone — it
+    // never lives permanently in the list flow.
+    vi.advanceTimersByTime(4500)
+    await waitFor(() => {
+      expect(
+        screen.queryByRole('status'),
+      ).not.toBeInTheDocument()
+    })
   })
 
   it('keeps the dialog open with the error visible when recurrence creation fails', async () => {

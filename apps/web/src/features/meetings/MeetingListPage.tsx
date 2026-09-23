@@ -99,6 +99,47 @@ function ComingSoonPanel({
   )
 }
 
+/**
+ * Non-modal, transient success feedback for a created recurring
+ * series. Fixed-positioned (outside the document flow) so it never
+ * shifts the Upcoming list, and it auto-dismisses without an action
+ * button. Placed TOP-RIGHT, below the sticky 64px global TopBar
+ * (`top-20` = 80px keeps a 16px gap under the header). Deliberately
+ * page-local: the repository has no application-wide notification
+ * architecture, and none is introduced here.
+ */
+const SERIES_TOAST_DURATION_MS = 4500
+
+// Exported (presentation-only) so the standalone visual harness
+// (`scripts/visual/upcoming-date-group-check.mjs`) can render the
+// real toast against the real production CSS.
+export function SeriesCreatedToast() {
+  return (
+    <div
+      role="status"
+      className="fixed top-20 right-6 z-50 w-max max-w-[min(360px,calc(100vw-3rem))] rounded-[10px] border border-border-subtle bg-surface px-4 py-3 shadow-md"
+    >
+      <div className="flex items-start gap-2.5">
+        <span
+          aria-hidden="true"
+          className="material-symbols-outlined mt-0.5 shrink-0 text-[18px] text-success"
+        >
+          check_circle
+        </span>
+
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-text">
+            Series created
+          </p>
+          <p className="mt-0.5 text-xs text-text-muted">
+            Upcoming occurrences are now available.
+          </p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function MeetingListPage() {
   const navigate = useNavigate()
 
@@ -130,12 +171,13 @@ export function MeetingListPage() {
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] =
     useState<string | null>(null)
-  // Success signal for a created recurring series: no concrete
-  // Meeting is created, so the confirmation is a dismissible page
-  // banner — the series' occurrences appear in Upcoming from the
-  // feed refetch.
-  const [seriesSuccess, setSeriesSuccess] =
-    useState<string | null>(null)
+  // Transient (auto-dismissing) success feedback for a created
+  // recurring series: no concrete Meeting is created, so the
+  // confirmation is a non-modal toast — the series' occurrences
+  // appear in Upcoming from the feed refetch.
+  const [seriesToastVisible, setSeriesToastVisible] =
+    useState(false)
+  const seriesToastTimer = useRef<number | null>(null)
 
   // One request window per page session: today → +42 days (local).
   const requestWindow = useMemo(
@@ -187,6 +229,35 @@ export function MeetingListPage() {
       )
     }
   }, [requestWindow])
+
+  const dismissSeriesToast =
+    useCallback(() => {
+      if (seriesToastTimer.current != null) {
+        window.clearTimeout(
+          seriesToastTimer.current,
+        )
+        seriesToastTimer.current = null
+      }
+      setSeriesToastVisible(false)
+    }, [])
+
+  const showSeriesToast = useCallback(() => {
+    if (seriesToastTimer.current != null) {
+      window.clearTimeout(
+        seriesToastTimer.current,
+      )
+    }
+    setSeriesToastVisible(true)
+    seriesToastTimer.current = window.setTimeout(
+      () => setSeriesToastVisible(false),
+      SERIES_TOAST_DURATION_MS,
+    )
+  }, [])
+
+  useEffect(
+    () => dismissSeriesToast,
+    [dismissSeriesToast],
+  )
 
   useEffect(() => {
     if (activeResearchGroupId == null) {
@@ -281,15 +352,12 @@ export function MeetingListPage() {
     setCreateError(null)
 
     try {
-      const recurrence =
-        await createMeetingRecurrence(input)
+      await createMeetingRecurrence(input)
 
       // No concrete Meeting was created. The new series' effective
       // occurrences become visible through the feed refetch.
       setCreateDialogOpen(false)
-      setSeriesSuccess(
-        `Recurring series “${recurrence.title}” created.`,
-      )
+      showSeriesToast()
       void loadOccurrences()
     } catch (createSeriesError) {
       // The dialog stays open with all recurrence fields preserved;
@@ -307,7 +375,7 @@ export function MeetingListPage() {
 
   const openCreateDialog = () => {
     setCreateError(null)
-    setSeriesSuccess(null)
+    dismissSeriesToast()
     setCreateDialogOpen(true)
   }
 
@@ -484,47 +552,6 @@ export function MeetingListPage() {
             </div>
           ) : (
             <>
-              {seriesSuccess && (
-                <div
-                  role="status"
-                  className="mb-4 flex items-center justify-between gap-4 rounded-[10px] border border-border-subtle bg-surface px-4 py-3"
-                >
-                  <div className="flex min-w-0 items-start gap-2.5">
-                    <span
-                      aria-hidden="true"
-                      className="material-symbols-outlined mt-0.5 shrink-0 text-[18px] text-accent-text"
-                    >
-                      repeat
-                    </span>
-
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-medium text-text">
-                        {seriesSuccess}
-                      </p>
-                      <p className="mt-0.5 text-xs text-text-muted">
-                        Its occurrences now appear in Upcoming.
-                      </p>
-                    </div>
-                  </div>
-
-                  <button
-                    type="button"
-                    aria-label="Dismiss"
-                    onClick={() =>
-                      setSeriesSuccess(null)
-                    }
-                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-text-muted transition hover:bg-surface-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-                  >
-                    <span
-                      aria-hidden="true"
-                      className="material-symbols-outlined text-[16px]"
-                    >
-                      close
-                    </span>
-                  </button>
-                </div>
-              )}
-
               {occurrencesError && (
                 <div
                   role="alert"
@@ -609,6 +636,8 @@ export function MeetingListPage() {
           void handleCreateSeries(input)
         }
       />
+
+      {seriesToastVisible && <SeriesCreatedToast />}
     </div>
   )
 }
