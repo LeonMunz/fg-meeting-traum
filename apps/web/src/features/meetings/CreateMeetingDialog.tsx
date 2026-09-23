@@ -1,9 +1,14 @@
 import {
   useEffect,
   useRef,
+  useMemo,
   useState,
 } from 'react'
-import type { FormEvent } from 'react'
+import type {
+  FormEvent,
+  MouseEvent as ReactMouseEvent,
+} from 'react'
+import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 
 import {
   listProjects,
@@ -15,6 +20,19 @@ import {
 } from '../../api/meetings'
 import { useResearchGroup } from '../research-group/useResearchGroup'
 import { getPersonName } from './shared'
+import { CreateMeetingCalendar } from './CreateMeetingCalendar'
+import { currentIanaTimezone } from './recurrenceUtils'
+import {
+  browserLocale,
+  formatDatePartLocale,
+  formatTimePartLocale,
+  isValidDatePart,
+  isValidTimePart,
+  localScheduledAtIso,
+  nextHalfHourBoundary,
+  parseManualTime,
+  timeSuggestions,
+} from './scheduleUtils'
 
 import type {
   ApiMeetingScope,
@@ -39,17 +57,6 @@ type CreateMeetingDialogProps = {
   submitError: string | null
   onClose: () => void
   onCreate: (input: CreateMeetingInput) => void
-}
-
-function getDefaultDateTimeValue() {
-  const date = new Date()
-  date.setMinutes(date.getMinutes() + 60)
-
-  const local = new Date(
-    date.getTime() - date.getTimezoneOffset() * 60_000,
-  )
-
-  return local.toISOString().slice(0, 16)
 }
 
 function getPersonInitials(person: ApiMeetingParticipantCandidate) {
@@ -78,8 +85,27 @@ export function CreateMeetingDialog({
     : ''
 
   const [title, setTitle] = useState('')
-  const [scheduledAt, setScheduledAt] =
-    useState(getDefaultDateTimeValue)
+  // Separate canonical scheduling form state (locale-independent):
+  //   - dateText: 'YYYY-MM-DD'
+  //   - timeText: 'HH:MM' (24-hour, zero-padded)
+  // Both default to today + the strictly-next 30-minute boundary (when the
+  // boundary crosses midnight, the date advances with it).
+  const [dateText, setDateText] = useState(() =>
+    nextHalfHourBoundary(new Date()).datePart,
+  )
+  const [timeText, setTimeText] = useState(() =>
+    nextHalfHourBoundary(new Date()).timePart,
+  )
+  const [dateFocused, setDateFocused] = useState(false)
+  const [timeFocused, setTimeFocused] = useState(false)
+  const [dateTouched, setDateTouched] = useState(false)
+  const [timeTouched, setTimeTouched] = useState(false)
+  const [calendarOpen, setCalendarOpen] = useState(false)
+  const [timeListOpen, setTimeListOpen] = useState(false)
+  const [activeTimeIndex, setActiveTimeIndex] = useState(0)
+  const dateFieldRef = useRef<HTMLDivElement | null>(null)
+  const dateInputRef = useRef<HTMLInputElement | null>(null)
+  const timeListRef = useRef<HTMLDivElement | null>(null)
   const [projects, setProjects] = useState<ApiProject[]>([])
   const [projectId, setProjectId] = useState('')
   const [series, setSeries] = useState<ApiMeetingSeries[]>([])
@@ -97,6 +123,10 @@ export function CreateMeetingDialog({
   >(null)
   const participantSearchVersion = useRef(0)
 
+  // The browser locale drives PRESENTATION only (field display, calendar
+  // labels); canonical values and parsing never depend on it.
+  const locale = useMemo(() => browserLocale(), [])
+
   const scope: ApiMeetingScope =
     projectId === '' ? 'group' : 'project'
 
@@ -106,7 +136,16 @@ export function CreateMeetingDialog({
   useEffect(() => {
     if (!open) {
       setTitle('')
-      setScheduledAt(getDefaultDateTimeValue())
+      const boundary = nextHalfHourBoundary(new Date())
+      setDateText(boundary.datePart)
+      setTimeText(boundary.timePart)
+      setDateFocused(false)
+      setTimeFocused(false)
+      setDateTouched(false)
+      setTimeTouched(false)
+      setCalendarOpen(false)
+      setTimeListOpen(false)
+      setActiveTimeIndex(0)
       setProjects([])
       setProjectId('')
       setSeries([])
@@ -120,6 +159,115 @@ export function CreateMeetingDialog({
       return
     }
   }, [open])
+
+  // Outside mousedown closes the Time suggestions list (established
+  // repository popover contract; the calendar handles its own outside
+  // clicks through CreateMeetingCalendar).
+  useEffect(() => {
+    if (!timeListOpen) {
+      return
+    }
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (
+        event.target instanceof Node &&
+        !timeListRef.current?.contains(event.target)
+      ) {
+        setTimeListOpen(false)
+      }
+    }
+
+    document.addEventListener('mousedown', handlePointerDown)
+
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown)
+    }
+  }, [timeListOpen])
+
+  const dateValid = isValidDatePart(dateText)
+  const timeValid = isValidTimePart(timeText)
+  const dateError = dateText !== '' && !dateValid && dateTouched
+  const timeError = timeText !== '' && !timeValid && timeTouched
+
+  // Locale-aware display: a valid value is rendered in the browser locale
+  // while the field is NOT focused; focused fields always show/edit the
+  // canonical form (so manual entry stays unambiguous and locale-
+  // independent).
+  const dateDisplay =
+    dateValid && !dateFocused ? formatDatePartLocale(dateText, locale) : dateText
+  const timeDisplay =
+    timeValid && !timeFocused
+      ? formatTimePartLocale(timeText, locale)
+      : timeText
+
+  // Quick-selection times in 30-minute increments (convenience only).
+  const timeOptions = timeSuggestions(
+    timeValid ? timeText : null,
+    new Date(),
+  )
+
+  const openTimeList = () => {
+    setCalendarOpen(false)
+    setActiveTimeIndex(Math.max(0, timeOptions.indexOf(timeText)))
+    setTimeListOpen(true)
+  }
+
+  const toggleTimeList = () => {
+    if (timeListOpen) {
+      setTimeListOpen(false)
+    } else {
+      openTimeList()
+    }
+  }
+
+  const toggleCalendar = () => {
+    setTimeListOpen(false)
+    setCalendarOpen((current) => !current)
+  }
+
+  const selectTimeOption = (timePart: string) => {
+    setTimeText(timePart)
+    setTimeTouched(false)
+    setTimeListOpen(false)
+  }
+
+  const handleTimeKeyDown = (
+    event: ReactKeyboardEvent<HTMLInputElement>,
+  ) => {
+    if (timeListOpen) {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault()
+        setActiveTimeIndex(
+          (index) => (index + 1) % timeOptions.length,
+        )
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault()
+        setActiveTimeIndex(
+          (index) => (index - 1 + timeOptions.length) % timeOptions.length,
+        )
+      } else if (event.key === 'Enter') {
+        event.preventDefault()
+        selectTimeOption(timeOptions[activeTimeIndex])
+      } else if (event.key === 'Escape') {
+        // Close the suggestions first; a subsequent Escape keeps the
+        // dialog's existing (no-op) behavior.
+        event.stopPropagation()
+        setTimeListOpen(false)
+      } else if (event.key === 'Tab') {
+        setTimeListOpen(false)
+      }
+    } else if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      openTimeList()
+    }
+  }
+
+  const handleCalendarSelect = (selectedDatePart: string) => {
+    setDateText(selectedDatePart)
+    setDateTouched(false)
+    setCalendarOpen(false)
+    dateInputRef.current?.focus()
+  }
 
   // Load the projects available for the selected research group so the
   // Project dropdown can offer them. Only write-role projects allow
@@ -308,13 +456,16 @@ export function CreateMeetingDialog({
 
     const trimmedTitle = title.trim()
 
-    if (!trimmedTitle || !scheduledAt || !researchGroupId) {
+    if (!trimmedTitle || !researchGroupId) {
       return
     }
 
-    const scheduledDate = new Date(scheduledAt)
+    // Combine the canonical Date + Time parts into the SAME semantic
+    // instant the previous combined datetime-local control submitted
+    // (local wall-clock intent, browser timezone, ISO-8601 UTC).
+    const scheduledAt = localScheduledAtIso(dateText, timeText)
 
-    if (Number.isNaN(scheduledDate.getTime())) {
+    if (!scheduledAt) {
       return
     }
 
@@ -323,7 +474,7 @@ export function CreateMeetingDialog({
 
     onCreate({
       title: trimmedTitle,
-      scheduledAt: scheduledDate.toISOString(),
+      scheduledAt,
       researchGroupId: Number(researchGroupId),
       scope,
       projectId: resolvedProjectId,
@@ -352,8 +503,25 @@ export function CreateMeetingDialog({
     )
   }
 
+  // Backdrop-target close: only a pointer press that lands on the
+  // backdrop itself — never on a descendant of the modal (inputs,
+  // selects, buttons, or the Calendar/Time popovers) — closes the
+  // dialog through the existing onClose action. This is the local
+  // outside-click contract of the repository popovers, implemented on
+  // the backdrop element itself (no document-global handler).
+  const handleBackdropMouseDown = (
+    event: ReactMouseEvent<HTMLDivElement>,
+  ) => {
+    if (event.target === event.currentTarget) {
+      onClose()
+    }
+  }
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 px-4 py-4">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 px-4 py-4"
+      onMouseDown={handleBackdropMouseDown}
+    >
       <div
         role="dialog"
         aria-modal="true"
@@ -607,20 +775,207 @@ export function CreateMeetingDialog({
                 Schedule
               </h3>
 
-              <label className="block">
-                <span className="mb-1.5 block text-sm font-medium text-text">
-                  Date and time
-                </span>
+              <div className="flex flex-col gap-3 min-[480px]:flex-row min-[480px]:items-start">
+                <div className="min-w-0 flex-1">
+                  <label
+                    htmlFor="create-meeting-date"
+                    className="mb-1.5 block text-sm font-medium text-text"
+                  >
+                    Date
+                  </label>
 
-                <input
-                  type="datetime-local"
-                  value={scheduledAt}
-                  onChange={(event) =>
-                    setScheduledAt(event.target.value)
-                  }
-                  className="h-10 w-full rounded-lg border border-border-control bg-surface px-3 text-sm text-text outline-none transition focus:border-focus focus:ring-2 focus:ring-focus/15"
-                />
-              </label>
+                  <div
+                    ref={dateFieldRef}
+                    className="relative"
+                  >
+                    <input
+                      id="create-meeting-date"
+                      ref={dateInputRef}
+                      type="text"
+                      value={dateDisplay}
+                      onChange={(event) =>
+                        setDateText(event.target.value)
+                      }
+                      onFocus={() => setDateFocused(true)}
+                      onBlur={() => {
+                        setDateFocused(false)
+                        setDateTouched(true)
+                      }}
+                      placeholder="YYYY-MM-DD"
+                      aria-invalid={dateError || undefined}
+                      aria-describedby={
+                        dateError
+                          ? 'create-meeting-date-error'
+                          : undefined
+                      }
+                      className="h-10 w-full rounded-lg border border-border-control bg-surface pl-3 pr-10 text-sm text-text outline-none transition placeholder:text-text-muted/60 focus:border-focus focus:ring-2 focus:ring-focus/15"
+                    />
+
+                    <button
+                      type="button"
+                      aria-label="Choose date"
+                      aria-haspopup="grid"
+                      aria-expanded={calendarOpen}
+                      onClick={toggleCalendar}
+                      className="absolute right-1.5 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-text-muted transition hover:bg-surface-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+                    >
+                      <span
+                        aria-hidden="true"
+                        className="material-symbols-outlined text-[18px]"
+                      >
+                        calendar_month
+                      </span>
+                    </button>
+
+                    <CreateMeetingCalendar
+                      open={calendarOpen}
+                      locale={locale}
+                      selectedDatePart={dateValid ? dateText : null}
+                      anchorRef={dateFieldRef}
+                      triggerRef={dateInputRef}
+                      onSelect={handleCalendarSelect}
+                      onOpenChange={setCalendarOpen}
+                    />
+                  </div>
+
+                  {dateError && (
+                    <p
+                      id="create-meeting-date-error"
+                      role="alert"
+                      className="mt-1.5 text-xs text-danger"
+                    >
+                      Enter a valid date.
+                    </p>
+                  )}
+                </div>
+
+                <div className="w-full min-[480px]:w-[148px] min-[480px]:shrink-0">
+                  <label
+                    htmlFor="create-meeting-time"
+                    className="mb-1.5 block text-sm font-medium text-text"
+                  >
+                    Time
+                  </label>
+
+                  <div
+                    ref={timeListRef}
+                    className="relative"
+                  >
+                    <input
+                      id="create-meeting-time"
+                      type="text"
+                      role="combobox"
+                      aria-expanded={timeListOpen}
+                      aria-haspopup="listbox"
+                      aria-autocomplete="list"
+                      aria-controls={
+                        timeListOpen
+                          ? 'create-meeting-time-listbox'
+                          : undefined
+                      }
+                      aria-activedescendant={
+                        timeListOpen
+                          ? `create-meeting-time-option-${activeTimeIndex}`
+                          : undefined
+                      }
+                      value={timeDisplay}
+                      onChange={(event) => {
+                        const value = event.target.value
+                        setTimeText(value)
+                        setActiveTimeIndex(
+                          Math.max(0, timeOptions.indexOf(value)),
+                        )
+                      }}
+                      onKeyDown={handleTimeKeyDown}
+                      onFocus={() => setTimeFocused(true)}
+                      onBlur={() => {
+                        setTimeFocused(false)
+                        setTimeTouched(true)
+                        setTimeListOpen(false)
+                        // Normalize manually entered times to the
+                        // canonical form (locale-independent parsing;
+                        // malformed text is kept as-is for validation).
+                        setTimeText(
+                          (current) => parseManualTime(current) ?? current,
+                        )
+                      }}
+                      placeholder="HH:MM"
+                      aria-invalid={timeError || undefined}
+                      aria-describedby={
+                        timeError
+                          ? 'create-meeting-time-error'
+                          : undefined
+                      }
+                      className="h-10 w-full rounded-lg border border-border-control bg-surface pl-3 pr-9 text-sm text-text outline-none transition placeholder:text-text-muted/60 focus:border-focus focus:ring-2 focus:ring-focus/15"
+                    />
+
+                    <button
+                      type="button"
+                      aria-label="Show time options"
+                      aria-haspopup="listbox"
+                      aria-expanded={timeListOpen}
+                      onClick={toggleTimeList}
+                      className="absolute right-1.5 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-text-muted transition hover:bg-surface-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+                    >
+                      <span
+                        aria-hidden="true"
+                        className="material-symbols-outlined text-[18px]"
+                      >
+                        expand_more
+                      </span>
+                    </button>
+
+                    {timeListOpen && (
+                      <div
+                        id="create-meeting-time-listbox"
+                        role="listbox"
+                        aria-label="Time options"
+                        className="absolute bottom-[calc(100%+6px)] right-0 z-50 w-full min-w-[148px] overflow-hidden rounded-lg border border-border-subtle bg-surface py-1 shadow-[0_12px_32px_rgba(0,0,0,0.32)]"
+                      >
+                        {timeOptions.map((option, index) => (
+                          <div
+                            key={option}
+                            id={`create-meeting-time-option-${index}`}
+                            role="option"
+                            aria-selected={option === timeText}
+                            onMouseDown={(event) =>
+                              event.preventDefault()
+                            }
+                            onClick={() =>
+                              selectTimeOption(option)
+                            }
+                            onMouseEnter={() =>
+                              setActiveTimeIndex(index)
+                            }
+                            className={[
+                              'cursor-pointer px-3 py-2 text-sm text-text',
+                              index === activeTimeIndex
+                                ? 'bg-surface-hover'
+                                : '',
+                            ].join(' ')}
+                          >
+                            {formatTimePartLocale(option, locale)}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {timeError && (
+                    <p
+                      id="create-meeting-time-error"
+                      role="alert"
+                      className="mt-1.5 text-xs text-danger"
+                    >
+                      Enter a valid time.
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <p className="mt-2.5 text-xs text-text-muted">
+                Local time · {currentIanaTimezone()}
+              </p>
             </div>
           </div>
 
@@ -643,14 +998,15 @@ export function CreateMeetingDialog({
               Cancel
             </button>
 
-            <button
-              type="submit"
-              disabled={
-                submitting ||
-                !title.trim() ||
-                !scheduledAt ||
-                !researchGroupId
-              }
+              <button
+                type="submit"
+                disabled={
+                  submitting ||
+                  !title.trim() ||
+                  !dateValid ||
+                  !timeValid ||
+                  !researchGroupId
+                }
               className="inline-flex h-9 items-center gap-2 rounded-lg bg-accent px-4 text-sm font-semibold text-text-inverse shadow-sm transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-45"
             >
               <span className="material-symbols-outlined text-[18px]">

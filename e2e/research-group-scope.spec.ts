@@ -381,8 +381,12 @@ test(
       )
 
     await page
-      .getByLabel('Date and time')
-      .fill('2030-03-04T09:00')
+      .getByLabel('Date')
+      .fill('2030-03-04')
+
+    await page
+      .getByLabel('Time')
+      .fill('09:00')
 
     await page
       .locator('form')

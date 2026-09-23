@@ -135,8 +135,12 @@ test(
       .fill(MEETING_TITLE)
 
     await page
-      .getByLabel('Date and time')
-      .fill('2030-01-02T10:30')
+      .getByLabel('Date')
+      .fill('2030-01-02')
+
+    await page
+      .getByLabel('Time')
+      .fill('10:30')
 
     await page
       .locator('form')
@@ -601,8 +605,12 @@ test(
       .fill('E2E Work Meeting')
 
     await page
-      .getByLabel('Date and time')
-      .fill('2030-02-03T11:00')
+      .getByLabel('Date')
+      .fill('2030-02-03')
+
+    await page
+      .getByLabel('Time')
+      .fill('11:00')
 
     await page
       .locator('form')
@@ -809,8 +817,12 @@ test(
       .fill('E2E Lifecycle Weekly')
 
     await page
-      .getByLabel('Date and time')
-      .fill('2030-01-05T09:00')
+      .getByLabel('Date')
+      .fill('2030-01-05')
+
+    await page
+      .getByLabel('Time')
+      .fill('09:00')
 
     await page
       .locator('form')
@@ -932,8 +944,12 @@ test(
       .fill('E2E Section Meeting')
 
     await page
-      .getByLabel('Date and time')
-      .fill('2030-02-01T09:00')
+      .getByLabel('Date')
+      .fill('2030-02-01')
+
+    await page
+      .getByLabel('Time')
+      .fill('09:00')
 
     await page
       .locator('form')
@@ -1327,8 +1343,12 @@ test(
       .fill('E2E Template Select Meeting')
 
     await page
-      .getByLabel('Date and time')
-      .fill('2030-04-01T10:00')
+      .getByLabel('Date')
+      .fill('2030-04-01')
+
+    await page
+      .getByLabel('Time')
+      .fill('10:00')
 
     await page
       .locator('form')
@@ -1389,8 +1409,12 @@ test(
       .fill('E2E Delete Meeting')
 
     await page
-      .getByLabel('Date and time')
-      .fill('2030-02-03T09:00')
+      .getByLabel('Date')
+      .fill('2030-02-03')
+
+    await page
+      .getByLabel('Time')
+      .fill('09:00')
 
     await page
       .locator('form')
@@ -1800,8 +1824,12 @@ test(
       .fill(NOTE_MEETING_TITLE)
 
     await page
-      .getByLabel('Date and time')
-      .fill('2030-03-01T10:00')
+      .getByLabel('Date')
+      .fill('2030-03-01')
+
+    await page
+      .getByLabel('Time')
+      .fill('10:00')
 
     await page
       .locator('form')
@@ -2140,8 +2168,12 @@ test(
       .fill(meetingTitle)
 
     await page
-      .getByLabel('Date and time')
-      .fill('2030-04-01T10:00')
+      .getByLabel('Date')
+      .fill('2030-04-01')
+
+    await page
+      .getByLabel('Time')
+      .fill('10:00')
 
     await page
       .locator('form')
@@ -2594,8 +2626,12 @@ test(
       .fill(meetingTitle)
 
     await newMeetingDialog
-      .getByLabel('Date and time')
-      .fill('2030-05-02T09:00')
+      .getByLabel('Date')
+      .fill('2030-05-02')
+
+    await newMeetingDialog
+      .getByLabel('Time')
+      .fill('09:00')
 
     await page
       .locator('form')
@@ -2737,8 +2773,12 @@ test(
       .fill('E2E Note Delete Weekly')
 
     await page
-      .getByLabel('Date and time')
-      .fill('2030-03-02T10:00')
+      .getByLabel('Date')
+      .fill('2030-03-02')
+
+    await page
+      .getByLabel('Time')
+      .fill('10:00')
 
     await page
       .locator('form')
@@ -2900,7 +2940,13 @@ test(
     await page.getByRole('link', { name: /Meetings/ }).click()
     await page.getByRole('button', { name: /New meeting/ }).click()
     await page.getByLabel('Title').fill('E2E Explicit Follow-up Target')
-    await page.getByLabel('Date and time').fill('2031-01-20T09:00')
+    await page
+      .getByLabel('Date')
+      .fill('2031-01-20')
+
+    await page
+      .getByLabel('Time')
+      .fill('09:00')
     await page
       .locator('form')
       .getByRole('button', { name: /Create meeting/ })
@@ -3008,8 +3054,12 @@ test(
       .fill('E2E Live Follow-up Target')
 
     await page
-      .getByLabel('Date and time')
-      .fill('2030-02-10T09:00')
+      .getByLabel('Date')
+      .fill('2030-02-10')
+
+    await page
+      .getByLabel('Time')
+      .fill('09:00')
 
     await page
       .locator('form')
@@ -3035,8 +3085,12 @@ test(
       .fill('E2E Live Current And Outcome')
 
     await page
-      .getByLabel('Date and time')
-      .fill('2030-02-03T09:00')
+      .getByLabel('Date')
+      .fill('2030-02-03')
+
+    await page
+      .getByLabel('Time')
+      .fill('09:00')
 
     await page
       .locator('form')

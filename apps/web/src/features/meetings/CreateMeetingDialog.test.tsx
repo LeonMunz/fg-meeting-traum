@@ -88,15 +88,17 @@ function deferred<T>() {
 function renderDialog(
   onCreate = vi.fn<(input: CreateMeetingInput) => void>(),
   submitError: string | null = null,
+  onClose = vi.fn<() => void>(),
 ) {
   return {
     onCreate,
+    onClose,
     ...render(
       <CreateMeetingDialog
         open
         submitting={false}
         submitError={submitError}
-        onClose={() => undefined}
+        onClose={onClose}
         onCreate={onCreate}
       />,
     ),
@@ -107,6 +109,13 @@ function searchFor(query: string) {
   fireEvent.change(screen.getByLabelText('Participants'), {
     target: { value: query },
   })
+}
+
+/** Focus the field and read its canonical (editing) value. */
+function canonicalValue(label: 'Date' | 'Time'): string {
+  const input = screen.getByLabelText(label) as HTMLInputElement
+  fireEvent.focus(input)
+  return input.value
 }
 
 beforeEach(() => {
@@ -133,6 +142,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
+  vi.useRealTimers()
 })
 
 describe('CreateMeetingDialog participant picker', () => {
@@ -142,8 +152,11 @@ describe('CreateMeetingDialog participant picker', () => {
     fireEvent.change(screen.getByLabelText('Title'), {
       target: { value: 'No invitees yet' },
     })
-    fireEvent.change(screen.getByLabelText('Date and time'), {
-      target: { value: '2030-01-02T10:30' },
+    fireEvent.change(screen.getByLabelText('Date'), {
+      target: { value: '2030-01-02' },
+    })
+    fireEvent.change(screen.getByLabelText('Time'), {
+      target: { value: '10:30' },
     })
     fireEvent.submit(screen.getByLabelText('Title').closest('form')!)
 
@@ -204,8 +217,11 @@ describe('CreateMeetingDialog participant picker', () => {
     fireEvent.change(screen.getByLabelText('Title'), {
       target: { value: 'Participant planning' },
     })
-    fireEvent.change(screen.getByLabelText('Date and time'), {
-      target: { value: '2030-01-02T10:30' },
+    fireEvent.change(screen.getByLabelText('Date'), {
+      target: { value: '2030-01-02' },
+    })
+    fireEvent.change(screen.getByLabelText('Time'), {
+      target: { value: '10:30' },
     })
     fireEvent.submit(screen.getByLabelText('Title').closest('form')!)
 
@@ -298,8 +314,11 @@ describe('CreateMeetingDialog participant picker', () => {
     fireEvent.change(screen.getByLabelText('Title'), {
       target: { value: 'Template planning' },
     })
-    fireEvent.change(screen.getByLabelText('Date and time'), {
-      target: { value: '2030-01-02T10:30' },
+    fireEvent.change(screen.getByLabelText('Date'), {
+      target: { value: '2030-01-02' },
+    })
+    fireEvent.change(screen.getByLabelText('Time'), {
+      target: { value: '10:30' },
     })
     fireEvent.submit(screen.getByLabelText('Title').closest('form')!)
 
@@ -371,7 +390,8 @@ describe('CreateMeetingDialog modal foundation', () => {
     const template = screen.getByLabelText('Meeting template')
     const participants = screen.getByLabelText('Participants')
     const schedule = screen.getByRole('heading', { name: 'Schedule' })
-    const dateTime = screen.getByLabelText('Date and time')
+    const date = screen.getByLabelText('Date')
+    const time = screen.getByLabelText('Time')
 
     expect(
       title.compareDocumentPosition(project) &
@@ -390,8 +410,9 @@ describe('CreateMeetingDialog modal foundation', () => {
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy()
 
-    // The Schedule section wraps the unchanged Date and time control.
-    expect(schedule.parentElement).toContainElement(dateTime)
+    // The Schedule section wraps the separate Date and Time controls.
+    expect(schedule.parentElement).toContainElement(date)
+    expect(schedule.parentElement).toContainElement(time)
   })
 
   it('offers the Research group meeting option without null-oriented wording', () => {
@@ -524,6 +545,86 @@ describe('CreateMeetingDialog modal foundation', () => {
     expect(
       screen.queryByRole('button', { name: /create meeting/i }),
     ).not.toBeInTheDocument()
+  })
+
+  it('closes the modal when the user presses on the backdrop', () => {
+    const { onClose } = renderDialog()
+
+    fireEvent.mouseDown(screen.getByRole('dialog').parentElement!)
+
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not close the modal when the user presses inside it', () => {
+    const { onClose } = renderDialog()
+
+    fireEvent.mouseDown(screen.getByRole('dialog'))
+    fireEvent.mouseDown(
+      screen.getByRole('heading', { name: 'New meeting', level: 2 }),
+    )
+
+    expect(onClose).not.toHaveBeenCalled()
+    expect(
+      screen.getByRole('heading', { name: 'New meeting', level: 2 }),
+    ).toBeVisible()
+  })
+
+  it('does not close the modal when interacting with a normal input', () => {
+    const { onClose } = renderDialog()
+
+    const title = screen.getByLabelText('Title')
+    fireEvent.mouseDown(title)
+    fireEvent.change(title, { target: { value: 'Still open' } })
+
+    expect(onClose).not.toHaveBeenCalled()
+    expect(title).toBeVisible()
+  })
+
+  it('does not close the modal when using the Calendar', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 8, 22, 20, 22))
+
+    const { onClose } = renderDialog()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Choose date' }))
+    fireEvent.click(within(screen.getByRole('grid')).getByText('15'))
+
+    expect(onClose).not.toHaveBeenCalled()
+    expect(
+      screen.getByRole('heading', { name: 'New meeting', level: 2 }),
+    ).toBeVisible()
+    // The selection still reaches the Date control (behavior unchanged).
+    expect(canonicalValue('Date')).toBe('2026-09-15')
+  })
+
+  it('does not close the modal when using the Time suggestions', () => {
+    const { onClose } = renderDialog()
+
+    fireEvent.change(screen.getByLabelText('Time'), {
+      target: { value: '21:30' },
+    })
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Show time options' }),
+    )
+    fireEvent.click(
+      within(screen.getByRole('listbox', { name: 'Time options' }))
+        .getAllByRole('option')[1],
+    )
+
+    expect(onClose).not.toHaveBeenCalled()
+    expect(
+      screen.getByRole('heading', { name: 'New meeting', level: 2 }),
+    ).toBeVisible()
+    // The selection still reaches the Time control (behavior unchanged).
+    expect(canonicalValue('Time')).toBe('22:00')
+  })
+
+  it('keeps the existing Cancel action closing the modal', () => {
+    const { onClose } = renderDialog()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    expect(onClose).toHaveBeenCalledTimes(1)
   })
 })
 })
