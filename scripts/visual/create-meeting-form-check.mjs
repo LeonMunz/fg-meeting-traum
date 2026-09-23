@@ -400,8 +400,18 @@ async function measureWeeklyState(page) {
     const onLabel =
       weekdayGrid?.previousElementSibling ?? null
 
-    const summary = Array.from(modal.querySelectorAll('p')).find(
-      (p) => p.textContent.includes('· no end'),
+    // The summary <p> carries an aria-hidden Material Symbols icon span
+    // (ligature text "repeat"); the VISIBLE copy is the paragraph's
+    // direct text nodes only — raw textContent would include the icon.
+    const copyOf = (el) =>
+      Array.from(el.childNodes)
+        .filter((node) => node.nodeType === Node.TEXT_NODE)
+        .map((node) => node.textContent)
+        .join('')
+        .trim()
+
+    const summary = Array.from(modal.querySelectorAll('p')).find((p) =>
+      /^Every .* · (no end|until |\d+ meeting)/.test(copyOf(p)),
     )
 
     const submit = Array.from(
@@ -423,7 +433,10 @@ async function measureWeeklyState(page) {
         ? everyBlock.getBoundingClientRect().bottom
         : null,
       onTop: onLabel ? onLabel.getBoundingClientRect().top : null,
-      summaryText: summary ? summary.textContent : null,
+      summaryText: summary ? copyOf(summary) : null,
+      summaryFontSizePx: summary
+        ? Number.parseFloat(getComputedStyle(summary).fontSize)
+        : null,
       submitText: submit ? submit.textContent.trim() : null,
       hasLeftBorder: Boolean(details) && getComputedStyle(details).borderLeftWidth !== '0px',
       templateHelper: modal.textContent.includes(
@@ -451,8 +464,18 @@ async function measureRepeatState(page) {
     )
     const intervalInput =
       document.getElementById('create-meeting-recurrence-interval')
+    // The summary <p> carries an aria-hidden Material Symbols icon span
+    // (ligature text "repeat"); the VISIBLE copy is the paragraph's
+    // direct text nodes only — raw textContent would include the icon.
+    const copyOf = (el) =>
+      Array.from(el.childNodes)
+        .filter((node) => node.nodeType === Node.TEXT_NODE)
+        .map((node) => node.textContent)
+        .join('')
+        .trim()
+
     const summary = Array.from(modal.querySelectorAll('p')).find((p) =>
-      /·\s*(no end|until |\d+ meeting)/.test(p.textContent ?? ''),
+      /^Every .* · (no end|until |\d+ meeting)/.test(copyOf(p)),
     )
 
     return {
@@ -464,7 +487,10 @@ async function measureRepeatState(page) {
       intervalValue: intervalInput ? intervalInput.value : null,
       weekdayCount: weekdayButtons.length,
       endModeRadioCount: endModeRadios.length,
-      summaryText: summary ? summary.textContent : null,
+      summaryText: summary ? copyOf(summary) : null,
+      summaryFontSizePx: summary
+        ? Number.parseFloat(getComputedStyle(summary).fontSize)
+        : null,
       alertText: Array.from(modal.querySelectorAll('[role="alert"]'))
         .map((alert) => alert.textContent.trim())
         .join(' | '),
@@ -735,8 +761,11 @@ try {
     check(
       'valid weekly summary rendered (secondary copy, no placeholder)',
       typeof w.summaryText === 'string' &&
-        /^Every (week|\d+ weeks) on .+ at .+ · no end$/.test(w.summaryText),
-      w.summaryText,
+        /^Every (week|\d+ weeks) on .+ at .+ · no end$/.test(w.summaryText) &&
+        // Secondary presentation: the summary renders at the 12px
+        // (text-xs) secondary size, not the 14px primary body copy.
+        w.summaryFontSizePx === 12,
+      `${w.summaryText} (font ${w.summaryFontSizePx}px)`,
     )
     const hasPlaceholder = await page.evaluate(() =>
       document
@@ -779,9 +808,7 @@ try {
     check(
       'Daily: valid summary, Create series enabled',
       typeof dd.summaryText === 'string' &&
-        /^Every (day|\d+ days) at .+ · no end$/.test(
-          dd.summaryText.replace(/^repeat/, ''),
-        ) &&
+        /^Every (day|\d+ days) at .+ · no end$/.test(dd.summaryText) &&
         dd.submitText?.includes('Create series') === true &&
         dd.submitDisabled === false,
       dd.summaryText,
@@ -809,7 +836,7 @@ try {
       'Monthly: same-day-of-month rule in the summary (no day control)',
       typeof mo.summaryText === 'string' &&
         /^Every (month|\d+ months) on day \d+ at .+ · no end$/.test(
-          mo.summaryText.replace(/^repeat/, ''),
+          mo.summaryText,
         ),
       mo.summaryText,
     )
