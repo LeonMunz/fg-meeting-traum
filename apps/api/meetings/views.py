@@ -29,6 +29,7 @@ from .models import (
     MeetingNote,
     MeetingParticipant,
     MeetingRecurrence,
+    MeetingRecurrenceExclusion,
     MeetingSection,
     MeetingSeries,
     MeetingSeriesSection,
@@ -54,6 +55,7 @@ from .serializers import (
     MeetingRecurrenceOccurrenceExcludeSerializer,
     MeetingRecurrenceOccurrenceQuerySerializer,
     MeetingRecurrenceOccurrenceSerializer,
+    MeetingRecurrencePersonalOccurrenceSerializer,
     MeetingRecurrenceRescheduleSerializer,
     MeetingRecurrenceSerializer,
     MeetingSectionCreateSerializer,
@@ -2567,6 +2569,215 @@ class MeetingRecurrenceOccurrenceListView(APIView):
         return Response(
             MeetingRecurrenceOccurrenceSerializer(
                 items,
+                many=True,
+            ).data
+        )
+
+
+class MeetingRecurrencePersonalOccurrenceListView(APIView):
+    """GET /api/meeting-recurrences/occurrences/
+
+    Bounded personal recurring-occurrence feed for the current
+    authenticated user: the EFFECTIVE occurrences of the recurrences
+    the user is personally relevant to, merged into ONE chronological
+    feed across all of them. This is the read contract the Meeting
+    overview needs to display virtual recurring occurrences alongside
+    concrete Meetings without materializing them; the per-recurrence
+    bounded occurrence read is unchanged.
+
+    Personal relevance mirrors the canonical Meeting read-access
+    invariant (the rule behind ``_accessible_scope_filter``): the user
+    is the recurrence CREATOR or a persisted intended PARTICIPANT
+    (``MeetingRecurrenceParticipant``). Scope-level visibility alone
+    (Research Group / Project read access — the rule the per-recurrence
+    read APIs enforce through ``MEETING_RECURRENCE_READ``) does NOT
+    make a recurrence relevant to the personal feed: authorization
+    visibility and personal Meeting-feed relevance are separate
+    concepts.
+
+    Every relevant recurrence is expanded with the canonical EFFECTIVE
+    expansion (``expand_effective_meeting_recurrence_occurrences``):
+    full recurrence-rule semantics with persisted single-occurrence
+    exclusions filtered out AFTER rule generation — an excluded
+    virtual occurrence and a cancelled materialized occurrence (whose
+    cancellation persists its exclusion) are simply absent, no
+    replacement occurrence is generated, and the rule is never
+    mutated.
+
+    Materialization is resolved with ONE bounded query over ALL
+    relevant recurrences and the requested window: an occurrence that
+    already has a concrete Meeting appears EXACTLY ONCE with
+    ``materialized: true``, its concrete ``meetingId``, the Meeting's
+    own actual ``scheduledAt`` (a rescheduled Meeting keeps its stable
+    occurrence identity but reports its moved time), and the Meeting's
+    own title; a virtual occurrence reports ``materialized: false``,
+    ``meetingId: null``, its original scheduled start as
+    ``scheduledAt``, and the canonical series title.
+
+    The window contract is identical to the per-recurrence bounded
+    occurrence read: ``from`` / ``to`` are BOTH mandatory,
+    timezone-aware, and ``from < to`` (naive/invalid values and
+    ``from >= to`` are rejected with the same ``400`` conventions).
+
+    Strictly read-only: the feed creates no Meeting rows, Sections,
+    participants, or audit events, and materializes nothing.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        query_serializer = MeetingRecurrenceOccurrenceQuerySerializer(
+            data=request.query_params,
+        )
+        if not query_serializer.is_valid():
+            return Response(query_serializer.errors, status=400)
+
+        range_start = query_serializer.validated_data["from"]
+        range_end = query_serializer.validated_data["to"]
+        if range_start >= range_end:
+            return Response(
+                {
+                    "error": (
+                        "'from' must be earlier than 'to'."
+                    )
+                },
+                status=400,
+            )
+
+        user = request.user
+
+        # Personal relevance: the recurrence equivalent of the
+        # canonical Meeting read-access rule (creator or explicit
+        # participant). Scope membership alone is NOT a feed input.
+        recurrences = list(
+            MeetingRecurrence.objects
+            .filter(
+                Q(created_by=user)
+                | Q(participant_relations__user=user),
+            )
+            .distinct()
+        )
+        if not recurrences:
+            return Response([])
+
+        # Load ALL exclusions the requested window can be affected by
+        # with ONE bounded query across every relevant recurrence
+        # (exclusion rows are keyed by the occurrence's original
+        # scheduled start, so the same window bounds them exactly),
+        # grouped in memory by recurrence: no per-recurrence
+        # exclusion query.
+        exclusions_by_recurrence = {}
+        for recurrence_id, original_start in (
+            MeetingRecurrenceExclusion.objects
+            .filter(
+                recurrence_id__in=[
+                    recurrence.pk for recurrence in recurrences
+                ],
+                original_scheduled_at__gte=range_start,
+                original_scheduled_at__lte=range_end,
+            )
+            .values_list("recurrence_id", "original_scheduled_at")
+        ):
+            exclusions_by_recurrence.setdefault(
+                recurrence_id, set(),
+            ).add(original_start)
+
+        # Expand every relevant recurrence with the canonical
+        # EFFECTIVE expansion (raw rule expansion + the preloaded
+        # exclusion set filtered out AFTER rule generation — no
+        # per-occurrence or per-recurrence lookup).
+        entries = []
+        for recurrence in recurrences:
+            for occurrence in (
+                expand_effective_meeting_recurrence_occurrences(
+                    meeting_recurrence=recurrence,
+                    range_start=range_start,
+                    range_end=range_end,
+                    excluded_starts=exclusions_by_recurrence.get(
+                        recurrence.pk, frozenset(),
+                    ),
+                )
+            ):
+                entries.append((recurrence, occurrence))
+        if not entries:
+            return Response([])
+
+        # ONE bounded materialization query over ALL relevant
+        # recurrences and the requested window: (recurrence,
+        # original_scheduled_at) is unique, so the instant-to-Meeting
+        # mapping is exact and needs no per-occurrence lookup.
+        materialized_meetings = {
+            (recurrence_id, original_start): (
+                meeting_id,
+                title,
+                scheduled_at,
+            )
+            for recurrence_id, original_start, meeting_id, title,
+            scheduled_at in (
+                Meeting.objects
+                .filter(
+                    recurrence_id__in=[
+                        recurrence.pk for recurrence in recurrences
+                    ],
+                    original_scheduled_at__in=[
+                        occurrence.original_start
+                        for _, occurrence in entries
+                    ],
+                )
+                .values_list(
+                    "recurrence_id",
+                    "original_scheduled_at",
+                    "id",
+                    "title",
+                    "scheduled_at",
+                )
+            )
+        }
+
+        items = []
+        for recurrence, occurrence in entries:
+            materialization = materialized_meetings.get(
+                (recurrence.pk, occurrence.original_start)
+            )
+            scheduled_at = (
+                materialization[2]
+                if materialization is not None
+                else occurrence.original_start
+            )
+            items.append(
+                (
+                    (scheduled_at, occurrence.occurrence_id),
+                    {
+                        "occurrenceId": occurrence.occurrence_id,
+                        "recurrenceId": recurrence.pk,
+                        "title": (
+                            materialization[1]
+                            if materialization is not None
+                            else recurrence.title
+                        ),
+                        "originalScheduledAt": occurrence.original_start,
+                        "scheduledAt": scheduled_at,
+                        "materialized": materialization is not None,
+                        "meetingId": (
+                            materialization[0]
+                            if materialization is not None
+                            else None
+                        ),
+                        "meetingSeriesId": recurrence.series_id,
+                        "researchGroupId": recurrence.research_group_id,
+                        "projectId": recurrence.project_id,
+                    },
+                )
+            )
+
+        # Deterministic chronological order: scheduledAt ascending,
+        # the stable occurrence identity as the tie-breaker for
+        # identical timestamps.
+        items.sort(key=lambda entry: entry[0])
+
+        return Response(
+            MeetingRecurrencePersonalOccurrenceSerializer(
+                [item for _, item in items],
                 many=True,
             ).data
         )

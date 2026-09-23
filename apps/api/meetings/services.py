@@ -637,6 +637,7 @@ def expand_effective_meeting_recurrence_occurrences(
     meeting_recurrence,
     range_start,
     range_end,
+    excluded_starts=None,
 ):
     """Expand one persisted recurrence into its EFFECTIVE occurrence set.
 
@@ -653,6 +654,18 @@ def expand_effective_meeting_recurrence_occurrences(
       does not extend);
     - siblings keep their identities, original starts, and order.
 
+    ``excluded_starts`` is an OPTIONAL preloaded set of excluded
+    original scheduled starts (timezone-aware instants) for THIS
+    recurrence within the requested window. Supplying it lets a
+    caller that expands MANY recurrences batch the exclusion load
+    into ONE query and hand each recurrence its own pre-set instead
+    of triggering one query per recurrence. The pre-set must cover
+    exactly this recurrence's exclusions inside the window (a
+    superset is harmless: it can only filter occurrences the rule
+    itself produced). When omitted (``None``), the canonical bounded
+    exclusion query for this recurrence/window is executed — the
+    EFFECTIVE semantics are identical either way.
+
     Read-only: creates or mutates no persistence state. Access to the
     recurrence row is the caller's responsibility, exactly like the raw
     expansion.
@@ -665,17 +678,19 @@ def expand_effective_meeting_recurrence_occurrences(
     if not occurrences:
         return []
 
-    # One bounded query over the requested window: (recurrence,
-    # original_scheduled_at) is unique, so the exclusion set is exact
-    # and needs no per-occurrence lookup.
-    excluded_starts = set(
-        MeetingRecurrenceExclusion.objects.filter(
-            recurrence=meeting_recurrence,
-            original_scheduled_at__in=[
-                occurrence.original_start for occurrence in occurrences
-            ],
-        ).values_list("original_scheduled_at", flat=True)
-    )
+    if excluded_starts is None:
+        # One bounded query over the requested window: (recurrence,
+        # original_scheduled_at) is unique, so the exclusion set is
+        # exact and needs no per-occurrence lookup.
+        excluded_starts = set(
+            MeetingRecurrenceExclusion.objects.filter(
+                recurrence=meeting_recurrence,
+                original_scheduled_at__in=[
+                    occurrence.original_start
+                    for occurrence in occurrences
+                ],
+            ).values_list("original_scheduled_at", flat=True)
+        )
     if not excluded_starts:
         return occurrences
 

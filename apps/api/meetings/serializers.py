@@ -1031,6 +1031,45 @@ class MeetingRecurrenceOccurrenceSerializer(serializers.Serializer):
     meetingId = serializers.IntegerField(allow_null=True)
 
 
+class MeetingRecurrencePersonalOccurrenceSerializer(serializers.Serializer):
+    """Compact read-only representation of ONE effective recurring
+    occurrence in the current user's personal recurring-occurrence
+    feed.
+
+    Reuses the per-recurrence bounded occurrence read's occurrence
+    identity contract: ``occurrenceId`` / ``originalScheduledAt`` are
+    the SAME values that read reports for the same occurrence (the
+    stable UUIDv5 identity derived from the original scheduled start,
+    never from the materialized Meeting). ``scheduledAt`` is the
+    ACTUAL scheduled time: the concrete Meeting's editable planned
+    time when materialized (a rescheduled Meeting keeps its stable
+    occurrence identity but reports its moved time) and the original
+    scheduled start while virtual. ``title`` is the effective title:
+    the materialized Meeting's own title when materialized, the
+    canonical series title while virtual.
+
+    The minimal Meeting-overview context: the owning ``recurrenceId``,
+    the canonical Meeting Template id (``meetingSeriesId``, nullable
+    for legacy template-less recurrences), ``researchGroupId``, and
+    ``projectId`` (null for group scope). ``materialized`` /
+    ``meetingId`` let the future frontend merge distinguish a virtual
+    occurrence from a materialized one without duplicating the Meeting
+    payload: a materialized occurrence appears EXACTLY ONCE, here, and
+    the Meeting list keeps reporting the concrete Meeting separately.
+    """
+
+    occurrenceId = serializers.UUIDField()
+    recurrenceId = serializers.IntegerField()
+    title = serializers.CharField()
+    originalScheduledAt = serializers.DateTimeField()
+    scheduledAt = serializers.DateTimeField()
+    materialized = serializers.BooleanField()
+    meetingId = serializers.IntegerField(allow_null=True)
+    meetingSeriesId = serializers.IntegerField(allow_null=True)
+    researchGroupId = serializers.IntegerField()
+    projectId = serializers.IntegerField(allow_null=True)
+
+
 class MeetingRecurrenceMaterializeSerializer(serializers.Serializer):
     """POST body contract for materializing ONE calculated occurrence.
 
