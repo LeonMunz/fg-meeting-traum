@@ -24,10 +24,11 @@ from .models import (
     Meeting,
     MeetingParticipant,
     MeetingRecurrence,
+    MeetingRecurrenceParticipant,
     MeetingSection,
 )
 from .services import materialize_meeting_recurrence_occurrence
-from .tests_recurrence import MeetingRecurrenceBase, _utc
+from .tests_recurrence import MeetingRecurrenceBase, UTC, _utc
 
 User = get_user_model()
 
@@ -604,3 +605,381 @@ class MeetingRecurrenceCreateAuthorizationTest(MeetingRecurrenceBase):
         self.assertEqual(project_response.json(),
                          {"error": "Meeting series not found"})
         self.assertEqual(MeetingRecurrence.objects.count(), 0)
+
+
+class MeetingRecurrenceCreateParticipantApiTest(MeetingRecurrenceBase):
+    """POST /api/meeting-recurrences/ with optional ``participantIds``.
+
+    The optional field resolves to existing application users with the
+    ordinary Meeting-participant conventions and delegates to the
+    domain service as ``participants``: the intent is persisted on the
+    recurrence, broadens no authorization, and snapshots into concrete
+    ``MeetingParticipant`` rows only when a future occurrence is
+    materialized through the existing endpoint.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.client = APIClient()
+        self.group_series = self._create_series()
+        self.project_series = self._create_series(
+            scope="project", project=self.project,
+        )
+
+    def login(self, user):
+        self.client.logout()
+        self.client.force_login(user)
+
+    def _payload(self, series=None, **overrides):
+        data = {
+            "meetingSeriesId": (series or self.group_series).pk,
+            "title": "Daily Standup",
+            "frequency": "daily",
+            "interval": 1,
+            "startDate": "2026-01-05",  # Monday
+            "localTime": "09:30",
+            "timezone": "Europe/Berlin",
+        }
+        data.update(overrides)
+        return data
+
+    def _post(self, payload):
+        return self.client.post(
+            "/api/meeting-recurrences/",
+            data=json.dumps(payload),
+            content_type="application/json",
+        )
+
+    def _recurrence_user_ids(self, recurrence):
+        return sorted(
+            MeetingRecurrenceParticipant.objects.filter(
+                recurrence=recurrence,
+            ).values_list("user_id", flat=True)
+        )
+
+    def _meeting_user_ids(self, meeting):
+        return sorted(
+            MeetingParticipant.objects.filter(meeting=meeting)
+            .values_list("user_id", flat=True)
+        )
+
+    def _materialize_first(self, recurrence, *, title="Standup Series"):
+        occurrence = self._first_occurrence(recurrence)
+        original = occurrence.original_start.astimezone(UTC)
+        payload = {
+            "occurrenceId": str(occurrence.occurrence_id),
+            "originalScheduledAt": original.isoformat().replace(
+                "+00:00", "Z",
+            ),
+            "title": title,
+        }
+        return self.client.post(
+            f"/api/meeting-recurrences/{recurrence.pk}"
+            "/occurrences/materialize/",
+            data=json.dumps(payload),
+            content_type="application/json",
+        )
+
+    # ── Valid creation with the optional field ───────────────────
+
+    def test_omitted_participant_ids_default_to_empty_intent(self):
+        self.login(self.alex)
+        response = self._post(self._payload())
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        recurrence = MeetingRecurrence.objects.get()
+        self.assertEqual(self._recurrence_user_ids(recurrence), [])
+
+    def test_empty_participant_ids_persist_empty_intent(self):
+        self.login(self.alex)
+        response = self._post(self._payload(participantIds=[]))
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        recurrence = MeetingRecurrence.objects.get()
+        self.assertEqual(self._recurrence_user_ids(recurrence), [])
+
+    def test_single_participant_persists_intent(self):
+        self.login(self.alex)
+        response = self._post(
+            self._payload(participantIds=[self.chris.pk]),
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        recurrence = MeetingRecurrence.objects.get()
+        self.assertEqual(
+            self._recurrence_user_ids(recurrence), [self.chris.pk],
+        )
+
+    def test_multiple_participants_persist_intent(self):
+        self.login(self.alex)
+        # maria is a group outsider: participant eligibility does not
+        # require membership (same rule as ordinary Meeting creation).
+        response = self._post(self._payload(
+            participantIds=[self.chris.pk, self.maria.pk],
+        ))
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        recurrence = MeetingRecurrence.objects.get()
+        self.assertEqual(
+            self._recurrence_user_ids(recurrence),
+            [self.chris.pk, self.maria.pk],
+        )
+
+    def test_duplicate_participant_ids_persist_each_user_once(self):
+        self.login(self.alex)
+        response = self._post(self._payload(
+            participantIds=[
+                self.chris.pk, self.maria.pk, self.chris.pk,
+            ],
+        ))
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        recurrence = MeetingRecurrence.objects.get()
+        self.assertEqual(
+            MeetingRecurrenceParticipant.objects.filter(
+                recurrence=recurrence,
+            ).count(),
+            2,
+        )
+        self.assertEqual(
+            self._recurrence_user_ids(recurrence),
+            [self.chris.pk, self.maria.pk],
+        )
+
+    def test_creator_id_in_participant_ids_is_valid(self):
+        self.login(self.alex)
+        response = self._post(self._payload(
+            participantIds=[self.alex.pk, self.chris.pk],
+        ))
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        recurrence = MeetingRecurrence.objects.get()
+        self.assertEqual(
+            self._recurrence_user_ids(recurrence),
+            [self.alex.pk, self.chris.pk],
+        )
+
+    def test_participant_ids_persist_for_daily_weekly_and_monthly(self):
+        self.login(self.alex)
+        payloads = [
+            self._payload(title="Daily"),
+            self._payload(
+                title="Weekly", frequency="weekly", weekdays=[0],
+            ),
+            self._payload(title="Monthly"),
+        ]
+        for payload in payloads:
+            payload["participantIds"] = [self.chris.pk]
+            response = self._post(payload)
+            self.assertEqual(
+                response.status_code, status.HTTP_201_CREATED,
+            )
+        recurrences = list(
+            MeetingRecurrence.objects.order_by("id"),
+        )
+        self.assertEqual(len(recurrences), 3)
+        for recurrence in recurrences:
+            self.assertEqual(
+                self._recurrence_user_ids(recurrence),
+                [self.chris.pk],
+            )
+
+    # ── No materialization on creation ───────────────────────────
+
+    def test_create_with_participants_persists_intent_but_no_meeting(self):
+        self.login(self.alex)
+        response = self._post(self._payload(
+            participantIds=[self.chris.pk, self.maria.pk],
+        ))
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(
+            MeetingRecurrence.objects.count(), 1,
+        )
+        self.assertEqual(MeetingRecurrenceParticipant.objects.count(), 2)
+        self.assertEqual(Meeting.objects.count(), 0)
+        self.assertEqual(MeetingParticipant.objects.count(), 0)
+
+    # ── Invalid participant input ────────────────────────────────
+
+    def _assert_participant_rejected(self, payload):
+        response = self._post(payload)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("participantIds", response.json())
+        # Nothing is persisted: no recurrence, no participant intent,
+        # no Meeting.
+        self.assertEqual(MeetingRecurrence.objects.count(), 0)
+        self.assertEqual(MeetingRecurrenceParticipant.objects.count(), 0)
+        self.assertEqual(Meeting.objects.count(), 0)
+        self.assertEqual(MeetingParticipant.objects.count(), 0)
+
+    def test_malformed_participant_id_rejected_atomically(self):
+        self.login(self.alex)
+        self._assert_participant_rejected(self._payload(
+            participantIds=["not-a-user-id"],
+        ))
+
+    def test_unknown_participant_id_rejected_atomically(self):
+        self.login(self.alex)
+        missing_user_id = User.objects.order_by("-pk").first().pk + 1000
+        self._assert_participant_rejected(self._payload(
+            participantIds=[self.chris.pk, missing_user_id],
+        ))
+
+    # ── Scope derivation and authorization are unaffected ────────
+
+    def test_participant_ids_do_not_affect_template_derived_scope(self):
+        self.login(self.alex)
+        group_response = self._post(self._payload(
+            series=self.group_series,
+            participantIds=[self.chris.pk, self.maria.pk],
+        ))
+        self.assertEqual(group_response.status_code, status.HTTP_201_CREATED)
+        group_data = group_response.json()
+        self.assertEqual(group_data["scope"], "group")
+        self.assertIsNone(group_data["projectId"])
+
+        project_response = self._post(self._payload(
+            series=self.project_series,
+            participantIds=[self.chris.pk, self.maria.pk],
+        ))
+        self.assertEqual(project_response.status_code, status.HTTP_201_CREATED)
+        project_data = project_response.json()
+        self.assertEqual(project_data["scope"], "project")
+        self.assertEqual(project_data["projectId"], self.project.pk)
+
+    def test_participant_ids_do_not_broaden_write_authorization(self):
+        # A Project viewer listing participants is still denied...
+        self.login(self.laura)
+        response = self._post(self._payload(
+            series=self.project_series,
+            participantIds=[self.chris.pk, self.maria.pk],
+        ))
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(MeetingRecurrence.objects.count(), 0)
+
+        # ...and an archived Project stays read-only with or without
+        # participants.
+        archive_project(project=self.project, actor=self.alex)
+        self.login(self.chris)
+        response = self._post(self._payload(
+            series=self.project_series,
+            participantIds=[self.laura.pk],
+        ))
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(MeetingRecurrence.objects.count(), 0)
+
+    def test_listed_participant_gains_no_recurrence_access(self):
+        # maria is listed as an intended participant of a
+        # project-scoped series, but she is an outsider: the intent
+        # grants no recurrence read/write access.
+        self.login(self.alex)
+        response = self._post(self._payload(
+            series=self.project_series,
+            participantIds=[self.maria.pk],
+        ))
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        recurrence = MeetingRecurrence.objects.get()
+
+        self.login(self.maria)
+        occurrences_response = self.client.get(
+            f"/api/meeting-recurrences/{recurrence.pk}/occurrences/",
+            {
+                "from": _utc(2026, 1, 5, 0, 0).isoformat(),
+                "to": _utc(2026, 1, 6, 0, 0).isoformat(),
+            },
+        )
+        self.assertEqual(
+            occurrences_response.status_code, status.HTTP_404_NOT_FOUND,
+        )
+
+        occurrence = self._first_occurrence(recurrence)
+        original = occurrence.original_start.astimezone(UTC)
+        materialize_response = self.client.post(
+            f"/api/meeting-recurrences/{recurrence.pk}"
+            "/occurrences/materialize/",
+            data=json.dumps({
+                "occurrenceId": str(occurrence.occurrence_id),
+                "originalScheduledAt": original.isoformat().replace(
+                    "+00:00", "Z",
+                ),
+                "title": "No access",
+            }),
+            content_type="application/json",
+        )
+        self.assertEqual(
+            materialize_response.status_code, status.HTTP_404_NOT_FOUND,
+        )
+        self.assertEqual(Meeting.objects.count(), 0)
+
+    # ── API → materialization participant snapshot ───────────────
+
+    def test_http_created_recurrence_materializes_participant_snapshot(self):
+        self.login(self.alex)
+        response = self._post(self._payload(
+            participantIds=[self.chris.pk, self.maria.pk],
+        ))
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        recurrence = MeetingRecurrence.objects.get()
+        self.assertEqual(
+            self._recurrence_user_ids(recurrence),
+            [self.chris.pk, self.maria.pk],
+        )
+
+        materialize_response = self._materialize_first(recurrence)
+        self.assertEqual(
+            materialize_response.status_code, status.HTTP_201_CREATED,
+        )
+        meeting = Meeting.objects.get()
+        # The concrete Meeting carries the creator plus the intended
+        # participants, each exactly once (creator not duplicated).
+        self.assertEqual(
+            MeetingParticipant.objects.filter(meeting=meeting).count(),
+            3,
+        )
+        self.assertEqual(
+            self._meeting_user_ids(meeting),
+            [self.alex.pk, self.chris.pk, self.maria.pk],
+        )
+
+    def test_creator_in_participant_ids_is_not_duplicated_on_materialization(self):
+        self.login(self.alex)
+        response = self._post(self._payload(
+            participantIds=[self.alex.pk, self.chris.pk, self.alex.pk],
+        ))
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        recurrence = MeetingRecurrence.objects.get()
+        self.assertEqual(
+            self._recurrence_user_ids(recurrence),
+            [self.alex.pk, self.chris.pk],
+        )
+
+        materialize_response = self._materialize_first(recurrence)
+        self.assertEqual(
+            materialize_response.status_code, status.HTTP_201_CREATED,
+        )
+        meeting = Meeting.objects.get()
+        self.assertEqual(
+            MeetingParticipant.objects.filter(
+                meeting=meeting, user=self.alex,
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            self._meeting_user_ids(meeting),
+            [self.alex.pk, self.chris.pk],
+        )
+
+    # ── Backward compatibility ───────────────────────────────────
+
+    def test_old_client_without_participant_ids_remains_compatible(self):
+        # A payload in the pre-participant contract still creates a
+        # valid recurrence with an EMPTY intent set, and its
+        # materialization yields exactly the creator.
+        self.login(self.alex)
+        response = self._post(self._payload())
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        recurrence = MeetingRecurrence.objects.get()
+        self.assertEqual(self._recurrence_user_ids(recurrence), [])
+
+        materialize_response = self._materialize_first(recurrence)
+        self.assertEqual(
+            materialize_response.status_code, status.HTTP_201_CREATED,
+        )
+        self.assertEqual(
+            self._meeting_user_ids(Meeting.objects.get()),
+            [self.alex.pk],
+        )

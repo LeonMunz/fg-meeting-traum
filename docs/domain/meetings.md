@@ -587,11 +587,28 @@ localTime         local wall-clock time (e.g. "10:00")
 timezone          IANA timezone name (e.g. "Europe/Berlin")
 endDate           inclusive final calendar date (optional)
 count             total occurrences INCLUDING the first (optional)
+participantIds    optional list of existing User ids (the intended
+                  participant set of the recurring SERIES)
 ```
 
 `endDate` and `count` map to the domain end modes: both absent/`null` →
 open-ended; `endDate` → inclusive final date; `count` → total occurrences
 including the first; both set → rejected.
+
+**Intended participants:** `participantIds` is optional and reuses the
+ordinary Meeting-participant HTTP conventions
+(`MeetingCreateSerializer.participantIds`): omitted or `[]` → a valid
+recurrence with an EMPTY participant intent; each id must resolve to an
+EXISTING application user (eligibility is the canonical Meeting-participant
+rule — Research Group / Project membership is NOT required); a malformed or
+unknown id fails request validation with a `400` and persists NOTHING (no
+recurrence, no participant intent, no Meeting). Duplicate ids are accepted
+and normalized to one persisted intent each; the creator MAY be included —
+materialization deduplicates through the canonical creator-first
+participant initialization. The intent broadens NO authorization: it is
+delegated to `create_meeting_recurrence(participants=...)` exactly like the
+domain representation, and being listed never grants recurrence or
+meeting access.
 
 **Template resolution and scope derivation:** the selected
 `MeetingSeries` is the canonical content source and already belongs to its
@@ -643,6 +660,15 @@ occurrence materialization endpoint. The recurrence created through this
 endpoint immediately works with the existing bounded occurrence read API
 and the existing materialize / reschedule / exclude / cancel endpoints,
 whose contracts are unchanged.
+
+With `participantIds`, a successful creation persists exactly one
+`MeetingRecurrence`, one `MeetingRecurrenceParticipant` row per unique
+intended participant, and still ZERO `Meeting` rows and ZERO
+`MeetingParticipant` rows — the concrete Meeting participants appear only
+when an occurrence is materialized (the snapshot rules above apply).
+Old clients that omit `participantIds` remain fully behaviorally
+compatible. The response contract is unchanged (no participant field is
+added to the recurrence representation).
 
 **Frontend (implemented — client foundation only):** the typed
 `ApiCreateMeetingRecurrenceInput` / `ApiMeetingRecurrence` request/response

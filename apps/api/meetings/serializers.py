@@ -923,6 +923,17 @@ class MeetingRecurrenceCreateSerializer(serializers.Serializer):
     ``count`` map to the domain end modes: both absent/null → open-ended;
     ``endDate`` → inclusive final calendar date; ``count`` → total
     occurrences including the first; both set → rejected by the domain.
+
+    ``participantIds`` is the optional intended participant set of the
+    recurring SERIES (omitted or an empty list is valid): it resolves to
+    existing application users exactly like ordinary Meeting creation
+    (``MeetingCreateSerializer.participantIds``) — a malformed or unknown
+    id fails validation with nothing persisted. Eligibility is the
+    canonical Meeting-participant rule (any existing user; Research
+    Group / Project membership is not required), and the intent broadens
+    no authorization. Duplicate ids are accepted and normalized by the
+    domain service. The creator may be included; materialization
+    deduplicates through the canonical creator-first initialization.
     """
 
     meetingSeriesId = serializers.IntegerField(min_value=1)
@@ -952,6 +963,11 @@ class MeetingRecurrenceCreateSerializer(serializers.Serializer):
         required=False,
         allow_null=True,
         default=None,
+    )
+    participantIds = serializers.PrimaryKeyRelatedField(
+        queryset=User.objects.all(),
+        many=True,
+        required=False,
     )
 
 

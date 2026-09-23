@@ -2365,6 +2365,13 @@ class MeetingRecurrenceCreateView(APIView):
     authority on every recurrence-rule invariant and the final write
     authorization. Creating the recurrence persists exactly one
     ``MeetingRecurrence`` and NEVER materializes a Meeting.
+
+    The optional ``participantIds`` request field resolves to existing
+    application users with the ordinary Meeting-participant conventions
+    and is delegated to the domain service as ``participants`` — the
+    intent is persisted on the recurrence and snapshots into concrete
+    ``MeetingParticipant`` rows only when a future occurrence is
+    materialized. It broadens no authorization.
     """
 
     permission_classes = [IsAuthenticated]
@@ -2422,6 +2429,7 @@ class MeetingRecurrenceCreateView(APIView):
                 end_mode=end_mode,
                 end_date=end_date,
                 occurrence_count=count,
+                participants=data.get("participantIds", ()),
             )
         except MeetingDomainError as exc:
             return Response({"error": exc.message}, status=400)
