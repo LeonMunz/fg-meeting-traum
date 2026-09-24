@@ -206,10 +206,25 @@ proxy path have passed deployment acceptance. Until then, Django's
 `check --deploy` is expected to retain `security.W004`; do not describe that
 check as clean and do not enable long-lived HSTS merely to silence it.
 
-This settings contract alone does not make FG Workspace deployable. A
-production application server, container and TLS-proxy configuration, durable
-PostgreSQL storage, backup/restore, and deployment operations remain separate
-follow-up work.
+The backend production image is defined by `apps/api/Dockerfile`, built with
+`apps/api/` as its context. It installs the committed `uv.lock` with frozen,
+runtime-only dependency resolution and runs Gunicorn as a non-root user on the
+private container port `8000`. Its default settings module is
+`config.settings_production`; secrets, database connection values, allowed
+hosts, and trusted CSRF origins remain runtime-owned configuration and are
+never image inputs.
+
+Starting the application container only starts Gunicorn. It never runs
+migrations, seeds, resets, or other database-mutating management commands.
+Migration files and `manage.py` remain in the image so release orchestration
+can invoke an explicit one-shot command in a later slice. `GET /api/health/`
+is process liveness only and deliberately performs no database readiness
+check.
+
+This backend runtime artifact alone does not make FG Workspace deployable.
+The frontend production image/static-serving boundary, TLS reverse proxy,
+durable PostgreSQL storage, backup/restore, migration/release orchestration,
+image publishing, and deployment automation remain separate follow-up work.
 
 ## Environment doctor (read-only)
 

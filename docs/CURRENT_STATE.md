@@ -215,6 +215,13 @@ Canonical domain reference: `docs/domain/authentication-sessions.md`.
 - **IMPLEMENTED** — inactive accounts cannot log in, and an already-authenticated session no longer authenticates once the account becomes inactive (401 on every API endpoint, including the session-management API); deactivation is not revocation (the Django session row is retained until normal expiry or explicit revocation).
 - **NOT IMPLEMENTED (deferred)** — session-management/account-security UI, password reset/change, e-mail verification, rate limiting, full ACTIVE/SUSPENDED/DEACTIVATED lifecycle, sudo/recent-auth, passkeys, SSO, API tokens, audit-log subsystem.
 
+## Backend production runtime
+
+- **IMPLEMENTED** — reproducible backend application image (`apps/api/Dockerfile`, build context `apps/api/`) on Python 3.12 with dependencies installed from the committed `uv.lock` in frozen, runtime-only mode. Gunicorn is the sole production WSGI server, binds `0.0.0.0:8000`, logs to stdout/stderr, runs `config.wsgi:application`, and defaults explicitly to `config.settings_production` without changing local-development defaults.
+- **IMPLEMENTED** — final container execution is non-root (UID/GID 10001), the source tree need not be writable, and secrets plus all production host/database/CSRF configuration remain runtime-owned. Container startup never runs migrations, seeds, resets, or collection steps; migration files and Django management commands remain available for later explicit release orchestration.
+- **IMPLEMENTED** — existing `GET /api/health/` is the container liveness endpoint and remains database-independent. It does not establish PostgreSQL readiness.
+- **NOT IMPLEMENTED (later deployment slices)** — frontend production image/static serving, Compose, TLS reverse proxy, PostgreSQL persistence, backup/restore, migration/release orchestration, image publishing, and automatic deployment.
+
 ## Account Invitations
 
 Canonical domain reference: `docs/domain/account-invitations.md`.
