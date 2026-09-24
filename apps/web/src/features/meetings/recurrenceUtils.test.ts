@@ -25,8 +25,9 @@ describe('currentIanaTimezone', () => {
 
     expect(typeof tz).toBe('string')
     expect(tz.length).toBeGreaterThan(0)
-    // IANA zone ids contain a slash (Area/Location).
-    expect(tz).toMatch(/^[A-Za-z_]+\//)
+    expect(() =>
+      new Intl.DateTimeFormat('en-US', { timeZone: tz })
+    ).not.toThrow()
   })
 })
 
