@@ -935,7 +935,21 @@ with no unbounded exception for `live` Meetings, so a Meeting
 scheduled in the past or beyond +42 days never appears in the
 initial Upcoming view; the concrete list is additionally scoped to
 the Meetings that still take place (`upcoming` / `live`; `completed`
-and terminal `cancelled` excluded). A recurring
+and terminal `cancelled` excluded). The Upcoming view is therefore
+scoped to the page's active Research Group for BOTH data sources:
+the concrete Meetings come from the active group's Meetings
+endpoint, and the personal recurring-occurrence feed — which is
+user-scoped ACROSS Research Groups by contract (it takes no group
+parameter) — is filtered by the page BEFORE the canonical merge,
+keeping only the feed rows whose canonical `researchGroupId`
+matches the active Research Group (the same stable page-level
+scoping convention as the Series tab: backend effective
+`scheduledAt` ordering among the kept rows is preserved, no
+extra requests, no Research Group fetch). Recurring occurrences
+of another Research Group never appear in Upcoming; because a
+cross-group occurrence's concrete Meeting can never be part of
+the active group's Meeting list, the canonical materialized
+deduplication among the kept rows is unaffected. A recurring
 occurrence looks like a normal Meeting (a subtle "Recurring"
 indicator — no rule string, because the feed DTO carries no
 frequency/weekday data; rendering "Every Tuesday" is follow-up

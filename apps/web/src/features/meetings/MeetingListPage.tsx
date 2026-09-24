@@ -246,10 +246,30 @@ export function MeetingListPage() {
     setOccurrencesError(null)
 
     try {
-      setOccurrences(
+      const rows =
         await listPersonalMeetingRecurrenceOccurrences(
           requestWindow.from,
           requestWindow.to,
+        )
+
+      // The personal occurrence feed is cross-group: it carries
+      // occurrences from every Research Group the user is
+      // personally relevant to (the API takes no group parameter).
+      // The Meetings page is scoped to its active Research Group,
+      // so keep only that group's rows — by each row's canonical
+      // `researchGroupId` — BEFORE the canonical Upcoming merge
+      // (`buildUpcomingList`), exactly mirroring the Series tab's
+      // page-level scoping filter. The stable filter preserves the
+      // backend's effective `scheduledAt` ordering among the kept
+      // rows; cross-group rows cannot join the active group's
+      // concrete Meetings, so materialized deduplication among the
+      // kept rows is unaffected. No re-sort, no extra requests, no
+      // Research Group fetch.
+      setOccurrences(
+        rows.filter(
+          (row) =>
+            row.researchGroupId ===
+            activeResearchGroupId,
         ),
       )
     } catch (loadError) {
@@ -260,7 +280,7 @@ export function MeetingListPage() {
         ),
       )
     }
-  }, [requestWindow])
+  }, [requestWindow, activeResearchGroupId])
 
   const loadSeries = useCallback(async () => {
     if (activeResearchGroupId == null) {

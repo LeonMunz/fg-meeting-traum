@@ -960,6 +960,199 @@ describe('MeetingListPage — Upcoming data', () => {
   })
 })
 
+describe('MeetingListPage — Upcoming research-group scoping', () => {
+  it('keeps only the active Research Group\'s recurring occurrences, preserving ordering, dedup, and the single feed request', async () => {
+    // Same-group concrete Meetings (the existing group-scoped
+    // source — unchanged).
+    vi.mocked(meetingsApi.listMeetings).mockResolvedValue([
+      makeMeeting({
+        id: 201,
+        title: 'Alpha sync',
+        scheduledAt: localIso(2026, 9, 23, 10, 0),
+      }),
+      makeMeeting({
+        id: 202,
+        title: 'Alpha review',
+        scheduledAt: localIso(2026, 9, 26, 12, 0),
+      }),
+    ])
+
+    // The personal occurrence feed is cross-group: rows from
+    // several Research Groups arrive in ONE response, interleaved.
+    vi.mocked(
+      meetingsApi.listPersonalMeetingRecurrenceOccurrences,
+    ).mockResolvedValue([
+      makeOccurrence({
+        occurrenceId: 'occ-g1-a',
+        recurrenceId: 30,
+        title: 'Group one weekly',
+        researchGroupId: 1,
+        originalScheduledAt: localIso(2026, 9, 24, 9, 0),
+        scheduledAt: localIso(2026, 9, 24, 9, 0),
+      }),
+      makeOccurrence({
+        occurrenceId: 'occ-g2-a',
+        recurrenceId: 31,
+        title: 'Group two weekly',
+        researchGroupId: 2,
+        originalScheduledAt: localIso(2026, 9, 24, 10, 0),
+        scheduledAt: localIso(2026, 9, 24, 10, 0),
+      }),
+      // A materialized cross-group occurrence (its concrete
+      // Meeting is NOT in the active group's list) must not
+      // surface either.
+      makeOccurrence({
+        occurrenceId: 'occ-g2-b',
+        recurrenceId: 31,
+        title: 'Group two materialized',
+        researchGroupId: 2,
+        originalScheduledAt: localIso(2026, 9, 25, 11, 0),
+        scheduledAt: localIso(2026, 9, 25, 11, 0),
+        materialized: true,
+        meetingId: 999,
+      }),
+      makeOccurrence({
+        occurrenceId: 'occ-g1-b',
+        recurrenceId: 30,
+        title: 'Group one later',
+        researchGroupId: 1,
+        originalScheduledAt: localIso(2026, 9, 25, 9, 0),
+        scheduledAt: localIso(2026, 9, 25, 9, 0),
+      }),
+      // The active group's materialized occurrence joins its
+      // concrete Meeting (deduplication on canonical identity —
+      // unchanged): exactly one row.
+      makeOccurrence({
+        occurrenceId: 'occ-g1-c',
+        recurrenceId: 30,
+        title: 'Alpha review',
+        researchGroupId: 1,
+        originalScheduledAt: localIso(2026, 9, 26, 12, 0),
+        scheduledAt: localIso(2026, 9, 26, 12, 0),
+        materialized: true,
+        meetingId: 202,
+      }),
+    ])
+
+    renderPage()
+
+    await screen.findByText('Group one weekly')
+
+    const section = screen.getByRole('region', {
+      name: 'Upcoming meetings',
+    })
+
+    // Same-group concrete Meetings remain present.
+    expect(screen.getByText('Alpha sync')).toBeVisible()
+
+    // EXACTLY the active group's rows, in effective-scheduledAt
+    // order — the interleaved cross-group rows must not enter
+    // the list or disturb its ordering.
+    const rowTitles = within(section)
+      .getAllByRole('button')
+      .map((row) => row.getAttribute('aria-label') ?? '')
+      .filter((label) => label.startsWith('Open '))
+      // Row label format: `Open <title> on <date> at <time>`.
+      .map((label) =>
+        label.slice(
+          'Open '.length,
+          label.indexOf(' on '),
+        ),
+      )
+    expect(rowTitles).toEqual([
+      'Alpha sync',
+      'Group one weekly',
+      'Group one later',
+      'Alpha review',
+    ])
+
+    // Cross-group recurrence rows never enter the rendered
+    // Upcoming list (virtual or materialized).
+    expect(
+      screen.queryByText('Group two weekly'),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByText('Group two materialized'),
+    ).not.toBeInTheDocument()
+
+    // The materialized same-group occurrence appears EXACTLY
+    // once (canonical-identity deduplication unchanged).
+    expect(
+      screen.getAllByText('Alpha review'),
+    ).toHaveLength(1)
+
+    // The scoping is a pure page-level filter: exactly one
+    // feed request, no per-row / per-group lookups.
+    expect(
+      meetingsApi.listPersonalMeetingRecurrenceOccurrences,
+    ).toHaveBeenCalledTimes(1)
+    expect(meetingsApi.listMeetings).toHaveBeenCalledTimes(1)
+    expect(meetingsApi.getMeetingSeries).not.toHaveBeenCalled()
+    expect(
+      meetingsApi.listMeetingParticipants,
+    ).not.toHaveBeenCalled()
+  })
+
+  it("follows the page's active Research Group, not a fixed group", async () => {
+    vi.mocked(useResearchGroupListScope).mockReturnValue({
+      activeResearchGroupId: 2,
+      activeResearchGroup: {
+        id: 2,
+        name: 'Other FG',
+        role: 'admin',
+      },
+      loading: false,
+      error: null,
+    })
+    vi.mocked(meetingsApi.listMeetings).mockResolvedValue([
+      makeMeeting({
+        id: 210,
+        title: 'Beta sync',
+        researchGroupId: 2,
+        scheduledAt: localIso(2026, 9, 23, 10, 0),
+      }),
+    ])
+    vi.mocked(
+      meetingsApi.listPersonalMeetingRecurrenceOccurrences,
+    ).mockResolvedValue([
+      makeOccurrence({
+        occurrenceId: 'occ-g1-d',
+        recurrenceId: 30,
+        title: 'First group weekly',
+        researchGroupId: 1,
+        originalScheduledAt: localIso(2026, 9, 24, 9, 0),
+        scheduledAt: localIso(2026, 9, 24, 9, 0),
+      }),
+      makeOccurrence({
+        occurrenceId: 'occ-g2-c',
+        recurrenceId: 31,
+        title: 'Second group weekly',
+        researchGroupId: 2,
+        originalScheduledAt: localIso(2026, 9, 24, 11, 0),
+        scheduledAt: localIso(2026, 9, 24, 11, 0),
+      }),
+    ])
+
+    renderPage()
+
+    await screen.findByText('Second group weekly')
+
+    expect(
+      screen.queryByText('First group weekly'),
+    ).not.toBeInTheDocument()
+    // Same-group concrete Meetings remain present under the
+    // switched scope.
+    expect(screen.getByText('Beta sync')).toBeVisible()
+    // The concrete Meeting list follows the same page scope.
+    expect(meetingsApi.listMeetings).toHaveBeenCalledWith(2)
+    // Still exactly one cross-group feed request — the scope is
+    // a client-side filter, not a changed request.
+    expect(
+      meetingsApi.listPersonalMeetingRecurrenceOccurrences,
+    ).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('MeetingListPage — row structure and interaction', () => {
   it('renders the desktop row semantics: Time, Meeting, People, Actions', async () => {
     vi.mocked(meetingsApi.listMeetings).mockResolvedValue([
