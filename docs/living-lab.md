@@ -226,8 +226,9 @@ The local production Compose topology (one loopback gateway, `/api`
 reverse proxy, durable PostgreSQL storage on a separately managed external
 volume) is now implemented as local-only infrastructure — see Local
 production stack below. TLS/public hostname, backup/restore,
-migration/release orchestration, image publishing, and deployment
-automation remain separate follow-up work.
+migration/release orchestration, and deployment automation remain
+separate follow-up work; immutable image publication to GHCR is
+implemented — see Production image publication (GHCR) below.
 
 ### Local production stack (Compose topology)
 
@@ -441,6 +442,82 @@ Current limitations (deliberately NOT implemented in this slice):
   tablespaces exist in this architecture.
 - No destructive in-place production restore and no automatic volume
   deletion: disaster cutover is a later, explicitly designed runbook.
+
+### Production image publication (GHCR)
+
+`.github/workflows/publish-images.yml` (`Production image publication
+(GHCR)`) publishes, for every verified `main` commit, exactly two
+immutable production images to GitHub Container Registry:
+
+```text
+ghcr.io/<owner>/<repo>-api :<40-char Git SHA>
+ghcr.io/<owner>/<repo>-web :<40-char Git SHA>
+```
+
+(`<owner>` / `<repo>` = the lowercase GitHub repository identity — e.g.
+`ghcr.io/example/fg-meeting-traum-api:dc836752198bd68ce9f58f1604680ccc8f049877`
+is the shape, not a real reference.)
+
+Contract:
+
+- **Trigger + gate** — publication runs only when a COMPLETED and
+  SUCCESSFUL run of the canonical Core verification workflow (its
+  exact top-level `name:` value, `Core verification`) for a `push` to
+  `main` finishes — a `workflow_run` dependency by workflow name
+  (renaming that `name:` requires updating the publication workflow's
+  `workflows:` list). The
+  publication workflow re-runs no test suite and verifies nothing by
+  itself; a failed, cancelled, pull-request, dispatch, or non-main core
+  run publishes nothing (both jobs skip).
+- **Immutability** — the exact 40-character Git commit SHA is the ONLY
+  tag. No `latest`, branch, short-SHA, or timestamp tag is ever
+  published. The built revision is the core run's head SHA (for a push
+  to main: the pushed commit); each job checks out exactly that
+  revision and asserts `git rev-parse HEAD` equals it before any build.
+- **Builds** — the existing production Dockerfiles unchanged:
+  `apps/api/Dockerfile` (context `apps/api/`) and `apps/web/Dockerfile`
+  (context = repository root), via Docker Buildx (official, SHA-pinned
+  Docker actions) on pinned `ubuntu-24.04` runners. Platform contract:
+  `linux/amd64` (the documented VServer target); every base-image
+  digest in both Dockerfiles was verified against the registries to be
+  a multi-platform index carrying linux/amd64.
+- **Authentication** — the runner's `GITHUB_TOKEN` only, under the
+  minimum workflow permissions `contents: read` + `packages: write`.
+  No PAT, no repository secret, no long-lived credential, no BuildKit
+  cache (cold-cache builds are the verified contract).
+- **Metadata** — standard OCI labels on both images
+  (`org.opencontainers.image.source` / `.revision` / `.repos`) plus
+  BuildKit provenance attestation.
+- **Both or nothing** — the two jobs run in parallel and BOTH must
+  succeed; a revision is deployment-ready only when BOTH image
+  artifacts exist.
+
+Publishing is NOT deployment: the workflow touches no server, no
+VServer, and no Compose stack. The published references are exactly the
+values for the existing required Compose variables of the local
+production topology (and later the VServer topology):
+
+```bash
+FG_API_IMAGE=ghcr.io/<owner>/<repo>-api:<full commit SHA>
+FG_WEB_IMAGE=ghcr.io/<owner>/<repo>-web:<full commit SHA>
+docker-compose -f deploy/compose.production.yaml config   # unchanged topology
+```
+
+Registry visibility boundary: whether the created GHCR packages are
+publicly pullable is a repository/package setting outside this slice
+and is NOT derivable from repository code. If the packages are private,
+the later VServer bootstrap must configure a minimal pull credential
+(e.g. a fine-grained token with read access to this repository's
+packages only); no such credential exists in this repository, and this
+slice adds none.
+
+External acceptance (first real `main` run after integration): the
+publication run is green, both images were pushed, both carry the exact
+main commit SHA as their tag, and — where registry visibility permits —
+both full-SHA references pull cleanly (`docker pull` of each reference
+from a clean Docker client, or registry metadata).
+
+Static contract test: `scripts/tests/publish-workflow.test.sh`.
 
 ## Environment doctor (read-only)
 

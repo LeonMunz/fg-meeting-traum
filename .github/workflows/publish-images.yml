@@ -1,0 +1,214 @@
+# Canonical production image publication for FG Workspace (GHCR).
+#
+# Publishes exactly two immutable production images for one verified
+# commit:
+#
+#   ghcr.io/<lowercase-owner>/<repo>-api :<40-char Git SHA>
+#   ghcr.io/<lowercase-owner>/<repo>-web :<40-char Git SHA>
+#
+# This workflow verifies nothing by itself and re-runs no test suite.
+# It depends on the canonical Core verification workflow (its exact
+# top-level `name:` value: `Core verification`) through a `workflow_run`
+# trigger: a publication job runs ONLY when a COMPLETED and SUCCESSFUL
+# core run of a `push` to `main` finishes. The published source revision
+# is that core run's head SHA — the same commit the gate verified — and
+# a step asserts the checked-out HEAD equals it before any build starts.
+#
+# Automatic publication is `push` to `main` ONLY. Pull requests, other
+# branches, and manual `workflow_dispatch` of the core gate never
+# publish (both jobs skip via the visible job condition).
+#
+# Invariants:
+#   * The exact 40-character Git commit SHA is the ONLY deployment tag.
+#     No mutable tag of any kind is published.
+#   * Image repository names are derived from the repository identity
+#     at runtime in a Bash step that lowercases `github.repository`
+#     (GitHub owner/repo may contain uppercase characters; GHCR package
+#     names must not; no owner/repository is hardcoded).
+#   * Authentication is the runner's GITHUB_TOKEN with the minimum
+#     required permissions (contents: read, packages: write). No PAT,
+#     no long-lived credential, no secret besides GITHUB_TOKEN.
+#   * Platform contract: linux/amd64 — the documented VServer target
+#     (deploy/compose.production.yaml). Every base image in both
+#     production Dockerfiles is pinned by an immutable digest verified
+#     to be a multi-platform index carrying linux/amd64.
+#   * Publishing is NOT deployment: nothing here touches a server, a
+#     VServer, or a Compose stack. The published references are consumed
+#     later through FG_API_IMAGE / FG_WEB_IMAGE.
+#
+# Concurrency: no cancellation is introduced. The core gate already
+# serializes pushes to main (queued, never cancelled), so superseded
+# commits never publish in parallel, and a re-run of one head SHA
+# republishes the identical immutable tag (idempotent).
+#
+# Cache: none. Cold-cache builds are the verified contract; a GHA cache
+# would additionally require actions: read/write permissions beyond the
+# minimum publication envelope and is not needed for correctness.
+#
+# Artifacts: none — the registry is the artifact.
+name: Production image publication (GHCR)
+
+on:
+  workflow_run:
+    # The gate this publication depends on: the canonical Core
+    # verification workflow, referenced by its exact top-level `name:`
+    # value. Renaming that `name:` in the Core workflow requires
+    # updating this list.
+    workflows: ["Core verification"]
+    types: [completed]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish-api:
+    name: Publish API image (full-SHA tag)
+    # Publication happens only after a SUCCESSFUL core gate run of a
+    # push to main. Any other core run (failure, cancellation, PR,
+    # dispatch, other branch) skips both jobs without publishing.
+    if: >-
+      github.event.workflow_run.conclusion == 'success'
+      && github.event.workflow_run.event == 'push'
+      && github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-24.04
+    # Cold-cache build of the production API image (uv sync from the
+    # committed lockfile inside the image) plus push; 20 minutes bounds
+    # hanging jobs with wide margin.
+    timeout-minutes: 20
+    env:
+      # The verified revision: the head commit of the completed core
+      # run. For a push to main this is the pushed commit — the same
+      # revision the core gate checked out and verified. This is the
+      # production image identity; the workflow_run event's own commit
+      # is deliberately NOT used for it.
+      FG_PUBLISH_SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - name: Checkout the verified revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The canonical revision of the core run — never the default
+          # branch HEAD, which a workflow_run run would check out.
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+
+      # The checkout must not silently build another revision.
+      - name: Verify the checked-out revision
+        run: test "$(git rev-parse HEAD)" = "$FG_PUBLISH_SHA"
+
+      # GHCR package names must be lowercase, but the GitHub repository
+      # identity may contain uppercase characters. Derive the immutable
+      # image reference at runtime in Bash (no expression-level
+      # lowercasing exists; no owner/repository is hardcoded).
+      # `${var,,}` is a standard bash 4+ expansion; the pinned
+      # ubuntu-24.04 runners provide bash 5.x.
+      - name: Derive immutable image reference
+        id: image
+        shell: bash
+        env:
+          GH_REPOSITORY: ${{ github.repository }}
+        run: |
+          repository="${GH_REPOSITORY,,}"
+          echo "name=ghcr.io/${repository}-api" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The production API image: existing Dockerfile, existing build
+      # context (apps/api/ — the backend image contract). The full
+      # commit SHA is the only tag.
+      - name: Build and push the API image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: apps/api
+          file: apps/api/Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: ${{ steps.image.outputs.name }}:${{ env.FG_PUBLISH_SHA }}
+          # BuildKit provenance attestation embedded in the published
+          # image (the buildx default, kept explicit). It is signed
+          # with the job's GITHUB_TOKEN and needs no extra permissions.
+          provenance: true
+          # Standard OCI source/revision metadata identifying the
+          # originating repository and the exact published commit.
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ env.FG_PUBLISH_SHA }}
+            org.opencontainers.image.repos=${{ steps.image.outputs.name }}
+
+      - name: Report the published reference
+        env:
+          PUBLISHED_IMAGE: ${{ steps.image.outputs.name }}
+        run: |
+          printf 'Published: %s:%s\n' "$PUBLISHED_IMAGE" "$FG_PUBLISH_SHA"
+
+  publish-web:
+    name: Publish web image (full-SHA tag)
+    if: >-
+      github.event.workflow_run.conclusion == 'success'
+      && github.event.workflow_run.event == 'push'
+      && github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-24.04
+    # Cold-cache build of the production web image (npm ci from the
+    # committed root lockfile + canonical Vite build inside the image)
+    # plus push; 20 minutes bounds hanging jobs with wide margin.
+    timeout-minutes: 20
+    env:
+      FG_PUBLISH_SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - name: Checkout the verified revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+
+      - name: Verify the checked-out revision
+        run: test "$(git rev-parse HEAD)" = "$FG_PUBLISH_SHA"
+
+      - name: Derive immutable image reference
+        id: image
+        shell: bash
+        env:
+          GH_REPOSITORY: ${{ github.repository }}
+        run: |
+          repository="${GH_REPOSITORY,,}"
+          echo "name=ghcr.io/${repository}-web" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The production web image: existing Dockerfile, repository-root
+      # build context (the npm workspace lockfile lives at the root).
+      - name: Build and push the web image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: apps/web/Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: ${{ steps.image.outputs.name }}:${{ env.FG_PUBLISH_SHA }}
+          provenance: true
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ env.FG_PUBLISH_SHA }}
+            org.opencontainers.image.repos=${{ steps.image.outputs.name }}
+
+      - name: Report the published reference
+        env:
+          PUBLISHED_IMAGE: ${{ steps.image.outputs.name }}
+        run: |
+          printf 'Published: %s:%s\n' "$PUBLISHED_IMAGE" "$FG_PUBLISH_SHA"

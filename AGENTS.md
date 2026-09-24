@@ -41,6 +41,7 @@ Do not change these choices without an explicit architecture decision.
 - `scripts/tests/agent-verify.test.sh` — agent-verify harness tests (usage, plan mode, `--summary-json` contract)
 - `scripts/tests/core-workflow.test.sh` — CI core workflow contract tests
 - `scripts/tests/e2e-workflow.test.sh` — CI E2E workflow contract tests
+- `scripts/tests/publish-workflow.test.sh` — CI production image publication (GHCR) workflow contract tests
 
 ## Documentation usage
 

@@ -98,13 +98,17 @@ PRECHECK
 
 ## CI gates (GitHub Actions)
 
-The repository carries two CI workflows, both in `.github/workflows/`, and
-both run on `pull_request` against `main`, on `push` to `main`, and on manual
-`workflow_dispatch`. Each is a single job on a pinned Ubuntu runner that
+The repository carries three CI workflows in `.github/workflows/`.
+The two verification gates (`core.yml`, `e2e.yml`) both run on
+`pull_request` against `main`, on `push` to `main`, and on manual
+`workflow_dispatch`; each is a single job on a pinned Ubuntu runner that
 executes its canonical gate against an isolated, health-checked PostgreSQL 16
-service container (CI-only, non-secret credentials). The repository does not
-configure branch protection; these gates are advisory checks on the branch
-and pull requests.
+service container (CI-only, non-secret credentials). The production image
+publication workflow (`publish-images.yml`) re-runs no test suite: it is a
+`workflow_run` dependency of the Core gate and publishes immutable GHCR
+images only for a successful core run of a `push` to `main`. The repository
+does not configure branch protection; these gates are advisory checks on the
+branch and pull requests.
 
 ### Core verification gate (`core.yml`)
 
@@ -162,6 +166,27 @@ contract above. A cancelled run is never presented as successful evidence.
 Static contract tests for the workflows:
 `scripts/tests/core-workflow.test.sh` and `scripts/tests/e2e-workflow.test.sh`.
 
+### Production image publication (GHCR) (`publish-images.yml`)
+
+`Production image publication (GHCR)` publishes exactly two immutable
+production images — `ghcr.io/<owner>/<repo>-api` and
+`ghcr.io/<owner>/<repo>-web`, each tagged ONLY with the exact 40-character
+Git commit SHA of the verified commit — to GitHub Container Registry. It depends on the canonical Core workflow by its exact top-level
+`name:` value (`Core verification`) through a `workflow_run` trigger,
+and publishes only when a COMPLETED, SUCCESSFUL core run of a `push` to
+`main` finishes; it
+re-runs no test suite and verifies nothing by itself. Each job checks out
+the core run's head SHA (asserted against `git rev-parse HEAD`), builds the
+existing production Dockerfile (`apps/api/Dockerfile`, context `apps/api/`;
+`apps/web/Dockerfile`, repository-root context) with Docker Buildx for
+`linux/amd64` (the documented VServer target), and pushes with
+`GITHUB_TOKEN` under the minimum permissions `contents: read` +
+`packages: write`. No mutable tag is ever published, and publishing touches
+no server or Compose stack (the references are later consumed via
+`FG_API_IMAGE` / `FG_WEB_IMAGE` — see `docs/living-lab.md`, Production
+image publication). Static contract tests for the workflow:
+`scripts/tests/publish-workflow.test.sh`.
+
 ## Branch workflow
 
 - `main` is the last fully integrated and verified state.
@@ -180,7 +205,7 @@ Static contract tests for the workflows:
 
 ## Harness contract tests
 
-Four static tests cover the verification harness and the CI workflow
+Five static tests cover the verification harness and the CI workflow
 contracts:
 
 ```bash
@@ -188,6 +213,7 @@ bash scripts/tests/agent-doctor.test.sh
 bash scripts/tests/agent-verify.test.sh
 bash scripts/tests/core-workflow.test.sh
 bash scripts/tests/e2e-workflow.test.sh
+bash scripts/tests/publish-workflow.test.sh
 ```
 
 - `agent-doctor.test.sh` — doctor output formats, exit codes, non-mutation,
@@ -199,6 +225,14 @@ bash scripts/tests/e2e-workflow.test.sh
   references, PostgreSQL 16, single canonical `core` invocation).
 - `e2e-workflow.test.sh` — the same for `.github/workflows/e2e.yml`, plus:
   `FG_ALLOW_E2E_RESET` appears exactly once, on the canonical gate line.
+- `publish-workflow.test.sh` — the publication contract of
+  `.github/workflows/publish-images.yml` (workflow_run trigger on the
+  exact Core workflow name only, success+push+main job conditions,
+  minimum permissions,
+  SHA-pinned actions, head-SHA checkout + revision assertion,
+  GITHUB_TOKEN-only authentication, existing Dockerfiles/contexts,
+  linux/amd64 platform, full-SHA-only tags, lowercase GHCR names, OCI
+  labels, Compose compatibility).
 
 They test the harness/workflow contract only: they are not executed by any
 `agent-verify` profile and are not invoked by the CI workflows. Run them
