@@ -28,6 +28,7 @@ Do not change these choices without an explicit architecture decision.
 - `apps/web/` — React frontend
 - `apps/api/` — Django backend
 - `deploy/` — local production Compose topology (production Compose file, deploy Caddyfile, placeholder env)
+- `deploy/scripts/postgres-backup.sh` / `deploy/scripts/postgres-restore-empty.sh` — manual operator PostgreSQL backup (validated `pg_dump -Fc` archive + SHA-256 sidecar) and restore into an EMPTY target database only; operator procedure in `docs/living-lab.md`
 - `docs/` — durable product, domain, architecture, and Living-Lab documentation
 - `docs/stitch_examples/` — visual reference exports only
 - `evals/` — historical-state eval case packages (pilot: `cases/activity-feed-query-cost`); see `evals/README.md`

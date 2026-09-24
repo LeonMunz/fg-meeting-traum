@@ -259,7 +259,9 @@ Dominant invariants:
   (`FG_POSTGRES_DATA_VOLUME` at `/var/lib/postgresql/data`). Compose never
   creates or deletes it: `down` + container/stack recreation preserves all
   data, and removing the volume is an explicit, destructive operator
-  decision (later backup tooling targets this exact volume).
+  decision (the operator backup tooling backs up this topology's
+  DATABASE as a logical archive; the volume itself is never copied or
+  moved by it — see the section below).
 - Only the Caddy gateway is reachable from the host, and only on loopback.
   `api` (8000) and `db` (5432) have no host ports, and `web` cannot
   address `db` (no shared network).
@@ -330,6 +332,115 @@ Caveats (read before using the loopback surface):
   cluster (and its credentials) is authoritative.
 - Startup runs no migrations and no seeding; run explicit one-shot
   commands (step 7) — release orchestration is a later slice.
+
+### PostgreSQL logical backup and restore (operator procedure)
+
+Manual, operator-facing recovery primitives for the application database of
+the local production topology. They are NOT automation: nothing schedules,
+rotates, uploads, or restores by itself. Canonical scripts:
+`deploy/scripts/postgres-backup.sh` and
+`deploy/scripts/postgres-restore-empty.sh` (script tests:
+`scripts/tests/postgres-backup-restore.test.sh`).
+
+Dominant recovery invariant: a backup is not usable merely because
+`pg_dump` exited successfully. It must be an atomic custom-format archive
+(`pg_dump -Fc`), validated by `pg_restore --list`, carry a SHA-256 checksum
+sidecar, and — to count as proven recoverable — have been restored into a
+completely fresh PostgreSQL data volume. Restore never overwrites a
+non-empty database.
+
+Create a backup (the database stays online: no service is stopped, paused,
+or locked; no host port is opened; all PostgreSQL tooling runs inside the
+pinned `db` container, so the host needs no PostgreSQL client):
+
+```bash
+deploy/scripts/postgres-backup.sh \
+  --env-file deploy/.env \
+  --output-dir /path/outside/repo/backups
+```
+
+(If the stack runs under a non-default Compose project name, both scripts
+accept `--project-name <name>`; the default is the project declared in
+`deploy/compose.production.yaml`, `fg-production`.)
+
+Artifact contract:
+
+- Naming: `fg-workspace-<database>-YYYYMMDDTHHMMSSZ.dump` (UTC timestamp)
+  plus a `sha256sum`-compatible sidecar `…dump.sha256`
+  (`<hash>  <archive-basename>`).
+- Written as `…dump.partial` first; published by atomic rename only after
+  the non-empty check and a successful `pg_restore --list` parse (the
+  archive is staged into the `db` container's ephemeral filesystem for
+  validation, never into the data volume).
+- Files are created with restrictive permissions (umask 077 → 0600).
+- The output directory must exist, be writable, and must NOT be inside the
+  repository.
+- On any failure: no final-looking archive remains, the partial is
+  removed, and the exit code is non-zero.
+
+Restore ONLY into an empty target database:
+
+```bash
+deploy/scripts/postgres-restore-empty.sh \
+  --env-file deploy/.env \
+  --archive /path/outside/repo/backups/fg-workspace-<database>-….dump
+```
+
+Preconditions are enforced in order, ALL before any database write:
+
+1. the archive exists and is non-empty;
+2. the SHA-256 sidecar (default `<archive>.sha256`, overridable with
+   `--checksum`) exists, is a single well-formed line naming exactly this
+   archive, and matches — a missing or invalid checksum fails closed
+   BEFORE any Docker/PostgreSQL interaction;
+3. the archive parses (`pg_restore --list` through the `db` container);
+4. the target database contains no user-schema relations (tables, views,
+   materialized views, sequences, foreign/partitioned tables) and no user
+   functions — system catalogs never count; a migrated or populated
+   database is refused with a clear message, zero changes, and a non-zero
+   exit.
+
+The restore then runs `pg_restore --exit-on-error` into the EXISTING
+configured application database. The image bootstrap owns database
+creation: the script never creates, drops, cleans, or deletes anything.
+There is deliberately NO `--force`, NO destructive bypass of the
+emptiness guard, NO `--clean`, NO `--create`, and NO automatic volume
+deletion. No `--no-owner` / `--no-acl` either: the runtime contract
+recreates the same application role from `POSTGRES_USER` on a fresh
+volume, so archived ownership and ACLs restore cleanly and the archive
+stays authoritative. If `pg_restore` fails part-way, the target may hold
+partial objects: re-prepare a fresh empty target (e.g. a fresh external
+volume) before any retry.
+
+Restore verification (direct database evidence — the liveness-only
+`GET /api/health/` is NOT recovery evidence):
+
+```bash
+# expected application objects restored (expect a non-zero count):
+docker-compose -f deploy/compose.production.yaml exec db sh -c \
+  'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "SELECT count(*) FROM pg_tables WHERE schemaname = '\''public'\''"'
+# migration history intact + no unapplied migrations (explicit one-shot):
+docker-compose -f deploy/compose.production.yaml run --rm api python manage.py migrate --check
+```
+
+Sensitivity: backups contain the complete team dataset (identities,
+projects, meetings, notes). Treat `.dump` and `.sha256` files like
+production data: restrictive permissions by default, never commit them to
+the repository, store them only where authorized.
+
+Current limitations (deliberately NOT implemented in this slice):
+
+- No scheduling, retention/rotation, off-host upload, or encryption
+  (later slices).
+- Logical recovery point only: NO Point-in-Time Recovery (no WAL
+  archiving; `wal_level` / `archive_mode` / `archive_command` are never
+  modified).
+- Not a full cluster backup: no `pg_dumpall`. Runtime configuration is the
+  source of truth for the application DB role (recreated from
+  `POSTGRES_USER` / `POSTGRES_PASSWORD` on a fresh volume); no custom
+  tablespaces exist in this architecture.
+- No destructive in-place production restore and no automatic volume
+  deletion: disaster cutover is a later, explicitly designed runbook.
 
 ## Environment doctor (read-only)
 
