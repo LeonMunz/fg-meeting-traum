@@ -34,6 +34,7 @@ import type {
   ApiMeeting,
   ApiMeetingRecurrence,
   ApiMeetingRecurrenceOccurrence,
+  ApiMeetingRecurrenceOverview,
   ApiMeetingSeries,
 } from '../../api/types'
 
@@ -43,11 +44,14 @@ vi.mock('../../api/meetings', async (importOriginal) => {
     ...actual,
     listMeetings: vi.fn(),
     listPersonalMeetingRecurrenceOccurrences: vi.fn(),
+    listMeetingRecurrences: vi.fn(),
     materializeMeetingRecurrenceOccurrence: vi.fn(),
     createMeeting: vi.fn(),
     createMeetingFromSeries: vi.fn(),
     createMeetingRecurrence: vi.fn(),
     listMeetingSeries: vi.fn(),
+    getMeetingSeries: vi.fn(),
+    listMeetingParticipants: vi.fn(),
     searchMeetingSeriesParticipantCandidates: vi.fn(),
     searchStandaloneMeetingParticipantCandidates: vi.fn(),
   }
@@ -127,6 +131,38 @@ function makeOccurrence(
     meetingSeriesId: 7,
     researchGroupId: 1,
     projectId: null,
+    ...overrides,
+  }
+}
+
+function makeSeriesOverview(
+  overrides: Partial<ApiMeetingRecurrenceOverview> & {
+    id: number
+  },
+): ApiMeetingRecurrenceOverview {
+  return {
+    title: `Series ${overrides.id}`,
+    meetingSeriesId: 7,
+    researchGroupId: 1,
+    scope: 'group',
+    projectId: null,
+    frequency: 'weekly',
+    interval: 1,
+    weekdays: [1],
+    startDate: '2026-09-22',
+    localTime: '10:00',
+    timezone: 'Europe/Berlin',
+    endDate: null,
+    count: null,
+    creator: {
+      id: 1,
+      username: 'ana',
+      firstName: 'Ana',
+      lastName: 'Lis',
+    },
+    peopleCount: 1,
+    status: 'active',
+    nextOccurrenceScheduledAt: localIso(2026, 9, 29, 10, 0),
     ...overrides,
   }
 }
@@ -304,6 +340,7 @@ beforeEach(() => {
   vi.mocked(
     meetingsApi.listPersonalMeetingRecurrenceOccurrences,
   ).mockResolvedValue([])
+  vi.mocked(meetingsApi.listMeetingRecurrences).mockResolvedValue([])
   vi.mocked(
     meetingsApi.materializeMeetingRecurrenceOccurrence,
   ).mockResolvedValue(createdMeeting)
@@ -389,24 +426,22 @@ describe('MeetingListPage — shell (header + tabs)', () => {
     await screen.findByText('Templates overview page')
   })
 
-  it('renders clearly intentional placeholders for the unimplemented Series and Past tabs without fetching their data', async () => {
+  it('keeps Past as an explicit coming-soon shell without fetching its data', async () => {
     renderPage()
-
-    fireEvent.click(
-      screen.getByRole('tab', { name: 'Series' }),
-    )
-    expect(
-      screen.getByText('Series overview is coming soon'),
-    ).toBeVisible()
 
     fireEvent.click(screen.getByRole('tab', { name: 'Past' }))
     expect(
       screen.getByText('Past view is coming soon'),
     ).toBeVisible()
 
-    // No Series/Past data implementation leaked in.
+    // No Past data implementation leaked in. (The Series tab is a
+    // functional read-only overview — its behavior is pinned in
+    // the Series overview tests below.)
     expect(
       meetingsApi.listMeetingSeries,
+    ).not.toHaveBeenCalled()
+    expect(
+      meetingsApi.listMeetingRecurrences,
     ).not.toHaveBeenCalled()
   })
 })
@@ -1939,6 +1974,608 @@ describe('MeetingListPage — states (empty / loading / error)', () => {
     )
 
     await screen.findByText('Team Sync')
+  })
+})
+
+describe('MeetingListPage — Series overview', () => {
+  it('issues no Series request while only the Upcoming tab is rendered', async () => {
+    renderPage()
+
+    // Wait until the initial Upcoming load has settled (the header
+    // action enables only after it does).
+    await waitFor(() => {
+      expect(headerNewMeetingButton()).toBeEnabled()
+    })
+
+    expect(
+      meetingsApi.listMeetingRecurrences,
+    ).not.toHaveBeenCalled()
+  })
+
+  it('fetches the canonical window-free Series overview exactly once when Series is activated', async () => {
+    vi.mocked(meetingsApi.listMeetingRecurrences).mockResolvedValue([
+      makeSeriesOverview({ id: 301, title: 'Zebra sync' }),
+    ])
+
+    renderPage()
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Series' }))
+    await screen.findByText('Zebra sync')
+
+    // The canonical personal overview request — no occurrence
+    // window parameters, no researchGroupId parameter.
+    expect(
+      meetingsApi.listMeetingRecurrences,
+    ).toHaveBeenCalledTimes(1)
+    expect(
+      meetingsApi.listMeetingRecurrences,
+    ).toHaveBeenCalledWith()
+  })
+
+  it('renders exactly one row per returned Series, preserving the backend ordering', async () => {
+    vi.mocked(meetingsApi.listMeetingRecurrences).mockResolvedValue([
+      makeSeriesOverview({ id: 303, title: 'Zebra sync' }),
+      makeSeriesOverview({ id: 301, title: 'Alpha board' }),
+      makeSeriesOverview({ id: 302, title: 'Mid review' }),
+    ])
+
+    renderPage()
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Series' }))
+    await screen.findByText('Zebra sync')
+
+    const section = screen.getByRole('region', {
+      name: 'Meeting series',
+    })
+    const titles = within(section).getAllByText(
+      /^(Zebra sync|Alpha board|Mid review)$/,
+    )
+
+    // One row per Series, no duplicates, in the backend's order
+    // (never re-sorted client-side).
+    expect(titles.map((title) => title.textContent)).toEqual([
+      'Zebra sync',
+      'Alpha board',
+      'Mid review',
+    ])
+  })
+
+  it('renders the human-readable schedule from the structured rule for daily, weekly, and monthly Series', async () => {
+    vi.mocked(meetingsApi.listMeetingRecurrences).mockResolvedValue([
+      makeSeriesOverview({
+        id: 401,
+        title: 'Daily standup',
+        frequency: 'daily',
+        weekdays: [],
+        localTime: '09:30',
+      }),
+      makeSeriesOverview({
+        id: 402,
+        title: 'Biweekly board',
+        frequency: 'weekly',
+        interval: 2,
+        weekdays: [1, 3],
+        localTime: '10:30',
+      }),
+      makeSeriesOverview({
+        id: 403,
+        title: 'Monthly report',
+        frequency: 'monthly',
+        interval: 1,
+        startDate: '2026-09-15',
+        localTime: '14:00',
+        count: 6,
+      }),
+    ])
+
+    renderPage()
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Series' }))
+    await screen.findByText('Daily standup')
+
+    const section = screen.getByRole('region', {
+      name: 'Meeting series',
+    })
+
+    // Rule summaries from the structured fields — no
+    // display-name inference.
+    expect(within(section).getByText(/Every day at/)).toBeVisible()
+    expect(
+      within(section).getByText(
+        /Every 2 weeks on Tuesday and Thursday at/,
+      ),
+    ).toBeVisible()
+    expect(
+      within(section).getByText(/Every month on day 15 at/),
+    ).toBeVisible()
+    // End mode from the structured endDate / count fields.
+    expect(within(section).getAllByText(/· no end$/)).toHaveLength(2)
+    expect(within(section).getByText(/· 6 meetings$/)).toBeVisible()
+  })
+
+  it('renders the next effective meeting for active Series (same year and other year)', async () => {
+    vi.mocked(meetingsApi.listMeetingRecurrences).mockResolvedValue([
+      makeSeriesOverview({
+        id: 501,
+        title: 'Close sync',
+        nextOccurrenceScheduledAt: localIso(2026, 9, 29, 10, 0),
+      }),
+      makeSeriesOverview({
+        id: 502,
+        title: 'Distant review',
+        nextOccurrenceScheduledAt: localIso(2027, 1, 5, 9, 0),
+      }),
+    ])
+
+    renderPage()
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Series' }))
+    await screen.findByText('Close sync')
+
+    // Each next label appears in exactly the two responsive slots
+    // (the desktop next track + the secondary metadata that
+    // carries it on mobile/tablet; CSS hides one per viewport,
+    // happy-dom keeps both in the DOM).
+    expect(screen.getAllByText('Tue, Sep 29 · 10:00')).toHaveLength(2)
+    expect(
+      screen.getAllByText('Tue, Jan 5, 2027 · 09:00'),
+    ).toHaveLength(2)
+  })
+
+  it('renders an ended Series with its state and no fabricated next meeting', async () => {
+    vi.mocked(meetingsApi.listMeetingRecurrences).mockResolvedValue([
+      makeSeriesOverview({
+        id: 503,
+        title: 'Old project sync',
+        status: 'ended',
+        nextOccurrenceScheduledAt: null,
+        count: 3,
+      }),
+      makeSeriesOverview({
+        id: 504,
+        title: 'Still running',
+      }),
+    ])
+
+    renderPage()
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Series' }))
+    await screen.findByText('Old project sync')
+
+    // Derived state rendered restrained, per Series.
+    expect(screen.getByText('Ended')).toBeVisible()
+    expect(screen.getAllByText('Active')).toHaveLength(1)
+
+    // No next date is fabricated for the ended Series: its row
+    // carries nothing in the " · HH:MM" next-meeting shape
+    // (the schedule summary ends in the end-condition phrase).
+    const endedTitle = screen.getByText('Old project sync')
+    const endedRow = endedTitle.parentElement!.parentElement!
+    expect(
+      within(endedRow).queryAllByText(/ · \d{2}:\d{2}$/),
+    ).toHaveLength(0)
+  })
+
+  it('renders peopleCount from the API payload (no participant fetch)', async () => {
+    vi.mocked(meetingsApi.listMeetingRecurrences).mockResolvedValue([
+      makeSeriesOverview({
+        id: 601,
+        title: 'Solo series',
+        peopleCount: 1,
+      }),
+      makeSeriesOverview({
+        id: 602,
+        title: 'Crew series',
+        peopleCount: 4,
+      }),
+    ])
+
+    renderPage()
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Series' }))
+    await screen.findByText('Solo series')
+
+    // One semantic string per responsive slot (the desktop People
+    // track + the secondary metadata; CSS hides one per viewport).
+    expect(screen.getAllByText('1 person')).toHaveLength(2)
+    expect(screen.getAllByText('4 people')).toHaveLength(2)
+
+    // The overview stays based on its canonical payload: no
+    // per-Series detail, Template, or participant requests, and
+    // the occurrence feed is not re-used for the Series rows.
+    expect(meetingsApi.getMeetingSeries).not.toHaveBeenCalled()
+    expect(meetingsApi.listMeetingSeries).not.toHaveBeenCalled()
+    expect(
+      meetingsApi.listMeetingParticipants,
+    ).not.toHaveBeenCalled()
+    expect(
+      meetingsApi.listPersonalMeetingRecurrenceOccurrences,
+    ).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the header and tabs visible with a lightweight row-shaped loading state', async () => {
+    let resolveSeries!: (
+      value: ApiMeetingRecurrenceOverview[],
+    ) => void
+    vi.mocked(meetingsApi.listMeetingRecurrences).mockReturnValue(
+      new Promise((resolve) => {
+        resolveSeries = resolve
+      }),
+    )
+
+    renderPage()
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Series' }))
+
+    const skeleton = await screen.findByRole('region', {
+      name: 'Loading meeting series',
+    })
+    // Three skeleton rows matching the row geometry.
+    expect(
+      skeleton.querySelectorAll('div.min-h-\\[68px\\]').length,
+    ).toBe(3)
+
+    // Header + tabs remain visible; no page spinner copy.
+    expect(
+      screen.getByRole('heading', { name: 'Meetings' }),
+    ).toBeVisible()
+    expect(screen.getByRole('tab', { name: 'Series' })).toBeVisible()
+
+    resolveSeries!([
+      makeSeriesOverview({ id: 701, title: 'Loaded series' }),
+    ])
+    await screen.findByText('Loaded series')
+    expect(
+      screen.queryByRole('region', {
+        name: 'Loading meeting series',
+      }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('shows the restrained empty state when the overview is empty', async () => {
+    renderPage()
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Series' }))
+
+    expect(await screen.findByText('No meeting series')).toBeVisible()
+  })
+
+  it('shows a compact Series-local error with Retry that repeats only the Series request, leaving Upcoming intact', async () => {
+    vi.mocked(meetingsApi.listMeetings).mockResolvedValue([
+      makeMeeting({
+        id: 101,
+        title: 'Team Sync',
+        scheduledAt: localIso(2026, 9, 23, 10, 0),
+      }),
+    ])
+    vi.mocked(meetingsApi.listMeetingRecurrences)
+      .mockRejectedValueOnce(
+        new ApiError(500, { error: 'series down' }),
+      )
+      .mockRejectedValueOnce(
+        new ApiError(500, { error: 'series down' }),
+      )
+      .mockResolvedValueOnce([
+        makeSeriesOverview({ id: 801, title: 'Recovered series' }),
+      ])
+
+    renderPage()
+    await screen.findByText('Team Sync')
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Series' }))
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('series down')
+    expect(
+      within(alert).getByRole('button', { name: /Retry/ }),
+    ).toBeVisible()
+
+    // Upcoming remains unaffected by the Series failure…
+    fireEvent.click(screen.getByRole('tab', { name: 'Upcoming' }))
+    expect(screen.getByText('Team Sync')).toBeVisible()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+
+    // …re-activation fetches the overview again (still only the
+    // Series request)…
+    fireEvent.click(screen.getByRole('tab', { name: 'Series' }))
+    const secondAlert = await screen.findByRole('alert')
+    expect(
+      meetingsApi.listMeetingRecurrences,
+    ).toHaveBeenCalledTimes(2)
+    expect(meetingsApi.listMeetings).toHaveBeenCalledTimes(1)
+
+    // …and Retry repeats ONLY the Series request.
+    fireEvent.click(
+      within(secondAlert).getByRole('button', { name: /Retry/ }),
+    )
+    await screen.findByText('Recovered series')
+    expect(
+      meetingsApi.listMeetingRecurrences,
+    ).toHaveBeenCalledTimes(3)
+    expect(meetingsApi.listMeetings).toHaveBeenCalledTimes(1)
+    expect(
+      meetingsApi.listPersonalMeetingRecurrenceOccurrences,
+    ).toHaveBeenCalledTimes(1)
+  })
+
+  it('refetches on every Series activation, picking up authoritative server state', async () => {
+    let serverState: ApiMeetingRecurrenceOverview[] = [
+      makeSeriesOverview({ id: 901, title: 'First series' }),
+    ]
+    vi.mocked(meetingsApi.listMeetingRecurrences).mockImplementation(
+      () => Promise.resolve(serverState),
+    )
+
+    renderPage()
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Series' }))
+    await screen.findByText('First series')
+    expect(
+      meetingsApi.listMeetingRecurrences,
+    ).toHaveBeenCalledTimes(1)
+
+    // The server gains a Series (created elsewhere, or by a
+    // second client): the next activation must obtain the
+    // authoritative state, never a fabricated local row.
+    serverState = [
+      ...serverState,
+      makeSeriesOverview({ id: 902, title: 'Second series' }),
+    ]
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Upcoming' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Series' }))
+
+    await screen.findByText('Second series')
+    expect(
+      meetingsApi.listMeetingRecurrences,
+    ).toHaveBeenCalledTimes(2)
+  })
+
+  it('refetches the Series overview after a Series is created while the tab is active', async () => {
+    const createdRecurrence: ApiMeetingRecurrence = {
+      id: 44,
+      title: 'Created series',
+      meetingSeriesId: 7,
+      researchGroupId: 1,
+      scope: 'group',
+      projectId: null,
+      frequency: 'weekly',
+      interval: 1,
+      weekdays: [3],
+      startDate: '2026-09-24',
+      localTime: '10:30',
+      timezone: 'Europe/Berlin',
+      endDate: null,
+      count: null,
+    }
+    vi.mocked(
+      meetingsApi.createMeetingRecurrence,
+    ).mockResolvedValue(createdRecurrence)
+
+    let serverState: ApiMeetingRecurrenceOverview[] = [
+      makeSeriesOverview({ id: 911, title: 'Existing series' }),
+    ]
+    vi.mocked(meetingsApi.listMeetingRecurrences).mockImplementation(
+      () => Promise.resolve(serverState),
+    )
+
+    renderPage()
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Series' }))
+    await screen.findByText('Existing series')
+
+    // Create a recurring series while the Series tab is active;
+    // the server state gains the new Series.
+    serverState = [
+      ...serverState,
+      makeSeriesOverview({
+        id: createdRecurrence.id,
+        title: createdRecurrence.title,
+      }),
+    ]
+
+    await openCreateDialog()
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Created series' },
+    })
+    await selectTemplate()
+    fireEvent.change(screen.getByLabelText('Date'), {
+      target: { value: '2026-09-24' },
+    })
+    fireEvent.change(screen.getByLabelText('Time'), {
+      target: { value: '10:30' },
+    })
+    fireEvent.change(screen.getByLabelText('Repeat'), {
+      target: { value: 'weekly' },
+    })
+
+    fireEvent.submit(
+      screen.getByLabelText('Title').closest('form')!,
+    )
+
+    await waitFor(() => {
+      expect(
+        meetingsApi.createMeetingRecurrence,
+      ).toHaveBeenCalledTimes(1)
+    })
+
+    // The open Series view is refreshed from the server: the new
+    // row appears alongside the existing one — no fabricated
+    // local row is relied on.
+    await screen.findByText('Created series')
+    expect(
+      meetingsApi.listMeetingRecurrences,
+    ).toHaveBeenCalledTimes(2)
+    expect(screen.getByText('Existing series')).toBeVisible()
+  })
+
+  it('keeps Series rows read-only: no navigation, no actions, nothing that looks clickable', async () => {
+    vi.mocked(meetingsApi.listMeetingRecurrences).mockResolvedValue([
+      makeSeriesOverview({ id: 921, title: 'Zebra sync' }),
+    ])
+
+    renderPage()
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Series' }))
+    await screen.findByText('Zebra sync')
+
+    const section = screen.getByRole('region', {
+      name: 'Meeting series',
+    })
+
+    // No interactive affordance inside the overview (no row
+    // actions menu, no links, no tab stops on the rows)…
+    expect(within(section).queryAllByRole('button')).toHaveLength(0)
+    expect(within(section).queryAllByRole('link')).toHaveLength(0)
+    expect(within(section).queryAllByRole('menu')).toHaveLength(0)
+    expect(section.querySelectorAll('[tabindex]')).toHaveLength(0)
+
+    // …and activation does nothing: no navigation, no detail
+    // destination is fabricated.
+    fireEvent.click(screen.getByText('Zebra sync'))
+    expect(
+      screen.queryByText(/Meeting detail:/),
+    ).not.toBeInTheDocument()
+    expect(screen.getByText('Zebra sync')).toBeVisible()
+  })
+
+  it('shows only the active Research Group\'s Series, preserving the backend ordering', async () => {
+    // The personal overview is cross-group: the backend can return
+    // rows from several Research Groups in one response.
+    vi.mocked(meetingsApi.listMeetingRecurrences).mockResolvedValue([
+      makeSeriesOverview({
+        id: 511,
+        title: 'Group one alpha',
+        researchGroupId: 1,
+      }),
+      makeSeriesOverview({
+        id: 512,
+        title: 'Group two series',
+        researchGroupId: 2,
+      }),
+      makeSeriesOverview({
+        id: 513,
+        title: 'Group one beta',
+        researchGroupId: 1,
+      }),
+      makeSeriesOverview({
+        id: 514,
+        title: 'Group two again',
+        researchGroupId: 2,
+        peopleCount: 3,
+      }),
+      // Project scope belongs to its Research Group — kept when
+      // that group is active.
+      makeSeriesOverview({
+        id: 515,
+        title: 'Project series',
+        researchGroupId: 1,
+        projectId: 5,
+      }),
+    ])
+
+    renderPage()
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Series' }))
+    await screen.findByText('Group one alpha')
+
+    const section = screen.getByRole('region', {
+      name: 'Meeting series',
+    })
+    const titles = within(section).getAllByText(
+      /^(Group one alpha|Group one beta|Project series|Group two series|Group two again)$/,
+    )
+
+    // Only the active group's rows, in the backend's ordering.
+    expect(titles.map((title) => title.textContent)).toEqual([
+      'Group one alpha',
+      'Group one beta',
+      'Project series',
+    ])
+    expect(
+      screen.queryByText('Group two series'),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByText('Group two again'),
+    ).not.toBeInTheDocument()
+
+    // The scoping is a pure page-level filter: exactly one
+    // overview request, no Research Group / detail / participant
+    // lookups.
+    expect(
+      meetingsApi.listMeetingRecurrences,
+    ).toHaveBeenCalledTimes(1)
+    expect(meetingsApi.listMeetings).toHaveBeenCalledTimes(1)
+    expect(
+      meetingsApi.listPersonalMeetingRecurrenceOccurrences,
+    ).toHaveBeenCalledTimes(1)
+    expect(meetingsApi.getMeetingSeries).not.toHaveBeenCalled()
+    expect(meetingsApi.listMeetingSeries).not.toHaveBeenCalled()
+    expect(
+      meetingsApi.listMeetingParticipants,
+    ).not.toHaveBeenCalled()
+  })
+
+  it('scopes to the page\'s active Research Group context, not a fixed group', async () => {
+    vi.mocked(useResearchGroupListScope).mockReturnValue({
+      activeResearchGroupId: 2,
+      activeResearchGroup: {
+        id: 2,
+        name: 'Other FG',
+        role: 'admin',
+      },
+      loading: false,
+      error: null,
+    })
+    vi.mocked(meetingsApi.listMeetingRecurrences).mockResolvedValue([
+      makeSeriesOverview({
+        id: 521,
+        title: 'First group series',
+        researchGroupId: 1,
+      }),
+      makeSeriesOverview({
+        id: 522,
+        title: 'Second group series',
+        researchGroupId: 2,
+      }),
+    ])
+
+    renderPage()
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Series' }))
+    await screen.findByText('Second group series')
+
+    expect(
+      screen.queryByText('First group series'),
+    ).not.toBeInTheDocument()
+    // The concrete Meeting list follows the same page scope.
+    expect(meetingsApi.listMeetings).toHaveBeenCalledWith(2)
+  })
+
+  it('applies the Meetings page research-group context: no Series request without an active group', async () => {
+    vi.mocked(useResearchGroupListScope).mockReturnValue({
+      activeResearchGroupId: null,
+      activeResearchGroup: null,
+      loading: false,
+      error: null,
+    })
+
+    renderPage()
+
+    // The page-level context gate (the same convention as
+    // Upcoming) also applies to the personal Series overview.
+    expect(
+      await screen.findByText(
+        'No research group is currently available.',
+      ),
+    ).toBeVisible()
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Series' }))
+    expect(
+      screen.getByText('No research group is currently available.'),
+    ).toBeVisible()
+    expect(
+      meetingsApi.listMeetingRecurrences,
+    ).not.toHaveBeenCalled()
   })
 })
 

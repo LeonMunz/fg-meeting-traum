@@ -13,6 +13,7 @@ import {
   createMeetingFromSeries,
   createMeetingRecurrence,
   listMeetings,
+  listMeetingRecurrences,
   listPersonalMeetingRecurrenceOccurrences,
   materializeMeetingRecurrenceOccurrence,
 } from '../../api/meetings'
@@ -20,12 +21,14 @@ import type {
   ApiMeeting,
   ApiCreateMeetingRecurrenceInput,
   ApiMeetingRecurrenceOccurrence,
+  ApiMeetingRecurrenceOverview,
 } from '../../api/types'
 import { useResearchGroupListScope } from '../research-group/useResearchGroupListScope'
 import {
   CreateMeetingDialog,
   type CreateMeetingInput,
 } from './CreateMeetingDialog'
+import { MeetingSeriesList } from './MeetingSeriesList'
 import {
   buildUpcomingList,
   selectUpcomingConcreteMeetings,
@@ -71,9 +74,10 @@ function getErrorMessage(
 }
 
 /**
- * Clearly intentional placeholder shell for the tabs that this
- * checkpoint does not implement yet (Series overview, Past). No data
- * is requested and no product behavior is simulated.
+ * Clearly intentional placeholder shell for the tab that this
+ * checkpoint does not implement yet (Past). No data is requested
+ * and no product behavior is simulated. (The Series tab is a
+ * functional read-only overview — see `MeetingSeriesList`.)
  */
 function ComingSoonPanel({
   icon,
@@ -168,6 +172,17 @@ export function MeetingListPage() {
     useState<ApiMeetingRecurrenceOccurrence[] | null>(null)
   const [occurrencesError, setOccurrencesError] =
     useState<string | null>(null)
+  // The personal Series overview: `null` = not loaded yet /
+  // loading. Fetched ONLY while the Series tab is active (see the
+  // activation effect below). The personal API is window-free and
+  // spans EVERY Research Group the user is personally relevant to
+  // (it takes no group parameter) — the page therefore keeps only
+  // the rows of its OWN active Research Group (see `loadSeries`).
+  const [series, setSeries] = useState<
+    ApiMeetingRecurrenceOverview[] | null
+  >(null)
+  const [seriesError, setSeriesError] =
+    useState<string | null>(null)
   const [createDialogOpen, setCreateDialogOpen] =
     useState(false)
   const [creating, setCreating] = useState(false)
@@ -247,6 +262,44 @@ export function MeetingListPage() {
     }
   }, [requestWindow])
 
+  const loadSeries = useCallback(async () => {
+    if (activeResearchGroupId == null) {
+      setSeries([])
+      setSeriesError(null)
+      return
+    }
+
+    setSeries(null)
+    setSeriesError(null)
+
+    try {
+      const rows = await listMeetingRecurrences()
+
+      // The personal overview is cross-group: it carries Series
+      // from every Research Group the user is personally relevant
+      // to. The Meetings page is scoped to its active Research
+      // Group, so keep only that group's rows — by each row's
+      // canonical `researchGroupId` (Project-scoped Series carry
+      // their group too). The stable filter preserves the
+      // backend's ordering; no re-sort, no extra requests, no
+      // Research Group fetch.
+      setSeries(
+        rows.filter(
+          (row) =>
+            row.researchGroupId ===
+            activeResearchGroupId,
+        ),
+      )
+    } catch (loadError) {
+      setSeriesError(
+        getErrorMessage(
+          loadError,
+          'Meeting series could not be loaded.',
+        ),
+      )
+    }
+  }, [activeResearchGroupId])
+
   const dismissSeriesToast =
     useCallback(() => {
       if (seriesToastTimer.current != null) {
@@ -288,6 +341,20 @@ export function MeetingListPage() {
     loadMeetings,
     loadOccurrences,
   ])
+
+  // The Series overview is fetched on tab ACTIVATION (and whenever
+  // the page's research-group context changes while the tab is
+  // active) — never merely from rendering Upcoming. Every
+  // activation refetches, so a newly created series is always
+  // picked up from the authoritative server state rather than a
+  // fabricated local row.
+  useEffect(() => {
+    if (activeTab !== 'series' || activeResearchGroupId == null) {
+      return
+    }
+
+    void loadSeries()
+  }, [activeTab, activeResearchGroupId, loadSeries])
 
   const upcomingGroups = useMemo(() => {
     if (meetings == null) {
@@ -376,6 +443,13 @@ export function MeetingListPage() {
       setCreateDialogOpen(false)
       showSeriesToast()
       void loadOccurrences()
+
+      // A successful creation invalidates any open Series view:
+      // the overview refetches its authoritative server state when
+      // the tab is active (no fabricated local row).
+      if (activeTab === 'series') {
+        void loadSeries()
+      }
     } catch (createSeriesError) {
       // The dialog stays open with all recurrence fields preserved;
       // there is no fallback to ordinary Meeting creation.
@@ -746,11 +820,22 @@ export function MeetingListPage() {
           ))}
 
         {activeTab === 'series' && (
-          <ComingSoonPanel
-            icon="repeat"
-            title="Series overview is coming soon"
-            description="Recurring series you create will appear here, with their rule and upcoming occurrences."
-          />
+          groupUnavailable ? (
+            <div className="rounded-[10px] border border-dashed border-border-default bg-surface-quiet px-6 py-12 text-center">
+              <p className="text-sm text-text-muted">
+                No research group is currently available.
+              </p>
+            </div>
+          ) : (
+            <MeetingSeriesList
+              series={series}
+              error={seriesError}
+              onRetry={() => {
+                void loadSeries()
+              }}
+              onNewMeeting={openCreateDialog}
+            />
+          )
         )}
 
         {activeTab === 'past' && (

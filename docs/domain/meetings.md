@@ -972,10 +972,22 @@ user-facing copy (the action is "Open meeting").
 Participants render only from the concrete Meeting's
 `participantIds` (never fabricated for virtual occurrences — the
 feed carries no participant data; the asymmetric contract is a
-known follow-up). `Series` and `Past` exist as structural tabs
-with explicit coming-soon shells; their product behavior remains
-deferred (the backend Series overview read contract IS implemented —
-see "Series overview read API (implemented)" below).
+known follow-up). `Series` is a functional read-only overview over
+the personal Series overview API: selecting the tab issues exactly
+one canonical `GET /api/meeting-recurrences/` (window-free, no
+group parameter). The personal overview is cross-group by
+contract — it returns every Series the user is personally
+relevant to, across all of their Research Groups — so the page
+keeps only the rows of its active Research Group via each row's
+canonical `researchGroupId` (a stable page-level filter: backend
+ordering among the kept rows is preserved, no extra requests, no
+Research Group fetch), mirroring the Meetings page research-group
+context gate. It renders one read-only row per kept record in the
+backend's ordering and exposes no row navigation, actions, or
+client-side re-sorting (see the checkpoint entry "Meetings Series
+overview tab"); `Past` remains an explicit coming-soon shell (the
+backend Series overview read contract IS implemented — see "Series
+overview read API (implemented)" below).
 
 ### Series overview read API (implemented)
 
@@ -1826,8 +1838,11 @@ unimplemented:
 
   The personal recurring-SERIES overview backend read contract IS
   implemented (see "Series overview read API (implemented)" above);
-  the Series tab UI, Series search / status-filter UI, and a Series
-  detail route/page remain unimplemented.
+  the read-only Series tab overview UI IS implemented as well
+  (selecting the tab issues the canonical `GET
+  /api/meeting-recurrences/`; see the checkpoint entry "Meetings
+  Series overview tab"); Series search / status-filter UI and a
+  Series detail route/page remain unimplemented.
 
   The bounded current-user recurring-occurrence feed backend read
   contract IS implemented (see
