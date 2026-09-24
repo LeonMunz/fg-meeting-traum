@@ -183,6 +183,34 @@ The Living-Lab environment uses:
 
 A test session should be attributable to an identifiable product version/commit.
 
+### Production configuration boundary
+
+`config.settings_production` is the fail-closed Django boundary for the
+intended same-origin HTTPS deployment. The production process must explicitly
+provide `DJANGO_SECRET_KEY`, all five current PostgreSQL connection values
+(`POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_HOST`, and
+`POSTGRES_PORT`), comma-separated `DJANGO_ALLOWED_HOSTS`, and comma-separated
+`DJANGO_CSRF_TRUSTED_ORIGINS`. Trusted CSRF origins must be explicit HTTPS
+origins; development localhost origins are confined to the development
+settings module.
+
+TLS is expected to terminate at a trusted reverse proxy. Django trusts exactly
+`X-Forwarded-Proto: https` through `SECURE_PROXY_SSL_HEADER` and redirects
+requests it does not recognize as secure. The Django application port must
+therefore remain private and accept traffic only from the trusted proxy;
+otherwise an untrusted client could forge that header. Secure session and CSRF
+cookies remain mandatory.
+
+HSTS is deliberately deferred until the real hostname, TLS termination, and
+proxy path have passed deployment acceptance. Until then, Django's
+`check --deploy` is expected to retain `security.W004`; do not describe that
+check as clean and do not enable long-lived HSTS merely to silence it.
+
+This settings contract alone does not make FG Workspace deployable. A
+production application server, container and TLS-proxy configuration, durable
+PostgreSQL storage, backup/restore, and deployment operations remain separate
+follow-up work.
+
 ## Environment doctor (read-only)
 
 `scripts/agent-doctor.sh` is a single read-only diagnostic command that reports

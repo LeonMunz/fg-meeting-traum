@@ -205,7 +205,7 @@ Canonical domain reference: `docs/domain/home.md`.
 
 Canonical domain reference: `docs/domain/authentication-sessions.md`.
 
-- **IMPLEMENTED** — Django-backed browser authentication (`login` / `logout` / `me` + CSRF endpoint) with server-side DB sessions; HttpOnly session cookie with `SameSite=Lax`; Secure cookies and CSRF transport via the production settings module `config.settings_production` (local HTTP development keeps Secure off explicitly).
+- **IMPLEMENTED** — Django-backed browser authentication (`login` / `logout` / `me` + CSRF endpoint) with server-side DB sessions; HttpOnly session cookie with `SameSite=Lax`; fail-closed production settings require an explicit deployment secret, all PostgreSQL connection fields, allowed hosts, and HTTPS CSRF trusted origins, keep Secure cookies enabled, trust only the configured forwarded-proto HTTPS signal from a private reverse proxy, and redirect non-secure requests (local HTTP development keeps its existing defaults and Secure off explicitly; HSTS remains deferred until TLS/proxy acceptance).
 - **IMPLEMENTED** — session-fixation protection: login rotates the session identifier (Django `login()`); a pre-login/anonymous session cookie cannot authenticate after login.
 - **IMPLEMENTED** — logout invalidates the current session server-side (Django session row + registry row); replaying the logged-out session cookie does not authenticate.
 - **IMPLEMENTED** — revocable multi-session foundation: `accounts.UserSession` server-side registry (metadata only; non-secret `public_id` UUID; the raw Django session key is never exposed; registry rows never grant authentication) with lazy registration for sessions created outside the login endpoint.

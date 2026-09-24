@@ -135,12 +135,17 @@ Production (`config/settings_production.py`):
 - `SESSION_COOKIE_SECURE = True`
 - `CSRF_COOKIE_SECURE = True`
 - `DEBUG = False`
+- `SECURE_SSL_REDIRECT = True`
+- `SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")`; the
+  application port must be private behind the trusted TLS-terminating proxy.
 - HttpOnly and SameSite=Lax inherited from the base settings.
 - The module refuses to start with the committed development
   `SECRET_KEY` (`DJANGO_SECRET_KEY` must be provided by the deployment),
-  so production session cookies are never signed with a repo-committed
-  secret. `ALLOWED_HOSTS` stays empty unless the deployment overrides
-  it (refuse-all default).
+  so production session cookies are never signed with a repo-committed secret.
+- PostgreSQL connection fields, allowed hosts, and HTTPS CSRF trusted origins
+  are explicit production environment inputs and fail closed when absent or
+  blank; development database defaults and localhost origins never become
+  production configuration.
 
 CSRF:
 
