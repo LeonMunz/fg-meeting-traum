@@ -1,0 +1,164 @@
+# FG Workspace — local production Compose topology.
+#
+# Loopback-only, production-shaped stack. This is deliberately NOT the
+# public deployment: no public hostname, no TLS/ACME, no backup
+# automation, no release migration orchestration, no image publishing.
+#
+#   127.0.0.1:<FG_HTTP_PORT, default 8080>
+#                    |
+#                    v
+#                  web   Caddy gateway: static SPA + /api reverse proxy
+#                    |
+#                    v   [gateway network: web <-> api]
+#                  api   Gunicorn (config.settings_production), private :8000
+#                    |
+#                    v   [data network: api <-> db, internal]
+#                  db    PostgreSQL 16 on a separately managed
+#                         external persistent volume
+#
+# Invariants:
+#   * web and api consume prebuilt, immutable images through required
+#     FG_WEB_IMAGE / FG_API_IMAGE substitution. This file never builds
+#     application source; a later GHCR/deploy slice substitutes exact
+#     commit-SHA image references through the same variables without
+#     changing this topology.
+#   * PostgreSQL data lives in the EXTERNAL volume named by
+#     FG_POSTGRES_DATA_VOLUME. Compose does not own that volume's
+#     lifecycle: bootstrap creates it once, `down` never deletes team
+#     data, and later backup tooling targets exactly this volume.
+#   * Only the Caddy gateway port is published, and only on loopback.
+#     The api (8000) and db (5432) ports exist only inside the Compose
+#     networks.
+#   * web cannot address db (no shared network); db has no path through
+#     the gateway network and no external network path at all.
+#   * No TLS, no ACME, no public hostname. The gateway's
+#     X-Forwarded-Proto: https injection is a temporary LOCAL-ONLY
+#     topology bridge (see deploy/Caddyfile and docs/living-lab.md).
+#   * Startup runs no migrations and no seeding; both remain explicit
+#     one-shot operator actions (release orchestration is a later slice).
+#
+# Runtime-owned configuration (all required, no repository defaults):
+#   FG_WEB_IMAGE, FG_API_IMAGE, FG_POSTGRES_DATA_VOLUME
+#   POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD
+#   DJANGO_SECRET_KEY, DJANGO_ALLOWED_HOSTS, DJANGO_CSRF_TRUSTED_ORIGINS
+# Optional: FG_HTTP_PORT (default 8080).
+# Placeholder names only: deploy/.env.example (deploy/.env stays ignored).
+
+name: fg-production
+
+services:
+  web:
+    image: ${FG_WEB_IMAGE:?FG_WEB_IMAGE is required}
+    # Topology-level Caddyfile: the same static contract as the
+    # image-level apps/web/Caddyfile, but /api is reverse-proxied to the
+    # private api service instead of returning 404. Mounted read-only
+    # over the image default; the image itself stays reusable.
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    networks:
+      - gateway
+    # The single host-reachable surface: loopback only. Caddy listens on
+    # the unprivileged internal port 8080 (image-level contract).
+    ports:
+      - "127.0.0.1:${FG_HTTP_PORT:-8080}:8080"
+    # The gateway only starts once the API it proxies is actually
+    # healthy, so the loopback surface never points at a dead upstream.
+    depends_on:
+      api:
+        condition: service_healthy
+
+  api:
+    image: ${FG_API_IMAGE:?FG_API_IMAGE is required}
+    # The image's Gunicorn entrypoint (private 0.0.0.0:8000) is used
+    # as-is; port 8000 is reachable from Compose networks only.
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings_production
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?DJANGO_SECRET_KEY is required}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:?DJANGO_ALLOWED_HOSTS is required}
+      DJANGO_CSRF_TRUSTED_ORIGINS: ${DJANGO_CSRF_TRUSTED_ORIGINS:?DJANGO_CSRF_TRUSTED_ORIGINS is required}
+    networks:
+      - gateway
+      - data
+    # Liveness only: the Gunicorn process can serve /api/health/. This is
+    # NOT database readiness — that is represented by the db healthcheck
+    # and the service_healthy dependency below. Stdlib only; the Host
+    # header uses the first configured allowed host so the check stays
+    # valid for any deployment's DJANGO_ALLOWED_HOSTS, and
+    # X-Forwarded-Proto: https is the production settings contract.
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - |
+          import os, sys, urllib.request
+          host = os.environ["DJANGO_ALLOWED_HOSTS"].split(",")[0].strip()
+          req = urllib.request.Request(
+              "http://127.0.0.1:8000/api/health/",
+              headers={"Host": host, "X-Forwarded-Proto": "https"},
+          )
+          try:
+              with urllib.request.urlopen(req, timeout=3) as resp:
+                  sys.exit(0 if 200 <= resp.status < 300 else 1)
+          except Exception:
+              sys.exit(1)
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    # Immutable digest pin of the official multi-platform manifest for
+    # postgres:16.15-bookworm (OCI image index sha256:efedf3595f1d...,
+    # resolved from the registry on 2026-09-24; the index carries
+    # linux/amd64 for the VServer target and linux/arm64 for developer
+    # acceptance). PostgreSQL major version is fixed at 16 for this
+    # topology; a 17/18 upgrade is a separate migration decision.
+    image: postgres:16.15-bookworm@sha256:efedf3595f1d6f415c08568ba171029bf54052e754cc9f030e3f2412b21f3d67
+    # First-initialization credentials only: on an already-initialized
+    # persistent volume the existing cluster (including its credentials)
+    # remains authoritative and the postgres entrypoint ignores these.
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    # Canonical cluster location. The volume is externally managed
+    # (see top-level `volumes`): Compose must not create, rename, or
+    # delete it, and `down` must not remove it.
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - data
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  postgres-data:
+    # Separately managed persistent PostgreSQL data. The operator
+    # creates the volume once outside Compose (bootstrap) and removes it
+    # only as an explicit, destructive decision.
+    external: true
+    name: ${FG_POSTGRES_DATA_VOLUME:?FG_POSTGRES_DATA_VOLUME is required}
+
+networks:
+  gateway:
+    # web <-> api. The only network the gateway container joins.
+  data:
+    # api <-> db. Internal: the data tier has no external network path
+    # at all (any egress the api ever needs flows via the gateway
+    # network, which this network does not provide).
+    internal: true

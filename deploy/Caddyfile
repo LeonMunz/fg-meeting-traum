@@ -1,0 +1,71 @@
+# FG Workspace — local production topology gateway (deploy-level Caddyfile).
+#
+# Mounted read-only over /etc/caddy/Caddyfile by
+# deploy/compose.production.yaml, replacing the image-level
+# apps/web/Caddyfile (which is left unchanged so the static frontend
+# image stays reusable).
+#
+# This file preserves the proven image-level static contract:
+#   * /assets/* serves real fingerprinted assets with the immutable
+#     cache policy (a missing asset is a 404, never the SPA document);
+#   * the SPA fallback is the matcher-less catch-all (real files as-is,
+#     otherwise the SPA document) with a revalidation-friendly
+#     no-cache policy for the document;
+# and it adds the one topology behavior the image deliberately lacks:
+#   * /api and /api/* are reverse-proxied to the private Gunicorn
+#     service (api:8000) on the Compose gateway network. The /api
+#     prefix is NOT stripped — the Django application is mounted at
+#     /api/... .
+#
+# TEMPORARY LOCAL-ONLY FORWARDED-PROTO BRIDGE (read before deploying):
+# this gateway listens on loopback HTTP for local acceptance, while the
+# same-origin HTTPS production contract (config.settings_production:
+# SECURE_SSL_REDIRECT + SECURE_PROXY_SSL_HEADER) requires the request to
+# present as https from the one trusted proxy. The reverse proxy below
+# therefore injects X-Forwarded-Proto: https toward api.
+# This is an explicitly temporary bridge of the LOCAL topology, NOT the
+# public deployment contract: the public slice terminates real TLS at
+# this same gateway (ACME/HSTS then belong there). Until then the
+# loopback HTTP surface is for operational acceptance (SPA delivery,
+# /api routing, health, database persistence) — not for authenticated
+# browser use, because Secure session/CSRF cookies and HTTPS-only
+# trusted CSRF origins make browser login impossible over plain HTTP.
+# The api port stays private to the Compose networks, so untrusted
+# clients cannot reach Django directly and forge the header.
+
+{
+	admin off
+	auto_https off
+}
+
+:8080 {
+	root * /srv
+
+	# API namespace: reverse proxy to the private Gunicorn service.
+	# The production settings contract trusts exactly
+	# X-Forwarded-Proto: https from this proxy (temporary LOCAL-ONLY
+	# bridge; see file header).
+	@api path /api /api/*
+	handle @api {
+		reverse_proxy api:8000 {
+			header_up X-Forwarded-Proto https
+		}
+	}
+
+	# Fingerprinted Vite build assets: long-lived immutable caching.
+	# A missing asset is a 404, never the SPA document.
+	handle /assets/* {
+		header Cache-Control "public, max-age=31536000, immutable"
+		file_server
+	}
+
+	# Catch-all fallback (matcher-less handle): real files are served
+	# as-is, otherwise the SPA document bootstraps any React Router
+	# path. no-cache keeps each deployed asset graph discoverable via
+	# revalidation (ETag/Last-Modified).
+	handle {
+		header Cache-Control "no-cache"
+		try_files {path} /index.html
+		file_server
+	}
+}

@@ -222,9 +222,114 @@ is process liveness only and deliberately performs no database readiness
 check.
 
 This backend runtime artifact alone does not make FG Workspace deployable.
-The frontend production image/static-serving boundary, TLS reverse proxy,
-durable PostgreSQL storage, backup/restore, migration/release orchestration,
-image publishing, and deployment automation remain separate follow-up work.
+The local production Compose topology (one loopback gateway, `/api`
+reverse proxy, durable PostgreSQL storage on a separately managed external
+volume) is now implemented as local-only infrastructure — see Local
+production stack below. TLS/public hostname, backup/restore,
+migration/release orchestration, image publishing, and deployment
+automation remain separate follow-up work.
+
+### Local production stack (Compose topology)
+
+`deploy/compose.production.yaml` runs FG Workspace as one production-shaped
+local stack behind a single loopback gateway. It is deliberately NOT the
+public deployment: no public hostname, no TLS/ACME, no backup automation,
+no release migration orchestration, no image publishing.
+
+```text
+127.0.0.1:<FG_HTTP_PORT, default 8080>
+                 |
+                 v
+               web    Caddy: static SPA + /api reverse proxy
+                 |
+                 v   [gateway network: web <-> api]
+               api    Gunicorn (config.settings_production), private :8000
+                 |
+                 v   [data network: api <-> db, internal]
+               db     PostgreSQL 16 (digest-pinned 16.15-bookworm),
+                      external persistent volume
+```
+
+Dominant invariants:
+
+- Application containers are disposable: `web` and `api` consume prebuilt
+  images (`FG_WEB_IMAGE`, `FG_API_IMAGE`); the Compose file carries no
+  `build:` for application services.
+- PostgreSQL data lives in a separately managed external Docker volume
+  (`FG_POSTGRES_DATA_VOLUME` at `/var/lib/postgresql/data`). Compose never
+  creates or deletes it: `down` + container/stack recreation preserves all
+  data, and removing the volume is an explicit, destructive operator
+  decision (later backup tooling targets this exact volume).
+- Only the Caddy gateway is reachable from the host, and only on loopback.
+  `api` (8000) and `db` (5432) have no host ports, and `web` cannot
+  address `db` (no shared network).
+
+Local acceptance procedure (Docker-capable machine; the development setup
+uses `colima start` for the Docker daemon):
+
+```bash
+# 1) Build local test images from the current worktree (image contracts
+#    from the backend/frontend production container slices).
+docker build -f apps/web/Dockerfile -t fg-workspace-web:compose-topology-local .
+docker build -f apps/api/Dockerfile -t fg-workspace-api:compose-topology-local apps/api
+
+# 2) Create the external PostgreSQL data volume ONCE (operator-owned).
+docker volume create fg_production_pg16_data
+
+# 3) Runtime configuration (the repository holds placeholders only).
+cp deploy/.env.example deploy/.env   # then fill in real local values:
+#    FG_WEB_IMAGE, FG_API_IMAGE, FG_POSTGRES_DATA_VOLUME,
+#    POSTGRES_DB / POSTGRES_USER / POSTGRES_PASSWORD,
+#    DJANGO_SECRET_KEY, DJANGO_ALLOWED_HOSTS=127.0.0.1,
+#    DJANGO_CSRF_TRUSTED_ORIGINS=https://127.0.0.1:8080
+
+# 4) Start (Compose auto-loads deploy/.env from the project directory).
+docker-compose -f deploy/compose.production.yaml up -d
+docker-compose -f deploy/compose.production.yaml ps   # expect: db, api, web all healthy
+
+# 5) Gateway acceptance.
+curl -fsS http://127.0.0.1:8080/ | head -c 200                  # SPA document
+curl -fsSI http://127.0.0.1:8080/ | grep -i '^cache-control'    # no-cache
+# Fingerprinted asset referenced by the served document:
+curl -fsSI "http://127.0.0.1:8080/assets/<fingerprinted-asset>.js" | grep -i '^cache-control'  # immutable
+curl -fsS http://127.0.0.1:8080/api/health/                     # {"status": "ok"} via proxy
+curl -fsS http://127.0.0.1:8080/meetings | head -c 100          # SPA fallback document
+
+# 6) Network isolation (both commands must fail to resolve).
+docker-compose -f deploy/compose.production.yaml exec web getent hosts db
+docker-compose -f deploy/compose.production.yaml exec db  getent hosts web
+
+# 7) DB readiness + explicit one-shot migration (never automatic).
+docker-compose -f deploy/compose.production.yaml exec api python manage.py migrate
+
+# 8) Persistence across container/stack recreation.
+docker-compose -f deploy/compose.production.yaml exec db sh -c \
+  'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "CREATE TABLE IF NOT EXISTS topology_persistence_check (id int primary key);"'
+docker-compose -f deploy/compose.production.yaml down
+docker-compose -f deploy/compose.production.yaml up -d
+docker-compose -f deploy/compose.production.yaml exec db sh -c \
+  'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "\dt topology_persistence_check"'
+# expect: the table survives
+
+# 9) Teardown keeps the volume.
+docker-compose -f deploy/compose.production.yaml down
+docker volume ls   # fg_production_pg16_data still exists
+# docker volume rm fg_production_pg16_data   # ONLY an explicit data-destruction decision
+```
+
+Caveats (read before using the loopback surface):
+
+- **Temporary local bridge**: the gateway is loopback HTTP, and the deploy
+  Caddyfile injects `X-Forwarded-Proto: https` toward `api` to satisfy the
+  production settings contract. Secure session/CSRF cookies and HTTPS-only
+  trusted origins make browser login impossible over plain HTTP, so this
+  surface is for operational acceptance, not authenticated browser use.
+  The public slice terminates real TLS at this same gateway.
+- `POSTGRES_DB` / `POSTGRES_USER` / `POSTGRES_PASSWORD` apply to first
+  initialization only; on an already-initialized volume the existing
+  cluster (and its credentials) is authoritative.
+- Startup runs no migrations and no seeding; run explicit one-shot
+  commands (step 7) — release orchestration is a later slice.
 
 ## Environment doctor (read-only)
 
