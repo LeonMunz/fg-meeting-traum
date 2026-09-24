@@ -1,0 +1,40 @@
+# FG Workspace — frontend static runtime (image-level slice).
+#
+# Serves the built Vite SPA from /srv on an unprivileged internal port.
+# No TLS, no ACME, no public domain, no /api reverse proxy — those
+# belong to the later Compose/network slice.
+
+{
+	admin off
+	auto_https off
+}
+
+:8080 {
+	root * /srv
+
+	# The API namespace is deliberately EXCLUDED from the SPA fallback:
+	# no reverse proxy exists in this slice, so both /api and /api/*
+	# fail with a deterministic HTTP 404 instead of masquerading as
+	# the frontend.
+	@api path /api /api/*
+	handle @api {
+		respond 404
+	}
+
+	# Fingerprinted Vite build assets: long-lived immutable caching.
+	# A missing asset is a 404, never the SPA document.
+	handle /assets/* {
+		header Cache-Control "public, max-age=31536000, immutable"
+		file_server
+	}
+
+	# Catch-all fallback (matcher-less handle): real files are served
+	# as-is, otherwise the SPA document bootstraps any React Router
+	# path. no-cache keeps each deployed asset graph discoverable via
+	# revalidation (ETag/Last-Modified).
+	handle {
+		header Cache-Control "no-cache"
+		try_files {path} /index.html
+		file_server
+	}
+}

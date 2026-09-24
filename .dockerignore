@@ -1,0 +1,54 @@
+# Frontend image build context = repository root (the npm workspace
+# lockfile lives at the root). Only the workspace manifests and the
+# web workspace source are needed; everything else is excluded so
+# secrets, artifacts, and the Python backend never enter the context.
+#
+# This file applies only to builds whose context is the repository
+# root (the frontend image). The backend image uses apps/api/ as its
+# build context and reads apps/api/.dockerignore, so it is unaffected.
+
+# Version control / IDE / OS
+.git
+.gitignore
+.github
+.air
+.idea
+*.iml
+.DS_Store
+
+# Python backend (not part of the npm workspace build)
+apps/api
+
+# Node caches and prebuilt output (rebuilt inside the image)
+node_modules
+**/node_modules
+.npm-cache
+**/.vite
+apps/web/dist
+
+# Environment files — never baked into the image
+.env
+.env.*
+
+# Tests, coverage, Python caches
+e2e
+evals
+playwright.config.ts
+playwright.diagnostics.config.ts
+playwright-report
+test-results
+**/htmlcov
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/.coverage
+**/.venv
+**/__pycache__
+**/*.py[cod]
+
+# Local agent observability artifacts
+.artifacts
+
+# Docker files themselves
+.dockerignore
+apps/web/Dockerfile
