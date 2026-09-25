@@ -104,9 +104,11 @@ expect_not_contains "t09 no permissions write scope" "$WF_TEXT" ": write"
   || bad "t10 exactly one job"
 expect_contains     "t11 pinned runner generation ubuntu-24.04" "$WF_TEXT" "runs-on: ubuntu-24.04"
 expect_not_contains "t12 no floating ubuntu-latest"             "$WF_TEXT" "ubuntu-latest"
-[ "$(count_matches '^[[:space:]]*timeout-minutes: 30$')" -eq 1 ] \
-  && ok "t13 job timeout is exactly 30 minutes" \
-  || bad "t13 job timeout is exactly 30 minutes"
+[ "$(count_matches '^[[:space:]]*timeout-minutes: 45$')" -eq 1 ] \
+  && ok "t13 job timeout is exactly 45 minutes" \
+  || bad "t13 job timeout is exactly 45 minutes"
+expect_not_contains "t13a no regression to the obsolete 30-minute limit" \
+  "$WF_TEXT" "timeout-minutes: 30"
 
 # Concurrency: cancel superseded PR runs only; pushes to main never cancelled.
 expect_contains "t14 concurrency group set" "$WF_TEXT" "group: core-"
