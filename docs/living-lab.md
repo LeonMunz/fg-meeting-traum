@@ -234,8 +234,10 @@ implemented — see Production image publication (GHCR) below.
 
 `deploy/compose.production.yaml` runs FG Workspace as one production-shaped
 local stack behind a single loopback gateway. It is deliberately NOT the
-public deployment: no public hostname, no TLS/ACME, no backup automation,
-no release migration orchestration, no image publishing.
+public deployment: no public hostname, no TLS/ACME, no image publishing.
+Backup and release operations are manual, operator-invoked primitives
+with no automation (see "PostgreSQL logical backup and restore" and
+"Manual exact-SHA release" below).
 
 ```text
 127.0.0.1:<FG_HTTP_PORT, default 8080>
@@ -332,7 +334,9 @@ Caveats (read before using the loopback surface):
   initialization only; on an already-initialized volume the existing
   cluster (and its credentials) is authoritative.
 - Startup runs no migrations and no seeding; run explicit one-shot
-  commands (step 7) — release orchestration is a later slice.
+  commands (step 7) — or the manual exact-SHA release transaction
+  below, which performs the migration explicitly once from the new API
+  image.
 
 ### PostgreSQL logical backup and restore (operator procedure)
 
@@ -518,6 +522,125 @@ both full-SHA references pull cleanly (`docker pull` of each reference
 from a clean Docker client, or registry metadata).
 
 Static contract test: `scripts/tests/publish-workflow.test.sh`.
+
+### Manual exact-SHA release (operator procedure)
+
+`deploy/scripts/release.sh` is ONE fail-closed operator command that
+releases the local production topology to a specific published commit.
+It orchestrates the existing primitives only — the production Compose
+file, the PostgreSQL backup script, and the `/api/health/` endpoint —
+and adds no automation, no rollback, and no restore of any kind.
+
+Prerequisites:
+
+- the target commit's image pair was published by the production image
+  publication workflow: `<image-base>-api:<FULL_SHA>` and
+  `<image-base>-web:<FULL_SHA>` (a revision is deployment-ready only
+  when BOTH image artifacts exist);
+- the production stack has running, healthy db and api containers and a
+  running web container — the backup requires the running `db` service;
+- an existing backup directory OUTSIDE the repository;
+- the Docker CLI, the Compose CLI with a reachable Docker daemon
+  (`docker compose` preferred, `docker-compose` fallback), and `curl`
+  on the host.
+
+Invocation:
+
+```bash
+deploy/scripts/release.sh <FULL_SHA> \
+  --env-file deploy/.env \
+  --image-base ghcr.io/<owner>/<repo> \
+  --backup-dir /path/outside/repo/backups \
+  [--project-name <name>]
+```
+
+- `<FULL_SHA>` must be exactly 40 lowercase hex characters; short
+  SHAs, branch names, mutable tags (e.g. `latest`), uppercase, and
+  malformed input are rejected before anything runs.
+- The release derives `FG_API_IMAGE=<image-base>-api:<sha>` and
+  `FG_WEB_IMAGE=<image-base>-web:<sha>` — the same SHA for both
+  services — and uses those references for every Compose operation
+  (configuration validation, pull, migration, stack update).
+- `--env-file` defaults to `deploy/.env`; `--project-name` defaults to
+  the Compose-declared project (`fg-production`).
+
+Phase order (every phase failure exits non-zero and prevents all later
+phases; there is NO automatic restore and NO automatic rollback):
+
+1. `VALIDATION` — release identity + inputs (before any runtime
+   mutation).
+2. `COMPOSE_CONFIG` — production Compose interpolation/configuration
+   validated with the derived full-SHA image references; no image
+   fetch, no containers.
+3. `BACKUP` — `deploy/scripts/postgres-backup.sh` with the same env
+   file, backup directory, and project name; the backup script remains
+   authoritative for dump validation, checksum, and atomic publication.
+   The database stays online.
+4. `IMAGE_PULL` — pulls only the exact `<base>-api:<sha>` and
+   `<base>-web:<sha>` images; no source build; the running stack is
+   not mutated.
+5. `MIGRATION` — exactly ONE `manage.py migrate --noinput` executed
+   from the NEW api image in a one-shot container (`compose run --rm
+   --no-deps api ...` — never `exec` on the running old container),
+   followed by `manage.py migrate --check` from the same new-image
+   contract. Normal API startup remains Gunicorn-only.
+6. `STACK_UPDATE` — updates only the `api` and `web` services; the db
+   service and the PostgreSQL volume are never recreated or deleted.
+7. `HEALTH` — (a) resolve each api/web/db container ID with Compose,
+   then inspect it with the Docker CLI: every container must exist and
+   be running, and every configured healthcheck must become `healthy`
+   within the bounded release health retry window (`starting` waits;
+   `unhealthy` fails immediately);
+   (b) same-origin API liveness `GET /api/health/` through the web
+   gateway on the Compose-reported published port (`compose port web
+   8080` — no port parsing from `.env`, no hardcoded gateway port;
+   bracketed/bare IPv6 is normalized without double brackets and
+   wildcard IPv4/IPv6 bindings use the matching loopback address for
+   the local probe); (c) gateway smoke `GET /`; (d) schema readiness
+   (the release's `migrate --check` succeeded). Liveness only — not
+   database correctness.
+
+Verification is deliberately smaller than broad E2E: no authenticated
+flows, no seeded-user requirements. The success report includes the
+requested SHA, both image refs, the backup archive, migration success,
+and health/smoke success. Compose resolves the running api/web container
+IDs and regular `docker inspect` reads
+`org.opencontainers.image.revision` from their metadata (advisory;
+locally built test images may lack the OCI label). No application
+version endpoint is introduced.
+
+Failure boundaries (fail closed; recovery is a manual, explicit
+operator decision):
+
+- **Backup failure** — no pull, no migration, no stack update; the
+  running stack and the database are unchanged.
+- **Pull failure** — the running stack and the database are unchanged.
+- **Migration failure** — the release stops immediately: NO retry, NO
+  restore, NO rollback to old images. A migration is NOT assumed
+  retry-safe: it may be non-atomic, irreversible, or have external
+  side effects. The report states that the database MAY have changed,
+  that operator investigation/recovery is REQUIRED, and identifies the
+  predeploy backup (the archive + `.sha256` sidecar from the BACKUP
+  phase) as the recovery artifact.
+- **`migrate --check` failure** — the stack is NOT updated.
+- **Stack update failure** — the database has ALREADY been migrated;
+  operator intervention may be necessary; no automatic rollback.
+- **Health/smoke failure** — non-zero exit; the release performs no
+  rollback of any kind.
+
+The release never executes: a source build, a mutable tag (`latest`,
+branch, or short-SHA reference), `compose down` (with or without
+volume flags), `docker volume rm`, an automatic restore
+(`postgres-restore-empty.sh` is a separate, explicit operator decision),
+or a restart of old images as a claimed rollback.
+
+Deterministic contract test (no Docker daemon, registry, network, or
+production secrets): `scripts/tests/release-transaction.test.sh`.
+
+The transaction is implemented, but real release execution against
+Docker/GHCR/VServer is not yet accepted. VServer bootstrap, real
+TLS/domain, automatic deployment, automatic rollback, scheduled/off-host
+backups, and PITR remain future work.
 
 ## Environment doctor (read-only)
 
