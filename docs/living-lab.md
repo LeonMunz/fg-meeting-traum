@@ -268,6 +268,10 @@ Dominant invariants:
 - Only the Caddy gateway is reachable from the host, and only on loopback.
   `api` (8000) and `db` (5432) have no host ports, and `web` cannot
   address `db` (no shared network).
+- `web`, `api`, and `db` use `restart: unless-stopped`, so the existing
+  stack returns after Docker or the host restarts unless an operator
+  explicitly stopped a container. This policy does not replace the
+  service healthchecks or deployment verification.
 
 Local acceptance procedure (Docker-capable machine; the development setup
 uses `colima start` for the Docker daemon):
@@ -333,10 +337,10 @@ Caveats (read before using the loopback surface):
 - `POSTGRES_DB` / `POSTGRES_USER` / `POSTGRES_PASSWORD` apply to first
   initialization only; on an already-initialized volume the existing
   cluster (and its credentials) is authoritative.
-- Startup runs no migrations and no seeding; run explicit one-shot
-  commands (step 7) — or the manual exact-SHA release transaction
-  below, which performs the migration explicitly once from the new API
-  image.
+- Startup and Docker restarts run no migrations and no seeding; run
+  explicit one-shot commands (step 7) — or the manual exact-SHA release
+  transaction below, which performs the migration explicitly once from the
+  new API image.
 
 ### PostgreSQL logical backup and restore (operator procedure)
 

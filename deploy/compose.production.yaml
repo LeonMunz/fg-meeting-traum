@@ -36,6 +36,9 @@
 #     topology bridge (see deploy/Caddyfile and docs/living-lab.md).
 #   * Startup runs no migrations and no seeding; both remain explicit
 #     one-shot operator actions (release orchestration is a later slice).
+#   * Every service uses `unless-stopped`, so an existing production stack
+#     returns after Docker or the host restarts. Restarting never runs
+#     migrations and does not replace healthchecks or release verification.
 #
 # Runtime-owned configuration (all required, no repository defaults):
 #   FG_WEB_IMAGE, FG_API_IMAGE, FG_POSTGRES_DATA_VOLUME
@@ -49,6 +52,7 @@ name: fg-production
 services:
   web:
     image: ${FG_WEB_IMAGE:?FG_WEB_IMAGE is required}
+    restart: unless-stopped
     # Topology-level Caddyfile: the same static contract as the
     # image-level apps/web/Caddyfile, but /api is reverse-proxied to the
     # private api service instead of returning 404. Mounted read-only
@@ -69,6 +73,7 @@ services:
 
   api:
     image: ${FG_API_IMAGE:?FG_API_IMAGE is required}
+    restart: unless-stopped
     # The image's Gunicorn entrypoint (private 0.0.0.0:8000) is used
     # as-is; port 8000 is reachable from Compose networks only.
     environment:
@@ -123,6 +128,7 @@ services:
     # acceptance). PostgreSQL major version is fixed at 16 for this
     # topology; a 17/18 upgrade is a separate migration decision.
     image: postgres:16.15-bookworm@sha256:efedf3595f1d6f415c08568ba171029bf54052e754cc9f030e3f2412b21f3d67
+    restart: unless-stopped
     # First-initialization credentials only: on an already-initialized
     # persistent volume the existing cluster (including its credentials)
     # remains authoritative and the postgres entrypoint ignores these.
