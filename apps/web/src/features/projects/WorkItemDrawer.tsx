@@ -3123,7 +3123,7 @@ export function WorkItemInspector({
                     void commitTitleEdit()
                   }}
                   aria-label="Work item title"
-                  className="-mx-3 w-full rounded-lg border border-focus-ring-primary bg-surface px-3 py-1.5 text-2xl font-semibold tracking-tight text-work-content-text outline-none focus:ring-2 focus:ring-focus-ring-primary/15"
+                  className="w-full rounded-lg border border-focus-ring-primary bg-surface px-3 py-1.5 text-2xl font-semibold tracking-tight text-work-content-text outline-none focus:ring-2 focus:ring-inset focus:ring-focus-ring-primary/15"
                 />
               ) : (
                 <div
@@ -3154,7 +3154,7 @@ export function WorkItemInspector({
                     }
                   }}
                   className={[
-                    '-mx-3 rounded-lg px-3 py-1.5 text-2xl font-semibold tracking-tight text-work-content-text',
+                    'break-words rounded-lg px-3 py-1.5 text-2xl font-semibold tracking-tight text-work-content-text',
                     readOnly
                       ? ''
                       : 'cursor-text transition hover:bg-work-surface-row-hover',
@@ -3178,7 +3178,7 @@ export function WorkItemInspector({
                   <span>Created from</span>
                 </div>
 
-                <div className="mt-2 text-sm text-work-content-text">
+                <div className="mt-2 break-words text-sm text-work-content-text">
                   {
                     item.meetingOrigin
                       .meetingTitle
@@ -3193,18 +3193,18 @@ export function WorkItemInspector({
                   </span>
                 </div>
 
-                <div className="mt-1 text-xs text-text-work-faded-70">
+                <div className="mt-1 break-words text-xs text-text-work-faded-70">
                   {
                     item.meetingOrigin
                       .meetingItemTitle
                   }
                 </div>
 
-                <div className="mt-2 text-xs font-medium text-text-work-faded-70">
+                <div className="mt-2 break-words text-xs font-medium text-text-work-faded-70">
                   Source note
                 </div>
 
-                <p className="mt-1 whitespace-pre-wrap text-sm text-work-content-text">
+                <p className="mt-1 whitespace-pre-wrap break-words text-sm text-work-content-text">
                   {
                     item.meetingOrigin
                       .noteContent
@@ -3231,7 +3231,7 @@ export function WorkItemInspector({
                   onEscape={() =>
                     setDescriptionEditing(false)
                   }
-                  className="-mx-3.5 rounded-lg border border-focus-ring-primary bg-surface px-3.5 py-2.5 focus-within:ring-2 focus-within:ring-focus-ring-primary/15"
+                  className="break-words rounded-lg border border-focus-ring-primary bg-surface px-3.5 py-2.5 focus-within:ring-2 focus-within:ring-inset focus-within:ring-focus-ring-primary/15"
                 />
               ) : (
                 <div
@@ -3274,7 +3274,7 @@ export function WorkItemInspector({
                     }
                   }}
                   className={[
-                    '-mx-3.5 min-h-[44px] rounded-lg px-3.5 py-2.5',
+                    'min-h-[44px] rounded-lg px-3.5 py-2.5',
                     item.description
                       ? ''
                       : 'text-sm leading-6 text-text-work-faded-70',
@@ -3289,7 +3289,7 @@ export function WorkItemInspector({
                       readOnly
                       variant="full"
                       className={
-                        readOnly ? '' : 'cursor-text'
+                        readOnly ? 'break-words' : 'break-words cursor-text'
                       }
                     />
                   ) : (
@@ -3376,7 +3376,7 @@ export function WorkItemInspector({
                     (assignee) => (
                       <span
                         key={assignee.id}
-                        className="inline-flex h-7 items-center gap-1.5 rounded-full bg-work-surface-support py-0.5 pl-1 pr-2 text-xs font-medium text-text-primary transition hover:bg-work-surface-row-hover"
+                        className="inline-flex h-7 break-words items-center gap-1.5 rounded-full bg-work-surface-support py-0.5 pl-1 pr-2 text-xs font-medium text-text-primary transition hover:bg-work-surface-row-hover"
                       >
                         <span className="flex h-5 w-5 items-center justify-center rounded-full bg-surface text-[8px] font-semibold text-text-secondary">
                           {
@@ -3384,7 +3384,9 @@ export function WorkItemInspector({
                           }
                         </span>
 
-                        {assignee.name}
+                        <span className="min-w-0 break-words">
+                          {assignee.name}
+                        </span>
 
                         {!readOnly && (
                           <button
@@ -3656,7 +3658,7 @@ export function WorkItemInspector({
                         onEscape={
                           cancelBlockedReasonEdit
                         }
-                        className="mt-2 w-full rounded-lg border border-focus-ring-primary bg-surface px-3 py-2 focus-within:ring-2 focus-within:ring-focus-ring-primary/15"
+                        className="mt-2 w-full break-words rounded-lg border border-focus-ring-primary bg-surface px-3 py-2 focus-within:ring-2 focus-within:ring-focus-ring-primary/15"
                       />
                     ) : (
                       <div
@@ -3721,8 +3723,8 @@ export function WorkItemInspector({
                             variant="compact"
                             className={
                               readOnly
-                                ? ''
-                                : 'cursor-text'
+                                ? 'break-words'
+                                : 'break-words cursor-text'
                             }
                           />
                         ) : (
@@ -3790,7 +3792,7 @@ export function WorkItemInspector({
                         variant="compact"
                         ariaLabel="Comment"
                         placeholder="Add a comment…"
-                        className="[&_.fg-prose]:min-h-[3.75rem]"
+                        className="break-words [&_.fg-prose]:min-h-[3.75rem]"
                       />
 
                       {commentSubmitError && (
