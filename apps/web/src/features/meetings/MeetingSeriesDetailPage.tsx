@@ -16,6 +16,7 @@ import {
   createMeetingSeriesSection,
   deleteMeetingSeries,
   exportMeetingSeriesAgenda,
+  importMeetingSeriesAgenda,
   getMeetingSeries,
   listMeetingSeriesSections,
   reorderMeetingSeriesSections,
@@ -25,6 +26,7 @@ import { getProject } from '../../api/projects'
 import { useSession } from '../../api/useSession'
 import type {
   ApiMeetingSeries,
+  ApiMeetingSeriesAgendaDocument,
   ApiMeetingSeriesSection,
   ApiProjectRole,
 } from '../../api/types'
@@ -98,6 +100,16 @@ export function MeetingSeriesDetailPage() {
 
   // Agenda JSON export
   const [exportingAgenda, setExportingAgenda] =
+    useState(false)
+
+  // Agenda JSON import
+  const [importedAgendaDoc, setImportedAgendaDoc] =
+    useState<ApiMeetingSeriesAgendaDocument | null>(
+      null,
+    )
+  const [importDialogOpen, setImportDialogOpen] =
+    useState(false)
+  const [importingAgenda, setImportingAgenda] =
     useState(false)
 
   const { user } = useSession()
@@ -529,6 +541,98 @@ export function MeetingSeriesDetailPage() {
     }
   }
 
+  // The selected file is read and JSON-parsed only far enough
+  // for the typed client (a syntax parse). The browser does not
+  // transform, merge, normalize, or reconstruct the agenda and
+  // never re-implements the server's strict document validation:
+  // the parsed document is handed to the import endpoint as-is.
+  const handleImportFileChange = async (
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    // Clear the input immediately so choosing the same file
+    // again (e.g. after a failed import) fires a fresh change.
+    const file =
+      event.target.files?.[0] ?? null
+    event.target.value = ''
+
+    if (file == null) {
+      return
+    }
+
+    setActionError(null)
+
+    let parsed: ApiMeetingSeriesAgendaDocument
+    try {
+      parsed = JSON.parse(
+        await file.text(),
+      )
+    } catch {
+      // Malformed local JSON: no import request, concise
+      // recoverable inline feedback, page unchanged.
+      setActionError(
+        'The selected file is not valid JSON.',
+      )
+      return
+    }
+
+    // Stage the parsed document and ask for an explicit,
+    // named confirmation before any request is made.
+    setImportedAgendaDoc(parsed)
+    setImportDialogOpen(true)
+  }
+
+  const handleImportCancel = () => {
+    // Cancelling makes no request and leaves the page
+    // unchanged.
+    setImportDialogOpen(false)
+    setImportedAgendaDoc(null)
+  }
+
+  const handleImportConfirm = async () => {
+    if (
+      seriesId == null ||
+      importingAgenda ||
+      importedAgendaDoc == null
+    ) {
+      return
+    }
+
+    setImportingAgenda(true)
+    setActionError(null)
+
+    try {
+      await importMeetingSeriesAgenda(
+        seriesId,
+        importedAgendaDoc,
+      )
+
+      // The import succeeded: reload the Template's
+      // Sections from the authoritative API and render the
+      // imported canonical order without a full-page reload.
+      // Template identity is preserved (never re-fetched or
+      // mutated).
+      const freshSections =
+        await listMeetingSeriesSections(
+          seriesId,
+        )
+      setSections(freshSections)
+      setImportDialogOpen(false)
+      setImportedAgendaDoc(null)
+    } catch (error) {
+      // A failed import keeps the currently rendered
+      // agenda intact with retryable feedback; the dialog
+      // stays open so the user can retry or cancel.
+      setActionError(
+        getErrorMessage(
+          error,
+          'Agenda could not be imported.',
+        ),
+      )
+    } finally {
+      setImportingAgenda(false)
+    }
+  }
+
   const handleDeleteTemplate =
     async () => {
       if (
@@ -642,14 +746,29 @@ export function MeetingSeriesDetailPage() {
             </span>
           )}
 
-          <div className="ml-auto flex items-center gap-2">
+          {/* Deliberate compact treatment below 480px: the
+              fixed 240px sidebar leaves only a ~102px content
+              column at 390px, so the Export / Import controls
+              render as 36px icon-only squares (accessible
+              names preserved) and the group wraps; the
+              full-text controls render at 480px and up. */}
+          <div className="ml-auto flex flex-wrap items-center gap-2">
             <button
               type="button"
               onClick={() =>
                 void handleExportAgenda()
               }
               disabled={exportingAgenda}
-              className="inline-flex h-9 items-center gap-2 rounded-lg border border-border-subtle px-3 text-sm font-semibold text-text transition hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-45"
+              // The aria-label mirrors the visible text in
+              // every state, so the accessible name stays
+              // stable for the icon-only treatment below
+              // 480px.
+              aria-label={
+                exportingAgenda
+                  ? 'Exporting…'
+                  : 'Export agenda JSON'
+              }
+              className="inline-flex h-9 items-center gap-2 rounded-lg border border-border-subtle px-3 text-sm font-semibold text-text transition hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-45 max-[479px]:w-9 max-[479px]:justify-center max-[479px]:px-0"
             >
               <span
                 aria-hidden="true"
@@ -665,10 +784,48 @@ export function MeetingSeriesDetailPage() {
                   : 'download'}
               </span>
 
-              {exportingAgenda
-                ? 'Exporting…'
-                : 'Export agenda JSON'}
+              {/* Full-text label at 480px and up; hidden in
+                  the icon-only treatment below 480px. */}
+              <span className="max-[479px]:hidden">
+                {exportingAgenda
+                  ? 'Exporting…'
+                  : 'Export agenda JSON'}
+              </span>
             </button>
+
+            {/* JSON agenda import is a write affordance, so it
+                renders only for users the existing manage rule
+                already treats as able to write the Template.
+                The server remains authoritative. */}
+            {canManageTemplate && (
+              <label className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-lg border border-border-subtle px-3 text-sm font-semibold text-text transition hover:bg-surface-hover max-[479px]:w-9 max-[479px]:justify-center max-[479px]:px-0">
+                <input
+                  type="file"
+                  accept="application/json,.json"
+                  className="sr-only"
+                  // Stable accessible name for the icon-only
+                  // treatment below 480px, where the visible
+                  // label text is hidden.
+                  aria-label="Import agenda JSON"
+                  onChange={(event) =>
+                    void handleImportFileChange(event)
+                  }
+                />
+
+                <span
+                  aria-hidden="true"
+                  className="material-symbols-outlined text-[18px]"
+                >
+                  upload
+                </span>
+
+                {/* Full-text label at 480px and up; hidden in
+                    the icon-only treatment below 480px. */}
+                <span className="max-[479px]:hidden">
+                  Import agenda JSON
+                </span>
+              </label>
+            )}
 
             {canManageTemplate && (
               <TemplateActionsMenu
@@ -1089,6 +1246,85 @@ export function MeetingSeriesDetailPage() {
           onCancel={() => setDeleteDialogOpen(false)}
           onConfirm={() => void handleDeleteTemplate()}
         />
+      )}
+
+      {importDialogOpen && series && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/25 px-4 py-8 backdrop-blur-[2px]"
+          onMouseDown={(event) => {
+            if (
+              event.target === event.currentTarget &&
+              !importingAgenda
+            ) {
+              handleImportCancel()
+            }
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="series-import-title"
+            className="w-full max-w-md overflow-hidden rounded-2xl border border-border-subtle bg-surface shadow-xl"
+          >
+            <div className="px-6 py-5">
+              <h2
+                id="series-import-title"
+                className="text-lg font-semibold tracking-tight text-text"
+              >
+                Replace agenda?
+              </h2>
+
+              <p className="mt-2 text-sm text-text-muted">
+                This replaces the complete existing
+                agenda of the meeting template
+                "{series.title}". The sections in the
+                selected file become the template's full
+                agenda.
+              </p>
+
+              {actionError && (
+                <p
+                  role="alert"
+                  className="mt-3 rounded-lg bg-danger-bg px-3 py-2 text-sm text-danger"
+                >
+                  {actionError}
+                </p>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-2 border-t border-border-subtle px-6 py-4">
+              <button
+                type="button"
+                disabled={importingAgenda}
+                onClick={handleImportCancel}
+                className="inline-flex h-9 items-center rounded-lg px-3.5 text-sm font-medium text-text-muted outline-none transition hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus/40 disabled:opacity-60"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                disabled={importingAgenda}
+                onClick={() =>
+                  void handleImportConfirm()
+                }
+                className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-action px-3.5 text-sm font-semibold text-text-inverse outline-none transition hover:bg-action-hover focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 disabled:opacity-60"
+              >
+                {importingAgenda && (
+                  <span
+                    aria-hidden="true"
+                    className="material-symbols-outlined animate-spin text-[18px]"
+                  >
+                    refresh
+                  </span>
+                )}
+                {importingAgenda
+                  ? 'Importing…'
+                  : 'Replace agenda'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )
