@@ -15,6 +15,7 @@ import {
   createMeetingFromSeries,
   createMeetingSeriesSection,
   deleteMeetingSeries,
+  exportMeetingSeriesAgenda,
   getMeetingSeries,
   listMeetingSeriesSections,
   reorderMeetingSeriesSections,
@@ -93,6 +94,10 @@ export function MeetingSeriesDetailPage() {
   const [deleteDialogOpen, setDeleteDialogOpen] =
     useState(false)
   const [deletingTemplate, setDeletingTemplate] =
+    useState(false)
+
+  // Agenda JSON export
+  const [exportingAgenda, setExportingAgenda] =
     useState(false)
 
   const { user } = useSession()
@@ -477,6 +482,53 @@ export function MeetingSeriesDetailPage() {
     setDraggingId(null)
   }
 
+  // The server remains authoritative for who may read the
+  // Template; anyone who can open this page may download its
+  // agenda. The server-produced Blob is downloaded byte-for-
+  // byte: it is never parsed or reserialized in the browser.
+  const handleExportAgenda = async () => {
+    if (
+      seriesId == null ||
+      exportingAgenda
+    ) {
+      return
+    }
+
+    setExportingAgenda(true)
+    setActionError(null)
+
+    try {
+      const { blob, filename } =
+        await exportMeetingSeriesAgenda(
+          seriesId,
+        )
+
+      const objectUrl =
+        URL.createObjectURL(blob)
+      const anchor =
+        document.createElement('a')
+
+      anchor.href = objectUrl
+      anchor.download =
+        filename ??
+        'meeting-template-agenda.json'
+
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      URL.revokeObjectURL(objectUrl)
+    } catch (error) {
+      setActionError(
+        getErrorMessage(
+          error,
+          'Agenda could not be exported.',
+        ),
+      )
+    } finally {
+      setExportingAgenda(false)
+    }
+  }
+
   const handleDeleteTemplate =
     async () => {
       if (
@@ -590,16 +642,43 @@ export function MeetingSeriesDetailPage() {
             </span>
           )}
 
-          {canManageTemplate && (
-            <div className="ml-auto">
+          <div className="ml-auto flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() =>
+                void handleExportAgenda()
+              }
+              disabled={exportingAgenda}
+              className="inline-flex h-9 items-center gap-2 rounded-lg border border-border-subtle px-3 text-sm font-semibold text-text transition hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-45"
+            >
+              <span
+                aria-hidden="true"
+                className={[
+                  'material-symbols-outlined text-[18px]',
+                  exportingAgenda
+                    ? 'animate-spin'
+                    : '',
+                ].join(' ')}
+              >
+                {exportingAgenda
+                  ? 'refresh'
+                  : 'download'}
+              </span>
+
+              {exportingAgenda
+                ? 'Exporting…'
+                : 'Export agenda JSON'}
+            </button>
+
+            {canManageTemplate && (
               <TemplateActionsMenu
                 onDeleteRequest={() => {
                   setActionError(null)
                   setDeleteDialogOpen(true)
                 }}
               />
-            </div>
-          )}
+            )}
+          </div>
         </div>
 
         <p className="mt-1.5 text-sm text-text-muted">
