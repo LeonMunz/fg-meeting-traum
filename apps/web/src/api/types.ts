@@ -640,6 +640,28 @@ export interface ApiReorderMeetingSeriesSectionsInput {
   sectionIds: number[]
 }
 
+/* ── Meeting Series agenda JSON (import/export, schema v1) ────── */
+
+/**
+ * Version-1 portable Meeting Template agenda document — the exact
+ * contract of `agenda-export.json` and `agenda-import.json`. Carries
+ * ONLY `schemaVersion` (1) and the ordered `sections`; each section
+ * carries exactly `name`, `description`, and `isActive`. No database
+ * ids, positions, scope, creator, timestamps, or Template identity
+ * metadata — the array order IS the portable ordering.
+ */
+export interface ApiMeetingSeriesAgendaDocument {
+  schemaVersion: 1
+  sections: ApiMeetingSeriesAgendaDocumentSection[]
+}
+
+/** One ordered entry of the version-1 agenda document. */
+export interface ApiMeetingSeriesAgendaDocumentSection {
+  name: string
+  description: string
+  isActive: boolean
+}
+
 export interface ApiMeetingSection {
   id: number
   meetingId: number

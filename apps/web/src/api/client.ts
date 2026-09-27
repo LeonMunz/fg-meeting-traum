@@ -15,6 +15,57 @@ export async function apiGet<T>(url: string): Promise<T> {
   return parseResponse<T>(res)
 }
 
+/**
+ * Authenticated file download result: the successful response body
+ * preserved byte-for-byte as a Blob (never parsed or reserialized),
+ * plus the server-provided attachment filename parsed from
+ * `Content-Disposition` (null when the header is absent or carries
+ * no `filename="..."` value).
+ */
+export interface ApiFileDownload {
+  blob: Blob
+  filename: string | null
+}
+
+/**
+ * Minimal authenticated GET that preserves the successful response
+ * body as a Blob and exposes the server-provided attachment
+ * filename. Same-origin credentials are preserved; non-2xx
+ * responses are converted into an ApiError with a safe fallback when
+ * the error body is not JSON.
+ */
+export async function apiGetFile(url: string): Promise<ApiFileDownload> {
+  const res = await fetch(url, {
+    credentials: 'same-origin',
+    headers: { Accept: 'application/json' },
+  })
+
+  if (!res.ok) {
+    throw new ApiError(res.status, await res.json().catch(() => null))
+  }
+
+  const blob = await res.blob()
+
+  return {
+    blob,
+    filename: attachmentFilename(res.headers.get('Content-Disposition')),
+  }
+}
+
+/**
+ * Extract the `filename="..."` value from a `Content-Disposition`
+ * header; null when the header is missing or has no quoted filename.
+ */
+function attachmentFilename(
+  contentDisposition: string | null,
+): string | null {
+  if (!contentDisposition) {
+    return null
+  }
+  const match = /filename="([^"]*)"/.exec(contentDisposition)
+  return match ? match[1] : null
+}
+
 export async function apiPost<T>(
   url: string,
   body: unknown,

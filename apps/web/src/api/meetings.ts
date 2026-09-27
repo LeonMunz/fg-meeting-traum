@@ -1,9 +1,12 @@
 import {
   apiDelete,
   apiGet,
+  apiGetFile,
   apiPatch,
   apiPost,
 } from './client'
+
+import type { ApiFileDownload } from './client'
 
 import type {
   ApiAddMeetingParticipantInput,
@@ -27,6 +30,7 @@ import type {
   ApiMeetingRecurrenceOverview,
   ApiMeetingSection,
   ApiMeetingSeries,
+  ApiMeetingSeriesAgendaDocument,
   ApiMeetingSeriesSection,
   ApiCreateMeetingSectionInput,
   ApiReorderMeetingSectionsInput,
@@ -502,4 +506,37 @@ export async function deleteMeetingNote(
   noteId: number,
 ): Promise<void> {
   return apiDelete<void>(`/api/meeting-notes/${noteId}/`)
+}
+
+/* ── Meeting Series agenda JSON (import/export, schema v1) ────── */
+
+/**
+ * Download the authoritative version-1 agenda JSON attachment for a
+ * Meeting Template. One authenticated same-origin GET; the
+ * server-produced body is preserved byte-for-byte as a Blob (never
+ * parsed or reserialized in the browser) and the server-provided
+ * attachment filename is returned for the later UI.
+ */
+export async function exportMeetingSeriesAgenda(
+  seriesId: number,
+): Promise<ApiFileDownload> {
+  return apiGetFile(
+    `/api/meeting-series/${seriesId}/agenda-export.json`,
+  )
+}
+
+/**
+ * Import the version-1 portable agenda document into a Meeting
+ * Template through the established CSRF-protected JSON POST path.
+ * The request body is the typed document; the response is the
+ * canonical imported document in the same version-1 shape.
+ */
+export async function importMeetingSeriesAgenda(
+  seriesId: number,
+  document: ApiMeetingSeriesAgendaDocument,
+): Promise<ApiMeetingSeriesAgendaDocument> {
+  return apiPost<ApiMeetingSeriesAgendaDocument>(
+    `/api/meeting-series/${seriesId}/agenda-import.json`,
+    document,
+  )
 }

@@ -8,6 +8,7 @@ import {
 
 import {
   apiGet,
+  apiGetFile,
   apiPost,
   ApiError,
 } from './client'
@@ -16,6 +17,8 @@ import {
   createMeeting,
   createMeetingFromSeries,
   createMeetingRecurrence,
+  exportMeetingSeriesAgenda,
+  importMeetingSeriesAgenda,
   listMeetingRecurrences,
   listPersonalMeetingRecurrenceOccurrences,
   materializeMeetingRecurrenceOccurrence,
@@ -35,6 +38,7 @@ import type {
   ApiMeetingRecurrenceOverview,
   ApiMeeting,
   ApiMeetingItem,
+  ApiMeetingSeriesAgendaDocument,
   ApiMeetingItemFollowUpSchedule,
   ApiMeetingItemFollowUpTargets,
 } from './types'
@@ -42,6 +46,7 @@ import type {
 vi.mock('./client', () => ({
   apiDelete: vi.fn(),
   apiGet: vi.fn(),
+  apiGetFile: vi.fn(),
   apiPatch: vi.fn(),
   apiPost: vi.fn(),
   ApiError: class ApiError extends Error {
@@ -657,5 +662,104 @@ describe('Recurrence occurrence materialization API client', () => {
     )
     expect(apiGet).not.toHaveBeenCalled()
     expect(result).toEqual(meeting)
+  })
+})
+
+describe('Meeting Template agenda JSON API client', () => {
+  const document: ApiMeetingSeriesAgendaDocument = {
+    schemaVersion: 1,
+    sections: [
+      { name: 'Check-In', description: '', isActive: true },
+      { name: 'Discussion', description: 'Main topics', isActive: true },
+      { name: 'Parking Lot', description: '', isActive: false },
+    ],
+  }
+
+  beforeEach(() => {
+    vi.mocked(apiGetFile).mockReset()
+    vi.mocked(apiPost).mockReset()
+  })
+
+  it('downloads the agenda through the exact .json export endpoint as one file GET', async () => {
+    const fileDownload = {
+      blob: new Blob(['{"schemaVersion":1}'], {
+        type: 'application/json',
+      }),
+      filename: 'weekly-sync.json',
+    }
+    vi.mocked(apiGetFile).mockResolvedValue(fileDownload)
+
+    const result = await exportMeetingSeriesAgenda(7)
+
+    expect(apiGetFile).toHaveBeenCalledTimes(1)
+    expect(apiGetFile).toHaveBeenCalledWith(
+      '/api/meeting-series/7/agenda-export.json',
+    )
+    expect(result).toBe(fileDownload)
+    expect(apiPost).not.toHaveBeenCalled()
+  })
+
+  it('preserves the returned Blob and the server-provided filename for the later UI', async () => {
+    const body = new Blob(['{"schemaVersion":1}\n'])
+    vi.mocked(apiGetFile).mockResolvedValue({
+      blob: body,
+      filename: 'weekly-sync.json',
+    })
+
+    const result = await exportMeetingSeriesAgenda(7)
+
+    expect(result.blob).toBe(body)
+    expect(result.filename).toBe('weekly-sync.json')
+  })
+
+  it('posts the exact typed document to the exact .json import endpoint through the CSRF-protected POST helper', async () => {
+    const imported: ApiMeetingSeriesAgendaDocument = {
+      schemaVersion: 1,
+      sections: [
+        { name: 'Check-In', description: '', isActive: true },
+        { name: 'Discussion', description: 'Main topics', isActive: true },
+        { name: 'Parking Lot', description: '', isActive: false },
+      ],
+    }
+    vi.mocked(apiPost).mockResolvedValue(imported)
+
+    const result = await importMeetingSeriesAgenda(7, document)
+
+    expect(apiPost).toHaveBeenCalledTimes(1)
+    expect(apiPost).toHaveBeenCalledWith(
+      '/api/meeting-series/7/agenda-import.json',
+      document,
+    )
+    expect(apiGetFile).not.toHaveBeenCalled()
+    expect(result).toEqual(imported)
+  })
+
+  it('returns the canonical typed imported document in the same version-1 shape', async () => {
+    const imported: ApiMeetingSeriesAgendaDocument = {
+      schemaVersion: 1,
+      sections: [
+        { name: 'Only', description: 'Sole section', isActive: true },
+      ],
+    }
+    vi.mocked(apiPost).mockResolvedValue(imported)
+
+    const result: ApiMeetingSeriesAgendaDocument =
+      await importMeetingSeriesAgenda(7, document)
+
+    expect(result.schemaVersion).toBe(1)
+    expect(result.sections).toEqual([
+      { name: 'Only', description: 'Sole section', isActive: true },
+    ])
+  })
+
+  it('surfaces the client ApiError from the import POST', async () => {
+    const error = new ApiError(400, {
+      sections: ["sections[0]: 'name' must not be blank."],
+    })
+    vi.mocked(apiPost).mockRejectedValue(error)
+
+    await expect(importMeetingSeriesAgenda(7, document)).rejects.toEqual(
+      error,
+    )
   })
 })
