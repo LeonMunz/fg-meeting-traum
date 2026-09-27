@@ -95,6 +95,7 @@ from meetings.views import (
     MeetingSectionListCreateView,
     MeetingSectionReorderView,
     MeetingSectionDetailView,
+    MeetingSeriesAgendaExportView,
     MeetingSeriesCreateOccurrenceView,
     MeetingSeriesDetailView,
     MeetingSeriesListCreateView,
@@ -208,6 +209,7 @@ urlpatterns = [
     # Meeting Series
     path('api/research-groups/<int:group_id>/meeting-series/', MeetingSeriesListCreateView.as_view(), name='research-group-meeting-series-list'),
     path('api/meeting-series/<int:series_id>/', MeetingSeriesDetailView.as_view(), name='meeting-series-detail'),
+    path('api/meeting-series/<int:series_id>/agenda-export.json', MeetingSeriesAgendaExportView.as_view(), name='meeting-series-agenda-export'),
     path('api/meeting-series/<int:series_id>/sections/', MeetingSeriesSectionListCreateView.as_view(), name='meeting-series-sections-list'),
     path('api/meeting-series/<int:series_id>/sections/reorder/', MeetingSeriesSectionReorderView.as_view(), name='meeting-series-sections-reorder'),
     path('api/meeting-series/<int:series_id>/occurrences/', MeetingSeriesCreateOccurrenceView.as_view(), name='meeting-series-occurrences'),

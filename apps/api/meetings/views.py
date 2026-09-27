@@ -1,7 +1,10 @@
+import json
 from zoneinfo import ZoneInfo
 
 from django.contrib.auth import get_user_model
 from django.db.models import Prefetch, Q
+from django.http import HttpResponse
+from django.utils.text import slugify
 
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -122,6 +125,7 @@ from .services import (
 User = get_user_model()
 
 PARTICIPANT_CANDIDATE_LIMIT = 20
+AGENDA_EXPORT_SCHEMA_VERSION = 1
 
 
 def _active_follow_up_prefetch():
@@ -607,6 +611,81 @@ class MeetingSeriesDetailView(APIView):
             return Response({"error": exc.message}, status=400)
 
         return Response(status=204)
+
+
+
+def _agenda_export_filename(title):
+    """Deterministic, filename-safe attachment name for the agenda
+    export, derived from the Template title.
+
+    The title is slugified (lowercase ASCII, runs of
+    non-alphanumerics collapsed to ``-``); a title without any
+    ASCII-safe characters falls back to a fixed name so the header
+    value is always safe.
+    """
+    slug = slugify(title)
+    if not slug:
+        slug = "meeting-template"
+    return f"{slug}.json"
+
+
+class MeetingSeriesAgendaExportView(APIView):
+    """GET /api/meeting-series/{series_id}/agenda-export.json
+
+    Read-only, side-effect-free JSON export of the Template's
+    complete ordered agenda structure (schema version 1): the
+    Template's sections in canonical position/id order, each
+    carrying name, description, and active state. The array order
+    is the portable ordering; no database ids, positions, scope,
+    creator, timestamps, occurrences, recurrence data, or Template
+    identity metadata are exported.
+
+    Authorization reuses the canonical MeetingSeries read rule
+    (``MEETING_SERIES_READ``); an inaccessible Template returns the
+    same non-leaking 404 as every other Template endpoint.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, series_id):
+        series = _require_meeting_series_access(request, series_id)
+        if series is None:
+            return Response(
+                {"error": "Meeting series not found"},
+                status=404,
+            )
+
+        sections = (
+            MeetingSeriesSection.objects
+            .filter(meeting_series=series)
+            .order_by("position", "id")
+        )
+
+        payload = {
+            "schemaVersion": AGENDA_EXPORT_SCHEMA_VERSION,
+            "sections": [
+                {
+                    "name": section.name,
+                    "description": section.description,
+                    "isActive": section.is_active,
+                }
+                for section in sections
+            ],
+        }
+
+        content = (
+            json.dumps(payload, indent=2, sort_keys=True) + "\n"
+        ).encode("utf-8")
+
+        response = HttpResponse(
+            content,
+            content_type="application/json",
+        )
+        response["Content-Disposition"] = (
+            'attachment; filename="%s"'
+            % _agenda_export_filename(series.title)
+        )
+        return response
 
 
 # ── MeetingSeriesSection endpoints ───────────────────────────────

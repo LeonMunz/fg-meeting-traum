@@ -315,6 +315,49 @@ surfaces the error. The row menu is rendered only for Templates the
 current user can manage under the rule above (the server remains
 authoritative).
 
+### Agenda export (implemented)
+
+A persisted Meeting Template's complete ordered agenda structure is
+exportable as a versioned, portable JSON document through
+`GET /api/meeting-series/{series_id}/agenda-export.json`
+(read-only, side-effect free).
+
+**Authorization** reuses the exact canonical Template read rule
+(kernel `MEETING_SERIES_READ`): a current Research Group member for a
+group-scoped Template, or a current Project member of the Template's
+Project (any role, including `viewer`) for a Project-scoped Template —
+archived Projects remain readable. A user without read access gets
+the same non-leaking `404` as every other Template endpoint; there is
+no parallel permission rule for the export.
+
+**Document contract (schema version 1):**
+
+```json
+{
+  "schemaVersion": 1,
+  "sections": [
+    { "name": "Check-In", "description": "", "isActive": true }
+  ]
+}
+```
+
+- `sections` carries EVERY Template Section — active AND inactive —
+  in canonical position/id order; the array order IS the portable
+  ordering.
+- Each section carries exactly `name`, `description`, and
+  `isActive`.
+- The document deliberately carries NO database ids, positions,
+  scope, project/group ids, creator, timestamps, occurrences,
+  recurrence data, or Template identity metadata — only what a later
+  lossless import of the editable Template structure needs.
+- A Template without Sections exports as `"sections": []`.
+
+The response body is deterministic (stable key order and formatting;
+byte-identical across calls), is served as `application/json`, and
+carries an attachment `Content-Disposition` filename derived safely
+from the Template title (slugified; a fixed fallback name when the
+title has no ASCII-safe characters).
+
 ---
 
 ## 5a. Recurring meeting schedules (internal: `MeetingRecurrence`, implemented core)
