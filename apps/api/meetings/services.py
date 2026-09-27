@@ -1864,6 +1864,9 @@ def cancel_meeting_recurrence_occurrence(
 
 # ── MeetingSeriesSection ─────────────────────────────────────────
 
+# Version of the portable agenda document (JSON export/import).
+AGENDA_EXPORT_SCHEMA_VERSION = 1
+
 
 @transaction.atomic
 def create_series_section(
@@ -1991,6 +1994,95 @@ def reorder_series_sections(
             pk=section_id,
             meeting_series=meeting_series,
         ).update(position=new_position)
+
+
+@transaction.atomic
+def replace_series_sections(
+    *,
+    meeting_series,
+    actor,
+    sections,
+):
+    """Atomically REPLACE the Template's complete editable Section set.
+
+    ``sections`` is the ordered portable agenda list (document schema
+    version 1): each entry carries exactly ``name`` (str),
+    ``description`` (str), and ``isActive`` (bool). The array order
+    becomes contiguous canonical positions starting at 0; active AND
+    inactive entries are preserved; an empty list intentionally
+    clears the Template agenda. Duplicate names remain allowed (the
+    domain permits them).
+
+    Authorization reuses the canonical scoped Template write rule,
+    and the replacement is serialized on the Template row lock,
+    exactly like the other section-write services. The write is one
+    transaction: either the complete imported set replaces the prior
+    set, or nothing changes.
+
+    Occurrences are never mutated: existing ``MeetingSection``
+    snapshots keep their content, and the provenance pointer to a
+    replaced Template Section is cleared (``SET_NULL``) exactly like
+    a Template deletion.
+    """
+    _require_series_write_access(
+        meeting_series=meeting_series,
+        user=actor,
+    )
+
+    normalized = []
+    for entry in sections:
+        if not isinstance(entry, dict):
+            raise MeetingDomainError(
+                "Each agenda entry must be an object."
+            )
+        name = entry.get("name")
+        if not isinstance(name, str):
+            raise MeetingDomainError(
+                "Section name must be a string."
+            )
+        name = name.strip()
+        if not name:
+            raise MeetingDomainError("Section name is required.")
+        if len(name) > 255:
+            raise MeetingDomainError(
+                "Section name must be at most 255 characters."
+            )
+        description = entry.get("description")
+        if not isinstance(description, str):
+            raise MeetingDomainError(
+                "Section description must be a string."
+            )
+        is_active = entry.get("isActive")
+        if not isinstance(is_active, bool):
+            raise MeetingDomainError(
+                "Section active state must be a boolean."
+            )
+        normalized.append(
+            (name, description.strip(), is_active)
+        )
+
+    # Serialize concurrent Template-section writes.
+    series = MeetingSeries.objects.select_for_update().get(
+        pk=meeting_series.pk,
+    )
+
+    series.series_sections.all().delete()
+
+    replaced = []
+    for position, (name, description, is_active) in enumerate(
+        normalized
+    ):
+        replaced.append(
+            MeetingSeriesSection.objects.create(
+                meeting_series=series,
+                name=name,
+                description=description,
+                position=position,
+                is_active=is_active,
+            )
+        )
+
+    return replaced
 
 
 # ── Meeting occurrence from Series (snapshot) ────────────────────

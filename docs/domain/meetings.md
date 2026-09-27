@@ -358,6 +358,60 @@ carries an attachment `Content-Disposition` filename derived safely
 from the Template title (slugified; a fixed fallback name when the
 title has no ASCII-safe characters).
 
+### Agenda import (implemented)
+
+A version-1 portable agenda document (exactly the export's shape)
+can be imported into an existing Meeting Template through
+`POST /api/meeting-series/{series_id}/agenda-import.json`,
+atomically REPLACING the Template's complete editable Section set.
+
+**Authorization** reuses the exact canonical scoped Template write
+rule (kernel `MEETING_SERIES_WRITE`) — a current Research Group
+member for a group-scoped Template, or a current `owner` / `member`
+of the Template's Project for a Project-scoped Template on a
+non-archived Project. An inaccessible or unknown Template returns
+the same non-leaking `404` as every other Template endpoint; a user
+who can read but not write (e.g. a Project `viewer`, or any user on
+an archived Project's Templates) receives the existing
+write-forbidden `403`. There is no parallel permission rule for the
+import.
+
+**Document contract (schema version 1):** the request body is the
+export document — exactly `schemaVersion` (1) and `sections`
+(ordered list); each section carries exactly `name`,
+`description`, and `isActive`. Validation is strict: malformed
+JSON, an unsupported schema version, missing or extra fields,
+wrong types, a blank name, or a name over 255 characters is
+rejected with `400` and NO mutation. The existing Section field
+constraints and normalization conventions apply (name and
+description are trimmed; a name at most 255 characters is
+accepted; duplicate section names remain allowed because the
+current domain permits them).
+
+**Replacement semantics:** the import is a complete replacement,
+never a merge or append — the prior Sections are removed and the
+imported array becomes the Template's complete editable Section
+set in ONE transaction. Array order becomes contiguous canonical
+positions starting at 0. Active AND inactive entries are
+preserved. An empty `sections` array intentionally clears the
+Template agenda. The write is an explicit transactional domain
+service that owns authorization and the write, serialized on the
+Template row lock like the other section-write operations; the
+HTTP endpoint only parses/validates and delegates.
+
+**What is never mutated:** the Template's identity, scope, title,
+description, and archive state; existing Meeting occurrences;
+their MeetingSection snapshots (content unchanged — the provenance
+pointer to a replaced Template Section is cleared `SET NULL`,
+exactly like a Template deletion); existing recurrence rows
+(later materializations naturally snapshot the Template's newly
+imported active Sections); participants; and audit data.
+
+**Response:** `200` with the canonical imported document in the
+same version-1 shape, so
+`export(source) → import(target) → export(target)` round-trips
+deterministically.
+
 ---
 
 ## 5a. Recurring meeting schedules (internal: `MeetingRecurrence`, implemented core)

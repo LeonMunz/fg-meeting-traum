@@ -67,6 +67,7 @@ from .serializers import (
     MeetingSectionReorderSerializer,
     MeetingSectionSerializer,
     MeetingSerializer,
+    MeetingSeriesAgendaImportSerializer,
     MeetingSeriesCreateSerializer,
     MeetingSeriesPatchSerializer,
     MeetingSeriesSectionCreateSerializer,
@@ -77,6 +78,7 @@ from .serializers import (
     MeetingWorkItemCreateSerializer,
 )
 from .services import (
+    AGENDA_EXPORT_SCHEMA_VERSION,
     MeetingDomainError,
     MeetingFollowUpConflictError,
     _has_canonical_meeting_read_access,
@@ -110,6 +112,7 @@ from .services import (
     reopen_meeting,
     reorder_meeting_sections,
     reorder_series_sections,
+    replace_series_sections,
     remove_meeting_participant,
     reschedule_meeting_recurrence_occurrence,
     start_meeting,
@@ -125,7 +128,6 @@ from .services import (
 User = get_user_model()
 
 PARTICIPANT_CANDIDATE_LIMIT = 20
-AGENDA_EXPORT_SCHEMA_VERSION = 1
 
 
 def _active_follow_up_prefetch():
@@ -686,6 +688,72 @@ class MeetingSeriesAgendaExportView(APIView):
             % _agenda_export_filename(series.title)
         )
         return response
+
+
+class MeetingSeriesAgendaImportView(APIView):
+    """POST /api/meeting-series/{series_id}/agenda-import.json
+
+    Imports a version-1 portable agenda document and atomically
+    REPLACES the Template's complete editable Section set. The
+    array order becomes contiguous canonical positions starting at
+    0; active AND inactive entries are preserved; an empty
+    ``sections`` list intentionally clears the agenda. The
+    transactional domain service owns authorization, the Template
+    row lock, and the write; this endpoint only parses/validates
+    and delegates.
+
+    Authorization reuses the canonical scoped Template write rule
+    (``MEETING_SERIES_WRITE``): an inaccessible or unknown
+    Template returns the non-leaking 404; a user who can read but
+    not write (e.g. a Project viewer or any user on an archived
+    Project) receives the existing write-forbidden response.
+
+    The response is the canonical imported document in the same
+    version-1 shape as the export, so
+    export(source) → import(target) → export(target) round-trips
+    deterministically.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, series_id):
+        series = _require_meeting_series_access(request, series_id)
+        if series is None:
+            return Response(
+                {"error": "Meeting series not found"},
+                status=404,
+            )
+
+        if not _has_scoped_write_access(request.user, series):
+            return _mutation_forbidden_response()
+
+        serializer = MeetingSeriesAgendaImportSerializer(
+            data=request.data,
+        )
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=400)
+
+        try:
+            sections = replace_series_sections(
+                meeting_series=series,
+                actor=request.user,
+                sections=serializer.validated_data["sections"],
+            )
+        except MeetingDomainError as exc:
+            return Response({"error": exc.message}, status=400)
+
+        payload = {
+            "schemaVersion": AGENDA_EXPORT_SCHEMA_VERSION,
+            "sections": [
+                {
+                    "name": section.name,
+                    "description": section.description,
+                    "isActive": section.is_active,
+                }
+                for section in sections
+            ],
+        }
+        return Response(payload)
 
 
 # ── MeetingSeriesSection endpoints ───────────────────────────────

@@ -7,6 +7,8 @@ from rest_framework import serializers
 from projects.models import ProjectMembership
 from research_groups.models import ResearchGroupMembership
 
+from .services import AGENDA_EXPORT_SCHEMA_VERSION
+
 from .models import (
     Meeting,
     MeetingItem,
@@ -158,6 +160,127 @@ class MeetingSeriesSectionReorderSerializer(serializers.Serializer):
     sectionIds = serializers.ListField(
         child=serializers.IntegerField(min_value=1),
     )
+
+
+class MeetingSeriesAgendaImportSerializer(serializers.Serializer):
+    """Strict parser for the version-1 portable agenda document.
+
+    The document carries EXACTLY ``schemaVersion`` (1) and
+    ``sections`` (ordered list); each section carries exactly
+    ``name`` (string), ``description`` (string), and ``isActive``
+    (boolean), using the existing Section field constraints: the
+    name must be non-blank after trimming and at most 255
+    characters. Missing, extra, or mistyped fields are rejected —
+    the import is a complete replacement, never a merge.
+    """
+
+    schemaVersion = serializers.IntegerField()
+    sections = serializers.ListField()
+
+    _SECTION_FIELDS = ("name", "description", "isActive")
+
+    def validate(self, attrs):
+        initial = self.initial_data
+        if isinstance(initial, dict):
+            unexpected = sorted(
+                field
+                for field in initial
+                if field not in ("schemaVersion", "sections")
+            )
+            if unexpected:
+                raise serializers.ValidationError({
+                    "non_field_errors": [
+                        "unexpected field(s): %s."
+                        % ", ".join(unexpected)
+                    ],
+                })
+        return attrs
+
+    def validate_schemaVersion(self, value):
+        raw = self.initial_data.get("schemaVersion")
+        if not isinstance(raw, int) or isinstance(raw, bool):
+            raise serializers.ValidationError(
+                "'schemaVersion' must be an integer."
+            )
+        if value != AGENDA_EXPORT_SCHEMA_VERSION:
+            raise serializers.ValidationError(
+                (
+                    "Unsupported schema version; only version 1 "
+                    "is supported."
+                )
+            )
+        return value
+
+    def validate_sections(self, sections):
+        errors = []
+        for index, entry in enumerate(sections):
+            if not isinstance(entry, dict):
+                errors.append(
+                    f"sections[{index}]: each entry must be an object."
+                )
+                continue
+
+            fields = set(entry)
+            missing = sorted(
+                field
+                for field in self._SECTION_FIELDS
+                if field not in fields
+            )
+            unexpected = sorted(
+                field for field in fields if field not in self._SECTION_FIELDS
+            )
+            if missing:
+                errors.append(
+                    "sections[%d]: missing field(s): %s."
+                    % (index, ", ".join(missing))
+                )
+            if unexpected:
+                errors.append(
+                    "sections[%d]: unexpected field(s): %s."
+                    % (index, ", ".join(unexpected))
+                )
+
+            name = entry.get("name")
+            if "name" in fields and not isinstance(name, str):
+                errors.append(
+                    f"sections[{index}]: 'name' must be a string."
+                )
+            elif isinstance(name, str):
+                if not name.strip():
+                    errors.append(
+                        f"sections[{index}]: 'name' must not be blank."
+                    )
+                elif len(name.strip()) > 255:
+                    errors.append(
+                        (
+                            f"sections[{index}]: 'name' must be at "
+                            "most 255 characters."
+                        )
+                    )
+
+            description = entry.get("description")
+            if "description" in fields and not isinstance(
+                description, str
+            ):
+                errors.append(
+                    (
+                        f"sections[{index}]: 'description' must be "
+                        "a string."
+                    )
+                )
+
+            is_active = entry.get("isActive")
+            if "isActive" in fields and not isinstance(is_active, bool):
+                errors.append(
+                    (
+                        f"sections[{index}]: 'isActive' must be a "
+                        "boolean."
+                    )
+                )
+
+        if errors:
+            raise serializers.ValidationError({"sections": errors})
+        return sections
 
 
 # ── MeetingSection (snapshot) ────────────────────────────────────
