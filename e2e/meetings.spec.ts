@@ -39,6 +39,59 @@ async function clickHeaderNewMeeting(page: Page) {
     .click()
 }
 
+/**
+ * Create a one-time Meeting from a Meeting Template through
+ * the Meetings page create dialog: the template detail page
+ * offers no occurrence creation anymore. The created Meeting
+ * is opened from the Upcoming list and its URL returned.
+ */
+async function createMeetingFromTemplate(
+  page: Page,
+  seriesTitle: string,
+  title: string,
+  daysAhead = 30,
+  time = '09:00',
+): Promise<string> {
+  await page
+    .getByRole('link', { name: /Meetings/ })
+    .click()
+
+  await clickHeaderNewMeeting(page)
+
+  await page.getByLabel('Title').fill(title)
+
+  await page
+    .getByLabel('Meeting template')
+    .selectOption({ label: seriesTitle })
+
+  // Inside the Upcoming window, so the created Meeting is
+  // listed right away.
+  await page
+    .getByLabel('Date')
+    .fill(
+      new Date(
+        Date.now() + daysAhead * 24 * 60 * 60 * 1000,
+      ).toISOString().slice(0, 10),
+    )
+  await page.getByLabel('Time').fill(time)
+
+  await page
+    .locator('form')
+    .getByRole('button', { name: /Create meeting/ })
+    .click()
+
+  // The list stays open after creation: open the new row to
+  // navigate into the Meeting.
+  await page
+    .getByRole('button', {
+      name: new RegExp(`^Open ${title} `),
+    })
+    .click()
+
+  await expect(page).toHaveURL(/\/meetings\/\d+$/)
+  return page.url()
+}
+
 const MEETING_TITLE =
   'E2E FG Weekly'
 
@@ -1089,21 +1142,16 @@ test(
     ).toBeVisible()
 
     // --------------------------------------------------------
-    // Create an occurrence from the series.
+    // Create an occurrence from the series via the
+    // Meetings page create dialog: the template detail
+    // page offers no occurrence creation anymore.
     // --------------------------------------------------------
 
-    await page
-      .getByLabel('Date & Time')
-      .fill('2030-03-01T10:00')
-
-    await page
-      .getByRole('button', {
-        name: /Create meeting/,
-      })
-      .click()
-
-    // The occurrence is navigated to directly.
-    await expect(page).toHaveURL(/\/meetings\/\d+$/)
+    await createMeetingFromTemplate(
+      page,
+      'E2E Series Weekly',
+      'E2E Series Occurrence',
+    )
 
     // Both snapshotted sections are visible.
     await expect(
@@ -1542,21 +1590,11 @@ test(
       }),
     ).toBeVisible()
 
-    await page
-      .getByLabel('Title')
-      .fill('E2E Template Meeting')
-
-    await page
-      .getByLabel('Date & Time')
-      .fill('2030-04-01T10:00')
-
-    await page
-      .getByRole('button', {
-        name: /Create meeting/,
-      })
-      .click()
-
-    await expect(page).toHaveURL(/\/meetings\/\d+$/)
+    await createMeetingFromTemplate(
+      page,
+      'E2E Delete Template',
+      'E2E Template Meeting',
+    )
 
     // --------------------------------------------------------
     // 3. Create the second template that must stay
@@ -2846,7 +2884,6 @@ test(
     await page.getByLabel('Name').fill('E2E Follow-up Series')
     await page.getByRole('button', { name: /Create template/ }).click()
     await expect(page).toHaveURL(/\/meetings\/series\/\d+$/)
-    const seriesUrl = page.url()
 
     await page.getByLabel('Section name').fill('For your Info')
     await page.getByRole('button', { name: /Add section/ }).click()
@@ -2854,15 +2891,21 @@ test(
       page.locator('span.font-semibold', { hasText: /^For your Info$/ }),
     ).toBeVisible()
 
-    await page.getByLabel('Date & Time').fill('2031-01-10T09:00')
-    await page.getByRole('button', { name: /Create meeting/ }).click()
-    await expect(page).toHaveURL(/\/meetings\/\d+$/)
-    const sourceUrl = page.url()
+    const sourceUrl = await createMeetingFromTemplate(
+      page,
+      'E2E Follow-up Series',
+      'E2E Follow-up Source',
+      20,
+    )
 
-    await page.goto(seriesUrl)
-    await page.getByLabel('Date & Time').fill('2031-01-17T09:00')
-    await page.getByRole('button', { name: /Create meeting/ }).click()
-    await expect(page).toHaveURL(/\/meetings\/\d+$/)
+    // Second Meeting in the same Series: its URL is not
+    // needed for this scenario.
+    await createMeetingFromTemplate(
+      page,
+      'E2E Follow-up Series',
+      'E2E Follow-up Second',
+      27,
+    )
 
     // Add a second, unrelated candidate to exercise explicit selection.
     await page.getByRole('link', { name: /Meetings/ }).click()
@@ -3470,7 +3513,6 @@ test(
     await page.getByLabel('Name').fill('E2E Cancel Follow-up Series')
     await page.getByRole('button', { name: /Create template/ }).click()
     await expect(page).toHaveURL(/\/meetings\/series\/\d+$/)
-    const seriesUrl = page.url()
 
     await page.getByLabel('Section name').fill('For your Info')
     await page.getByRole('button', { name: /Add section/ }).click()
@@ -3479,17 +3521,20 @@ test(
     ).toBeVisible()
 
     // First occurrence = source.
-    await page.getByLabel('Date & Time').fill('2031-02-10T09:00')
-    await page.getByRole('button', { name: /Create meeting/ }).click()
-    await expect(page).toHaveURL(/\/meetings\/\d+$/)
-    const sourceUrl = page.url()
+    const sourceUrl = await createMeetingFromTemplate(
+      page,
+      'E2E Cancel Follow-up Series',
+      'E2E Cancel Follow-up Source',
+      20,
+    )
 
     // Second occurrence = target.
-    await page.goto(seriesUrl)
-    await page.getByLabel('Date & Time').fill('2031-02-17T09:00')
-    await page.getByRole('button', { name: /Create meeting/ }).click()
-    await expect(page).toHaveURL(/\/meetings\/\d+$/)
-    const targetUrl = page.url()
+    const targetUrl = await createMeetingFromTemplate(
+      page,
+      'E2E Cancel Follow-up Series',
+      'E2E Cancel Follow-up Target',
+      27,
+    )
     const targetMeetingId = Number(
       targetUrl.match(/\/meetings\/(\d+)$/)?.[1] ?? '',
     )
@@ -3680,7 +3725,6 @@ test(
     await page.getByLabel('Name').fill('E2E Cancel Follow-up Series')
     await page.getByRole('button', { name: /Create template/ }).click()
     await expect(page).toHaveURL(/\/meetings\/series\/\d+$/)
-    const seriesUrl = page.url()
 
     await page.getByLabel('Section name').fill('For your Info')
     await page.getByRole('button', { name: /Add section/ }).click()
@@ -3689,17 +3733,20 @@ test(
     ).toBeVisible()
 
     // First occurrence = source.
-    await page.getByLabel('Date & Time').fill('2031-02-10T09:00')
-    await page.getByRole('button', { name: /Create meeting/ }).click()
-    await expect(page).toHaveURL(/\/meetings\/\d+$/)
-    const sourceUrl = page.url()
+    const sourceUrl = await createMeetingFromTemplate(
+      page,
+      'E2E Cancel Follow-up Series',
+      'E2E Cancel Follow-up Source',
+      20,
+    )
 
     // Second occurrence = target.
-    await page.goto(seriesUrl)
-    await page.getByLabel('Date & Time').fill('2031-02-17T09:00')
-    await page.getByRole('button', { name: /Create meeting/ }).click()
-    await expect(page).toHaveURL(/\/meetings\/\d+$/)
-    const targetUrl = page.url()
+    const targetUrl = await createMeetingFromTemplate(
+      page,
+      'E2E Cancel Follow-up Series',
+      'E2E Cancel Follow-up Target',
+      27,
+    )
     const targetMeetingId = Number(
       targetUrl.match(/\/meetings\/(\d+)$/)?.[1] ?? '',
     )

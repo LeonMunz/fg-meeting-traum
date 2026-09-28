@@ -12,7 +12,6 @@ import {
 
 import { ApiError } from '../../api/client'
 import {
-  createMeetingFromSeries,
   createMeetingSeriesSection,
   deleteMeetingSeries,
   exportMeetingSeriesAgenda,
@@ -191,14 +190,6 @@ export function MeetingSeriesDetailPage() {
   const [creatingSection, setCreatingSection] =
     useState(false)
 
-  // Occurrence form
-  const [occurrenceTitle, setOccurrenceTitle] =
-    useState('')
-  const [occurrenceDate, setOccurrenceDate] =
-    useState('')
-  const [creatingOccurrence, setCreatingOccurrence] =
-    useState(false)
-
   // Editing
   const [editingSectionId, setEditingSectionId] =
     useState<number | null>(null)
@@ -375,59 +366,6 @@ export function MeetingSeriesDetailPage() {
       )
     } finally {
       setSavingSection(false)
-    }
-  }
-
-  const handleCreateOccurrence = async (
-    event: FormEvent,
-  ) => {
-    event.preventDefault()
-
-    if (
-      seriesId == null ||
-      creatingOccurrence
-    ) {
-      return
-    }
-
-    setCreatingOccurrence(true)
-    setActionError(null)
-
-    try {
-      const payload: {
-        title?: string
-        scheduledAt?: string
-      } = {}
-
-      if (occurrenceTitle.trim()) {
-        payload.title =
-          occurrenceTitle.trim()
-      }
-
-      if (occurrenceDate) {
-        payload.scheduledAt =
-          occurrenceDate
-      }
-
-      const meeting =
-        await createMeetingFromSeries(
-          seriesId,
-          payload,
-        )
-
-      // Navigate to the new meeting.
-      navigate(
-        `/meetings/${meeting.id}`,
-      )
-    } catch (error) {
-      setActionError(
-        getErrorMessage(
-          error,
-          'Occurrence could not be created.',
-        ),
-      )
-    } finally {
-      setCreatingOccurrence(false)
     }
   }
 
@@ -1130,81 +1068,9 @@ export function MeetingSeriesDetailPage() {
           )}
         </section>
 
-        {/* Sidebar: Create occurrence */}
         <aside>
-          <div className="overflow-hidden rounded-xl border border-border-subtle bg-surface">
-            <div className="border-b border-border-subtle bg-surface-header px-5 py-4">
-              <h2 className="text-base font-semibold text-text">
-                New Occurrence
-              </h2>
-
-              <p className="mt-1 text-xs text-text-muted">
-                Create a meeting from this template. Active
-                sections will be snapshotted.
-              </p>
-            </div>
-
-            <form
-              onSubmit={handleCreateOccurrence}
-              className="p-5"
-            >
-              <div className="grid gap-4">
-                <label>
-                  <span className="mb-1.5 block text-sm font-medium text-text">
-                    Title
-                  </span>
-
-                  <input
-                    type="text"
-                    value={occurrenceTitle}
-                    onChange={(event) =>
-                      setOccurrenceTitle(
-                        event.target.value,
-                      )
-                    }
-                    placeholder="Uses template name"
-                    className="h-10 w-full rounded-lg border border-border-control bg-surface px-3 text-sm text-text outline-none focus:border-focus focus:ring-2 focus:ring-focus/15"
-                  />
-                </label>
-
-                <label>
-                  <span className="mb-1.5 block text-sm font-medium text-text">
-                    Date & Time
-                  </span>
-
-                  <input
-                    type="datetime-local"
-                    value={occurrenceDate}
-                    onChange={(event) =>
-                      setOccurrenceDate(
-                        event.target.value,
-                      )
-                    }
-                    className="h-10 w-full rounded-lg border border-border-control bg-surface px-3 text-sm text-text outline-none focus:border-focus focus:ring-2 focus:ring-focus/15"
-                  />
-                </label>
-              </div>
-
-              <div className="mt-4">
-                <button
-                  type="submit"
-                  disabled={creatingOccurrence}
-                  className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-action px-4 text-sm font-semibold text-text-inverse transition hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-45"
-                >
-                  <span className="material-symbols-outlined text-[18px]">
-                    event
-                  </span>
-
-                  {creatingOccurrence
-                    ? 'Creating…'
-                    : 'Create meeting'}
-                </button>
-              </div>
-            </form>
-          </div>
-
           {/* Active sections preview */}
-          <div className="mt-5 overflow-hidden rounded-xl border border-border-subtle bg-surface">
+          <div className="overflow-hidden rounded-xl border border-border-subtle bg-surface">
             <div className="border-b border-border-subtle bg-surface-header px-5 py-4">
               <h2 className="text-base font-semibold text-text">
                 Snapshot Preview
