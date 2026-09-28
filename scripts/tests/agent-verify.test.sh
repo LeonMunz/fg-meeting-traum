@@ -43,6 +43,10 @@
 #     identical top-level and process exit codes
 #   * Playwright arguments (e2e and full): present in the announced command,
 #     JSON-escaped in the summary, no environment leakage
+#   * Playwright argv boundary (e2e and full): the conventional `--`
+#     separator at the agent-verify CLI boundary is stripped (at most one)
+#     and never reaches the Playwright CLI; arguments keep their order and
+#     arrive as individual argv elements (npm shim argv recording)
 #   * browser-execution gate (consumed from agent-doctor): the blocked
 #     sandbox (blocked_sandbox) refuses e2e/full BEFORE any phase with the
 #     exact host command and never invokes the Playwright phase; the host
@@ -142,7 +146,9 @@ make_fake_bin() {
   # prove whether the Playwright phase was actually invoked. The marker is
   # created only for the exact Playwright entry point (`npm run
   # test:e2e`), never for other npm calls (e.g. the doctor's npm probe).
-  printf '#!/bin/bash\nif [ -n "${FG_TEST_NPM_MARKER:-}" ] && [ "$1" = "run" ] && [ "$2" = "test:e2e" ]; then : > "$FG_TEST_NPM_MARKER"; fi\nexit %s\n' "$npm_rc" >"$dir/npm"
+  # When FG_TEST_NPM_ARGS is set, the shim additionally records the exact
+  # argv of that invocation (one element per line) for the boundary tests.
+  printf '#!/bin/bash\nif [ -n "${FG_TEST_NPM_MARKER:-}" ] && [ "$1" = "run" ] && [ "$2" = "test:e2e" ]; then : > "$FG_TEST_NPM_MARKER"; fi\nif [ -n "${FG_TEST_NPM_ARGS:-}" ] && [ "$1" = "run" ] && [ "$2" = "test:e2e" ]; then for a in "$@"; do printf "%%s\\n" "$a" >> "$FG_TEST_NPM_ARGS"; done; fi\nexit %s\n' "$npm_rc" >"$dir/npm"
   printf '#!/bin/bash\nexit 0\n' >"$dir/uv"
   chmod +x "$dir/git" "$dir/npm" "$dir/uv"
 }
@@ -586,6 +592,43 @@ set -e
 expect_rc "t14j full summary command identical to announced command (JSON-parsed)" 0 "$vrc"
 if [ -n "$vout" ]; then printf '%s\n' "$vout"; fi
 expect_not_contains "t14k no secret value in the full summary" "$(cat "$PW_JSON2")" "supersecretpassword123"
+
+# ----------------- t14x playwright argv boundary (separator stripping) ----
+# The npm shim records the exact argv of the `npm run test:e2e` invocation
+# (one element per line) when FG_TEST_NPM_ARGS is set. The exact sequence
+# proves what reaches the npm/Playwright boundary: the conventional `--`
+# separator at the agent-verify CLI boundary is stripped (at most one),
+# and the Playwright arguments keep their order as individual argv
+# elements (a value with embedded spaces/quotes must arrive as one
+# element, never re-split or re-quoted).
+PW_ARGS="$MATRIX_DIR/e2e-args.txt"
+run_cmd env PATH="$FAKE_BIN_OK" FG_ALLOW_E2E_RESET=1 FG_TEST_NPM_ARGS="$PW_ARGS" \
+  "$BASH_BIN" "$VERIFY" e2e -- --grep foo
+expect_rc "t14x1 e2e with conventional separator exits 0" 0 "$RC"
+expect_file "t14x2 e2e: npm shim recorded the Playwright argv" "$PW_ARGS"
+expect_eq "t14x3 e2e: separator stripped, argv exactly run test:e2e -- --grep foo" \
+  "$(printf 'run\ntest:e2e\n--\n--grep\nfoo')" "$(cat "$PW_ARGS" 2>/dev/null || true)"
+
+PW_ARGS2="$MATRIX_DIR/e2e-args-nosep.txt"
+run_cmd env PATH="$FAKE_BIN_OK" FG_ALLOW_E2E_RESET=1 FG_TEST_NPM_ARGS="$PW_ARGS2" \
+  "$BASH_BIN" "$VERIFY" e2e --grep foo
+expect_rc "t14x4 e2e without separator (existing boundary) exits 0" 0 "$RC"
+expect_eq "t14x5 e2e: separator optional, argv exactly run test:e2e -- --grep foo" \
+  "$(printf 'run\ntest:e2e\n--\n--grep\nfoo')" "$(cat "$PW_ARGS2" 2>/dev/null || true)"
+
+PW_ARGS3="$MATRIX_DIR/full-args.txt"
+run_cmd env PATH="$FAKE_BIN_OK" FG_ALLOW_E2E_RESET=1 FG_TEST_NPM_ARGS="$PW_ARGS3" \
+  "$BASH_BIN" "$VERIFY" full -- --project chromium
+expect_rc "t14x6 full with conventional separator exits 0" 0 "$RC"
+expect_eq "t14x7 full: separator stripped, argv exactly run test:e2e -- --project chromium" \
+  "$(printf 'run\ntest:e2e\n--\n--project\nchromium')" "$(cat "$PW_ARGS3" 2>/dev/null || true)"
+
+PW_ARGS4="$MATRIX_DIR/e2e-args-values.txt"
+run_cmd env PATH="$FAKE_BIN_OK" FG_ALLOW_E2E_RESET=1 FG_TEST_NPM_ARGS="$PW_ARGS4" \
+  "$BASH_BIN" "$VERIFY" e2e -- --grep 'say "hi" & bye' --project=chrome
+expect_rc "t14x8 e2e with value-carrying args exits 0" 0 "$RC"
+expect_eq "t14x9 e2e: argument values remain individual argv elements" \
+  "$(printf 'run\ntest:e2e\n--\n--grep\nsay "hi" & bye\n--project=chrome')" "$(cat "$PW_ARGS4" 2>/dev/null || true)"
 
 # ---------------------- t15 browser gate: blocked sandbox (e2e/full) -----
 # The blocked path must stop BEFORE Playwright, any browser, and any

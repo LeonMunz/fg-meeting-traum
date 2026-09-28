@@ -885,6 +885,12 @@ main() {
     e2e|full)
       PROFILE="$first"
       shift
+      # Strip at most one conventional `--` separator at the agent-verify
+      # CLI boundary; it marks where the Playwright arguments begin and is
+      # not forwarded (phase_e2e supplies the npm boundary itself).
+      if [ "$#" -gt 0 ] && [ "$1" = "--" ]; then
+        shift
+      fi
       E2E_ARGS=("$@")
       ;;
     *)
