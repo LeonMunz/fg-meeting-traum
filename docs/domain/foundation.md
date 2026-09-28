@@ -868,10 +868,16 @@ itself, and no My Work mutation-by-category semantics exist: a
 move uses the target's `statusDefinitionId` through the existing
 canonical Work Item mutation path.
 
-My Work has no independent persisted card ordering. Project
-`boardPosition` remains project-local and is never used to choose a
-global status target; moving a card within the same global semantic
-category does not persist any My Work ordering.
+My Work Board ordering is personal, server-persisted state
+(Section 14b): one explicit relational ordering record per user per
+Work Item (`MyWorkBoardPosition`), applying only in the semantic
+status category it was created for. Project `boardPosition` remains
+project-local, is never used to choose a global status target, and is
+never the My Work ordering mechanism — a My Work move neither reads
+nor writes it.
+
+No `MyWorkTask` entity is created, and no second Work Item/task
+entity exists for My Work ordering.
 
 Possible UI filters:
 
@@ -880,8 +886,6 @@ Possible UI filters:
 - Overdue
 - Blocked
 - Done
-
-No `MyWorkTask` entity is created.
 
 ## 14a. My Work preferences (server-side personal view state)
 
@@ -960,6 +964,146 @@ The user-facing My Work filter toolbar (Research Group / Project /
 Type filter controls, chips, and client-side filtering over the My
 Work payload) is follow-up work; this section defines the
 persistent backend preference domain and API foundation only.
+
+## 14b. My Work Board ordering (personal server-persisted state, implemented)
+
+My Work Board (Kanban) card ordering is PERSONAL view state,
+persisted server-side per user (NOT localStorage). It survives
+navigation, reload, logout/login, and device changes. It never
+affects another user's My Work order and never affects Project Board
+order.
+
+Persisted state — a relational per-user / per-Work Item ordering
+record (NOT JSON ID arrays, NOT `WorkItem.board_position`):
+
+```text
+MyWorkBoardPosition
+
+user_id          (one row per user + Work Item; CASCADE)
+work_item_id     (canonical WorkItem; CASCADE)
+status_category  todo | in_progress | review | done
+position         (1-based rank within the user's column for that
+                  semantic category)
+created_at / updated_at
+
+UNIQUE (user, work_item)
+```
+
+Invariants:
+
+- **Distinct from Project Board ordering.** `WorkItem.board_position`
+  is Project-local Board state, meaningful only within one
+  Project/status-definition column. My Work spans multiple Projects,
+  so Project `board_position` is never a My Work ordering input: a
+  My Work move neither reads nor writes it, and Project Board
+  semantics (column render order, manual ordering, cross-column
+  drag, status-only transition) are unchanged.
+- **A position applies only in the semantic category it was created
+  for** (the row's `status_category`). If the Work Item's status is
+  changed outside My Work (Project Board, editor, status-only
+  transition, Meeting surface) and the stored row's category no
+  longer matches the Work Item's current status category, that row is
+  stale: the Work Item behaves as unpositioned in the new column
+  until My Work ordering establishes a position for that category.
+  A stale row never positions the Work Item in a different column.
+- **Unpositioned is valid.** A Work Item with no applicable personal
+  position (no row, or a stale row) appears after explicitly
+  positioned items using the existing canonical fallback ordering
+  (creation order: `created_at`, then Work Item ID).
+- **No dangling references.** Rows CASCADE from the Work Item:
+  deleting a Work Item removes its personal-order references.
+- **Non-leaking.** Personal ordering is never authorization: it
+  grants no membership and never grants access to any Work Item,
+  Project, or Research Group. Every read and write is constrained by
+  the user's CURRENT My Work projection (current assignment +
+  current `owner`/`member` Project membership + current Research
+  Group membership); lost assignment/access never makes stale
+  personal metadata visible and never grants access.
+
+Read contract — `GET /api/me/work-items/`:
+
+- Every item carries `myWorkBoardPosition: integer | null` — the
+  user's effective personal position within the item's CURRENT
+  semantic category column; `null` when unpositioned (no row, or a
+  row from a different category).
+- The top-level response ordering is UNCHANGED (canonical creation
+  order `created_at` with Work Item ID tie-break): the field is
+  Board-order metadata only and never reorders the List payload.
+  My Work List View behavior is unchanged.
+- My Work Board columns render explicitly positioned items first
+  (`myWorkBoardPosition` ascending), then unpositioned items in
+  canonical creation order.
+
+Move contract — `POST /api/me/work-items/{work_item_id}/reorder/`
+(authenticated, CSRF-protected):
+
+```text
+{
+  "statusCategory": "todo" | "in_progress" | "review" | "done",
+  "beforeWorkItemId": <integer | null>
+}
+```
+
+- `statusCategory` (required): the target My Work column — one of
+  the four fixed semantic categories.
+- `beforeWorkItemId` (optional; `null` / omitted = end of the
+  column): the Work Item that must FOLLOW the moved one in the
+  target column.
+
+Semantics — one atomic operation per request:
+
+- **Same semantic category** as the Work Item's current status:
+  personal ordering ONLY — no Work Item status mutation, no Work
+  Item history event, Project `board_position` untouched.
+- **Different semantic category**: the concrete target
+  `WorkItemStatusDefinition` is resolved with the same canonical
+  Project-local rule as the My Work read contract (first active
+  definition in that category owned by the Work Item's own Project,
+  by the Project's configured status order with a stable
+  definition-ID tie-break; display names never participate). No
+  target → the move is rejected and nothing changes. The canonical
+  status transition (existing authorization, archived/read-only
+  rules, completion semantics, exactly ONE `work_item.updated`
+  history event for a real status change — `board_position` never
+  changes and no sibling is renumbered) and the personal target
+  position are applied in ONE transaction: a failed placement never
+  leaves the Work Item in a new status with the personal move
+  missing, and vice versa. Personal ordering itself is not Work Item
+  history.
+- On every move the target column is normalized to explicit
+  positions 1..N in its resulting render order; ONLY the requesting
+  user's rows are written, so ordering stays deterministic and other
+  users' ordering is untouched.
+- **Per-user serialization.** Every move locks the requesting
+  user's User row FIRST inside the move transaction — same-user My
+  Work reorder operations (the personal column spans Projects, so
+  the moved item's Project row alone is not a sufficient lock root)
+  serialize on that one stable per-user row and can never normalize
+  the same personal column from a stale snapshot. The canonical
+  Project / moved Work Item row locks are taken ONLY on the
+  cross-category path, where the canonical status mutation requires
+  them; the personal ``MyWorkBoardPosition`` locks remain
+  user-specific; and personal column normalization never locks
+  canonical sibling Work Items (a personal reorder never mutates a
+  Work Item row). Consequence: different users do NOT contend on
+  canonical sibling Work Item rows merely because their personal
+  My Work columns overlap. Cross-category moves may still
+  legitimately contend on the canonical Project / moved Work Item
+  locks — the canonical status mutation requires them — when they
+  mutate shared canonical domain state.
+
+Authorization / non-leaking rules:
+
+- The moved Work Item must be in the requesting user's CURRENT My
+  Work projection, else 404 (indistinguishable from an unknown Work
+  Item — no existence leak).
+- A non-null `beforeWorkItemId` must identify ANOTHER Work Item in
+  the requesting user's CURRENT My Work projection AND in the
+  requested target category, else 400. An inaccessible / unassigned
+  / private Work Item is never honored merely because its ID was
+  supplied; the moved item cannot be its own anchor.
+- Structural payload violations (unknown `statusCategory`,
+  non-integer `beforeWorkItemId`) → 400.
 
 ## 15. Project Board (implemented)
 

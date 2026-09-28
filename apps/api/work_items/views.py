@@ -26,6 +26,11 @@ from projects.models import (
 from research_groups.models import ResearchGroupMembership
 
 from .models import WorkItem, WorkItemAssignee, WorkItemComment
+from .my_work_board_order import (
+    MY_WORK_STATUS_CATEGORIES,
+    effective_my_work_board_positions,
+    move_my_work_item,
+)
 from .my_work_preferences import (
     MyWorkPreferencesError,
     get_my_work_preferences,
@@ -904,6 +909,16 @@ class PersonalMyWorkView(APIView):
             ).order_by("id"):
                 origins.setdefault(origin.work_item_id, origin)
 
+        # One bulk fetch of the user's EFFECTIVE personal My Work
+        # Board positions (NOT per item): a stored row applies only in
+        # the semantic category it was created for (a stale position
+        # from another category never positions the item), so the
+        # fetch matches the row's stored category against each Work
+        # Item's CURRENT status category in one query.
+        board_positions = effective_my_work_board_positions(
+            request.user, [wi.pk for wi in work_items],
+        )
+
         # One bulk status-target resolution for every Project
         # represented by the response (NOT per item and NOT per
         # Project): for the future global My Work Kanban, each item
@@ -940,6 +955,19 @@ class PersonalMyWorkView(APIView):
             )
 
             item.update({
+                # Effective personal My Work Board position within
+                # the item's CURRENT semantic category column: the
+                # user's persisted 1-based rank, or null when the
+                # item is unpositioned (no stored row, or a stored
+                # row from a different category). Board columns
+                # render positioned items first (rank ascending),
+                # then unpositioned items in canonical creation
+                # order. The top-level payload order below stays
+                # canonical — this field is Board-order metadata,
+                # never a List ordering input.
+                "myWorkBoardPosition": board_positions.get(
+                    work_item.pk
+                ),
                 "projectName": work_item.project.name,
                 "researchGroupId": (
                     work_item.project.research_group_id
@@ -994,6 +1022,118 @@ class PersonalMyWorkView(APIView):
             data.append(item)
 
         return Response(data)
+
+
+class PersonalMyWorkReorderView(APIView):
+    """POST /api/me/work-items/{work_item_id}/reorder/
+
+    One atomic, PERSONAL My Work Board move: places the Work Item at
+    an exact position in the requesting user's My Work column for the
+    requested semantic category. Server-persisted per-user view state
+    (``MyWorkBoardPosition``) — survives navigation, reload,
+    logout/login, and device changes, and never affects another
+    user's order or the Project Board.
+
+    Body:
+    - statusCategory: required. Target My Work column, one of the
+      four fixed semantic categories
+      (``todo`` / ``in_progress`` / ``review`` / ``done``).
+    - beforeWorkItemId: optional (null / omitted = end of the
+      column). The Work Item that must FOLLOW the moved one in the
+      target column; it must be another Work Item of the requesting
+      user's CURRENT My Work projection in the requested category.
+
+    Semantics (``docs/domain/foundation.md`` §14b):
+    - Same semantic category as the Work Item's current status: NO
+      Work Item status mutation and NO Work Item history event —
+      only the user's personal ordering changes.
+    - Different semantic category: the concrete target
+      StatusDefinition is resolved with the canonical Project-local
+      My Work rule (first active definition in that category by
+      configured status order, stable ID tie-break; no target = the
+      move is rejected) and the canonical status transition is
+      applied (authorization, archived/read-only rules, completion
+      semantics, exactly one ``work_item.updated`` history event for
+      a real change) atomically WITH the personal position.
+    - ``WorkItem.board_position`` (Project-local Board order) is
+      never read or written.
+
+    Authorization: the moved Work Item and the anchor must be in the
+    requesting user's CURRENT My Work projection (current assignment
+    + owner/member Project membership + Research Group membership);
+    items outside the projection are answered with a non-leaking
+    404, invalid anchors with a 400.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, work_item_id):
+        # Non-leaking 404: an unknown Work Item and a Work Item
+        # outside the user's CURRENT My Work projection are
+        # indistinguishable.
+        work_item = (
+            WorkItem.objects.filter(pk=work_item_id)
+            .select_related("status_definition")
+            .first()
+        )
+        if work_item is None or not personal_my_work_queryset(
+            request.user
+        ).filter(pk=work_item.pk).exists():
+            return Response(
+                {"error": "WorkItem not found"},
+                status=404,
+            )
+
+        status_category = request.data.get("statusCategory")
+        if status_category not in MY_WORK_STATUS_CATEGORIES:
+            return Response(
+                {"error": "statusCategory must be one of: "
+                          + ", ".join(MY_WORK_STATUS_CATEGORIES) + "."},
+                status=400,
+            )
+
+        before_work_item_id = request.data.get("beforeWorkItemId")
+        if before_work_item_id is not None:
+            try:
+                before_work_item_id = int(before_work_item_id)
+            except (TypeError, ValueError):
+                return Response(
+                    {"error": "beforeWorkItemId is invalid."},
+                    status=400,
+                )
+            if before_work_item_id == work_item.pk:
+                return Response(
+                    {"error": "beforeWorkItemId cannot be the moved "
+                              "Work Item itself."},
+                    status=400,
+                )
+            # The anchor must be another Work Item of the user's
+            # CURRENT My Work projection in the requested category —
+            # an inaccessible / unassigned / private Work Item is
+            # never honored merely because its ID was supplied.
+            anchor = personal_my_work_queryset(request.user).filter(
+                pk=before_work_item_id,
+                status_definition__category=status_category,
+            ).first()
+            if anchor is None:
+                return Response(
+                    {"error": "beforeWorkItemId must reference a Work "
+                              "Item in your My Work in the requested "
+                              "category."},
+                    status=400,
+                )
+
+        try:
+            moved = move_my_work_item(
+                user=request.user,
+                work_item=work_item,
+                status_category=status_category,
+                before_work_item_id=before_work_item_id,
+            )
+        except WorkItemDomainError as exc:
+            return Response({"error": exc.message}, status=400)
+
+        return Response(serialize_work_item(moved, user=request.user))
 
 
 class MyWorkPreferencesView(APIView):

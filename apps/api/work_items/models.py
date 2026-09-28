@@ -253,3 +253,75 @@ class MyWorkPreferences(models.Model):
             f"MyWorkPreferences(user={self.user_id}, "
             f"view={self.view_mode})"
         )
+class MyWorkBoardPosition(models.Model):
+    """Persisted personal My Work Board position for one user's Work Item.
+
+    My Work Board ordering is personal, server-side view state over the
+    canonical Work Items (``docs/domain/foundation.md`` §14b): one row
+    per (user, Work Item) holding the Work Item's explicit position
+    within the user's My Work column for exactly one fixed semantic
+    status category.
+
+    Invariants:
+
+    - One row per (user, Work Item) (unique). The Work Item carries at
+      most one personal position at a time, and it is applied ONLY in
+      the semantic category it was created for (``status_category``).
+      When the Work Item's status is changed by another surface, a row
+      whose category no longer matches the Work Item's current status
+      category is stale: it positions the Work Item nowhere until My
+      Work ordering establishes a position for the current category.
+    - ``position`` is the 1-based rank within the requesting user's My
+      Work semantic-category column (all of the user's Work Items in
+      that category, across Projects). It is personal view state: it
+      is never read by Project Board ordering (``WorkItem.board_position``
+      stays Project-local), never a cross-project ordering input, and
+      it never authorizes anything.
+    - Rows CASCADE from both the Work Item and the user: deleting the
+      Work Item never leaves a dangling personal-order reference, and
+      lost assignment/access never makes stale personal metadata
+      visible (reads apply a row only when its category still matches
+      the Work Item's current status category AND the Work Item is in
+      the user's current My Work projection).
+    """
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="my_work_board_positions",
+    )
+    work_item = models.ForeignKey(
+        WorkItem,
+        on_delete=models.CASCADE,
+        related_name="my_work_board_positions",
+    )
+    # The fixed semantic category (WorkItemStatusDefinition.Category
+    # values) this position was created for. A position applies ONLY in
+    # this category — never in any other.
+    status_category = models.CharField(
+        max_length=16,
+        choices=WorkItemStatusDefinition.Category.choices,
+    )
+    # 1-based rank within the user's My Work column for
+    # ``status_category``.
+    position = models.PositiveIntegerField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "work_items_my_work_board_position"
+        verbose_name = "my work board position"
+        verbose_name_plural = "my work board positions"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "work_item"],
+                name="%(app_label)s_%(class)s_unique_user_work_item",
+            )
+        ]
+
+    def __str__(self):
+        return (
+            f"MyWorkBoardPosition(user={self.user_id}, "
+            f"work_item={self.work_item_id}, "
+            f"category={self.status_category}, position={self.position})"
+        )
