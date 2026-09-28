@@ -279,9 +279,16 @@ export function CreateMeetingCalendar({
         ))}
       </div>
 
-      <div className="grid grid-cols-7 gap-y-0.5">
+      {/*
+        Weeks container: stacks the six week rows vertically. Each row is
+        its OWN 7-column grid so every date renders under its weekday
+        column. This container must never be a 7-column grid: its direct
+        children are the six rows, not the 42 cells — that transposes the
+        calendar into seven columns of weeks.
+      */}
+      <div className="flex flex-col gap-y-0.5">
         {Array.from({ length: WEEKS }, (_, week) => (
-          <div key={week} role="row">
+          <div key={week} role="row" className="grid grid-cols-7">
             {days
               .slice(week * DAYS_PER_WEEK, (week + 1) * DAYS_PER_WEEK)
               .map((datePart) => {

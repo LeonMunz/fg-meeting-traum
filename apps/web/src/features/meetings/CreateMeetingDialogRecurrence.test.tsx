@@ -25,6 +25,7 @@ import {
 } from './CreateMeetingDialog'
 import {
   browserLocale,
+  formatCalendarDayLabel,
   formatDatePartLocale,
   formatTimePartLocale,
 } from './scheduleUtils'
@@ -790,6 +791,37 @@ describe('CreateMeetingDialog recurrence editor', () => {
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       }),
     )
+  })
+
+  it('selecting Thursday 2026-10-01 via the calendar makes Weekly/Thursday valid (transposed-calendar regression)', async () => {
+    renderDialog()
+    await selectTemplate()
+    // Anchor the calendar on September 2026, so October 1 is visible as
+    // an adjacent-month day.
+    setBaseForm('2026-09-22')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Choose date' }))
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: formatCalendarDayLabel('2026-10-01', locale),
+      }),
+    )
+    expect(screen.getByLabelText('Date')).toHaveValue('2026-10-01')
+
+    selectRepeat('weekly')
+
+    // The unconfigured weekday set synced with the selected date:
+    // Thursday is the canonical selected weekday, so the start-date
+    // weekday invariant holds and there is no weekday mismatch error.
+    expect(weekdayButton('Thursday')).toHaveAttribute('aria-pressed', 'true')
+    expect(weekdayButton('Tuesday')).toHaveAttribute('aria-pressed', 'false')
+    expect(
+      screen.queryByText("The start date's weekday must be selected."),
+    ).not.toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Create series' }),
+    ).toBeEnabled()
   })
 })
 
