@@ -2305,6 +2305,68 @@ def replace_series_sections(
     return replaced
 
 
+@transaction.atomic
+def delete_series_section(*, series_section, actor):
+    """Permanently delete one Template Section
+    (MeetingSeriesSection).
+
+    Uses the existing scoped Template write rule (the same
+    MEETING_SERIES_WRITE kernel capability as every other Template
+    Section edit), so a user who cannot manage the Template cannot
+    delete one of its Sections either.
+
+    Deletes EXACTLY ONE Template Section. The Template itself, its
+    sibling Template Sections, and every Recurrence that references
+    the Template are preserved unchanged.
+
+    Existing Meeting occurrences are NOT owned by the Template
+    Section: they are independent snapshots. Deleting the Template
+    Section never deletes an occurrence-level MeetingSection, its
+    Agenda items, Notes, or Follow-ups, and never creates any
+    replacement structure; it only clears the snapshot's provenance
+    pointer (``MeetingSection.source_series_section`` is SET_NULL)
+    while every snapshot's own content (name, description, position,
+    visibility) is preserved.
+
+    New one-time Meetings and later materialized recurrence
+    occurrences snapshot only the REMAINING active Template
+    Sections: the deleted Section is simply no longer there, and no
+    implicit replacement Section is created (a Template may
+    legitimately have zero active Sections). Deleting the last
+    Section (active or not) is allowed and leaves the Template with
+    zero Sections.
+
+    The existing reversible "Inactive" state is a separate feature
+    and is not affected.
+    """
+    # Serialize against concurrent Template Section lifecycle
+    # operations and revalidate against the current persisted state
+    # (e.g. a Project archived after the caller loaded the Template):
+    # the authorization decision must never be made on a stale
+    # related object. The lock query stays join-free (PostgreSQL
+    # cannot FOR UPDATE the nullable side of an outer join); the
+    # related state is re-fetched afterwards.
+    MeetingSeriesSection.objects.select_for_update().get(
+        pk=series_section.pk
+    )
+    series_section = (
+        MeetingSeriesSection.objects
+        .select_related(
+            "meeting_series",
+            "meeting_series__research_group",
+            "meeting_series__project",
+        )
+        .get(pk=series_section.pk)
+    )
+
+    _require_series_write_access(
+        meeting_series=series_section.meeting_series,
+        user=actor,
+    )
+
+    series_section.delete()
+
+
 # ── Meeting occurrence from Series (snapshot) ────────────────────
 
 

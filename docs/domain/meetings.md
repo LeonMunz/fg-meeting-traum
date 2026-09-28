@@ -2202,6 +2202,58 @@ A concrete Meeting may additionally:
 
 Those changes do not mutate the Template.
 
+### Template Section deletion (implemented)
+
+A single Template Section is permanently deletable through
+`DELETE /api/meeting-series-sections/{sectionId}/` (returns `204`
+when successful).
+
+**Authorization** reuses the exact scoped Template write rule of
+the editability above (the kernel's `MEETING_SERIES_WRITE`): a
+user who cannot manage the Template cannot delete one of its
+Sections either. A user without read access gets the
+non-leaking `404`; a user who can read but not write (e.g. a
+Project `viewer` on a Project-scoped Template, or any user on an
+archived Project's Templates) gets `403`.
+
+**What deletion removes:** exactly one Template Section.
+
+**What deletion preserves:** the Template, its sibling Template
+Sections, and the Recurrences that reference the Template are
+untouched. Existing Meeting occurrences are independent
+snapshots and are NEVER deleted by a Section deletion: their
+`MeetingSection` rows, Agenda items, Notes, Follow-ups, and
+Work Items remain intact. The affected snapshots' provenance
+reference (`MeetingSection.source_series_section`) is cleared
+(`SET_NULL`) while every snapshot's own content (name,
+description, position, visibility) is preserved.
+
+**Effect on future occurrences:** new one-time Meetings and
+later materialized recurrence occurrences snapshot only the
+REMAINING active Template Sections — the deleted Section is
+simply no longer there. A Recurrence remains materializable
+after the deletion (the Template still exists). No implicit
+replacement Section is created: deleting the last Section
+(active or not) is allowed and leaves the Template with zero
+Sections, consistent with the existing ability to have zero
+active Template Sections. The reversible "Inactive" state is a
+separate feature and is not affected.
+
+**User interaction:** the Section-Kachel on the template
+management page offers the destructive delete action (rendered
+only for users who can manage the Template under the rule
+above; the server remains authoritative) behind an explicit
+confirmation dialog that names the Section and explains that
+existing Meetings keep their Sections while new Meetings — and
+recurring occurrences that have not been opened yet — no longer
+receive it (additionally explaining that new Meetings will
+initially have no Agenda Section when the deleted Section is
+the last active one). Cancelling performs no write; a
+successful deletion refreshes the authoritative Template state
+(the Section disappears from the list and the Snapshot
+Preview); a failed deletion keeps the Section and surfaces the
+error via the existing action-error pattern.
+
 ### Legacy migration invariant (MeetingItem → MeetingSection)
 
 The `MeetingItem.meeting_section` relation is NOT NULL. When it was introduced,

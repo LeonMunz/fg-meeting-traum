@@ -103,6 +103,7 @@ from .services import (
     create_series_section,
     create_work_item_from_meeting_item,
     delete_meeting_note,
+    delete_series_section,
     end_meeting,
     expand_effective_meeting_recurrence_occurrences,
     exclude_meeting_recurrence_occurrence,
@@ -927,6 +928,30 @@ class MeetingSeriesSectionDetailView(APIView):
         return Response(
             MeetingSeriesSectionSerializer(section).data
         )
+
+    def delete(self, request, section_id):
+        section = _require_series_section_access(request, section_id)
+        if section is None:
+            return Response(
+                {"error": "Series section not found"},
+                status=404,
+            )
+
+        if not _has_scoped_write_access(
+            request.user,
+            section.meeting_series,
+        ):
+            return _mutation_forbidden_response()
+
+        try:
+            delete_series_section(
+                series_section=section,
+                actor=request.user,
+            )
+        except MeetingDomainError as exc:
+            return Response({"error": exc.message}, status=400)
+
+        return Response(status=204)
 
 
 class MeetingSeriesSectionReorderView(APIView):

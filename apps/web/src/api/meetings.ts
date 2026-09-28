@@ -366,6 +366,14 @@ export async function reorderMeetingSeriesSections(
   )
 }
 
+export async function deleteMeetingSeriesSection(
+  sectionId: number,
+): Promise<void> {
+  return apiDelete<void>(
+    `/api/meeting-series-sections/${sectionId}/`,
+  )
+}
+
 /* ── Meeting Occurrences from Series ───────────────────────────── */
 
 export async function createMeetingFromSeries(

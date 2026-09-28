@@ -14,6 +14,7 @@ import { ApiError } from '../../api/client'
 import {
   createMeetingSeriesSection,
   deleteMeetingSeries,
+  deleteMeetingSeriesSection,
   exportMeetingSeriesAgenda,
   importMeetingSeriesAgenda,
   getMeetingSeries,
@@ -36,6 +37,7 @@ import {
   MeetingSeriesDeleteDialog,
   TemplateActionsMenu,
 } from './meetingSeriesDelete'
+import { MeetingSeriesSectionDeleteDialog } from './meetingSeriesSectionDelete'
 
 function getErrorMessage(
   error: unknown,
@@ -95,6 +97,12 @@ export function MeetingSeriesDetailPage() {
   const [deleteDialogOpen, setDeleteDialogOpen] =
     useState(false)
   const [deletingTemplate, setDeletingTemplate] =
+    useState(false)
+
+  // Template Section deletion
+  const [sectionDeleteTarget, setSectionDeleteTarget] =
+    useState<ApiMeetingSeriesSection | null>(null)
+  const [deletingSection, setDeletingSection] =
     useState(false)
 
   // Agenda JSON export
@@ -603,6 +611,38 @@ export function MeetingSeriesDetailPage() {
       }
     }
 
+  const handleDeleteSection = async () => {
+    if (
+      sectionDeleteTarget == null ||
+      deletingSection
+    ) {
+      return
+    }
+
+    const sectionId = sectionDeleteTarget.id
+
+    setDeletingSection(true)
+    setActionError(null)
+
+    try {
+      await deleteMeetingSeriesSection(sectionId)
+      setSectionDeleteTarget(null)
+      // Refresh the authoritative Template state (the
+      // section list and the Snapshot Preview) from the
+      // server.
+      void loadSeries()
+    } catch (error) {
+      setActionError(
+        getErrorMessage(
+          error,
+          'Section could not be deleted.',
+        ),
+      )
+    } finally {
+      setDeletingSection(false)
+    }
+  }
+
   if (loading) {
     return (
       <div className="w-full px-6 py-8 lg:px-8 lg:py-10 xl:px-10">
@@ -1085,6 +1125,24 @@ export function MeetingSeriesDetailPage() {
                               : 'visibility_off'}
                           </span>
                         </button>
+
+                        {canManageTemplate && (
+                          <button
+                            type="button"
+                            aria-label={`Delete section ${section.name}`}
+                            onClick={() => {
+                              setActionError(null)
+                              setSectionDeleteTarget(
+                                section,
+                              )
+                            }}
+                            className="flex h-8 w-8 items-center justify-center rounded-lg text-text-muted transition hover:bg-danger-bg hover:text-danger"
+                          >
+                            <span aria-hidden="true" className="material-symbols-outlined text-[18px]">
+                              delete
+                            </span>
+                          </button>
+                        )}
                       </div>
                     </div>
                   )}
@@ -1139,6 +1197,25 @@ export function MeetingSeriesDetailPage() {
           error={actionError}
           onCancel={() => setDeleteDialogOpen(false)}
           onConfirm={() => void handleDeleteTemplate()}
+        />
+      )}
+
+      {sectionDeleteTarget && (
+        <MeetingSeriesSectionDeleteDialog
+          section={sectionDeleteTarget}
+          isLastActiveSection={
+            sectionDeleteTarget.isActive &&
+            sections.filter((s) => s.isActive)
+              .length === 1
+          }
+          deleting={deletingSection}
+          error={actionError}
+          onCancel={() =>
+            setSectionDeleteTarget(null)
+          }
+          onConfirm={() =>
+            void handleDeleteSection()
+          }
         />
       )}
 
