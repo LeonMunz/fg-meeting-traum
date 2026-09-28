@@ -194,6 +194,24 @@ values and exit codes are documented in `docs/living-lab.md` (Environment
 doctor); the post-blocker environment budget is part of the canonical
 evidence contract in `docs/agent/WORKFLOW.md`.
 
+Browser execution gate (agent sandbox): `scripts/agent-doctor.sh` owns the
+canonical browser-execution capability gate (machine-readable
+`browser_execution` state in `--json`: `available` | `blocked_sandbox`).
+In the known macOS agent sandbox (harness signal `CODEX_SANDBOX=seatbelt`)
+it reports `blocked_sandbox` WITHOUT launching any browser process, and
+`./scripts/agent-verify.sh e2e/full` consumes that state and refuses before
+any phase starts (exit 2, exact host-terminal command printed). When the
+gate is blocked: stop browser experiments — do NOT launch Brave or any
+other system/Chrome browser fallback (a Brave launch from the agent
+sandbox crashes and shows user-visible macOS crash dialogs), do NOT
+re-download or reinstall browsers, do NOT loop escalation requests. Report
+the E2E gate as `NOT_VERIFIED_ENVIRONMENT_BLOCKED` (ENVIRONMENT/HARNESS)
+with the exact host-terminal command:
+`FG_ALLOW_E2E_RESET=1 npm run test:e2e -- <spec>` (or
+`FG_ALLOW_E2E_RESET=1 ./scripts/agent-verify.sh e2e`). Outside the blocked
+sandbox, E2E behavior is unchanged; override: `FG_BROWSER_GATE` (doctor
+`--help`).
+
 Verification claims, blocker classification, and completion reports follow
 that same evidence contract (`docs/agent/WORKFLOW.md`, Evidence contract):
 five verification statuses, four error classes, one environment budget, one

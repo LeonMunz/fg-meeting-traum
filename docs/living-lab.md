@@ -655,6 +655,8 @@ environment. It is diagnostic only:
 - it never runs tests,
 - it never starts services or browsers (the bounded Chromium launch preflight
   closes the browser before the doctor continues; nothing is left running),
+- when the browser-execution gate is `blocked_sandbox` it never launches a
+  browser at all — the bounded Chromium launch preflight is skipped entirely,
 - it never installs dependencies,
 - it never mutates the working tree or any database (the only database
   statement executed is a read-only `SELECT 1`),
@@ -672,6 +674,9 @@ The JSON mode has a fixed structure (`schema_version: 1`): `repo`,
 `environment`, an ordered `capabilities` array (each capability has at least
 `name`, `status`, `detail`), an `optional_capabilities` array, and a
 `summary` block.
+The top-level `browser_execution` field carries the canonical
+browser-execution gate state (`available` | `blocked_sandbox`); see the
+subsection below.
 
 The last capability, `agent_observability` (local agent trace-capture
 collector), is **optional**: it is reported but does not gate the result or
@@ -706,6 +711,49 @@ capability is `available` only when the Chromium launch preflight succeeded and
 the database is reachable. Otherwise the `e2e` profile cannot pass and must be
 reported as blocked, not as verified.
 
+### Browser-execution gate (`browser_execution`)
+
+The doctor owns the canonical browser-execution capability gate for agent
+workflows: one capability (`browser_execution`, reported between
+`quick_gate` and `playwright_runtime`) plus the top-level JSON field of the
+same name.
+
+- **Signal.** In the known macOS agent sandbox, tool commands run under the
+  Seatbelt profile and the harness exports `CODEX_SANDBOX=seatbelt` exactly
+  for those commands. On macOS (Darwin), `CODEX_SANDBOX` set to a non-`none`
+  value therefore means browser execution is impossible: the Playwright
+  Chromium bundle cannot be read, a freshly downloaded Chromium cannot use
+  AppKit appearance services, and system browsers (e.g. Brave) start and
+  then crash with a user-visible macOS crash dialog. The detection is
+  environment-only — the gate concludes `blocked_sandbox` BEFORE any browser
+  process could be spawned, and the bounded launch preflight is skipped
+  (capability `chromium_launch` becomes `blocked` with a `skipped` detail).
+  The signal is macOS-specific; on other platforms the same variable does
+  not block.
+- **States.** `available` (no macOS agent sandbox active; browser execution
+  may proceed — install/launch capability is still diagnosed by
+  `playwright_runtime` / `chromium_launch`) or `blocked_sandbox`.
+- **Effect.** `e2e_gate` becomes `blocked` (it lists
+  `browser_execution(blocked)`), and `agent-verify e2e/full` consume the
+  state and refuse before any phase starts (exit 2, exact host-terminal
+  command printed). An undeterminable doctor result also fails closed.
+- **Host command.** When the gate is blocked, E2E runs in a normal
+  (unsandboxed) host terminal:
+  `FG_ALLOW_E2E_RESET=1 npm run test:e2e -- <spec>` (or
+  `FG_ALLOW_E2E_RESET=1 ./scripts/agent-verify.sh e2e`).
+- **Override.** `FG_BROWSER_GATE=auto` (default; detect) |
+  `blocked_sandbox` (force the blocked state; deterministic testing) |
+  `available` (user-approved unsandboxed/host execution — the bounded
+  launch preflight still runs and must succeed, so the override cannot hide
+  a real block). Invalid values are a usage error (exit 2).
+- **Agent rule.** Once the gate is `blocked_sandbox`, agents stop browser
+  experiments: no Brave or other system/Chrome browser fallback (a Brave
+  launch from the agent sandbox is explicitly prohibited — it produces
+  user-visible macOS crash dialogs), no browser re-download/reinstall, no
+  escalation loops; the E2E gate is reported as
+  NOT_VERIFIED_ENVIRONMENT_BLOCKED with the host command (canonical rule:
+  `docs/agent/WORKFLOW.md`, Browser-execution gate rule).
+
 ### Environment budget after a detected blocker
 
 The post-blocker environment budget (one normal attempt, at most one retry
@@ -718,9 +766,13 @@ attempts.
 
 `bash scripts/tests/agent-doctor.test.sh` covers the output formats, exit
 codes, non-mutation, and simulated blockers (missing runtimes via restricted
-PATH, missing browser via empty `PLAYWRIGHT_BROWSERS_PATH`, blocked-launch
-classification and cause sanitization, optional-capability semantics). The
-doctor is not part of any `agent-verify.sh` profile; run it directly.
+PATH, missing browser via empty `PLAYWRIGHT_BROWSERS_PATH`, the
+browser-execution gate — simulated blocked sandbox (blocked before any
+browser process could launch, proven via a node-invocation log), the real
+`CODEX_SANDBOX=seatbelt` signal on Darwin, ordinary-host `available`,
+override and usage-error semantics — blocked-launch classification and
+cause sanitization, and optional-capability semantics). The doctor is not
+part of any `agent-verify.sh` profile; run it directly.
 
 ## Agent observability (local, optional)
 

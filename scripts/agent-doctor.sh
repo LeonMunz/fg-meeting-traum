@@ -22,9 +22,20 @@
 #   frontend_gate       prerequisites of the `frontend` verify profile
 #   backend_gate        prerequisites of the `backend` verify profile
 #   quick_gate          prerequisites of the `quick` verify profile (no DB)
+#   browser_execution   CANONICAL browser-execution gate for agent workflows:
+#                       environment-only detection of the known macOS agent
+#                       sandbox (harness signal CODEX_SANDBOX=seatbelt, plus
+#                       the explicit FG_BROWSER_GATE override). It never
+#                       launches a browser process. In the blocked state
+#                       (blocked_sandbox) every downstream browser launch is
+#                       stopped BEFORE it happens, including the preflight.
+#                       States: available | blocked_sandbox (top-level JSON
+#                       field "browser_execution").
 #   playwright_runtime  @playwright/test + installed Chromium executable
 #   chromium_launch     bounded headless launch preflight (about:blank, then
-#                       the browser is closed; no product page, no data)
+#                       the browser is closed; no product page, no data);
+#                       SKIPPED (status blocked, no process launched) when
+#                       browser_execution is blocked_sandbox
 #   e2e_gate            prerequisites of the `e2e` verify profile; the doctor
 #                       never sets FG_ALLOW_E2E_RESET and never touches the
 #                       fg_e2e schema
@@ -47,6 +58,14 @@
 #                (sandbox/policy, failing browser launch, auth failure, ...)
 #   unknown      not determinable without mutation or extra context
 #
+# Environment variables:
+#   FG_BROWSER_GATE      browser_execution gate override: auto (default;
+#                        detect), blocked_sandbox (force the blocked state;
+#                        deterministic testing / edge cases), available
+#                        (user-approved unsandboxed/host execution: the
+#                        bounded launch preflight still runs and must
+#                        succeed, so the override cannot hide a real block)
+#
 # Exit codes:
 #   0  all capabilities available
 #   1  diagnosis completed; >=1 capability is blocked/unavailable/unknown
@@ -67,6 +86,10 @@ SCHEMA_VERSION=1
 PREFLIGHT_TIMEOUT_MS=10000
 VENV_PY="$REPO_ROOT/apps/api/.venv/bin/python"
 DETAIL_MAX=240
+
+# Canonical browser-execution gate state (set in main before the probes):
+# exactly one of "available" | "blocked_sandbox".
+BROWSER_EXECUTION_STATE="available"
 
 CAP_NAMES=()
 CAP_STATUSES=()
@@ -226,6 +249,47 @@ launch_status_for_rc() {
     0)   printf 'available' ;;
     *)   printf 'blocked' ;;
   esac
+}
+
+# Canonical browser-execution gate (sourceable for tests).
+# Prints exactly one state on stdout: "available" or "blocked_sandbox".
+# Returns 2 on an invalid FG_BROWSER_GATE value.
+#
+# Environment-only detection: this function NEVER launches a browser
+# process. The known macOS agent sandbox (Codex tool shells run under the
+# Seatbelt profile; the harness exports CODEX_SANDBOX=seatbelt exactly for
+# those commands) makes browser execution impossible: the Playwright
+# Chromium bundle cannot be read, freshly downloaded Chromium cannot use
+# AppKit appearance services, and system browsers (e.g. Brave) start and
+# then crash with user-visible macOS crash dialogs. No launch retry,
+# fallback browser, or download can change that, so the gate concludes
+# blocked BEFORE any browser process could be spawned.
+#
+#   FG_BROWSER_GATE=blocked_sandbox  force the blocked state
+#   FG_BROWSER_GATE=available        user-approved unsandboxed/host
+#                                    execution (the bounded launch
+#                                    preflight still runs and must succeed)
+#   FG_BROWSER_GATE=auto|unset       detect: Darwin + CODEX_SANDBOX set to a
+#                                    non-"none" value -> blocked_sandbox
+#                                    (the signal is macOS-specific; on other
+#                                    platforms browsers may work)
+browser_execution_state() {
+  case "${FG_BROWSER_GATE:-auto}" in
+    available)       printf 'available'; return 0 ;;
+    blocked_sandbox) printf 'blocked_sandbox'; return 0 ;;
+    auto) ;;
+    *) return 2 ;;
+  esac
+  local sandbox_value="${CODEX_SANDBOX:-}"
+  if [ -z "$sandbox_value" ] || [ "$sandbox_value" = "none" ]; then
+    printf 'available'
+    return 0
+  fi
+  case "${PLATFORM:-}" in
+    Darwin) printf 'blocked_sandbox' ;;
+    *)      printf 'available' ;;
+  esac
+  return 0
 }
 
 # -------------------------------------------------------- capability probes ---
@@ -522,6 +586,13 @@ cap_playwright_runtime() {
 }
 
 cap_chromium_launch() {
+  # The canonical gate decides FIRST: in the known macOS agent sandbox the
+  # bounded launch preflight is skipped entirely — no browser process is
+  # ever started, so no crash dialogs and no wasted retries.
+  if [ "$BROWSER_EXECUTION_STATE" = "blocked_sandbox" ]; then
+    add_cap "chromium_launch" "blocked" "skipped: browser_execution is blocked_sandbox — a sandboxed launch cannot work; no browser process was launched"
+    return 0
+  fi
   local pw_status
   pw_status="$(cap_status_of playwright_runtime)"
   if [ "$pw_status" != "available" ]; then
@@ -607,8 +678,23 @@ cap_quick_gate() {
   fi
 }
 
+cap_browser_execution() {
+  # The canonical browser-execution gate. Environment-only: it never
+  # launches a browser process (see browser_execution_state).
+  local reason
+  if [ "$BROWSER_EXECUTION_STATE" = "blocked_sandbox" ]; then
+    case "${FG_BROWSER_GATE:-auto}" in
+      blocked_sandbox) reason="FG_BROWSER_GATE=blocked_sandbox (explicit)" ;;
+      *)               reason="macOS agent sandbox (CODEX_SANDBOX=${CODEX_SANDBOX:-?})" ;;
+    esac
+    add_cap "browser_execution" "blocked" "blocked_sandbox: ${reason}; no browser process may launch here (Brave fallbacks crash visibly). Host terminal: FG_ALLOW_E2E_RESET=1 npm run test:e2e -- <spec>"
+  else
+    add_cap "browser_execution" "available" "no macOS agent sandbox active; browser execution may proceed (install/launch capability: playwright_runtime, chromium_launch)"
+  fi
+}
+
 cap_e2e_gate() {
-  local prereqs="node_runtime npm frontend_deps playwright_runtime chromium_launch database"
+  local prereqs="node_runtime npm frontend_deps browser_execution playwright_runtime chromium_launch database"
   local st missing consent
   st="$(derive_gate "$prereqs")"
   missing="$(gate_missing_list "$prereqs")"
@@ -646,6 +732,21 @@ Optional capabilities:
   A missing optional collector never turns a healthy product environment
   into a failed doctor result.
 
+Browser-execution gate (canonical for agent workflows):
+  browser_execution reports available or blocked_sandbox as a top-level JSON
+  field. In the known macOS agent sandbox (harness signal
+  CODEX_SANDBOX=seatbelt) it is blocked_sandbox WITHOUT launching any
+  browser process: the bounded Chromium preflight is skipped, the e2e_gate
+  is blocked, and agent-verify e2e/full refuse before any phase starts. A
+  blocked gate is NOT a successful E2E verification — run E2E in a normal
+  (unsandboxed) host terminal:
+    FG_ALLOW_E2E_RESET=1 npm run test:e2e -- <spec>
+    (or: FG_ALLOW_E2E_RESET=1 ./scripts/agent-verify.sh e2e)
+  Override: FG_BROWSER_GATE=auto (default; detect) | blocked_sandbox |
+  available (user-approved unsandboxed/host execution — the bounded launch
+  preflight still runs and must succeed, so the override cannot hide a
+  real block).
+
 Exit codes:
   0  all required capabilities available
   1  diagnosis completed; >=1 required capability blocked/unavailable/unknown
@@ -668,6 +769,7 @@ print_human() {
     "$REPO_ROOT" "${REPO_BRANCH:-?}" "${REPO_HEAD:-?}" \
     "$([ "$REPO_WRITABLE" = "true" ] && printf yes || printf no)"
   printf 'Platform: %s %s\n\n' "$PLATFORM" "$ARCH"
+  printf 'Browser execution gate: %s\n\n' "$BROWSER_EXECUTION_STATE"
   printf '%-22s %-12s %s\n' "CAPABILITY" "STATUS" "DETAIL"
   for i in "${!CAP_NAMES[@]}"; do
     printf '%-22s %-12s %s\n' "${CAP_NAMES[$i]}" "${CAP_STATUSES[$i]}" "${CAP_DETAILS[$i]}"
@@ -734,6 +836,7 @@ print_json() {
   printf '    "platform": "%s",\n' "$(json_escape "$PLATFORM")"
   printf '    "arch": "%s"\n' "$(json_escape "$ARCH")"
   printf '  },\n'
+  printf '  "browser_execution": "%s",\n' "$(json_escape "$BROWSER_EXECUTION_STATE")"
   printf '  "capabilities": [\n'
   for i in "${!CAP_NAMES[@]}"; do
     sep=","
@@ -779,6 +882,13 @@ main() {
   REPO_HEAD=""
   REPO_WRITABLE="false"
 
+  # Canonical browser-execution gate: resolved ONCE, before any probe that
+  # could launch a browser, from environment signals only.
+  if ! BROWSER_EXECUTION_STATE="$(browser_execution_state)"; then
+    printf 'agent-doctor: ERROR: FG_BROWSER_GATE must be one of: auto, available, blocked_sandbox\n' >&2
+    exit 2
+  fi
+
   cap_repo_workspace
   cap_node_runtime
   cap_npm
@@ -790,6 +900,7 @@ main() {
   cap_frontend_gate
   cap_backend_gate
   cap_quick_gate
+  cap_browser_execution
   cap_playwright_runtime
   cap_chromium_launch
   cap_e2e_gate

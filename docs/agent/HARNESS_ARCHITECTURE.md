@@ -651,7 +651,7 @@ documentation: `docs/living-lab.md` "Environment doctor").
 
 ### 7.1 Capability model
 
-The doctor runs 16 fixed-order probes and reports one status per capability:
+The doctor runs 17 fixed-order probes and reports one status per capability:
 
 | # | Capability | Checks |
 |---|---|---|
@@ -666,11 +666,12 @@ The doctor runs 16 fixed-order probes and reports one status per capability:
 | 9 | `frontend_gate` | derived: `node_runtime` + `npm` + `frontend_deps` |
 | 10 | `backend_gate` | derived: `uv_runtime` + `backend_deps` + `database` |
 | 11 | `quick_gate` | derived prerequisites of the `quick` profile (no DB) |
-| 12 | `playwright_runtime` | `@playwright/test` + installed Chromium executable |
-| 13 | `chromium_launch` | bounded headless launch preflight (`about:blank`, then closed; no product page, no data) |
-| 14 | `e2e_gate` | derived prerequisites of the `e2e` profile; the doctor never sets `FG_ALLOW_E2E_RESET` and never touches `fg_e2e` |
-| 15 | `network` | deterministic TCP probe (registry.npmjs.org:443) + proxy-env observation |
-| 16 | `agent_observability` | **OPTIONAL**: local otelcol collector present/working |
+| 12 | `browser_execution` | **canonical browser-execution gate**: environment-only detection of the known macOS agent sandbox (`CODEX_SANDBOX=seatbelt` on Darwin; `FG_BROWSER_GATE` override); never launches a browser process |
+| 13 | `playwright_runtime` | `@playwright/test` + installed Chromium executable |
+| 14 | `chromium_launch` | bounded headless launch preflight (`about:blank`, then closed; no product page, no data); **skipped** (`blocked`) when `browser_execution` is `blocked_sandbox` |
+| 15 | `e2e_gate` | derived prerequisites of the `e2e` profile (incl. `browser_execution`); the doctor never sets `FG_ALLOW_E2E_RESET` and never touches `fg_e2e` |
+| 16 | `network` | deterministic TCP probe (registry.npmjs.org:443) + proxy-env observation |
+| 17 | `agent_observability` | **OPTIONAL**: local otelcol collector present/working |
 
 Derived gates use worst-status precedence: `unavailable > blocked >
 unknown > available`, and report the missing prerequisites as
@@ -685,6 +686,11 @@ unknown > available`, and report the missing prerequisites as
 - Human mode: capability matrix. JSON mode (`--json`): stable schema
   (`schemaVersion` 1), stable capability order, `summary.overall` = `ok`
   only when every **required** capability is available, else `degraded`.
+- JSON mode also carries the top-level `browser_execution` field
+  (`available` | `blocked_sandbox`): the canonical browser-execution gate
+  state consumed by `agent-verify e2e/full` (refusal with the exact
+  host-terminal command in the blocked sandbox; fail-closed when the
+  doctor result is undeterminable).
 - Exit codes: 0 all available; 1 completed with ≥1 non-available; 2 usage;
   3 internal doctor failure.
 - **Optional capability rule**: `agent_observability` is reported but never
@@ -693,7 +699,9 @@ unknown > available`, and report the missing prerequisites as
 ### 7.3 Hard read-only contract
 
 No tests executed; no services or browsers left running (the Chromium
-preflight closes the browser before continuing); no dependency installs; no
+preflight closes the browser before continuing; when the browser-execution
+gate is `blocked_sandbox`, no browser process is launched at all); no
+dependency installs; no
 working-tree/git/database mutation (database = connect + `SELECT 1` only);
 output never contains secrets or full environment dumps (the launch-error
 sanitizer strips ANSI, temp paths, `--user-data-dir`, and pids; details are
@@ -711,6 +719,11 @@ truncated to 240 chars).
   NOT_VERIFIED_ENVIRONMENT_BLOCKED with the exact external command). The
   doctor never installs, and agents must not start installing to unblock a
   gate.
+- `agent-verify e2e/full` consumes the browser-execution gate (doctor
+  `browser_execution`): in the known macOS agent sandbox it refuses before
+  any phase starts (exit 2, exact host-terminal command) and never launches
+  a browser; an undeterminable gate fails closed. Canonical agent rule:
+  `docs/agent/WORKFLOW.md` (Browser-execution gate rule).
 - `agent-observability start` consumes the doctor as evidence: it stores a
   read-only `agent-doctor.sh --json` snapshot into the run directory
   (DEGRADED is stored as evidence; a failed doctor leaves no file; capture

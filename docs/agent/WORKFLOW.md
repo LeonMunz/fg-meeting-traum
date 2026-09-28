@@ -70,6 +70,12 @@ PRECHECK
   only with explicit consent to the destructive reset:
   `FG_ALLOW_E2E_RESET=1 ./scripts/agent-verify.sh e2e` (the configured
   Playwright startup resets the `fg_e2e` schema).
+  Before any phase starts, `agent-verify` checks the canonical
+  browser-execution gate (the `agent-doctor` `browser_execution` state):
+  in the known macOS agent sandbox it reports `blocked_sandbox` and
+  `agent-verify e2e/full` refuse (exit 2, exact host-terminal command
+  printed) — no server, no database change, no browser process. See the
+  ENVIRONMENT_OR_HARNESS browser-gate rule below.
 - Consent to the destructive reset is enforced at the choke point, not only
   in `agent-verify.sh`: the `reset_e2e` management command itself refuses
   (clear error, nonzero exit) unless BOTH `DJANGO_SETTINGS_MODULE=
@@ -386,6 +392,28 @@ whether the product path was actually reached, and the allowed next action.
   command. No installation, retry, or escalation loops. An environment blocker
   is a classified gate status, not a debugging-budget **BLOCKED** state.
 
+**Browser-execution gate rule (agent sandbox)**
+
+The canonical browser-execution gate is the `agent-doctor`
+`browser_execution` capability (machine-readable top-level JSON field;
+states `available` | `blocked_sandbox`). In the known macOS agent sandbox
+(harness signal `CODEX_SANDBOX=seatbelt`) it concludes `blocked_sandbox`
+from environment signals only — before any browser process could be
+spawned. Once the gate is `blocked_sandbox`:
+
+- Do not start Playwright and do not launch any browser: no Brave, no
+  Chrome, no other system-browser fallback. Launching system Brave from
+  the agent sandbox is explicitly prohibited: it starts and then crashes
+  with a user-visible macOS crash dialog.
+- Do not re-download or reinstall browsers as a retry, and do not loop
+  escalated-execution requests for the same gate.
+- `./scripts/agent-verify.sh e2e/full` refuses before any phase starts
+  (exit 2) and prints the exact host-terminal command.
+- Report the E2E gate as NOT_VERIFIED_ENVIRONMENT_BLOCKED with the exact
+  host-terminal command: `FG_ALLOW_E2E_RESET=1 npm run test:e2e -- <spec>`
+  (or `FG_ALLOW_E2E_RESET=1 ./scripts/agent-verify.sh e2e`).
+- A `blocked_sandbox` result never counts as a passing E2E verification.
+
 **SCOPE_DISCOVERY**
 
 - When: verification reveals a gap, regression, or behavior that is not part
@@ -445,7 +473,7 @@ Illustrative example (values must be the observed ones in a real report):
 | quick profile | `./scripts/agent-verify.sh quick` | STATICALLY_VERIFIED | PASS, exit 0 | no | `-` |
 | contract search | `rg -n "STATICALLY_VERIFIED" docs/agent/WORKFLOW.md` | STATICALLY_VERIFIED | matches found, exit 0 | no | `-` |
 | My Work E2E | `FG_ALLOW_E2E_RESET=1 npm run test:e2e -- my-work` | RUNTIME_VERIFIED | 12/12 passed, exit 0 | yes | `test-results/my-work/trace.zip` |
-| e2e profile (browser) | `FG_ALLOW_E2E_RESET=1 ./scripts/agent-verify.sh e2e` | NOT_VERIFIED_ENVIRONMENT_BLOCKED | not executed — `e2e_gate: blocked` (Chromium launch) | no | blocker: doctor output; run externally: `FG_ALLOW_E2E_RESET=1 ./scripts/agent-verify.sh e2e` |
+| e2e profile (browser) | `FG_ALLOW_E2E_RESET=1 ./scripts/agent-verify.sh e2e` | NOT_VERIFIED_ENVIRONMENT_BLOCKED | not executed — `browser_execution: blocked_sandbox` (agent sandbox; refused before any phase) | no | blocker: doctor output; run externally: `FG_ALLOW_E2E_RESET=1 npm run test:e2e -- <spec>` |
 
 ### Artifact rules
 

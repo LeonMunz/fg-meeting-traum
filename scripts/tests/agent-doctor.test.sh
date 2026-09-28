@@ -20,6 +20,10 @@
 #   * optional capability agent_observability: reported but never gates the
 #     result unless FG_DOCTOR_REQUIRE_OBSERVABILITY=1
 #   * blocked-launch classification + cause sanitization (sourced helpers)
+#   * browser-execution gate: environment-only sandbox detection
+#     (blocked_sandbox stops before any browser process could launch;
+#     proven via a node-invocation log), override semantics, real
+#     CODEX_SANDBOX signal on Darwin, host environment available
 #   * read-only contract markers in the doctor source
 
 set -Eeuo pipefail
@@ -76,7 +80,7 @@ expect_eq() { # expect_eq <name> <expected> <actual>
 EXPECTED_CAPABILITIES=(
   repo_workspace node_runtime npm uv_runtime python_runtime
   frontend_deps backend_deps database frontend_gate backend_gate quick_gate
-  playwright_runtime chromium_launch e2e_gate network
+  browser_execution playwright_runtime chromium_launch e2e_gate network
   agent_observability
 )
 OPTIONAL_CAPABILITIES=(agent_observability)
@@ -91,7 +95,31 @@ json_field() { # json_field <json> <capability-name> -> prints status
   ' "$2" 2>/dev/null <<<"$1"
 }
 
+json_detail() { # json_detail <json> <capability-name> -> prints detail
+  node -e '
+    const fs = require("fs");
+    const d = JSON.parse(fs.readFileSync(0, "utf8"));
+    const c = (d.capabilities || []).find((x) => x.name === process.argv[1]);
+    if (!c) process.exit(2);
+    console.log(c.detail);
+  ' "$2" 2>/dev/null <<<"$1"
+}
+
+json_browser_state() { # json_browser_state <json> -> top-level browser_execution
+  node -e '
+    const d = JSON.parse(require("fs").readFileSync(0, "utf8"));
+    console.log(typeof d.browser_execution === "string" ? d.browser_execution : "<missing>");
+  ' 2>/dev/null <<<"$1"
+}
+
 BASH_BIN="$(command -v bash)"
+
+# Hermetic environment: the suite may itself run inside a real product
+# session, whose environment carries the macOS agent sandbox signal
+# (CODEX_SANDBOX=seatbelt) or a gate override. The ambient capability
+# runs simulate an ordinary host environment; the sandbox behavior is
+# tested explicitly (t12).
+unset CODEX_SANDBOX FG_BROWSER_GATE 2>/dev/null || true
 
 
 # ------------------------------------------------------------- t01 help -----
@@ -109,10 +137,10 @@ run_cmd bash "$DOCTOR" --json --help
 expect_rc "t02b multiple flags exit 2" 2 "$RC"
 
 # --------------------------------------------------------- t03 human mode ---
-run_cmd bash "$DOCTOR"
+run_cmd env -u CODEX_SANDBOX -u FG_BROWSER_GATE bash "$DOCTOR"
 out="$CAP_OUT"; rc="$RC"
 if [ "$rc" -eq 0 ] || [ "$rc" -eq 1 ]; then ok "t03a human mode exit code in {0,1}"; else bad "t03a human mode exit code in {0,1} (got $rc)"; fi
-expect_contains "t03b human mode has summary" "$out" "Summary: 16 capabilities"
+expect_contains "t03b human mode has summary" "$out" "Summary: 17 capabilities"
 
 # Every capability name appears with a valid status as its second column.
 rows="$(printf '%s\n' "$out" | awk '$2 ~ /^(available|blocked|unavailable|unknown)$/ { print $1 }')"
@@ -135,18 +163,30 @@ const d = JSON.parse(fs.readFileSync(0, "utf8"));
 const errs = [];
 const eq = (a, b, m) => { if (a !== b) errs.push(m); };
 const EXPECTED = '"$(printf '%s ' "${EXPECTED_CAPABILITIES[@]}" | node -e 'const t=require("fs").readFileSync(0,"utf8"); console.log(JSON.stringify(t.trim().split(/\s+/)))')"';
-const ALLOWED = new Set(["available", "blocked", "unavailable", "unknown"]);
-eq(d.schema_version, 1, "schema_version");
-eq(d.tool, "agent-doctor", "tool");
-if (!Array.isArray(d.capabilities)) errs.push("capabilities not an array");
-else {
-  eq(d.capabilities.map((c) => c.name).join("|"), EXPECTED.join("|"), "capability names/order");
-  d.capabilities.forEach((c, i) => {
-    if (typeof c.detail !== "string" || c.detail.length === 0) errs.push("cap[" + i + "] detail");
-    if (!ALLOWED.has(c.status)) errs.push("cap[" + i + "] status=" + c.status);
-    for (const k of Object.keys(c)) if (!["name", "status", "detail"].includes(k)) errs.push("cap[" + i + "] extra key " + k);
-  });
-}
+    const ALLOWED = new Set(["available", "blocked", "unavailable", "unknown"]);
+    eq(d.schema_version, 1, "schema_version");
+    eq(d.tool, "agent-doctor", "tool");
+    if (typeof d.browser_execution !== "string" || !["available", "blocked_sandbox"].includes(d.browser_execution)) errs.push("top-level browser_execution state");
+    if (!Array.isArray(d.capabilities)) errs.push("capabilities not an array");
+    else {
+      eq(d.capabilities.map((c) => c.name).join("|"), EXPECTED.join("|"), "capability names/order");
+      d.capabilities.forEach((c, i) => {
+        if (typeof c.detail !== "string" || c.detail.length === 0) errs.push("cap[" + i + "] detail");
+        if (!ALLOWED.has(c.status)) errs.push("cap[" + i + "] status=" + c.status);
+        for (const k of Object.keys(c)) if (!["name", "status", "detail"].includes(k)) errs.push("cap[" + i + "] extra key " + k);
+      });
+      // browser_execution gate consistency (top-level state vs capability)
+      const be = d.capabilities.find((c) => c.name === "browser_execution");
+      if (typeof d.browser_execution === "string") {
+        if (d.browser_execution === "blocked_sandbox") {
+          if (!be || be.status !== "blocked" || be.detail.indexOf("blocked_sandbox") === -1) errs.push("browser_execution cap must be blocked/blocked_sandbox");
+          const cl = d.capabilities.find((c) => c.name === "chromium_launch");
+          if (!cl || cl.status !== "blocked" || cl.detail.indexOf("skipped") === -1) errs.push("chromium_launch must be blocked + skipped when gate blocked");
+        } else if (d.browser_execution === "available") {
+          if (!be || be.status !== "available") errs.push("browser_execution cap must be available");
+        }
+      }
+    }
 if (!d.repo || d.repo.root !== process.env.FG_DOCTOR_TEST_REPO_ROOT) errs.push("repo.root");
 if (typeof (d.repo || {}).writable !== "boolean") errs.push("repo.writable");
 if (!d.environment || typeof d.environment.platform !== "string") errs.push("environment");
@@ -315,6 +355,77 @@ req_overall="$(node -e 'const d=JSON.parse(require("fs").readFileSync(0,"utf8"))
 if [ "$obs_st" != "available" ]; then
   expect_eq "t11e require mode degrades result when capability is not available" "degraded" "$req_overall"
 fi
+
+# --------------------- t12 browser-execution gate (sandbox awareness) ----
+# The canonical gate is environment-only: in the blocked state it must
+# conclude BEFORE any browser process could be spawned.
+
+# t12 unit: state resolution of the sourced helper (no processes at all).
+gate_state() { # gate_state <ENV=VAL>... -> prints state (rc via $?)
+  env FG_DOCTOR_SOURCE_ONLY=1 "$@" bash -c 'source "$0" >/dev/null 2>&1; browser_execution_state' "$DOCTOR" 2>/dev/null
+}
+expect_eq "t12a Darwin + CODEX_SANDBOX=seatbelt -> blocked_sandbox" "blocked_sandbox" "$(gate_state PLATFORM=Darwin CODEX_SANDBOX=seatbelt)"
+expect_eq "t12b Darwin without CODEX_SANDBOX -> available" "available" "$(gate_state PLATFORM=Darwin)"
+expect_eq "t12c Darwin + CODEX_SANDBOX=none -> available" "available" "$(gate_state PLATFORM=Darwin CODEX_SANDBOX=none)"
+expect_eq "t12d non-Darwin + CODEX_SANDBOX=seatbelt -> available (macOS-specific signal)" "available" "$(gate_state PLATFORM=Linux CODEX_SANDBOX=seatbelt)"
+expect_eq "t12e FG_BROWSER_GATE=available overrides detection" "available" "$(gate_state PLATFORM=Darwin CODEX_SANDBOX=seatbelt FG_BROWSER_GATE=available)"
+expect_eq "t12f FG_BROWSER_GATE=blocked_sandbox forces blocked on any platform" "blocked_sandbox" "$(gate_state PLATFORM=Linux FG_BROWSER_GATE=blocked_sandbox)"
+gs_rc=0
+st_bogus="$(gate_state FG_BROWSER_GATE=bogus)" || gs_rc=$?
+expect_rc "t12g invalid FG_BROWSER_GATE value -> rc 2" 2 "$gs_rc"
+expect_eq "t12h invalid FG_BROWSER_GATE prints no state" "" "$st_bogus"
+
+# t12 full run (forced blocked state, platform-independent): the doctor
+# must report blocked_sandbox, skip the launch preflight, and never invoke
+# the preflight JS — proven via a node shim that logs every node call.
+NODE_LOG="$(mktemp)"
+NODEBIN="$(mktemp -d)"
+REAL_NODE="$(command -v node)"
+cat > "$NODEBIN/node" <<NODEEOF
+#!/bin/bash
+printf '%s\n' "\$*" >> "$NODE_LOG"
+exec "$REAL_NODE" "\$@"
+NODEEOF
+chmod +x "$NODEBIN/node"
+run_cmd env -u CODEX_SANDBOX FG_BROWSER_GATE=blocked_sandbox PATH="$NODEBIN:$PATH" bash "$DOCTOR" --json
+out="$CAP_OUT"; rc="$RC"
+expect_rc "t12i blocked-sandbox doctor run exits 1 (degraded)" 1 "$rc"
+expect_eq "t12j top-level browser_execution blocked_sandbox" "blocked_sandbox" "$(json_browser_state "$out")"
+expect_eq "t12k browser_execution capability blocked" "blocked" "$(json_field "$out" browser_execution)"
+expect_contains "t12l blocked detail names the state" "$(json_detail "$out" browser_execution)" "blocked_sandbox"
+expect_contains "t12m blocked detail surfaces the host command" "$(json_detail "$out" browser_execution)" "FG_ALLOW_E2E_RESET=1 npm run test:e2e -- <spec>"
+expect_eq "t12n chromium_launch blocked (skipped)" "blocked" "$(json_field "$out" chromium_launch)"
+expect_contains "t12o chromium_launch detail says skipped" "$(json_detail "$out" chromium_launch)" "skipped"
+expect_eq "t12p e2e_gate blocked" "blocked" "$(json_field "$out" e2e_gate)"
+# Proof that no browser launch happened: the shim logs every node
+# invocation; the launch preflight (the only browser-launching code in
+# the doctor) contains chromium.launch and newPage — neither may appear.
+node_log="$(cat "$NODE_LOG" 2>/dev/null)"
+expect_not_contains "t12q no browser-launch JS ever invoked (node log)" "$node_log" "launch("
+expect_not_contains "t12r no preflight page JS ever invoked (node log)" "$node_log" "newPage"
+rm -rf "$NODEBIN"; rm -f "$NODE_LOG"
+
+# t12 real signal: on Darwin the harness sandbox signal blocks; on other
+# platforms the same signal is macOS-specific and must not block.
+run_cmd env -u FG_BROWSER_GATE CODEX_SANDBOX=seatbelt bash "$DOCTOR" --json
+out="$CAP_OUT"
+if [ "$(uname -s 2>/dev/null)" = "Darwin" ]; then
+  expect_eq "t12s Darwin real signal (CODEX_SANDBOX=seatbelt) -> blocked_sandbox" "blocked_sandbox" "$(json_browser_state "$out")"
+  expect_eq "t12t Darwin real signal: chromium_launch skipped (blocked)" "blocked" "$(json_field "$out" chromium_launch)"
+else
+  expect_eq "t12s non-Darwin real signal -> available (macOS-specific gate)" "available" "$(json_browser_state "$out")"
+fi
+
+# t12 ordinary host environment: the gate can proceed (available).
+run_cmd env -u CODEX_SANDBOX -u FG_BROWSER_GATE bash "$DOCTOR" --json
+expect_eq "t12u ordinary host environment -> browser_execution available" "available" "$(json_browser_state "$CAP_OUT")"
+
+# t12 usage errors / help for the gate.
+run_cmd env FG_BROWSER_GATE=bogus bash "$DOCTOR" --json
+expect_rc "t12v invalid FG_BROWSER_GATE exits 2" 2 "$RC"
+expect_contains "t12w invalid override message names allowed values" "$CAP_OUT" "auto, available, blocked_sandbox"
+expect_contains "t12x help documents the browser-execution gate" "$(bash "$DOCTOR" --help 2>/dev/null)" "Browser-execution gate"
+expect_contains "t12y help documents the override" "$(bash "$DOCTOR" --help 2>/dev/null)" "FG_BROWSER_GATE"
 
 # ---------------------------------------------------------------- summary ---
 printf '\n'

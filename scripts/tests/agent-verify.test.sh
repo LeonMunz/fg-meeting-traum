@@ -43,6 +43,11 @@
 #     identical top-level and process exit codes
 #   * Playwright arguments (e2e and full): present in the announced command,
 #     JSON-escaped in the summary, no environment leakage
+#   * browser-execution gate (consumed from agent-doctor): the blocked
+#     sandbox (blocked_sandbox) refuses e2e/full BEFORE any phase with the
+#     exact host command and never invokes the Playwright phase; the host
+#     gate proceeds to the (shimmed) Playwright phase; an undeterminable
+#     gate fails closed (refusal, no browser)
 
 set -Eeuo pipefail
 
@@ -109,6 +114,11 @@ BASH_BIN="$(command -v bash)"
 unset FG_AGENT_RUN_ID CODEX_SESSION_ID FG_PRODUCT_SESSION_MAP_DIR \
       FG_OBS_RUNS_DIR 2>/dev/null || true
 
+# Same hermetic treatment for the browser-execution gate signals: the
+# suite's e2e/full simulations model an ordinary host environment unless
+# a test sets CODEX_SANDBOX / FG_BROWSER_GATE explicitly.
+unset CODEX_SANDBOX FG_BROWSER_GATE 2>/dev/null || true
+
 # The quick profile's phases in canonical order (mirrored from the profile
 # functions of agent-verify.sh, used only for assertions).
 EXPECTED_PHASES="repo: hygiene|frontend: typecheck|frontend: lint|backend: django check|backend: migration drift"
@@ -120,12 +130,19 @@ EXPECTED_COMMANDS='git diff HEAD --check|npm run typecheck|npm run lint|cd apps/
 make_fake_bin() {
   local dir="$1" npm_rc="$2" tool target
   mkdir -p "$dir"
-  for tool in bash mktemp date dirname mv rm; do
+  # sed/tr/uname/head: the e2e/full gate consumes the agent-doctor result,
+  # and the doctor (like this suite) must stay functional under a
+  # restricted PATH.
+  for tool in bash mktemp date dirname mv rm sed tr uname head; do
     target="$(command -v "$tool" 2>/dev/null || true)"
     if [ -n "$target" ]; then ln -sf "$target" "$dir/$tool"; fi
   done
   printf '#!/bin/bash\nexit 0\n' >"$dir/git"
-  printf '#!/bin/bash\nexit %s\n' "$npm_rc" >"$dir/npm"
+  # The npm shim records an invocation marker (when asked) so tests can
+  # prove whether the Playwright phase was actually invoked. The marker is
+  # created only for the exact Playwright entry point (`npm run
+  # test:e2e`), never for other npm calls (e.g. the doctor's npm probe).
+  printf '#!/bin/bash\nif [ -n "${FG_TEST_NPM_MARKER:-}" ] && [ "$1" = "run" ] && [ "$2" = "test:e2e" ]; then : > "$FG_TEST_NPM_MARKER"; fi\nexit %s\n' "$npm_rc" >"$dir/npm"
   printf '#!/bin/bash\nexit 0\n' >"$dir/uv"
   chmod +x "$dir/git" "$dir/npm" "$dir/uv"
 }
@@ -334,6 +351,9 @@ expect_contains "t01g --help documents evidence-only boundary" "$out" "never cla
 expect_contains "t01h --help documents FG_AGENT_RUN_ID correlation" "$out" "FG_AGENT_RUN_ID"
 expect_contains "t01h2 --help scopes auto-correlation as same-identity" "$out" "same-identity"
 expect_contains "t01h3 --help points to current-run for reliable correlation" "$out" "current-run"
+expect_contains "t01i --help documents the browser-execution gate" "$out" "browser-execution gate"
+expect_contains "t01j --help documents blocked_sandbox" "$out" "blocked_sandbox"
+expect_contains "t01k --help documents FG_BROWSER_GATE override" "$out" "FG_BROWSER_GATE"
 
 # ------------------------------------------------------- t02 usage errors --
 run_cmd "$BASH_BIN" "$VERIFY" --summary-json
@@ -493,10 +513,14 @@ for prof in quick frontend backend core; do
 done
 for prof in e2e full; do
   # Reset opt-in set exclusively for this simulated shim run; the npm shim
-  # executes, no browser launches, no database is touched.
-  run_cmd env PATH="$FAKE_BIN_OK" FG_ALLOW_E2E_RESET=1 "$BASH_BIN" "$VERIFY" --summary-json "$MATRIX_DIR/$prof.json" "$prof"
+  # executes, no browser launches, no database is touched. The npm
+  # invocation marker proves the (simulated) host gate proceeded to the
+  # Playwright phase: outside the blocked sandbox, E2E behavior is
+  # unchanged.
+  run_cmd env PATH="$FAKE_BIN_OK" FG_ALLOW_E2E_RESET=1 FG_TEST_NPM_MARKER="$MATRIX_DIR/$prof.npm-ran" "$BASH_BIN" "$VERIFY" --summary-json "$MATRIX_DIR/$prof.json" "$prof"
   expect_rc "t12 $prof: simulated run (opt-in) exits 0" 0 "$RC"
   expect_contains "t12 $prof: consent acknowledged" "$CAP_OUT" "FG_ALLOW_E2E_RESET=1 acknowledged"
+  expect_file "t12 $prof: Playwright phase invoked on the host gate (npm ran)" "$MATRIX_DIR/$prof.npm-ran"
   pf="$(plan_pairs_file "$prof")"
   run_matrix_validate "t12 $prof: summary valid, plan-consistent, all phases passed" \
     "$MATRIX_DIR/$prof.json" "$prof" "$pf" pass 0 -1
@@ -562,6 +586,63 @@ set -e
 expect_rc "t14j full summary command identical to announced command (JSON-parsed)" 0 "$vrc"
 if [ -n "$vout" ]; then printf '%s\n' "$vout"; fi
 expect_not_contains "t14k no secret value in the full summary" "$(cat "$PW_JSON2")" "supersecretpassword123"
+
+# ---------------------- t15 browser gate: blocked sandbox (e2e/full) -----
+# The blocked path must stop BEFORE Playwright, any browser, and any
+# fallback could run. The npm invocation marker is the process evidence:
+# if the Playwright phase were reached, the shim would create the file.
+NPM_BLOCKED_MARKER="$TMPROOT/npm-blocked-ran"
+run_cmd env PATH="$FAKE_BIN_OK" FG_BROWSER_GATE=blocked_sandbox FG_ALLOW_E2E_RESET=1 FG_TEST_NPM_MARKER="$NPM_BLOCKED_MARKER" "$BASH_BIN" "$VERIFY" e2e
+expect_rc "t15a blocked gate: e2e refused before any phase (exit 2)" 2 "$RC"
+expect_contains "t15b refusal names the machine-readable state" "$CAP_OUT" "browser_execution: blocked_sandbox"
+expect_contains "t15c refusal classifies ENVIRONMENT_OR_HARNESS" "$CAP_OUT" "ENVIRONMENT_OR_HARNESS"
+expect_contains "t15d refusal keeps the gate NOT_VERIFIED" "$CAP_OUT" "NOT_VERIFIED_ENVIRONMENT_BLOCKED"
+expect_contains "t15e refusal surfaces the exact host profile command" "$CAP_OUT" "FG_ALLOW_E2E_RESET=1 $VERIFY e2e [playwright args]"
+expect_contains "t15f refusal surfaces the exact host npm command" "$CAP_OUT" "FG_ALLOW_E2E_RESET=1 npm run test:e2e -- <spec>"
+expect_not_contains "t15g no phase executed" "$CAP_OUT" "==> "
+expect_no_file "t15h Playwright (npm) never invoked in blocked mode" "$NPM_BLOCKED_MARKER"
+
+# The full profile refuses the same way, before any core phase.
+run_cmd env PATH="$FAKE_BIN_OK" FG_BROWSER_GATE=blocked_sandbox FG_ALLOW_E2E_RESET=1 FG_TEST_NPM_MARKER="$NPM_BLOCKED_MARKER" "$BASH_BIN" "$VERIFY" full
+expect_rc "t15i blocked gate: full refused before any phase (exit 2)" 2 "$RC"
+expect_not_contains "t15j full: no phase executed" "$CAP_OUT" "==> "
+expect_no_file "t15k full: Playwright never invoked in blocked mode" "$NPM_BLOCKED_MARKER"
+
+# The real harness sandbox signal (macOS-specific by design): on Darwin,
+# CODEX_SANDBOX=seatbelt alone blocks without any explicit override.
+if [ "$(uname -s 2>/dev/null)" = "Darwin" ]; then
+  run_cmd env -u FG_BROWSER_GATE PATH="$FAKE_BIN_OK" CODEX_SANDBOX=seatbelt FG_ALLOW_E2E_RESET=1 FG_TEST_NPM_MARKER="$NPM_BLOCKED_MARKER" "$BASH_BIN" "$VERIFY" e2e
+  expect_rc "t15l Darwin real signal: e2e refused (exit 2)" 2 "$RC"
+  expect_contains "t15m Darwin real signal names the state" "$CAP_OUT" "browser_execution: blocked_sandbox"
+  expect_no_file "t15n Darwin real signal: Playwright never invoked" "$NPM_BLOCKED_MARKER"
+fi
+
+# The explicit host override proceeds to the (shimmed) Playwright phase.
+run_cmd env PATH="$FAKE_BIN_OK" FG_BROWSER_GATE=available FG_ALLOW_E2E_RESET=1 FG_TEST_NPM_MARKER="$TMPROOT/npm-host-ran" "$BASH_BIN" "$VERIFY" e2e
+expect_rc "t15o host gate (FG_BROWSER_GATE=available): e2e proceeds" 0 "$RC"
+expect_file "t15p host gate: Playwright phase invoked (npm ran)" "$TMPROOT/npm-host-ran"
+
+# -------------------- t16 browser gate: undetermined -> fail closed ------
+# When the doctor result cannot be determined (its required text tools are
+# absent from PATH), the e2e profile must refuse explicitly: never a
+# silent pass, never an uncontrolled browser launch.
+FAKE_BIN_NO_DOCTOR="$TMPROOT/bin-no-doctor"
+mkdir -p "$FAKE_BIN_NO_DOCTOR"
+for tool in bash mktemp date dirname mv rm; do
+  target="$(command -v "$tool" 2>/dev/null || true)"
+  if [ -n "$target" ]; then ln -sf "$target" "$FAKE_BIN_NO_DOCTOR/$tool"; fi
+done
+printf '#!/bin/bash\nexit 0\n' >"$FAKE_BIN_NO_DOCTOR/git"
+printf '#!/bin/bash\nif [ -n "${FG_TEST_NPM_MARKER:-}" ] && [ "$1" = "run" ] && [ "$2" = "test:e2e" ]; then : > "$FG_TEST_NPM_MARKER"; fi\nexit 0\n' >"$FAKE_BIN_NO_DOCTOR/npm"
+printf '#!/bin/bash\nexit 0\n' >"$FAKE_BIN_NO_DOCTOR/uv"
+chmod +x "$FAKE_BIN_NO_DOCTOR/git" "$FAKE_BIN_NO_DOCTOR/npm" "$FAKE_BIN_NO_DOCTOR/uv"
+run_cmd env PATH="$FAKE_BIN_NO_DOCTOR" FG_ALLOW_E2E_RESET=1 FG_TEST_NPM_MARKER="$TMPROOT/npm-undetermined-ran" "$BASH_BIN" "$VERIFY" e2e
+expect_rc "t16a undetermined gate: e2e refused (exit 2)" 2 "$RC"
+expect_contains "t16b refusal explains the undetermined gate" "$CAP_OUT" "could not be determined"
+expect_contains "t16c refusal names the doctor" "$CAP_OUT" "agent-doctor.sh"
+expect_contains "t16d refusal surfaces the host profile command" "$CAP_OUT" "FG_ALLOW_E2E_RESET=1 $VERIFY e2e [playwright args]"
+expect_not_contains "t16e no phase executed" "$CAP_OUT" "==> "
+expect_no_file "t16f Playwright (npm) never invoked with an undetermined gate" "$TMPROOT/npm-undetermined-ran"
 
 # ------------------------------------------------------------- summary -----
 printf '\n'

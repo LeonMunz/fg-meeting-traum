@@ -25,9 +25,15 @@
 #             environment and FG_ALLOW_E2E_RESET=1, because the configured
 #             Playwright startup resets the fg_e2e schema. Refuses (before
 #             starting servers or touching the database) without opt-in.
+#             Before any phase starts, it also checks the canonical
+#             browser-execution gate (agent-doctor browser_execution
+#             state): in the known macOS agent sandbox (blocked_sandbox)
+#             it refuses with the exact host-terminal command and never
+#             launches a browser process.
 #
 #   full      core + e2e. Never silently skips E2E: it fails clearly when
-#             the browser environment or the destructive-reset opt-in is
+#             the browser gate, the browser environment, or the
+#             destructive-reset opt-in is
 #             absent. A passing `full` means every frontend, backend, and
 #             browser-E2E surface actually ran successfully.
 #
@@ -83,6 +89,10 @@ PLANNED_COUNT=0
 PHASE_NAMES=()
 PHASE_COMMANDS=()
 PHASE_DURATIONS=()
+
+# Canonical browser-execution gate state for the e2e/full profiles:
+# "available" | "blocked_sandbox" | "" (undetermined; refusal).
+BROWSER_GATE_STATE=""
 
 # Mutation classifications printed for every phase (plan and run).
 MUTATE_NONE="none"
@@ -152,9 +162,15 @@ Profiles:
             environment and FG_ALLOW_E2E_RESET=1: the configured Playwright
             startup resets the fg_e2e schema (DROP SCHEMA CASCADE +
             migrate + seed). Refuses before any server starts or database
-            state changes when the opt-in is absent.
-  full      core + e2e. Fails clearly when the E2E opt-in or browser
-            environment is absent; never silently skips E2E.
+            state changes when the opt-in is absent. Before any phase
+            starts, it checks the canonical browser-execution gate
+            (agent-doctor browser_execution state): in the known macOS
+            agent sandbox (blocked_sandbox) it refuses with the exact
+            host-terminal command and never launches a browser process
+            (no Brave/system-browser fallback, no browser download).
+  full      core + e2e. Fails clearly when the browser gate, the E2E
+            opt-in, or the browser environment is absent; never silently
+            skips E2E.
 
 plan <profile>
   Prints the execution order, exact commands, environment requirements,
@@ -208,6 +224,13 @@ profiles; all other profiles reject extra arguments.
 Environment variables:
   FG_ALLOW_E2E_RESET=1   Required to run the e2e/full profiles (consent to
                          the destructive fg_e2e schema reset).
+  FG_BROWSER_GATE=<mode> Browser-execution gate override, consumed by the
+                         e2e/full profiles via the agent-doctor result
+                         (auto = detect, the default; blocked_sandbox =
+                         force the blocked state; available = user-approved
+                         unsandboxed/host execution — the doctor's bounded
+                         launch preflight still runs and must succeed).
+                         See scripts/agent-doctor.sh --help.
   FG_AGENT_RUN_ID=<id>   Authoritative explicit correlation id for the
                          JSON summary (letters/digits/._- , max 128
                          chars). Recorded as "agentRunId" so the Run
@@ -246,6 +269,7 @@ Exit codes:
   0                    profile passed (--help and plan also exit 0).
   <phase exit code>    fail-fast: the failing phase's own nonzero status.
   2                    usage error, unknown profile, missing E2E consent,
+                       browser-execution gate blocked (blocked_sandbox),
                        or an invalid --summary-json target (including
                        --summary-json with plan).
   75                   verification passed but the JSON summary could not
@@ -400,7 +424,7 @@ req_pg() {
 }
 
 req_browser() {
-  printf '  - browser-capable environment (Chromium must be launchable; unavailable in the agent sandbox)\n'
+  printf '  - browser-capable environment: the canonical browser-execution gate (agent-doctor browser_execution) must report available; in the known macOS agent sandbox (CODEX_SANDBOX=seatbelt) browser execution is blocked_sandbox and the profile refuses before any phase — run E2E in a normal host terminal\n'
 }
 
 req_consent() {
@@ -437,7 +461,8 @@ print_requirements() {
   esac
 }
 
-# Refuse E2E before any server starts or database state changes.
+# Refuse E2E before any server starts or database state changes (the
+# destructive-reset consent is absent).
 e2e_refuse() {
   {
     printf 'agent-verify: REFUSING the e2e phase before starting any server or touching the database.\n'
@@ -463,6 +488,100 @@ require_e2e_consent() {
   fi
   printf 'agent-verify: e2e requires a browser-capable environment; FG_ALLOW_E2E_RESET=1 acknowledged.\n'
   printf 'agent-verify: the Playwright startup will reset the fg_e2e schema (destructive).\n'
+}
+
+# Canonical browser-execution gate for the e2e/full profiles (run mode).
+# Consumes the agent-doctor capability result — the doctor owns sandbox
+# detection; this script never probes browsers or launches browser
+# processes itself. On success it sets BROWSER_GATE_STATE to "available"
+# or "blocked_sandbox" and returns 0; it returns 1 when the doctor result
+# cannot be determined (BROWSER_GATE_STATE stays empty). The doctor exits
+# 1 for a normal "degraded" diagnosis with a complete JSON document, so
+# exit 0 and 1 are both valid JSON outputs; anything else is not.
+browser_gate_state() {
+  local doctor_json="" state="" rc=0
+  # The command-substitution subshell inherits this script's ERR trap;
+  # clear it there so a normal (exit 1) degraded doctor result cannot
+  # print a spurious fail banner (same pattern as resolve_session_mapped_run).
+  doctor_json="$(trap - ERR; bash "$REPO_ROOT/scripts/agent-doctor.sh" --json 2>/dev/null)" || rc=$?
+  if [ "$rc" -ne 0 ] && [ "$rc" -ne 1 ]; then
+    return 1
+  fi
+  [ -n "$doctor_json" ] || return 1
+  state="$(trap - ERR; printf '%s\n' "$doctor_json" \
+    | sed -n 's/.*"browser_execution"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+    | head -n 1)" || state=""
+  case "$state" in
+    available|blocked_sandbox) BROWSER_GATE_STATE="$state"; return 0 ;;
+  esac
+  return 1
+}
+
+# Refuse the e2e/full profiles when the canonical browser-execution gate
+# reports blocked_sandbox — before any server starts, before any database
+# state change, and before any browser process could be spawned.
+e2e_refuse_browser_blocked() {
+  {
+    printf 'agent-verify: REFUSING the e2e phase before starting any server, database, or browser process.\n'
+    printf '\n'
+    printf 'Reason:\n'
+    printf '  * The canonical browser-execution gate (scripts/agent-doctor.sh) reports:\n'
+    printf '      browser_execution: blocked_sandbox\n'
+    printf '    This shell runs in the known macOS agent sandbox (Seatbelt). Browser\n'
+    printf '    processes cannot run here: Playwright Chromium cannot read its browser\n'
+    printf '    bundle, and system browsers (e.g. Brave) start and then crash with a\n'
+    printf '    user-visible macOS crash dialog.\n'
+    printf '  * Classification: ENVIRONMENT_OR_HARNESS — not a product failure. The\n'
+    printf '    E2E gate must stay NOT_VERIFIED_ENVIRONMENT_BLOCKED; a blocked browser\n'
+    printf '    is never a passing E2E result.\n'
+    printf '\n'
+    printf 'After a blocked browser gate, stop browser experiments: do not launch\n'
+    printf 'Brave or any other system/Chrome browser fallback, do not re-download or\n'
+    printf 'reinstall browsers, and do not loop escalated-execution requests.\n'
+    printf '\n'
+    printf 'To run E2E, in a normal (unsandboxed) host terminal:\n'
+    printf '  FG_ALLOW_E2E_RESET=1 %s e2e [playwright args]\n' "$0"
+    printf '  (or: FG_ALLOW_E2E_RESET=1 npm run test:e2e -- <spec>)\n'
+  } >&2
+  exit 2
+}
+
+# Refuse the e2e/full profiles when the gate CANNOT be determined: an
+# explicit refusal (never a silent pass, never an uncontrolled browser
+# launch). The environment is abnormal in a way the canonical gate could
+# not classify; the operator runs the doctor to diagnose.
+e2e_refuse_gate_undetermined() {
+  {
+    printf 'agent-verify: REFUSING the e2e phase before starting any server, database, or browser process.\n'
+    printf '\n'
+    printf 'Reason:\n'
+    printf '  * The browser-execution gate (agent-doctor) could not be determined in this environment (doctor failed or reported no browser_execution state).\n'
+    printf '  * Classification: ENVIRONMENT_OR_HARNESS — not a product failure. The\n'
+    printf '    E2E gate must stay NOT_VERIFIED_ENVIRONMENT_BLOCKED; a browser whose\n'
+    printf '    capability is unknown is neither launched nor silently skipped.\n'
+    printf '\n'
+    printf 'Diagnose, then run E2E from a normal (unsandboxed) host terminal:\n'
+    printf '  ./scripts/agent-doctor.sh --json\n'
+    printf '  FG_ALLOW_E2E_RESET=1 %s e2e [playwright args]\n' "$0"
+  } >&2
+  exit 2
+}
+
+# Run-mode prerequisites for the e2e/full profiles: the canonical
+# browser-execution gate first (refusing in the blocked sandbox — and in
+# an undeterminable environment — before anything starts), then the
+# destructive-reset consent.
+require_e2e_prerequisites() {
+  [ "$VERIFY_MODE" = "run" ] || return 0
+  BROWSER_GATE_STATE=""
+  if browser_gate_state; then
+    if [ "$BROWSER_GATE_STATE" = "blocked_sandbox" ]; then
+      e2e_refuse_browser_blocked
+    fi
+  else
+    e2e_refuse_gate_undetermined
+  fi
+  require_e2e_consent
 }
 
 # --- Optional machine-readable run summary (--summary-json) --------------
@@ -800,7 +919,7 @@ main() {
   fi
 
   case "$PROFILE" in
-    e2e|full) require_e2e_consent ;;
+    e2e|full) require_e2e_prerequisites ;;
   esac
 
   if [ "$VERIFY_MODE" = "plan" ]; then
