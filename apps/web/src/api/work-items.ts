@@ -14,6 +14,7 @@ import type {
   ApiWorkItem,
   ApiWorkItemComment,
   ApiWorkItemHistoryEvent,
+  ApiWorkItemStatus,
 } from './types'
 
 export async function listProjectWorkItems(
@@ -151,5 +152,46 @@ export async function listMyWork(
 
   return apiGet<ApiPersonalWorkItem[]>(
     `/api/me/work-items/${query}`,
+  )
+}
+
+export interface ApiMyWorkReorderInput {
+  // The target My Work column — one of the four fixed semantic
+  // categories. Same category as the item's current status:
+  // personal ordering ONLY (no status mutation); different
+  // category: the backend resolves the concrete project-local
+  // status target and applies the canonical transition atomically
+  // with the personal position (foundation.md Section 14b).
+  statusCategory: ApiWorkItemStatus
+  // The Work Item that must FOLLOW the moved one in the target
+  // column; null = end of the column. Never the moved Work Item
+  // itself.
+  beforeWorkItemId: number | null
+}
+
+/**
+ * Atomic My Work Board move: places the Work Item at an exact
+ * position in the requesting user's personal My Work column for
+ * the requested semantic category.
+ *
+ * One request covers the whole operation — same-column reordering
+ * (personal ordering only, no status mutation) and cross-column
+ * moves (canonical status transition + personal position in ONE
+ * server transaction). The standalone `transitionWorkItemStatus`
+ * request is a different operation (no positional anchor) and must
+ * NOT be called in addition for a board drag.
+ *
+ * The response is the moved Work Item as serialized for the
+ * requesting user; My Work reconciles by the subsequent
+ * authoritative `listMyWork()` refetch, so the returned object is
+ * informational for the caller.
+ */
+export async function reorderMyWorkItem(
+  workItemId: number,
+  input: ApiMyWorkReorderInput,
+): Promise<ApiWorkItem> {
+  return apiPost<ApiWorkItem>(
+    `/api/me/work-items/${workItemId}/reorder/`,
+    input,
   )
 }

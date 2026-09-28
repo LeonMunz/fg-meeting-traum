@@ -222,6 +222,14 @@ export interface ApiPersonalWorkItem extends ApiWorkItem {
   // ordering, never by status name, and never for same-category
   // moves.
   statusTargets: ApiWorkItemStatusTarget[]
+  // The user's personal My Work Board position (1-based rank within
+  // the user's column for the item's CURRENT semantic category) —
+  // server-persisted per-user view state (foundation.md Section
+  // 14b). null = unpositioned (no row, or a stale row from a
+  // different category). Board-render metadata ONLY: the
+  // top-level payload order (canonical creation order) and the
+  // List View are never reordered by it.
+  myWorkBoardPosition: number | null
 }
 
 /**

@@ -26,7 +26,7 @@ import {
   deleteWorkItem,
   listMyWork,
   listProjectWorkItems,
-  transitionWorkItemStatus,
+  reorderMyWorkItem,
   updateWorkItem,
 } from '../../api/work-items'
 import {
@@ -46,6 +46,10 @@ import {
   buildCreateWorkItemInput,
   resolveWorkItemType,
 } from '../projects/workItemMapping'
+import {
+  orderMyWorkBoardColumn,
+  resolveMyWorkBoardDrop,
+} from './myWorkBoardOrder'
 import {
   collapseResearchGroupChips,
   filterMyWorkItemsByResearchGroup,
@@ -96,17 +100,33 @@ const EMPTY_WORK_ITEM_TYPES: readonly ApiWorkItemTypeKind[] = []
  * cross-project scope.
  *
  * Kanban (Board view): four fixed semantic columns (Todo / In progress /
- * Review / Done) grouped SOLELY by `statusCategory`, preserving the
- * canonical API order within each column. Cross-category drag/drop
- * moves a card to the concrete project-local status resolved by that
- * item's own `statusTargets` (at most one target per semantic
- * category, derived read-only from the item's Project): exactly one
- * canonical Work Item status mutation is issued, then the board
- * re-renders the authoritative refetched payload. The item's current
- * category is never a mutation target and a category without a
- * target is not a drop destination. No global card ordering exists,
- * no within-column reordering is supported, and no My Work-specific
- * status or position state is introduced.
+ * Review / Done) grouped SOLELY by `statusCategory`. Within a column,
+ * explicitly positioned cards render first in `myWorkBoardPosition`
+ * ascending order, then unpositioned cards in the existing canonical
+ * fallback order (creation order — the API order); the List View
+ * ordering is unchanged.
+ *
+ * Drag/drop places a card at an EXACT position: within its own column
+ * or at a precise insertion point in another valid semantic column,
+ * with an insertion indicator between cards. A drop resolves to the
+ * one atomic My Work reorder request
+ * (`POST /api/me/work-items/{id}/reorder/` with `statusCategory` +
+ * `beforeWorkItemId`): a same-column drop is personal ordering only
+ * (no status mutation, no history event), and a cross-column drop
+ * carries the canonical status transition (the concrete target
+ * resolved by the item's own `statusTargets` on the server) plus the
+ * personal position in ONE transaction — the standalone
+ * transition-status request is never issued for a board drag. The
+ * item's current category is a valid destination (reordering only);
+ * a category without a statusTarget (for a cross-column move) is not
+ * a drop destination. The visible insertion point is converted into
+ * an anchor over the COMPLETE loaded payload (never the filtered
+ * visible list), so presentation filters never reorder hidden
+ * cards. Exactly one authoritative My Work refetch follows a
+ * successful move; a failed move leaves the previous visible order
+ * intact with the established non-fatal error treatment. The
+ * persisted ordering is the server's personal
+ * `myWorkBoardPosition` state — no client-side order copy.
  *
  * Kanban card presentation (the approved compact personal-board
  * visual contract): column = semantic status, icon + label = Work
@@ -699,9 +719,10 @@ export function MyWorkPage() {
     number | null
   >(null)
 
-  // Cards with an in-flight status mutation: duplicate drops of the
-  // same card are ignored and the card shows restrained pending
-  // feedback while the mutation + authoritative refetch run.
+  // Cards with an in-flight board move: duplicate drops of the same
+  // card are ignored while the atomic reorder request +
+  // authoritative refetch run, and the card shows restrained
+  // pending feedback (no optimistic relocation is made).
   const [pendingMoveItemIds, setPendingMoveItemIds] = useState<
     ReadonlySet<number>
   >(() => new Set())
@@ -1307,91 +1328,6 @@ export function MyWorkPage() {
     handleDrawerDeleteWorkItem,
   ])
 
-  // Cross-category Kanban drop: mutates the SAME canonical Work
-  // Item through the canonical status-only transition
-  // (`POST /api/work-items/{id}/transition-status/`) — the
-  // dedicated status change that preserves the item's project-local
-  // `board_position` (no Project-board reposition, no sibling
-  // renumbering). The ordinary status PATCH is NOT used here: it
-  // would reposition the item to the end of the target column. The
-  // board then renders the authoritative refetched My Work payload.
-  const handleKanbanDrop = useCallback(
-    async (
-      itemId: number,
-      category: ApiWorkItemStatus,
-    ) => {
-      const item = items.find(
-        (candidate) => candidate.id === itemId,
-      )
-
-      // A drop into the item's CURRENT category is a no-op by
-      // contract: this board has no within-column reordering, so no
-      // mutation and no refetch.
-      if (!item || item.statusCategory === category) {
-        return
-      }
-
-      // The concrete target comes ONLY from the item's
-      // statusTargets (its Project's first active status definition
-      // in the target category). No target → not a valid drop: no
-      // mutation, no refetch, no fallback status is invented and no
-      // status is chosen by name.
-      const target = item.statusTargets.find(
-        (candidate) =>
-          candidate.statusCategory === category,
-      )
-
-      if (!target) {
-        return
-      }
-
-      // At most one in-flight mutation per card: a second drop of
-      // the same card while the first is pending is ignored.
-      if (pendingMoveItemIds.has(itemId)) {
-        return
-      }
-
-      setPendingMoveItemIds((current) =>
-        new Set(current).add(itemId),
-      )
-      setStatusDropError(null)
-
-      try {
-        // Only the concrete target statusDefinitionId is sent —
-        // never boardPosition, never an insertion anchor, never any
-        // My Work ordering state (no global card ordering exists).
-        await transitionWorkItemStatus(
-          itemId,
-          target.statusDefinitionId,
-        )
-
-        // The backend result is authoritative: the refetched
-        // payload — not local inference — decides the card's final
-        // column (its returned statusCategory) and concrete
-        // statusName.
-        await refreshMyWork()
-      } catch (mutationError) {
-        // No optimistic relocation was made, so the card remains in
-        // its authoritative category; expose the failure with the
-        // established board error pattern and allow a retry by
-        // dragging again.
-        setStatusDropError(
-          getErrorMessage(
-            mutationError,
-            'Work item could not be moved.',
-          ),
-        )
-      } finally {
-        setPendingMoveItemIds((current) => {
-          const next = new Set(current)
-          next.delete(itemId)
-          return next
-        })
-      }
-    },
-    [items, pendingMoveItemIds, refreshMyWork],
-  )
-
   // Server ordering (`created_at`, ID tie-break) is authoritative.
   // The single established presentation rule: completed items render
   // last — a stable partition, so backend relative order is
@@ -1488,6 +1424,136 @@ export function MyWorkPage() {
       selectedTypeKinds,
     ],
   )
+
+  // Exact-positional Kanban drop: ONE atomic My Work reorder
+  // (`POST /api/me/work-items/{id}/reorder/`) — the whole operation
+  // in one request. Same semantic category: personal ordering only
+  // (no status mutation, no history event, Project `board_position`
+  // untouched). Different category: the backend resolves the
+  // concrete project-local target from the item's `statusTargets`
+  // rule and applies the canonical status transition atomically
+  // with the personal position — the standalone transition-status
+  // request is never issued for a board drag, and the ordinary
+  // status PATCH is not used either. The visible insertion point
+  // (`visibleIndex` into the column's FILTERED render order) is
+  // converted into `beforeWorkItemId` over the COMPLETE loaded
+  // payload, so presentation filters never reorder hidden cards.
+  // The board then renders the authoritative refetched My Work
+  // payload — no optimistic relocation is ever made.
+  const handleBoardDrop = useCallback(
+    async (
+      itemId: number,
+      category: ApiWorkItemStatus,
+      visibleIndex: number,
+    ) => {
+      const item = items.find(
+        (candidate) => candidate.id === itemId,
+      )
+
+      if (!item) {
+        return
+      }
+
+      // At most one in-flight move per card: a second drop of the
+      // same card while the first is pending is ignored.
+      if (pendingMoveItemIds.has(itemId)) {
+        return
+      }
+
+      // Cross-column destinations are valid ONLY where the item's
+      // statusTargets resolve a concrete project-local status — the
+      // same gate the board uses for drop availability. No target →
+      // the column cannot accept the card: no request, no fallback
+      // status is invented and none is chosen by name. The current
+      // category is always a valid destination (reordering only).
+      if (item.statusCategory !== category) {
+        const target = item.statusTargets.find(
+          (candidate) =>
+            candidate.statusCategory === category,
+        )
+
+        if (!target) {
+          return
+        }
+      }
+
+      // Exact anchor over the COMPLETE loaded payload — the
+      // filtered visible list is never treated as the persisted
+      // column (foundation.md Section 14b).
+      const fullColumn = orderMyWorkBoardColumn(
+        items,
+        category,
+      )
+      const visibleColumn = orderMyWorkBoardColumn(
+        filteredItems,
+        category,
+      )
+      const {
+        beforeWorkItemId,
+        isNoOp,
+      } = resolveMyWorkBoardDrop(
+        category,
+        item,
+        fullColumn,
+        visibleColumn,
+        visibleIndex,
+      )
+
+      // A placement that leaves the persisted order unchanged
+      // (same column, same slot — including the card's own
+      // "before" gap) sends nothing: no request, no refetch.
+      if (isNoOp) {
+        return
+      }
+
+      setPendingMoveItemIds((current) =>
+        new Set(current).add(itemId),
+      )
+      setStatusDropError(null)
+
+      try {
+        // Exactly the two contract fields: the target column and
+        // the exact anchor (null = end). Never boardPosition,
+        // never a statusDefinitionId — the backend owns both the
+        // target-status resolution and the personal order.
+        await reorderMyWorkItem(itemId, {
+          statusCategory: category,
+          beforeWorkItemId,
+        })
+
+        // The server result is authoritative: the refetched
+        // payload — not local inference — decides the persisted
+        // order and the card's final column / concrete
+        // statusName that remain on screen.
+        await refreshMyWork()
+      } catch (mutationError) {
+        // No optimistic relocation was made, so the previous
+        // visible order is intact by construction (no false
+        // order or status is left on screen); expose the failure
+        // with the established board error pattern and allow a
+        // retry by dragging again.
+        setStatusDropError(
+          getErrorMessage(
+            mutationError,
+            'Work item could not be moved.',
+          ),
+        )
+      } finally {
+        setPendingMoveItemIds((current) => {
+          const next = new Set(current)
+          next.delete(itemId)
+          return next
+        })
+      }
+    },
+    [
+      items,
+      filteredItems,
+      pendingMoveItemIds,
+      refreshMyWork,
+    ],
+  )
+
 
   // The selected groups resolved to renderable chips (id + name).
   const selectedGroupChips = useMemo(() => {
@@ -1762,17 +1828,20 @@ export function MyWorkPage() {
   const visibleItems = orderedItems
 
   // Global Kanban grouping over the SAME filtered payload. The group
-  // filter applies equally. Within each column the canonical API order
-  // is preserved (Array.filter keeps relative order); Project
-  // `boardPosition` is never a global ordering input and no global
-  // sort is introduced.
+  // filter applies equally. Within each column the PERSONAL board
+  // order renders: explicitly positioned cards first
+  // (`myWorkBoardPosition` ascending), then unpositioned cards in
+  // the canonical fallback order (the API's creation order —
+  // `orderMyWorkBoardColumn` preserves input order for the
+  // unpositioned tail). Project `boardPosition` is never a global
+  // ordering input; the List View keeps its own unchanged order.
   const kanbanColumns = useMemo(() => {
     return GLOBAL_STATUS_COLUMNS.map((column) => ({
       value: column.value,
       label: column.label,
-      items: filteredItems.filter(
-        (item) =>
-          item.statusCategory === column.value,
+      items: orderMyWorkBoardColumn(
+        filteredItems,
+        column.value,
       ),
     }))
   }, [filteredItems])
@@ -2215,10 +2284,11 @@ export function MyWorkPage() {
             onDragEnd={() =>
               setDraggedItemId(null)
             }
-            onDrop={(itemId, category) =>
-              void handleKanbanDrop(
+            onDrop={(itemId, category, visibleIndex) =>
+              void handleBoardDrop(
                 itemId,
                 category,
+                visibleIndex,
               )
             }
           />
@@ -2507,26 +2577,37 @@ export function MyWorkPage() {
 
 
 /**
- * Global My Work Kanban with cross-category drag/drop.
+ * Global My Work Kanban with exact-positional drag/drop.
  *
  * Four fixed semantic columns (Todo / In progress / Review / Done)
- * rendered over the SAME canonical `GET /api/me/work-items/` payload
- * the List renders. Grouping is by `statusCategory` only; within a
- * column the canonical API order is preserved.
+ * rendered over the SAME canonical `GET /api/me/work-items/`
+ * payload the List renders. Grouping is by `statusCategory` only;
+ * within a column the personal board order renders (positioned
+ * cards first by `myWorkBoardPosition` ascending, then
+ * unpositioned in the canonical fallback order).
  *
  * Drag/drop reuses the Project Work Items Board's native HTML5
- * mechanism (draggable card, column drop zones, `dataTransfer` item
- * id). While a drag is active, each column presents its DROP
- * AVAILABILITY for that specific dragged item: a different category
- * that the item's `statusTargets` resolves to a concrete
- * project-local definition for is a valid target — the lane itself
- * takes a subtle accent tint plus a 1px inset ring (no standalone
- * dropzone); the item's own category and categories without a
- * target are unavailable (quiet dim, and the browser drop is
- * refused because `dragover` is not accepted). No decoration exists
- * when no drag is active. Dropping issues exactly one canonical
- * status mutation and one authoritative My Work refetch — no global
- * card ordering, no within-column reordering, no `boardPosition`.
+ * mechanism (draggable card, column drop zones, `dataTransfer`
+ * item id). While a drag is active, each column presents its DROP
+ * AVAILABILITY for that specific dragged item: the item's OWN
+ * category (within-column reordering) and every different
+ * category its `statusTargets` resolve to a concrete
+ * project-local definition are valid targets — the hovered lane
+ * takes a subtle accent tint plus a 1px inset ring; categories
+ * without a target (for a cross-column move) are unavailable
+ * (quiet dim, and the browser drop is refused because `dragover`
+ * is not accepted). The PRIMARY positional signal is a precise
+ * insertion indicator BETWEEN cards at the exact landing spot
+ * (absolutely positioned in the gap — changing the insertion
+ * target never shifts layout), covering before-first,
+ * between-cards, and after-last; an empty valid column shows a
+ * full-column drop target. No decoration exists when no drag is
+ * active. Dropping reports the visible insertion index; the page
+ * resolves the exact `beforeWorkItemId` anchor over the COMPLETE
+ * loaded payload and issues exactly one atomic My Work reorder
+ * request plus one authoritative refetch — no separate
+ * status-transition request, no optimistic relocation, no Project
+ * `board_position`.
  * At narrow widths the board scrolls horizontally inside its own
  * region — the document itself never overflows.
  */
@@ -2556,6 +2637,7 @@ function MyWorkBoard({
   onDrop: (
     itemId: number,
     category: ApiWorkItemStatus,
+    visibleIndex: number,
   ) => void
 }) {
   // The dragged item, looked up in the SAME canonical payload the
@@ -2580,6 +2662,17 @@ function MyWorkBoard({
         ) ?? null
     )
   }, [columns, draggedItemId, pendingItemIds])
+
+  // The precise insertion slot while a drag hovers a column: the
+  // hovered column plus the index of the card the dragged card
+  // would be inserted BEFORE (`items.length` = after the last
+  // card). null = no column hovered yet. The indicator LINE is
+  // the primary positional signal (see the column rendering); the
+  // lane tint/ring is only the restrained active-drop highlight.
+  const [dragIndicator, setDragIndicator] = useState<{
+    category: ApiWorkItemStatus
+    index: number
+  } | null>(null)
 
   return (
     // The board renders directly on the page canvas: NO outer
@@ -2623,11 +2716,12 @@ function MyWorkBoard({
           }}
         >
           {columns.map((column) => {
-            // Drop availability for the ACTIVE drag. The current
-            // category is never a mutation target (no within-column
-            // reordering exists here), and a category the item's
-            // statusTargets do not cover is unavailable — the board
-            // never invents a fallback status.
+            // Drop availability for the ACTIVE drag. The item's
+            // OWN category is a valid destination (within-column
+            // reordering), and a different category is valid where
+            // the item's statusTargets resolve a concrete
+            // project-local definition — the board never invents a
+            // fallback status.
             const isSameCategory =
               draggedItem?.statusCategory ===
               column.value
@@ -2639,28 +2733,94 @@ function MyWorkBoard({
               ) ?? false
             const isValidDropTarget =
               draggedItem != null &&
-              !isSameCategory &&
-              hasStatusTarget
+              (isSameCategory || hasStatusTarget)
             const isUnavailable =
               draggedItem != null &&
               !isValidDropTarget
 
+            // The precise insertion slot while hovering THIS
+            // column: the index of the card the dragged card would
+            // be inserted before (items.length = after the last
+            // card). null = not currently hovering this column.
+            const indicatorIndex =
+              dragIndicator?.category ===
+              column.value
+                ? dragIndicator.index
+                : null
+
             const handleColumnDragOver = (
-              event: React.DragEvent,
+              event: React.DragEvent<HTMLDivElement>,
             ) => {
               if (!isValidDropTarget) {
                 // NOT preventing the default makes the browser
-                // refuse the drop — the card returns to its own
-                // column and no mutation can occur.
+                // refuse the drop — no card can land in this
+                // column and no move can occur.
                 return
               }
 
               event.preventDefault()
               event.dataTransfer.dropEffect = 'move'
+
+              // Precise slot: the first visible card whose
+              // vertical midpoint is BELOW the pointer is the card
+              // the dragged card would be inserted before; the
+              // pointer below every midpoint = after the last card
+              // (and the only slot of an empty column).
+              const y = event.clientY
+              let index = column.items.length
+              const cards =
+                event.currentTarget.querySelectorAll(
+                  '[data-my-work-board-card]',
+                )
+
+              for (let i = 0; i < column.items.length; i += 1) {
+                const card = cards.item(i)
+
+                if (!card) {
+                  continue
+                }
+
+                const rect =
+                  card.getBoundingClientRect()
+
+                if (y < rect.top + rect.height / 2) {
+                  index = i
+                  break
+                }
+              }
+
+              setDragIndicator((current) =>
+                current?.category ===
+                  column.value &&
+                current.index === index
+                  ? current
+                  : {
+                      category: column.value,
+                      index,
+                    },
+              )
+            }
+            const handleColumnDragLeave = (
+              event: React.DragEvent<HTMLDivElement>,
+            ) => {
+              // Moving into a child is not a real leave.
+              if (
+                event.currentTarget.contains(
+                  event.relatedTarget as Node | null,
+                )
+              ) {
+                return
+              }
+
+              setDragIndicator((current) =>
+                current?.category === column.value
+                  ? null
+                  : current,
+              )
             }
 
             const handleColumnDrop = (
-              event: React.DragEvent,
+              event: React.DragEvent<HTMLDivElement>,
             ) => {
               event.preventDefault()
 
@@ -2671,6 +2831,18 @@ function MyWorkBoard({
 
               const numericId = Number(droppedId)
 
+              // The slot this column was last hovered at. A drop
+              // only lands where dragover accepted — i.e. the
+              // indicator is set — so the fallback (the end) is a
+              // backstop; it is the only slot an empty column has.
+              const index =
+                dragIndicator?.category ===
+                column.value
+                  ? dragIndicator.index
+                  : column.items.length
+
+              setDragIndicator(null)
+
               // Backstop: only the actively dragged item can be
               // dropped (stale/foreign payloads are ignored).
               if (
@@ -2680,7 +2852,7 @@ function MyWorkBoard({
                 return
               }
 
-              onDrop(numericId, column.value)
+              onDrop(numericId, column.value, index)
             }
 
             return (
@@ -2695,6 +2867,7 @@ function MyWorkBoard({
                       : 'unavailable'
                 }
                 onDragOver={handleColumnDragOver}
+                onDragLeave={handleColumnDragLeave}
                 onDrop={handleColumnDrop}
                 className={[
                   'flex min-h-[max(520px,calc(100vh-245px))] min-w-0 flex-col rounded-md px-2 pb-4 transition-colors',
@@ -2728,27 +2901,69 @@ function MyWorkBoard({
                 </span>
               </div>
 
-              {/* Empty columns stay visible (header + count) with no
-                  decorative placeholder; the lane surface extends
-                  below the last card. */}
-              <div className="flex flex-col gap-2">
-                {column.items.length === 0 ? null : (
-                  column.items.map((item) => (
-                    <MyWorkBoardCard
-                      key={item.id}
-                      item={item}
-                      onOpen={onOpen}
-                      dragging={
-                        draggedItemId === item.id
-                      }
-                      pendingMove={
-                        pendingItemIds.has(
-                          item.id,
-                        )
-                      }
-                      onDragStart={onDragStart}
-                      onDragEnd={onDragEnd}
+              {/* Card area: one relative wrapper per card carries
+                  the precise insertion indicator (absolutely
+                  positioned in the gap — changing the insertion
+                  target never shifts layout). An empty VALID
+                  column shows an obvious full-column drop target
+                  for the whole drag; empty columns otherwise stay
+                  visible (header + count) with no decorative
+                  placeholder. */}
+              <div className="flex flex-1 flex-col gap-2">
+                {column.items.length === 0 ? (
+                  isValidDropTarget ? (
+                    <div
+                      data-my-work-empty-drop-target
+                      aria-hidden="true"
+                      className="min-h-[88px] flex-1 rounded-md border border-dashed border-work-lane-drag-ring"
                     />
+                  ) : null
+                ) : (
+                  column.items.map((item, itemIndex) => (
+                    <div
+                      key={item.id}
+                      data-my-work-board-card={item.id}
+                      className="relative"
+                    >
+                      {/* Before this card. */}
+                      {indicatorIndex === itemIndex ? (
+                        <div
+                          data-my-work-insertion-indicator
+                          aria-hidden="true"
+                          className="absolute left-0 right-0 top-[-5px] h-0.5 rounded-full bg-interaction-primary"
+                        />
+                      ) : null}
+
+                      {/* After this card (the last one). */}
+                      {indicatorIndex ===
+                      column.items.length &&
+                      itemIndex ===
+                        column.items.length - 1 ? (
+                        <div
+                          data-my-work-insertion-indicator
+                          aria-hidden="true"
+                          className="absolute left-0 right-0 top-[calc(100%+3px)] h-0.5 rounded-full bg-interaction-primary"
+                        />
+                      ) : null}
+
+                      <MyWorkBoardCard
+                        item={item}
+                        onOpen={onOpen}
+                        dragging={
+                          draggedItemId === item.id
+                        }
+                        pendingMove={
+                          pendingItemIds.has(
+                            item.id,
+                          )
+                        }
+                        onDragStart={onDragStart}
+                        onDragEnd={() => {
+                          setDragIndicator(null)
+                          onDragEnd()
+                        }}
+                      />
+                    </div>
                   ))
                 )}
               </div>
@@ -2762,7 +2977,7 @@ function MyWorkBoard({
 }
 
 /**
- * My Work Kanban card with cross-category drag.
+ * My Work Kanban card with exact-positional drag.
  *
  * Compact personal-board card with exactly four information
  * groups, in order:
