@@ -1113,6 +1113,19 @@ export function MyWorkPage() {
   // effect) so the boundary check always sees the DOM as actually
   // clicked. Native HTML5 drag never dispatches a trailing click, so
   // drag/drop can neither open nor close the drawer.
+  //
+  // Same gesture-origin rule as the Project page's equivalent
+  // effect: the dismissal decision also looks at where the pointer
+  // gesture ORIGINATED. The latest primary pointerdown records
+  // whether it started inside the inspector boundary, and the
+  // following click consumes that record — a click whose gesture
+  // started inside the inspector (e.g. a text selection dragged
+  // across the drawer's edge and released outside, whose click
+  // target the browser places at the down/up common ancestor,
+  // outside) never dismisses. The record is overwritten by every
+  // primary pointerdown and consumed by every click, so a later
+  // fresh outside press+click dismisses exactly as before — no
+  // stale suppression survives.
   useEffect(() => {
     if (
       selectedDrawerItem == null ||
@@ -1121,12 +1134,51 @@ export function MyWorkPage() {
       return
     }
 
+    // Origin record of the latest pointer gesture (see the
+    // gesture-origin rule above). A plain closure variable: it
+    // lives exactly as long as this listener registration and is
+    // rebuilt fresh whenever the effect re-registers.
+    let gestureStartedInsideInspector = false
+
+    function handleDocumentPointerDownCapture(
+      event: PointerEvent,
+    ) {
+      // Only primary-button gestures produce a trailing `click`;
+      // right/middle presses never touch the record.
+      if (event.button !== 0) {
+        return
+      }
+
+      gestureStartedInsideInspector =
+        event.target instanceof Element &&
+        event.target.closest(
+          '[data-work-item-inspector-boundary]',
+        ) !== null
+    }
+
     function handleDocumentClickCapture(
       event: MouseEvent,
     ) {
+      // Consume this click's gesture origin FIRST, unconditionally:
+      // a real click always follows exactly one primary pointerdown
+      // (already recorded above), and a click with no pointerdown
+      // (e.g. keyboard activation) must never inherit a stale
+      // record from an unrelated earlier gesture.
+      const gestureStartedInside =
+        gestureStartedInsideInspector
+      gestureStartedInsideInspector = false
+
       const target = event.target
 
       if (!(target instanceof Element)) {
+        return
+      }
+
+      // The gesture ORIGINATED inside the inspector (e.g. a text
+      // selection started in the drawer and dragged outside): this
+      // is an inside interaction, never an outside dismissal —
+      // regardless of where the click's target landed.
+      if (gestureStartedInside) {
         return
       }
 
@@ -1155,12 +1207,24 @@ export function MyWorkPage() {
     }
 
     document.addEventListener(
+      'pointerdown',
+      handleDocumentPointerDownCapture,
+      true,
+    )
+
+    document.addEventListener(
       'click',
       handleDocumentClickCapture,
       true,
     )
 
     return () => {
+      document.removeEventListener(
+        'pointerdown',
+        handleDocumentPointerDownCapture,
+        true,
+      )
+
       document.removeEventListener(
         'click',
         handleDocumentClickCapture,

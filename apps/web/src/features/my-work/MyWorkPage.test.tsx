@@ -5365,6 +5365,239 @@ describe('My Work Kanban — exact positional drag and drop', () => {
   })
 })
 
+// SCOPE: happy-dom has no layout engine and no real text-selection
+// engine, so a "drag the selection across the drawer's edge" is
+// simulated at the event level: a PRIMARY pointerdown inside the
+// inspector boundary, followed by a click whose target lands
+// OUTSIDE (exactly where browsers target the trailing click of a
+// cross-boundary drag — the down/up common ancestor). The contract
+// under test is the page-level dismissal state machine, mirrored
+// from the Project Work Items page: inside-started gestures never
+// dismiss, fresh outside press+clicks still do, and every
+// protected target keeps its protection.
+describe(
+  'My Work — inspector outside-interaction close (gesture origin)',
+  () => {
+    // Wire the drawer's lazy Project context and open the
+    // inspector for the default card, waiting until the stub
+    // drawer (drawerState 'ready') has mounted — only then is the
+    // outside-click effect registered against the boundary.
+    function openInspectorForTest() {
+      mockDrawerContext()
+
+      vi.mocked(listMyWork).mockResolvedValue([
+        makeItem(),
+        makeItem({
+          id: 101,
+          title: 'Second task',
+          statusCategory: 'todo',
+        }),
+      ])
+
+      const { container, getByRole } = renderPage()
+
+      return {
+        container,
+        getByRole,
+        drawer: () =>
+          container.querySelector(
+            '[data-testid="work-item-drawer"]',
+          ) as HTMLElement,
+      }
+    }
+
+    async function openInspector(
+      ctx: ReturnType<typeof openInspectorForTest>,
+    ) {
+      await waitFor(() => {
+        expect(
+          ctx.getByRole('button', {
+            name: 'Open Prepare samples',
+          }),
+        ).toBeInTheDocument()
+      })
+
+      await act(async () => {
+        fireEvent.click(
+          ctx.getByRole('button', {
+            name: 'Open Prepare samples',
+          }),
+        )
+      })
+
+      await waitFor(() => {
+        expect(ctx.drawer()).not.toBeNull()
+      })
+    }
+
+    // The h1 page heading: an inert, unmarked page target — not
+    // the inspector boundary, not a Work Item target, not the
+    // keep-open view switch. A genuine outside click landing here
+    // must dismiss.
+    function outsideTarget(ctx: {
+      getByRole: (
+        role: string,
+        options?: { name?: string | RegExp },
+      ) => HTMLElement
+    }): HTMLElement {
+      return ctx.getByRole('heading', {
+        name: 'My Work',
+      })
+    }
+
+    it('stays open when the pointer gesture starts inside the drawer and the click lands outside', async () => {
+      const ctx = openInspectorForTest()
+      await openInspector(ctx)
+
+      // Press inside the drawer (its title), drag beyond the
+      // drawer's edge, release outside: the trailing click's
+      // target is outside the inspector.
+      await act(async () => {
+        fireEvent.pointerDown(
+          ctx.drawer().querySelector(
+            '[data-testid="work-item-drawer-title"]',
+          ) as HTMLElement,
+          { button: 0 },
+        )
+        fireEvent.click(outsideTarget(ctx))
+      })
+
+      // The gesture ORIGINATED inside — the drawer stays open.
+      expect(ctx.drawer()).not.toBeNull()
+    })
+
+    it('closes on a fresh outside press+click', async () => {
+      const ctx = openInspectorForTest()
+      await openInspector(ctx)
+
+      const outside = outsideTarget(ctx)
+
+      await act(async () => {
+        fireEvent.pointerDown(outside, { button: 0 })
+        fireEvent.click(outside)
+      })
+
+      await waitFor(() => {
+        expect(ctx.drawer()).toBeNull()
+      })
+    })
+
+    it('does not leave stale suppression behind: inside-started drag-out does not close, then the NEXT fresh outside click DOES close', async () => {
+      const ctx = openInspectorForTest()
+      await openInspector(ctx)
+
+      const outside = outsideTarget(ctx)
+
+      // Gesture 1: starts inside the drawer, click lands outside
+      // — no close.
+      await act(async () => {
+        fireEvent.pointerDown(
+          ctx.drawer().querySelector(
+            '[data-testid="work-item-drawer-title"]',
+          ) as HTMLElement,
+          { button: 0 },
+        )
+        fireEvent.click(outside)
+      })
+
+      expect(ctx.drawer()).not.toBeNull()
+
+      // Gesture 2: a fresh outside press+click — must close.
+      await act(async () => {
+        fireEvent.pointerDown(outside, { button: 0 })
+        fireEvent.click(outside)
+      })
+
+      await waitFor(() => {
+        expect(ctx.drawer()).toBeNull()
+      })
+    })
+
+    it('keeps a click that starts and lands fully inside the drawer open', async () => {
+      const ctx = openInspectorForTest()
+      await openInspector(ctx)
+
+      const title = ctx.drawer().querySelector(
+        '[data-testid="work-item-drawer-title"]',
+      ) as HTMLElement
+
+      await act(async () => {
+        fireEvent.pointerDown(title, { button: 0 })
+        fireEvent.click(title)
+      })
+
+      expect(ctx.drawer()).not.toBeNull()
+    })
+
+    it('keeps canonical Work Item targets protected: clicking another card switches in place instead of closing', async () => {
+      const ctx = openInspectorForTest()
+      await openInspector(ctx)
+
+      const cardB = ctx.getByRole('button', {
+        name: 'Open Second task',
+      })
+
+      await act(async () => {
+        fireEvent.pointerDown(cardB, { button: 0 })
+        fireEvent.click(cardB)
+      })
+
+      // Still open — and now showing the second item.
+      expect(ctx.drawer()).not.toBeNull()
+      await waitFor(() => {
+        expect(
+          ctx.drawer().querySelector(
+            '[data-testid="work-item-drawer-title"]',
+          ),
+        ).toHaveTextContent('Second task')
+      })
+    })
+
+    it('keeps the Board/List view switch protected: switching views does not close the drawer', async () => {
+      const ctx = openInspectorForTest()
+      await openInspector(ctx)
+
+      const listToggle = ctx.getByRole('button', {
+        name: 'List',
+      })
+
+      await act(async () => {
+        fireEvent.pointerDown(listToggle, { button: 0 })
+        fireEvent.click(listToggle)
+      })
+
+      // The view switched to List...
+      expect(
+        ctx.getByRole('button', { name: 'List' }),
+      ).toBeInTheDocument()
+      // ...and the drawer stayed open on the same item.
+      expect(ctx.drawer()).not.toBeNull()
+      expect(
+        ctx.drawer().querySelector(
+          '[data-testid="work-item-drawer-title"]',
+        ),
+      ).toHaveTextContent('Prepare samples')
+    })
+
+    it('still closes through the explicit close button', async () => {
+      const ctx = openInspectorForTest()
+      await openInspector(ctx)
+
+      await act(async () => {
+        fireEvent.click(
+          ctx.getByRole('button', {
+            name: 'Close work item drawer',
+          }),
+        )
+      })
+
+      await waitFor(() => {
+        expect(ctx.drawer()).toBeNull()
+      })
+    })
+  },
+)
+
 describe('My Work preferences — hydration and view mode persistence', () => {
   it('issues the preferences GET on the initial My Work load', async () => {
     vi.mocked(listMyWork).mockResolvedValue([

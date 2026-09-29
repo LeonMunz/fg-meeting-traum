@@ -756,6 +756,22 @@ export function ProjectDetailPage() {
   // "click" event for the drag gesture itself, so dragging a card
   // between columns never reaches this handler at all.
   //
+  // Gesture-origin rule: dismissal also looks at where the pointer
+  // gesture ORIGINATED, not only where the click landed. Browsers
+  // target the click of a cross-boundary drag at the common
+  // ancestor of the down/up positions — outside the drawer for a
+  // Description text selection that starts inside, is dragged
+  // across the drawer's edge, and is released outside. A
+  // target-only check would close the inspector over the user's
+  // live selection. So the latest PRIMARY pointerdown records
+  // whether it started inside the inspector boundary, and the
+  // click that follows the gesture consumes that record: a click
+  // whose gesture started inside the inspector never dismisses,
+  // wherever its target landed. The record is overwritten by every
+  // primary pointerdown and consumed by every click, so a later
+  // FRESH outside press+click dismisses exactly as before — no
+  // stale suppression survives.
+  //
   // Declared unconditionally (before any early `return`) to satisfy
   // rules-of-hooks — it no-ops internally whenever the drawer isn't
   // in edit mode.
@@ -764,12 +780,51 @@ export function ProjectDetailPage() {
       return
     }
 
+    // Origin record of the latest pointer gesture (see the
+    // gesture-origin rule above). A plain closure variable: it
+    // lives exactly as long as this listener registration and is
+    // rebuilt fresh whenever the effect re-registers.
+    let gestureStartedInsideInspector = false
+
+    function handleDocumentPointerDownCapture(
+      event: PointerEvent,
+    ) {
+      // Only primary-button gestures produce a trailing `click`;
+      // right/middle presses never touch the record.
+      if (event.button !== 0) {
+        return
+      }
+
+      gestureStartedInsideInspector =
+        event.target instanceof Element &&
+        event.target.closest(
+          '[data-work-item-inspector-boundary]',
+        ) !== null
+    }
+
     function handleDocumentClickCapture(
       event: MouseEvent,
     ) {
+      // Consume this click's gesture origin FIRST, unconditionally:
+      // a real click always follows exactly one primary pointerdown
+      // (already recorded above), and a click with no pointerdown
+      // (e.g. keyboard activation) must never inherit a stale
+      // record from an unrelated earlier gesture.
+      const gestureStartedInside =
+        gestureStartedInsideInspector
+      gestureStartedInsideInspector = false
+
       const target = event.target
 
       if (!(target instanceof Element)) {
+        return
+      }
+
+      // The gesture ORIGINATED inside the inspector (e.g. a text
+      // selection started in the drawer and dragged outside): this
+      // is an inside interaction, never an outside dismissal —
+      // regardless of where the click's target landed.
+      if (gestureStartedInside) {
         return
       }
 
@@ -805,12 +860,24 @@ export function ProjectDetailPage() {
     }
 
     document.addEventListener(
+      'pointerdown',
+      handleDocumentPointerDownCapture,
+      true,
+    )
+
+    document.addEventListener(
       'click',
       handleDocumentClickCapture,
       true,
     )
 
     return () => {
+      document.removeEventListener(
+        'pointerdown',
+        handleDocumentPointerDownCapture,
+        true,
+      )
+
       document.removeEventListener(
         'click',
         handleDocumentClickCapture,
