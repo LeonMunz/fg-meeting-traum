@@ -3568,8 +3568,11 @@ describe('permanent delete: success reconciliation', () => {
     expect(
       screen.getByText('Select a note to read it.'),
     ).toBeInTheDocument()
-    // Focus moved to the sensible next action (New note).
-    expect(newNoteButton()).toHaveFocus()
+    // Focus moved to the sensible next action (New note). The
+    // handoff is a passive effect after the reconciled commit —
+    // the row-disappearance wait above proves the removal, not
+    // the later focus handoff — so wait for it explicitly.
+    await waitFor(() => expect(newNoteButton()).toHaveFocus())
   })
 
   it('keeps an active search query intact after deleting a result', async () => {
