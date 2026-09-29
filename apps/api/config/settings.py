@@ -44,6 +44,7 @@ INSTALLED_APPS = [
     'projects',
     'work_items',
     'meetings',
+    'personal_notes',
     'audit_history',
     'authorization',
 ]
