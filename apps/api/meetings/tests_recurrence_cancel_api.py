@@ -10,9 +10,13 @@ service. The concrete ``Meeting`` is RETAINED with terminal
 representation (``200`` for both the initial cancellation and an
 idempotent replay).
 
-Meeting-level read access is creator-or-participant, so the
-write-authorized actors in these tests are the creator or an explicit
-participant (the canonical Meeting access/resolution convention).
+Meeting-level read access is the canonical MEETING_READ rule
+(project scope: creator/participant WITH current Project access),
+and cancellation is destructive Meeting administration
+(MEETING_ADMIN: project scope requires the Project write role,
+owner or member, non-archived), so the authorized actors in these
+tests are the creator or an explicit participant with the Project
+write role (the canonical Meeting access/resolution convention).
 """
 
 import json
@@ -503,7 +507,7 @@ class MeetingRecurrenceCancelApiAuthorizationTest(MeetingRecurrenceCancelApiBase
         meeting.refresh_from_db()
         self.assertEqual(meeting.status, Meeting.Status.CANCELLED)
 
-    def test_project_viewer_cannot_cancel(self):
+    def test_project_viewer_participant_cannot_cancel(self):
         recurrence = self._project_recurrence()
         meeting = self._materialize(recurrence=recurrence)
         add_meeting_participant(
@@ -513,7 +517,27 @@ class MeetingRecurrenceCancelApiAuthorizationTest(MeetingRecurrenceCancelApiBase
 
         response = self._post_cancel(meeting)
 
+        # Cancellation is destructive Meeting administration: an
+        # explicit participant with only the viewer role collaboates
+        # on the Meeting but may NOT cancel the occurrence (the
+        # scoped Project write rule — owner/member — is required).
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        meeting.refresh_from_db()
+        self.assertEqual(meeting.status, Meeting.Status.UPCOMING)
+        self.assertEqual(self._exclusions(recurrence).count(), 0)
+        self.assertEqual(self._cancelled_events(meeting).count(), 0)
+
+    def test_project_viewer_non_participant_cannot_cancel(self):
+        recurrence = self._project_recurrence()
+        meeting = self._materialize(recurrence=recurrence)
+        self.login(self.laura)
+
+        response = self._post_cancel(meeting)
+
+        # A Project viewer who is NOT a participant does not even
+        # see the Meeting: the non-leaking 404 path.
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(response.json(), {"error": "Meeting not found"})
         meeting.refresh_from_db()
         self.assertEqual(meeting.status, Meeting.Status.UPCOMING)
         self.assertEqual(self._exclusions(recurrence).count(), 0)

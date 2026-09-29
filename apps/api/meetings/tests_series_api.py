@@ -118,10 +118,14 @@ class MeetingSeriesApiTest(TestCase):
         self.assertFalse(data["isArchived"])
         self.assertEqual(data["researchGroupId"], self.group.pk)
 
-    def test_create_occurrence_accepts_external_initial_participant(self):
+    def test_create_occurrence_rejects_outside_group_initial_participant(self):
         scheduled_at = timezone.now() + timedelta(days=1)
         self.login(self.alex)
 
+        # maria is not a current Research Group member of the
+        # series' Research Group: occurrence creation is rejected and
+        # nothing is persisted, with no membership created as a side
+        # effect.
         response = self.client.post(
             f"/api/meeting-series/{self.series.pk}/occurrences/",
             {
@@ -131,12 +135,8 @@ class MeetingSeriesApiTest(TestCase):
             format="json",
         )
 
-        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        data = response.json()
-        self.assertEqual(
-            data["participantIds"],
-            [self.alex.pk, self.maria.pk],
-        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(Meeting.objects.count(), 0)
         self.assertFalse(
             ResearchGroupMembership.objects.filter(
                 research_group=self.group,
@@ -144,10 +144,22 @@ class MeetingSeriesApiTest(TestCase):
             ).exists()
         )
 
-        self.login(self.maria)
+        # An eligible current Research Group member can be an initial
+        # participant of the occurrence.
+        response = self.client.post(
+            f"/api/meeting-series/{self.series.pk}/occurrences/",
+            {
+                "scheduledAt": scheduled_at.isoformat(),
+                "participantIds": [self.chris.pk, self.chris.pk],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        data = response.json()
         self.assertEqual(
-            self.client.get(f"/api/meetings/{data['id']}/").status_code,
-            status.HTTP_200_OK,
+            data["participantIds"],
+            [self.alex.pk, self.chris.pk],
         )
 
     def test_invalid_occurrence_participant_rolls_back_create(self):

@@ -312,14 +312,28 @@ class ActivityFeedView(APIView):
         )
 
         # Meetings the user can read RIGHT NOW — the canonical
-        # MEETING_READ rule (creator-or-explicit-participant)
-        # expressed as one DB-level subquery. Group/Project
-        # membership alone is deliberately NOT part of this.
+        # MEETING_READ rule expressed as one DB-level subquery.
+        # Group-scoped Meetings are readable by every CURRENT member
+        # of the Meeting's Research Group; project-scoped Meetings
+        # stay restricted to the creator or an explicit participant
+        # who STILL holds a valid current ProjectMembership in the
+        # Meeting's Project (the canonical Project-read boundary;
+        # Project membership, ownership, or admin status alone are
+        # deliberately NOT part of this, and a stale creator /
+        # participant relation without current Project access grants
+        # nothing).
         readable_meeting_ids = (
             Meeting.objects
             .filter(
-                Q(created_by=user)
-                | Q(participant_relations__user=user)
+                (
+                    Q(scope=Meeting.Scope.GROUP, project__isnull=True)
+                    & Q(research_group__memberships__user=user)
+                )
+                | (
+                    (Q(created_by=user)
+                        | Q(participant_relations__user=user))
+                    & Q(project__memberships__user=user)
+                )
             )
             .values_list("pk", flat=True)
         )

@@ -126,14 +126,48 @@ empty (deny).
 
 ### Meeting capabilities
 
-- `MEETING_READ` is granted iff the user created the Meeting or is an
-  explicit `MeetingParticipant`. Group/Project membership, ownership, and
-  admin status alone do **not** grant Meeting visibility.
-- `MEETING_WRITE` is the scoped write rule of the Meeting's scope
-  (independent of the creator/participant read rule):
-  - group scope: `GROUP_READ` in the Meeting's ResearchGroup;
-  - Project scope: `PROJECT_WORK` in the Meeting's Project, and the
-    Project is not archived.
+- `MEETING_READ`:
+  - group scope: any CURRENT member of the Meeting's ResearchGroup
+    (`GROUP_READ`);
+  - project scope: the user created the Meeting or is an explicit
+    `MeetingParticipant`, **and** holds a valid current
+    ProjectMembership satisfying the canonical Project-read boundary.
+    Project membership, ownership, and admin status alone do **not**
+    grant Meeting visibility, and a stale creator / participant
+    relation without current Project access grants no read access
+    either (the Meeting answers a non-leaking `404`).
+- `MEETING_WRITE` (Meeting collaboration — editing and running an
+  EXISTING Meeting occurrence: title/schedule, Sections, Items,
+  Notes, adding participants, Start, Live actions, End, Reopen):
+  - group scope: `GROUP_READ` in the Meeting's ResearchGroup (any
+    current member; the admin role is not required);
+  - project scope: the Meeting creator or an explicit participant
+    with a valid current ProjectMembership (any role satisfies the
+    canonical Project-read boundary) while the Project is not
+    archived. A Project write role (`PROJECT_WORK`) is **not**
+    required to operate the Meeting.
+- `MEETING_ADMIN` (destructive Meeting administration on an
+  EXISTING occurrence: permanently deleting the Meeting, cancelling
+  a materialized recurrence occurrence, removing a
+  Meeting participant):
+  - group scope: `GROUP_READ` in the Meeting's ResearchGroup — group
+    Meetings are fully collaborative, so every current member has
+    the full surface;
+  - project scope: the Meeting creator or an explicit participant
+    with `PROJECT_WORK` (Project owner or member) while the Project
+    is not archived. Participation with a `viewer` role alone never
+    grants destructive administration.
+- Meeting collaboration is NOT Project access: it never grants
+  `PROJECT_WORK` or any other Project / Work Item capability, and the
+  moderator identity is not an authorization gate for Meeting
+  collaboration. Meeting administration requires the canonical
+  Project write role on Project Meetings — it never grants it
+  either.
+- Scope-level CREATION operations (creating a Meeting occurrence, a
+  Meeting Series template, or a Recurrence; materializing an
+  occurrence; the single-occurrence virtual reschedule API) keep the
+  stricter scoped write rule (group scope: `GROUP_READ`; Project
+  scope: `PROJECT_WORK`, Project not archived).
 - `MEETING_SERIES_READ` / `MEETING_SERIES_WRITE` follow the Meeting scope
   rules for the Series (group scope: `GROUP_READ`; Project scope:
   `PROJECT_READ` / `PROJECT_WORK`, Project not archived for write).

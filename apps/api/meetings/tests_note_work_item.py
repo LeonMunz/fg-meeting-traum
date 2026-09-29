@@ -921,13 +921,42 @@ class NoteWorkItemApiTest(NoteWorkItemBase):
         )
 
     def test_origin_hidden_without_meeting_read_access(self):
-        work_item = self._create_from_note(
-            note=self.note,
+        # A project-scoped Meeting: unlike group Meetings, it is NOT
+        # readable by every Research Group member — only the creator
+        # and explicit participants have Meeting read access.
+        project_meeting = create_meeting(
+            research_group=self.group,
+            actor=self.alex,
+            title="Project Origin Guard",
+            scheduled_at=self.scheduled_at,
+            scope=Meeting.Scope.PROJECT,
+            project=self.project,
+        )
+        section = MeetingSection.objects.get(meeting=project_meeting)
+        item = create_meeting_item(
+            meeting=project_meeting,
+            meeting_section=section,
+            actor=self.alex,
+            title="Origin item",
+        )
+        start_meeting(meeting=project_meeting, actor=self.alex)
+        note = create_meeting_note(
+            meeting_item=item,
+            actor=self.alex,
+            content="Origin note",
+        )
+        work_item = create_work_item_from_meeting_item(
+            meeting_item=item,
+            project=self.project,
+            actor=self.alex,
+            type_definition_id=self.task_type.pk,
             title="Origin Guard",
+            description=note.content,
+            meeting_note=note,
         )
 
         # A Project member who is neither the Meeting creator nor a
-        # Meeting participant cannot read the group Meeting, so the
+        # Meeting participant cannot read the project Meeting, so the
         # origin must stay hidden.
         outsider = User.objects.create_user(
             username="note-wi-cross",

@@ -82,9 +82,9 @@ from .services import (
     MeetingDomainError,
     MeetingFollowUpConflictError,
     _has_canonical_meeting_read_access,
-    _has_can_meet_participant_add_access,
     add_meeting_participant,
     cancel_meeting_recurrence_occurrence,
+    eligible_meeting_participant_user_ids,
     create_meeting,
     delete_meeting,
     delete_meeting_series,
@@ -288,7 +288,7 @@ def _has_project_write_access(user, project):
 def _has_scoped_write_access(user, resource):
     """Meeting/Series write via the kernel capabilities.
 
-    - Meeting occurrence → MEETING_WRITE (scoped write rule).
+    - Meeting occurrence → MEETING_WRITE (Meeting collaboration rule).
     - MeetingSeries template → MEETING_SERIES_WRITE.
     """
     if isinstance(resource, MeetingSeries):
@@ -298,6 +298,18 @@ def _has_scoped_write_access(user, resource):
         )
     scope = resolve_meeting_scope(user, resource)
     return scope is not None and scope.has(Capability.MEETING_WRITE)
+
+
+def _has_scoped_admin_access(user, meeting):
+    """Destructive Meeting administration via the kernel.
+
+    Meeting occurrence → MEETING_ADMIN: group scope — any current
+    Research Group member; project scope — the creator or an explicit
+    participant with ``PROJECT_WORK`` (Project owner or member) while
+    the Project is not archived.
+    """
+    scope = resolve_meeting_scope(user, meeting)
+    return scope is not None and scope.has(Capability.MEETING_ADMIN)
 
 
 def _mutation_forbidden_response():
@@ -312,14 +324,17 @@ def _mutation_forbidden_response():
     )
 
 
-def _participant_candidate_response(request):
+def _participant_candidate_response(request, eligible_user_ids):
     query = request.query_params.get("q", "").strip()
     if len(query) < 2:
         return Response([])
 
     candidates = (
         User.objects
-        .filter(is_active=True)
+        .filter(
+            is_active=True,
+            pk__in=list(eligible_user_ids),
+        )
         .filter(
             Q(username__icontains=query)
             | Q(first_name__icontains=query)
@@ -341,15 +356,26 @@ def _participant_candidate_response(request):
     )
 
 
-def _run_meeting_lifecycle_action(request, meeting, action):
+def _run_meeting_lifecycle_action(
+    request,
+    meeting,
+    action,
+    *,
+    require_admin=False,
+):
     """Shared handler for explicit Meeting action endpoints.
 
     Used by the Start/End/Reopen lifecycle actions and the
-    materialized-occurrence cancel action: enforces the scope-aware
-    Meeting write rule, runs the domain operation, and returns the
-    updated canonical Meeting.
+    materialized-occurrence cancel action: enforces the canonical
+    Meeting write rule (Meeting collaboration) — or, when
+    ``require_admin`` is set (materialized-occurrence cancel), the
+    stricter destructive administration rule (MEETING_ADMIN) — runs
+    the domain operation, and returns the updated canonical Meeting.
     """
-    if not _has_scoped_write_access(request.user, meeting):
+    if require_admin:
+        if not _has_scoped_admin_access(request.user, meeting):
+            return _mutation_forbidden_response()
+    elif not _has_scoped_write_access(request.user, meeting):
         return _mutation_forbidden_response()
 
     try:
@@ -363,12 +389,24 @@ def _run_meeting_lifecycle_action(request, meeting, action):
 
 
 def _accessible_scope_filter(user):
-    """Meetings the user may discover: creator or explicit
-    participant. Scope membership alone does NOT grant Meeting
-    visibility."""
+    """Meetings the user may discover.
+
+    - group scope: every CURRENT member of the Meeting's Research
+      Group (the listing endpoint already requires GROUP_READ in
+      that group);
+    - project scope: creator or explicit participant with a valid
+      CURRENT ProjectMembership in the Meeting's Project (the
+      canonical Project-read boundary). Project membership,
+      ownership, or admin status alone never grant Meeting
+      visibility, and a stale creator / participant relation
+      without current Project access grants none either.
+    """
     return (
-        Q(created_by=user)
-        | Q(participant_relations__user=user)
+        Q(scope=Meeting.Scope.GROUP)
+        | (
+            (Q(created_by=user) | Q(participant_relations__user=user))
+            & Q(project__memberships__user=user)
+        )
     )
 
 
@@ -955,7 +993,15 @@ class MeetingSeriesParticipantCandidateListView(APIView):
         if not _has_scoped_write_access(request.user, series):
             return _mutation_forbidden_response()
 
-        return _participant_candidate_response(request)
+        eligible_user_ids = eligible_meeting_participant_user_ids(
+            research_group=series.research_group,
+            scope=series.scope,
+            project=series.project,
+        )
+        return _participant_candidate_response(
+            request,
+            eligible_user_ids,
+        )
 
 
 class MeetingSeriesCreateOccurrenceView(APIView):
@@ -1211,7 +1257,15 @@ class ResearchGroupMeetingParticipantCandidateListView(APIView):
         if error_response is not None:
             return error_response
 
-        return _participant_candidate_response(request)
+        eligible_user_ids = eligible_meeting_participant_user_ids(
+            research_group=group,
+            scope=data["scope"],
+            project=project,
+        )
+        return _participant_candidate_response(
+            request,
+            eligible_user_ids,
+        )
 
 
 class ResearchGroupMeetingListCreateView(APIView):
@@ -1401,7 +1455,10 @@ class MeetingDetailView(APIView):
                 status=404,
             )
 
-        if not _has_scoped_write_access(request.user, meeting):
+        # Destructive Meeting administration (MEETING_ADMIN): a
+        # Project Meeting participant with a viewer role alone is
+        # not sufficient.
+        if not _has_scoped_admin_access(request.user, meeting):
             return _mutation_forbidden_response()
 
         try:
@@ -1482,7 +1539,8 @@ class MeetingCancelView(APIView):
     Delegates entirely to the canonical domain operation
     ``cancel_meeting_recurrence_occurrence``: lifecycle validation,
     exclusion persistence, idempotency, recurrence locking, audit, and
-    the scoped Meeting write rule stay in the domain service. The
+    the destructive Meeting administration rule (MEETING_ADMIN) stay
+    in the domain service. The
     Meeting row survives with terminal ``cancelled`` status; the
     response is the retained canonical Meeting representation (``200``
     for both the initial cancellation and an idempotent replay).
@@ -1502,6 +1560,46 @@ class MeetingCancelView(APIView):
             request,
             meeting,
             cancel_meeting_recurrence_occurrence,
+            require_admin=True,
+        )
+
+
+class MeetingParticipantCandidateListView(APIView):
+    """Candidate discovery for managing an existing Meeting's
+    participants.
+
+    Reuses the canonical Meeting write rule: only users who can
+    manage the Meeting's participants may discover candidates. The
+    result set is restricted to users eligible for the Meeting's
+    ACTUAL scope (group: current Research Group members; project:
+    users with valid current Project access) — candidate discovery
+    is read-only and creates no participant or membership records.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, meeting_id):
+        meeting = _require_meeting_access(
+            request,
+            meeting_id,
+        )
+        if meeting is None:
+            return Response(
+                {"error": "Meeting not found"},
+                status=404,
+            )
+
+        if not _has_scoped_write_access(request.user, meeting):
+            return _mutation_forbidden_response()
+
+        eligible_user_ids = eligible_meeting_participant_user_ids(
+            research_group=meeting.research_group,
+            scope=meeting.scope,
+            project=meeting.project,
+        )
+        return _participant_candidate_response(
+            request,
+            eligible_user_ids,
         )
 
 
@@ -1551,10 +1649,7 @@ class MeetingParticipantListCreateView(APIView):
                 status=404,
             )
 
-        if not _has_can_meet_participant_add_access(
-            meeting=meeting,
-            user=request.user,
-        ):
+        if not _has_scoped_write_access(request.user, meeting):
             return _mutation_forbidden_response()
 
         user_id = request.data.get("userId")
@@ -1620,7 +1715,10 @@ class MeetingParticipantDetailView(APIView):
                 status=404,
             )
 
-        if not _has_scoped_write_access(request.user, meeting):
+        # Destructive Meeting administration (MEETING_ADMIN): a
+        # Project Meeting participant with a viewer role alone is
+        # not sufficient to remove participants.
+        if not _has_scoped_admin_access(request.user, meeting):
             return _mutation_forbidden_response()
 
         try:

@@ -191,19 +191,46 @@ def _observe_clock() -> tuple[date, datetime, datetime]:
     )
 
 
+def _readable_meeting_predicate(user):
+    """The canonical Meeting read rule as one DB-level Q predicate.
+
+    Group scope: every current member of the Meeting's Research
+    Group. Project scope: the creator or an explicit participant
+    WITH a valid current ProjectMembership in the Meeting's Project
+    (the canonical Project-read boundary); Project membership,
+    ownership, or admin status alone grant nothing, and a stale
+    creator/participant relation without current Project access
+    grants nothing either.
+    """
+    return (
+        (
+            Q(scope=Meeting.Scope.GROUP, project__isnull=True)
+            & Q(research_group__memberships__user=user)
+        )
+        | (
+            (Q(created_by=user)
+                | Q(participant_relations__user=user))
+            & Q(project__memberships__user=user)
+        )
+    )
+
+
 def _meeting_candidates(*, user, window_start, window_end):
     """One bounded query: the user's upcoming readable Meetings
     inside the window.
 
-    Canonical ``MEETING_READ`` at query level: creator or explicit
-    current participant (the identical predicate of the Meeting list
-    scope filter and the Activity feed's readable-Meeting rule).
-    Group/Project membership, ownership, and admin status grant
-    nothing.
+    Canonical ``MEETING_READ`` at query level (the identical
+    predicate of the Meeting list scope filter and the Activity
+    feed's readable-Meeting rule): group-scoped Meetings are
+    readable by every current member of the Meeting's Research
+    Group; project-scoped Meetings stay restricted to the creator or
+    an explicit current participant who still holds valid current
+    Project access. Project membership, ownership, and admin status
+    alone grant nothing for project Meetings.
     """
     return (
         Meeting.objects.filter(
-            Q(created_by=user) | Q(participant_relations__user=user),
+            _readable_meeting_predicate(user),
             status=Meeting.Status.UPCOMING,
             scheduled_at__gte=window_start,
             scheduled_at__lt=window_end,

@@ -7,10 +7,12 @@ Proves the canonical semantics of
   ``scheduled_at``, Work Items on date-only ``due_date``)
 - Meeting lifecycle: only ``upcoming`` (live / completed / stale
   past excluded)
-- Meeting authorization: canonical ``MEETING_READ`` (creator or
-  explicit current participant) — Group/Project membership, admin
-  status, and ownership grant nothing; participant removal revokes
-  at read time
+- Meeting authorization: canonical ``MEETING_READ`` — group Meetings
+  are readable by every current Research Group member; project
+  Meetings are readable only by the creator or an explicit current
+  participant. Project membership, admin status, and ownership grant
+  no extra Meeting read; participant removal revokes project Meeting
+  read at read time
 - Work Item authorization: current assignment + current
   Project/Research Group eligibility (My Work boundary) —
   membership removal revokes at read time; ``done`` excluded
@@ -353,19 +355,24 @@ class MeetingAuthorizationTest(_TimelineBase):
         self.assertEqual(self._meeting_ids(self.data["laura"]), [m.pk])
 
     def test_research_group_admin_without_meeting_read_does_not_see(self):
-        # Chris (plain member) creates; Alex is the Research Group
-        # ADMIN and a group member — admin status grants nothing.
+        # Project-scoped Meeting: Research Group membership and admin
+        # status (and Project ownership) grant nothing — only the
+        # creator and explicit participants have Meeting read.
         m = self._make_meeting(
-            title="Chris's group meeting",
+            title="Chris's project meeting",
             scheduled_at=_at(TODAY + timedelta(days=2), 10),
             actor=self.data["chris"],
-            participants=[self.data["maria"]],
+            scope=Meeting.Scope.PROJECT,
+            project=self.project,
+            participants=[self.data["laura"]],
         )
+        # Alex (RG admin, Project owner) sees nothing.
         self.assertEqual(self._meeting_ids(self.data["alex"]), [])
-        # A plain Research Group member without read also sees nothing.
-        self.assertEqual(self._meeting_ids(self.data["laura"]), [])
-        # The explicit participant sees it.
-        self.assertEqual(self._meeting_ids(self.data["maria"]), [m.pk])
+        # Maria (plain RG member, no Project access) sees nothing.
+        self.assertEqual(self._meeting_ids(self.data["maria"]), [])
+        # The creator and the explicit participant see it.
+        self.assertEqual(self._meeting_ids(self.data["chris"]), [m.pk])
+        self.assertEqual(self._meeting_ids(self.data["laura"]), [m.pk])
 
     def test_outsider_does_not_see(self):
         m = self._make_meeting(
@@ -377,9 +384,14 @@ class MeetingAuthorizationTest(_TimelineBase):
         self.assertEqual(self._meeting_ids(self.data["chris"]), [m.pk])
 
     def test_participant_removal_removes_candidate_at_read_time(self):
+        # Project-scoped Meeting: only the creator and explicit
+        # participants have read access, so removing the participant
+        # row revokes the candidate at read time.
         m = self._make_meeting(
             title="Laura invited", scheduled_at=_at(TODAY + timedelta(days=1), 10),
             actor=self.data["alex"],
+            scope=Meeting.Scope.PROJECT,
+            project=self.project,
             participants=[self.data["laura"]],
         )
         self.assertEqual(self._meeting_ids(self.data["laura"]), [m.pk])
@@ -390,7 +402,8 @@ class MeetingAuthorizationTest(_TimelineBase):
         ).delete()
         self.assertGreaterEqual(removed[0], 1)
 
-        # ... and the candidate is immediately gone.
+        # ... and the candidate is immediately gone; her Project
+        # VIEWER membership does not grant Meeting read.
         self.assertEqual(self._meeting_ids(self.data["laura"]), [])
 
 
@@ -570,14 +583,17 @@ class FollowUpNotACandidateTest(_TimelineBase):
             title="Past sync",
             scheduled_at=_at(TODAY - timedelta(days=2), 9),
         )
-        # Created by Chris (the creator is auto-participant); Alex is
-        # neither creator nor participant → Alex cannot read it.
-        # Group-scoped MEETING_WRITE is GROUP_READ, so Alex may still
-        # schedule the follow-up into it.
+        # Target: a project Meeting created by Chris (Project member).
+        # Alex is Project owner but neither creator nor participant of
+        # the target → he cannot read it. Chris (creator) can write
+        # both the group source and the project target, so he
+        # schedules the follow-up.
         target = self._make_meeting(
-            title="Next sync (Chris only)",
+            title="Next sync (project)",
             scheduled_at=_at(TODAY + timedelta(days=2), 9),
             actor=self.data["chris"],
+            scope=Meeting.Scope.PROJECT,
+            project=self.project,
         )
         source_section = source.meeting_sections.first()
         target_section = target.meeting_sections.first()
@@ -591,11 +607,12 @@ class FollowUpNotACandidateTest(_TimelineBase):
             source_meeting_item=source_item,
             target_meeting=target,
             target_meeting_section=target_section,
-            actor=self.data["alex"],
+            actor=self.data["chris"],
         )
 
         # Alex cannot read the target Meeting: the follow-up must not
-        # leak it (no target row, no follow-up row).
+        # leak it (no target row, no follow-up row; the source is
+        # outside the forward window).
         self.assertEqual(self._candidates(self.data["alex"]), [])
         # ... while Chris sees exactly the target Meeting once.
         self.assertEqual(self._meeting_ids(self.data["chris"]), [target.pk])

@@ -1845,17 +1845,21 @@ actions and the FollowUp cancel action):
   occurrence identity, a scheduled start, or any recurrence-level
   input, and it NEVER materializes a virtual occurrence.
 - **Resolution and authorization:** the Meeting is resolved through
-  the normal Meeting visibility rule (creator-or-participant read
-  access; inaccessible / unknown ids answer a non-leaking `404`), and
-  the action enforces the canonical scoped Meeting write rule before
-  the domain operation runs (read-only actors answer `403`;
-  unauthenticated requests are rejected). Like every other
-  Meeting action, the write rule only ever applies to a Meeting
-  that first passes the visibility stage: a write-authorized
-  actor who is neither creator nor participant of the Meeting
-  gets the same non-leaking `404`. The domain service re-enforces
-  the same write rule — the view adds no second capability and no
-  endpoint-specific role logic.
+  the normal Meeting visibility rule (canonical `MEETING_READ` read
+  access — group scope: any current Research Group member; project
+  scope: creator or participant with current Project access;
+  inaccessible / unknown ids answer a non-leaking `404`), and the
+  action enforces the canonical destructive Meeting administration
+  rule (`MEETING_ADMIN`: group scope — any current Research Group
+  member; project scope — the creator or an explicit participant
+  with `PROJECT_WORK`, Project not archived) before the domain
+  operation runs (a denied actor answers `403`; unauthenticated
+  requests are rejected). Like every other Meeting action, the rule
+  only ever applies to a Meeting that first passes the visibility
+  stage (administration implies read, so no admin-authorized actor
+  exists outside it). The domain service re-enforces the same rule —
+  the view adds no second capability and no endpoint-specific role
+  logic.
 - **Response:** the retained canonical Meeting representation (the
   canonical Meeting serializer — same `id`, `status: cancelled`,
   unchanged `scheduledAt` / title / content) with `200` for BOTH the
@@ -1882,8 +1886,10 @@ a concrete recurring `Meeting`:
 
 - **Required:** a persisted Meeting with BOTH recurrence provenance
   fields (`recurrence` + `original_scheduled_at` — a paired
-  invariant), the canonical scoped Meeting write rule, and status
-  `upcoming`;
+  invariant), the canonical destructive Meeting administration rule
+  (`MEETING_ADMIN`: group scope — any current Research Group member;
+  project scope — the creator or an explicit participant with
+  `PROJECT_WORK`, Project not archived), and status `upcoming`;
 - **Preserved:** the Meeting row / primary key, the recurrence FK,
   the immutable `original_scheduled_at`, the current `scheduled_at`,
   the title, Sections, agenda items, notes, participants, Work Item
@@ -1924,10 +1930,12 @@ a concrete recurring `Meeting`:
   able to destroy the Meeting's content/history instead of
   cancelling it. Standalone (non-recurring) Meetings keep the
   ordinary hard-delete behavior unchanged;
-- **Authorized:** the canonical scoped Meeting write rule (group
-  scope → group read members; project scope → Project owner/member,
-  non-archived Projects only) — the same rule every other Meeting
-  mutation enforces; read access alone is never sufficient;
+- **Authorized:** the canonical destructive Meeting administration
+  rule (`MEETING_ADMIN` — group scope: any current Research Group
+  member; project scope: the creator or an explicit participant
+  with `PROJECT_WORK` — Project owner or member — while the Project
+  is not archived). Collaboration (viewer included) is NOT
+  sufficient for deletion; read access alone is never sufficient;
 - **Audit:** exactly ONE `meeting.cancelled` event for the first
   successful cancellation, recorded in the same transaction as the
   status change and the exclusion; an idempotent replay records
@@ -2413,60 +2421,107 @@ UNIQUE(meeting_id, user_id)
 
 ### Meeting read-access invariant
 
-A Meeting is visible/readable iff the user:
+A Meeting is visible/readable iff the user satisfies the canonical
+`MEETING_READ` rule for the Meeting's scope:
 
-1. created the Meeting (`created_by`), or
-2. is an explicit `MeetingParticipant`.
+- **group scope:** the user is a CURRENT member of the Meeting's
+  Research Group (any group role — the admin role is not required
+  and not special);
+- **project scope:** the user created the Meeting (`created_by`) or
+  is an explicit `MeetingParticipant`, **and** holds a valid
+  current `ProjectMembership` in the Meeting's Project (the
+  canonical Project-read boundary; any Project role qualifies).
+  Project membership, ownership, or admin status alone must NOT
+  grant Meeting visibility, and a stale creator / participant
+  relation without current Project access grants no read access
+  either.
 
-Research Group membership, Project membership, ownership, or admin
-status alone must NOT grant Meeting visibility. A Meeting
-invitation grants Meeting read access only — it does NOT create
-Research Group membership, Project membership, Project permissions,
-or access to otherwise protected Work Items.
+Meeting read access grants Meeting read access only — it does NOT
+create Research Group membership, Project membership, or Project
+permissions, and it does NOT grant access to otherwise protected
+Work Items. Losing the relevant Research Group membership
+(group scope) or the current Project access behind a
+creator/participant relationship (project scope) revokes read
+access at read time: the Meeting answers a non-leaking `404` and
+drops out of every permission-filtered list and discovery feed,
+while the stale `MeetingParticipant` row itself may remain
+persisted.
 
 ### Participant-add authorization
 
-- The Meeting creator may add participants.
-- Any existing Meeting participant may add participants.
-- The added user may be any existing application user. They do NOT
-  need to belong to the Meeting's Research Group or Project.
+- The actor needs the canonical Meeting write permission
+  (`MEETING_WRITE`) for that Meeting:
+  - group scope: any CURRENT member of the Meeting's Research Group;
+  - project scope: the Meeting creator or an existing explicit
+    participant, with valid current Project access while the Project
+    is not archived (any Project role — owner, member, or viewer —
+    is sufficient).
+- The target user must be ELIGIBLE for the Meeting's actual scope:
+  - group scope: the target must CURRENTLY hold a
+    `ResearchGroupMembership` in the Meeting's Research Group;
+  - project scope: the target must hold a valid current
+    `ProjectMembership` in the Meeting's Project (the canonical
+    Project-read boundary; any role qualifies).
+- A non-eligible target is rejected: no participant row is persisted
+  and no membership is created as a side effect.
 - Adding a participant must not create or alter Research Group
   membership, Project membership, or unrelated permissions.
-- An unrelated non-participant (who is not the creator) cannot add
-  participants.
 
 The creator of a Meeting is automatically added as a participant.
+
+### Participant-removal authorization
+
+Removing a `MeetingParticipant` is destructive Meeting
+administration (`MEETING_ADMIN`), not collaboration:
+
+- group scope: any CURRENT member of the Meeting's Research Group
+  (group Meetings are fully collaborative);
+- project scope: the Meeting creator or an existing explicit
+  participant with `PROJECT_WORK` (Project owner or member) while
+  the Project is not archived. A participant with a `viewer` role
+  alone may NOT remove participants.
+
+Removing a participant never creates or alters any membership.
 
 ### Create-time participants
 
 Both standalone Meeting creation and creation of an occurrence from a
 Meeting Template accept an optional `participantIds` list. Every ID must
-identify an existing application user; Research Group membership and Project
-access are not invitee eligibility requirements. The creator and the unique
-supplied users are persisted as `MeetingParticipant` rows in the same database
-transaction as the Meeting and its occurrence Sections. Supplying the creator
-or another user more than once does not create duplicate rows. If any ID is
-invalid, validation fails and no Meeting or participant rows from that request
-are persisted.
+identify an existing application user who is ELIGIBLE for the Meeting's
+scope: a group-scoped Meeting requires the user to CURRENTLY hold Research
+Group membership in the Meeting's Research Group; a project-scoped Meeting
+requires the user to hold a valid current Project membership in the Meeting's
+Project. The creator and the unique supplied eligible users are persisted as
+`MeetingParticipant` rows in the same database transaction as the Meeting and
+its occurrence Sections. Supplying the creator or another user more than
+once does not create duplicate rows. If any ID is invalid or non-eligible,
+validation fails and no Meeting or participant rows from that request are
+persisted. No membership is ever created as a side effect.
 
-### Create-time participant candidate discovery
+### Participant candidate discovery
 
-The API provides read-only participant-candidate search for both creation
+The API provides read-only participant-candidate search for all three
 contexts:
 
 ```text
 GET /api/research-groups/{groupId}/meetings/participant-candidates/
 GET /api/meeting-series/{seriesId}/participant-candidates/
+GET /api/meetings/{meetingId}/participant-candidates/
 ```
 
 The standalone endpoint accepts the same `scope` and optional `projectId`
 context used by standalone Meeting creation. Each endpoint requires the same
-effective permission needed to create its corresponding Meeting occurrence.
-Results include active application users matching username, first name, or
-last name, regardless of Research Group membership, Project membership, or
-Project role. Discovery returns only `id`, `username`, `firstName`, and
-`lastName`; it creates no participant or membership records and grants no
-Meeting, Research Group, or Project access.
+effective permission the corresponding operation requires (the creation
+endpoints: Meeting creation; the per-Meeting endpoint: the canonical Meeting
+write permission for that Meeting).
+
+Results are restricted to users ELIGIBLE for the actual scope and matching
+username, first name, or last name: group scope exposes only active current
+members of the Research Group; project scope exposes only active users with
+a valid current Project membership in the Project. Users outside that set
+are never returned, even when they match the query. Discovery returns only
+`id`, `username`, `firstName`, and `lastName`; it creates no participant or
+membership records and grants no Meeting, Research Group, or Project access.
 
 Default participants are not implemented (see Section 14 for the
 scope of the implemented model).
@@ -2478,6 +2533,13 @@ Do not build attendance analytics, rankings or performance metrics.
 ## 14. Moderator and moderator rotation
 
 > **Not yet implemented.** The implemented Meeting model has no `moderator` field and no moderator rotation. The following is intended direction.
+
+Authorization note: the moderator identity is (and remains) NOT an
+authorization gate for Meeting collaboration — group Meeting
+collaboration comes from current Research Group membership and
+Project Meeting collaboration from the creator/explicit-participant
+rule. If a moderator field is ever introduced, it must not change
+that boundary.
 
 The moderator controls the live-meeting flow:
 
@@ -3555,8 +3617,11 @@ of the MVP.
 
 ### Authoring authorization
 
-Note authoring reuses the canonical Meeting write model (Research Group
-admin for group Meetings; Project owner/member for Project Meetings). The
+Note authoring reuses the canonical Meeting write model
+(`MEETING_WRITE`: any current Research Group member for group
+Meetings; the creator or an explicit participant with valid current
+Project access while the Project is not archived — any Project role,
+including viewer — for Project Meetings). The
 server enforces this independently of frontend visibility, and Upcoming or
 Completed Meetings reject Note create / update / delete.
 
@@ -4356,27 +4421,27 @@ Move to section…
 1. A Research Group Meeting has no `project_id` (scope `group`).
 2. A Project Meeting has a `project_id` (scope `project`).
 3. Both `Meeting` and `MeetingSeries` enforce the scope/project consistency constraint at the database level.
-4. Meeting read access is creator-or-participant: a user may see/read a Meeting iff they created it or are an explicit participant. Research Group membership, Project membership, ownership, or admin status alone must NOT grant Meeting visibility.
-5. A Meeting invitation grants Meeting read access only. It must NOT grant Research Group membership, Project membership, Project permissions, or access to otherwise protected Work Items.
-6. The Meeting creator and any existing Meeting participant may add further participants. The added user may be any existing application user and does NOT need to belong to the Meeting's Research Group or Project.
-6. Meeting content on a Project Meeting obeys Project write roles: `viewer` cannot mutate; archived Projects are read-only.
-7. Every `MeetingItem` belongs to exactly one `Meeting`.
-8. Every `MeetingItem` belongs to exactly one `MeetingSection` (`meeting_section` is NOT NULL).
-9. Historical `MeetingSection` labels do not change when the Template structure is later edited (occurrence is a snapshot).
-10. Editing an occurrence never mutates its Template.
-11. A Meeting created without a Template still has a real default `Agenda` Section.
-12. Meeting → Work Item creation always requires a target Project.
-13. A Project Meeting can only create work in its own Project.
-14. Meeting → Work Item creation obeys Project write permissions, assignee eligibility, and Work Item invariants (the Work Item service remains authoritative).
-15. Meeting/MeetingItem queries are permission-filtered and must not leak inaccessible Project data.
-16. Meeting lifecycle transitions (start/end/reopen) are guarded and serialized per Meeting.
-17. A `MeetingItemFollowUp` requires a concrete target Meeting, target
+4. Meeting read access follows the canonical `MEETING_READ` rule: a group-scoped Meeting is readable by every current member of its Research Group; a project-scoped Meeting is readable iff the user created it or is an explicit participant AND holds a valid current `ProjectMembership` satisfying the canonical Project-read boundary. Project membership, ownership, or admin status alone must NOT grant project Meeting visibility, and a stale creator / participant relation without current Project access grants no read access either (non-leaking `404` on detail, dropped from every permission-filtered list and discovery feed).
+5. Meeting read access grants Meeting read access only. It must NOT grant Research Group membership, Project membership, Project permissions, or access to otherwise protected Work Items.
+6. Meeting collaboration (editing and running an existing Meeting) follows the canonical `MEETING_WRITE` rule: group scope — every current Research Group member; project scope — the creator or an explicit participant with valid current Project access while the Project is not archived (any Project role, including `viewer`). Project write roles are NOT required to operate a Meeting, and Meeting collaboration never grants `PROJECT_WORK` or any Work Item permission. Creating a Meeting, Template, or Recurrence keeps the stricter scope-level write rule; archived Projects are read-only for Meeting collaboration. Destructive Meeting administration (permanently deleting a Meeting, cancelling a materialized recurrence occurrence, and removing a Meeting participant) is NOT collaboration: it follows the stricter canonical `MEETING_ADMIN` rule (see invariant 21).
+7. Adding a participant requires the canonical Meeting write permission and a target ELIGIBLE for the Meeting's actual scope (group: current Research Group member; project: valid current Project membership). A non-eligible target is rejected without side effects.
+8. Every `MeetingItem` belongs to exactly one `Meeting`.
+9. Every `MeetingItem` belongs to exactly one `MeetingSection` (`meeting_section` is NOT NULL).
+10. Historical `MeetingSection` labels do not change when the Template structure is later edited (occurrence is a snapshot).
+11. Editing an occurrence never mutates its Template.
+12. A Meeting created without a Template still has a real default `Agenda` Section.
+13. Meeting → Work Item creation always requires a target Project.
+14. A Project Meeting can only create work in its own Project.
+15. Meeting → Work Item creation obeys Project write permissions, assignee eligibility, and Work Item invariants (the Work Item service remains authoritative).
+16. Meeting/MeetingItem queries are permission-filtered and must not leak inaccessible Project data.
+17. Meeting lifecycle transitions (start/end/reopen) are guarded and serialized per Meeting.
+18. A `MeetingItemFollowUp` requires a concrete target Meeting, target
     MeetingSection, and new target MeetingItem. The source and target item must
     differ. The scheduling domain operation requires an existing upcoming
     target Meeting and an explicit visible Section belonging to it.
-18. A source `MeetingItem` has at most one non-cancelled
+19. A source `MeetingItem` has at most one non-cancelled
     `MeetingItemFollowUp`; cancelled records do not block a later schedule.
-19. Cancelling a scheduled follow-up reopens the source to `not_discussed`,
+20. Cancelling a scheduled follow-up reopens the source to `not_discussed`,
     leaves `current_meeting_item` exactly unchanged, and is addressed by
     concrete FollowUp ID. Repeated cancellation is idempotent. The generated
     target is removed only when provably untouched (pristine provenance flag,
@@ -4386,6 +4451,7 @@ Move to section…
     with its Meeting/Section trace. A check constraint guarantees that every
     non-cancelled follow-up has a concrete target item (null target only
     after cancellation). Reschedule remains unimplemented.
+21. Destructive Meeting administration follows the canonical `MEETING_ADMIN` rule and is strictly narrower than Meeting collaboration: permanently deleting a Meeting, cancelling a materialized recurrence occurrence, and removing a Meeting participant require — group scope: any current Research Group member (group Meetings are fully collaborative, so every current member has the full Meeting surface); project scope: the Meeting creator or an explicit participant with `PROJECT_WORK` (Project owner or member) while the Project is not archived. A `viewer`-role participant may collaborate (edit content, add participants, Start / Live / End / Reopen) but may NOT perform these destructive operations; a collaborator whose Project access has been revoked loses them as well as every other Meeting right (invariant 4). A non-participant Project owner or member gains no Meeting access of any kind. `MEETING_ADMIN` implies `MEETING_READ` and `MEETING_WRITE`, and it never grants `PROJECT_WORK` or any Work Item permission in return.
 
 > Intended invariants that depend on not-yet-implemented concepts (Topic
 > state, per-item `intent`/`origin`, NoteEntry streams, moderator rotation,

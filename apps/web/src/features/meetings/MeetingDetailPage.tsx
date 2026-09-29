@@ -33,6 +33,7 @@ import {
   reopenMeeting,
   reopenMeetingItem,
   removeMeetingParticipant,
+  searchMeetingParticipantCandidates,
   startMeeting,
   updateMeetingItem,
   updateMeetingNote,
@@ -40,7 +41,6 @@ import {
 } from '../../api/meetings'
 import {
   getProject,
-  listResearchGroupMembers,
   getProjectWorkItemConfiguration,
   listProjectMemberships,
 } from '../../api/projects'
@@ -92,8 +92,8 @@ import type {
   ApiMeetingNote,
   ApiMeetingParticipant,
   ApiMeetingSection,
-  ApiResearchGroupMember,
   ApiLinkedWorkItem,
+  ApiMeetingParticipantCandidate,
   ApiProject,
   ApiProjectMembership,
   ApiProjectWorkItemConfiguration,
@@ -368,9 +368,6 @@ export function MeetingDetailPage() {
   const [participants, setParticipants] =
     useState<ApiMeetingParticipant[]>([])
 
-  const [members, setMembers] =
-    useState<ApiResearchGroupMember[]>([])
-
   const [items, setItems] =
     useState<ApiMeetingItem[]>([])
 
@@ -381,8 +378,21 @@ export function MeetingDetailPage() {
   const [actionError, setActionError] =
     useState<string | null>(null)
 
-  const [selectedMemberId, setSelectedMemberId] =
+  const [participantQuery, setParticipantQuery] =
     useState('')
+
+  const [participantCandidates, setParticipantCandidates] =
+    useState<ApiMeetingParticipantCandidate[]>([])
+
+  const [searchingParticipants, setSearchingParticipants] =
+    useState(false)
+
+  const [
+    participantSearchError,
+    setParticipantSearchError,
+  ] = useState<string | null>(null)
+
+  const participantSearchVersion = useRef(0)
 
   const [addingParticipant, setAddingParticipant] =
     useState(false)
@@ -580,30 +590,34 @@ export function MeetingDetailPage() {
   const { user } = useSession()
   const { activeResearchGroup } = useResearchGroup()
 
-  const isGroupAdmin = useMemo(() => {
+  // Current Research Group membership (any role) of the user in the
+  // Meeting's group — the canonical group-scope Meeting collaboration
+  // boundary. Admin status is NOT a gate.
+  const isGroupMember = useMemo(() => {
     if (user == null) {
       return false
     }
 
     return (
-      activeResearchGroup?.role === 'admin' &&
-      activeResearchGroup.id === meeting?.researchGroupId
+      activeResearchGroup?.id === meeting?.researchGroupId
     )
   }, [activeResearchGroup, user, meeting?.researchGroupId])
 
-  // For a Project Meeting, resolve the current user's role from the
-  // Project read-model so viewers never see enabled lifecycle actions.
-  const [projectRole, setProjectRole] = useState<string | null>(null)
+  // For a Project Meeting, load the Project read-model of the Meeting's
+  // Project: the current user's Project access (any role satisfies the
+  // canonical Project-read boundary) and the archived state decide
+  // Meeting collaboration. A 404 (no access) leaves it null.
+  const [project, setProject] = useState<ApiProject | null>(null)
 
   useEffect(() => {
     if (meeting == null || meeting.scope !== 'project') {
-      setProjectRole(null)
+      setProject(null)
 
       return
     }
 
     if (meeting.projectId == null) {
-      setProjectRole(null)
+      setProject(null)
 
       return
     }
@@ -611,14 +625,14 @@ export function MeetingDetailPage() {
     let cancelled = false
 
     getProject(meeting.projectId)
-      .then((project) => {
+      .then((loadedProject) => {
         if (!cancelled) {
-          setProjectRole(project.currentUserRole)
+          setProject(loadedProject)
         }
       })
       .catch(() => {
         if (!cancelled) {
-          setProjectRole(null)
+          setProject(null)
         }
       })
 
@@ -627,34 +641,87 @@ export function MeetingDetailPage() {
     }
   }, [meeting])
 
-  // Group Meetings are managed by Research Group admins. Project
-  // Meetings are managed by the Project's owner/member (write roles).
+  // Meeting collaboration mirrors the server's canonical
+  // MEETING_WRITE rule: a group Meeting is fully collaborative for
+  // every current Research Group member; a Project Meeting is
+  // collaborative for its creator or explicit participants with valid
+  // current Project access (any Project role) while the Project is not
+  // archived. Meeting collaboration never grants Project/Work Item
+  // permissions, and the moderator is not an authorization gate.
   // The server remains authoritative; this only decides whether to
   // render the controls.
   const canManageLifecycle = useMemo(() => {
-    if (meeting == null) {
+    if (meeting == null || user == null) {
       return false
     }
 
     if (meeting.scope === 'group') {
-      return isGroupAdmin
+      return isGroupMember
     }
 
     if (meeting.projectId == null) {
       return false
     }
 
+    const isMeetingCollaborator =
+      meeting.createdById === user.id ||
+      meeting.participantIds.includes(user.id)
+
+    if (!isMeetingCollaborator) {
+      return false
+    }
+
+    if (project == null || project.archivedAt != null) {
+      return false
+    }
+
+    return true
+  }, [meeting, isGroupMember, user, project])
+
+  // Destructive Meeting administration mirrors the server's canonical
+  // MEETING_ADMIN rule: a group Meeting is fully manageable by every
+  // current Research Group member; a Project Meeting destructive
+  // action (Delete meeting, removing a participant) additionally
+  // requires the existing Project write role (owner or member) while
+  // the Project is not archived. A viewer-participant collaborates
+  // (Start/Edit/add participants) but does NOT get these controls.
+  // The server remains authoritative; this only decides whether to
+  // render the controls.
+  const canAdministerMeeting = useMemo(() => {
+    if (meeting == null || user == null) {
+      return false
+    }
+
+    if (meeting.scope === 'group') {
+      return isGroupMember
+    }
+
+    if (meeting.projectId == null) {
+      return false
+    }
+
+    const isMeetingCollaborator =
+      meeting.createdById === user.id ||
+      meeting.participantIds.includes(user.id)
+
+    if (!isMeetingCollaborator) {
+      return false
+    }
+
+    if (project == null || project.archivedAt != null) {
+      return false
+    }
+
     return (
-      projectRole === 'owner' ||
-      projectRole === 'member'
+      project.currentUserRole === 'owner' ||
+      project.currentUserRole === 'member'
     )
-  }, [meeting, isGroupAdmin, projectRole])
+  }, [meeting, isGroupMember, user, project])
 
   const loadMeeting = useCallback(async () => {
     if (meetingId == null) {
       setMeeting(null)
       setParticipants([])
-      setMembers([])
       setItems([])
       setSections([])
       setLoadError('Invalid Meeting ID.')
@@ -673,21 +740,16 @@ export function MeetingDetailPage() {
       const [
         nextParticipants,
         nextItems,
-        nextMembers,
         nextSections,
       ] = await Promise.all([
         listMeetingParticipants(meetingId),
         listMeetingItems(meetingId),
-        listResearchGroupMembers(
-          nextMeeting.researchGroupId,
-        ),
         listMeetingSections(meetingId),
       ])
 
       setMeeting(nextMeeting)
       setParticipants(nextParticipants)
       setItems(nextItems)
-      setMembers(nextMembers)
       setSections(nextSections)
       // A fresh load/re-entry resets local selection to the Meeting's
       // actual current item (selection is never persisted).
@@ -696,7 +758,6 @@ export function MeetingDetailPage() {
     } catch (error) {
       setMeeting(null)
       setParticipants([])
-      setMembers([])
       setItems([])
       setSections([])
 
@@ -779,20 +840,72 @@ export function MeetingDetailPage() {
     [participants],
   )
 
-  const availableMembers = useMemo(
+  // Candidate discovery for participant management. The server
+  // restricts results to users eligible for the Meeting's ACTUAL scope
+  // (group: current Research Group members; project: users with valid
+  // current Project access), so the client only excludes the people
+  // that are already participants.
+  const availableParticipants = useMemo(
     () =>
-      members
-        .filter(
-          (member) =>
-            !participantUserIds.has(member.id),
-        )
-        .sort((a, b) =>
-          getPersonName(a).localeCompare(
-            getPersonName(b),
-          ),
-        ),
-    [members, participantUserIds],
+      participantCandidates.filter(
+        (candidate) =>
+          !participantUserIds.has(candidate.id),
+      ),
+    [participantCandidates, participantUserIds],
   )
+
+  const participantSearchActive =
+    participantQuery.trim().length >= 2
+
+  // Debounced candidate search while participant management is open.
+  useEffect(() => {
+    if (!managingParticipants || meeting == null) {
+      return
+    }
+
+    const query = participantQuery.trim()
+
+    participantSearchVersion.current += 1
+    const version = participantSearchVersion.current
+
+    setParticipantCandidates([])
+    setSearchingParticipants(false)
+    setParticipantSearchError(null)
+
+    if (query.length < 2) {
+      return
+    }
+
+    const timeout = window.setTimeout(() => {
+      setSearchingParticipants(true)
+
+      void searchMeetingParticipantCandidates(
+        meeting.id,
+        query,
+      )
+        .then((results) => {
+          if (participantSearchVersion.current === version) {
+            setParticipantCandidates(results)
+          }
+        })
+        .catch(() => {
+          if (participantSearchVersion.current === version) {
+            setParticipantSearchError(
+              'People could not be searched.',
+            )
+          }
+        })
+        .finally(() => {
+          if (participantSearchVersion.current === version) {
+            setSearchingParticipants(false)
+          }
+        })
+    }, 250)
+
+    return () => {
+      window.clearTimeout(timeout)
+    }
+  }, [managingParticipants, meeting, participantQuery])
 
   const sortedParticipants = useMemo(
     () =>
@@ -850,20 +963,17 @@ export function MeetingDetailPage() {
     return map
   }, [sortedItems])
 
-  const handleAddParticipant = async () => {
+  const handleAddParticipant = async (
+    candidate: ApiMeetingParticipantCandidate,
+  ) => {
     if (
       meetingId == null ||
-      !selectedMemberId ||
       addingParticipant
     ) {
       return
     }
 
-    const userId = Number(selectedMemberId)
-
-    if (!Number.isInteger(userId)) {
-      return
-    }
+    const userId = candidate.id
 
     setAddingParticipant(true)
     setActionError(null)
@@ -897,7 +1007,11 @@ export function MeetingDetailPage() {
           : current,
       )
 
-      setSelectedMemberId('')
+      setParticipantCandidates((current) =>
+        current.filter(
+          (entry) => entry.id !== participant.user.id,
+        ),
+      )
     } catch (error) {
       setActionError(
         getErrorMessage(
@@ -2293,8 +2407,8 @@ export function MeetingDetailPage() {
     !isUpcoming &&
     (meeting.scope === 'group'
       ? true
-      : projectRole === 'owner' ||
-        projectRole === 'member')
+      : project?.currentUserRole === 'owner' ||
+        project?.currentUserRole === 'member')
 
   // A Live Meeting's current item is persisted on the Meeting
   // (currentMeetingItemId); "current" is not an item outcome.
@@ -2572,7 +2686,7 @@ export function MeetingDetailPage() {
             </button>
           )}
 
-          {canManageLifecycle && (
+          {canAdministerMeeting && (
             <MenuTrigger label="Meeting actions">
               {(_, close) => (
                 <>
@@ -2641,8 +2755,8 @@ export function MeetingDetailPage() {
                 if (next) {
                   requestAnimationFrame(() => {
                     document
-                      .querySelector<HTMLSelectElement>(
-                        'select[data-participant-select]',
+                      .querySelector<HTMLInputElement>(
+                        'input[data-participant-search]',
                       )
                       ?.focus()
                   })
@@ -2669,52 +2783,88 @@ export function MeetingDetailPage() {
 
       {managingParticipants && canEditParticipants && (
         <div className="mt-4 rounded-xl border border-border-subtle bg-surface-quiet p-4">
-          <div className="flex gap-2">
-            <label className="min-w-0 flex-1">
+          <div className="min-w-0 flex-1">
+            <label className="block">
               <span className="sr-only">
-                Add participant
+                Search people to add
               </span>
 
-              <select
-                data-participant-select
-                value={selectedMemberId}
-                disabled={
-                  addingParticipant ||
-                  availableMembers.length === 0
-                }
+              <input
+                data-participant-search
+                type="text"
+                value={participantQuery}
                 onChange={(event) =>
-                  setSelectedMemberId(event.target.value)
+                  setParticipantQuery(event.target.value)
                 }
-                className="h-9 w-full rounded-lg border border-border-control bg-surface px-2 text-sm text-text outline-none focus:border-focus"
-              >
-                <option value="">
-                  {availableMembers.length > 0
-                    ? 'Select member…'
-                    : 'Everyone added'}
-                </option>
-
-                {availableMembers.map((member) => (
-                  <option
-                    key={member.id}
-                    value={member.id}
-                  >
-                    {getPersonName(member)}
-                  </option>
-                ))}
-              </select>
+                placeholder="Type at least 2 characters…"
+                className="h-9 w-full rounded-lg border border-border-control bg-surface px-3 text-sm text-text outline-none placeholder:text-text-muted focus:border-focus"
+              />
             </label>
 
-            <button
-              type="button"
-              disabled={
-                addingParticipant ||
-                !selectedMemberId
-              }
-              onClick={() => void handleAddParticipant()}
-              className="inline-flex h-9 items-center justify-center rounded-lg bg-accent px-3 text-sm font-semibold text-text-inverse disabled:cursor-not-allowed disabled:opacity-45"
-            >
-              Add
-            </button>
+            {participantSearchActive && (
+              <div
+                aria-live="polite"
+                className="mt-2 max-h-44 overflow-y-auto rounded-xl border border-border-default bg-surface shadow-lg"
+              >
+                {searchingParticipants ? (
+                  <div className="flex items-center gap-2 px-4 py-3 text-sm text-text-muted">
+                    <span
+                      aria-hidden="true"
+                      className="material-symbols-outlined animate-spin text-[18px]"
+                    >
+                      refresh
+                    </span>
+                    Searching…
+                  </div>
+                ) : participantSearchError ? (
+                  <div
+                    role="alert"
+                    className="px-4 py-3 text-sm text-danger"
+                  >
+                    {participantSearchError}
+                  </div>
+                ) : availableParticipants.length > 0 ? (
+                  <div className="divide-y divide-border-subtle">
+                    {availableParticipants.map(
+                      (candidate) => (
+                        <button
+                          key={candidate.id}
+                          type="button"
+                          disabled={addingParticipant}
+                          onClick={() =>
+                            void handleAddParticipant(
+                              candidate,
+                            )
+                          }
+                          className="flex w-full items-center gap-3 px-4 py-3 text-left transition hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus disabled:cursor-not-allowed disabled:opacity-45"
+                        >
+                          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-surface-muted text-[11px] font-semibold text-text">
+                            {getInitials(candidate)}
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-sm font-medium text-text">
+                              {getPersonName(candidate)}
+                            </span>
+                            <span className="block truncate text-xs text-text-muted">
+                              @{candidate.username}
+                            </span>
+                          </span>
+                          <span className="text-xs font-semibold text-accent-text">
+                            Add
+                          </span>
+                        </button>
+                      ),
+                    )}
+                  </div>
+                ) : (
+                  <div className="px-4 py-3 text-sm text-text-muted">
+                    {participantCandidates.length > 0
+                      ? 'All matching people are added.'
+                      : 'No matching people found.'}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="mt-4 divide-y divide-border-subtle">
@@ -2738,21 +2888,23 @@ export function MeetingDetailPage() {
                   </div>
                 </div>
 
-                <button
-                  type="button"
-                  aria-label={`Remove ${getPersonName(participant.user)}`}
-                  disabled={
-                    removingParticipantId === participant.id
-                  }
-                  onClick={() =>
-                    void handleRemoveParticipant(participant)
-                  }
-                  className="flex h-8 w-8 items-center justify-center rounded-lg text-text-muted transition hover:bg-danger-bg hover:text-danger disabled:opacity-45"
-                >
-                  <span aria-hidden="true" className="material-symbols-outlined text-[18px]">
-                    close
-                  </span>
-                </button>
+                {canAdministerMeeting && (
+                  <button
+                    type="button"
+                    aria-label={`Remove ${getPersonName(participant.user)}`}
+                    disabled={
+                      removingParticipantId === participant.id
+                    }
+                    onClick={() =>
+                      void handleRemoveParticipant(participant)
+                    }
+                    className="flex h-8 w-8 items-center justify-center rounded-lg text-text-muted transition hover:bg-danger-bg hover:text-danger disabled:opacity-45"
+                  >
+                    <span aria-hidden="true" className="material-symbols-outlined text-[18px]">
+                      close
+                    </span>
+                  </button>
+                )}
               </div>
             ))}
           </div>

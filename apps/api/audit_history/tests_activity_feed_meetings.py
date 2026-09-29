@@ -7,9 +7,14 @@ GET /api/activity/ now also projects the Meeting slice events
 
 Security contract under test (docs/domain/activity.md §5):
 
-- Meeting read rule = creator-or-explicit-participant (the canonical
-  MEETING_READ rule). Group/Project membership alone must NEVER grant
-  Meeting Activity visibility.
+- Meeting read rule = the canonical MEETING_READ rule: group Meetings
+  are readable by every current member of the Meeting's Research
+  Group; project Meetings are readable by the creator or an explicit
+  participant who holds a valid current ProjectMembership (the
+  canonical Project-read boundary). Project membership, ownership,
+  or admin status alone must NEVER grant Meeting Activity
+  visibility, and a stale creator / participant relation without
+  current Project access grants no visibility either.
 - ``meeting.follow_up_scheduled`` references BOTH Meetings: it is
   returned only if the requester can read BOTH the source and the
   target Meeting today — target-only readability must not leak source
@@ -35,7 +40,7 @@ from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APITestCase, APIClient
 
-from projects.models import WorkItemTypeDefinition
+from projects.models import ProjectMembership, WorkItemTypeDefinition
 from projects.services import create_project
 from research_groups.models import (
     ResearchGroup,
@@ -71,8 +76,9 @@ class _MeetingFeedBase(APITestCase):
         # Group "Feed Meetings":
         #   alice — member, creator of all Meetings below
         #   bob   — member, participant of M1 / M2 / M4
-        #   carol — member, participant of M2 ONLY (non-participant of
-        #           M1 / M3 / M4 — membership alone grants nothing)
+        #   carol — member (sees the group-scoped M1 / M2 / M3 via
+        #           membership), participant of M2 ONLY; the
+        #           project-scoped M4 stays hidden from her
         #   dave  — not a member of this group at all
         self.alice = User.objects.create_user(
             username="feed-mt-alice", password="Pass1!",
@@ -219,6 +225,17 @@ class MeetingFeedVisibilityTest(_MeetingFeedBase):
         )
 
     def test_participant_sees_their_meetings_only(self):
+        # bob is a Research Group member: every group-scoped Meeting
+        # (M1 / M2 / M3) is visible, plus the project-scoped M4 he
+        # participates in — with a valid current ProjectMembership,
+        # the canonical participant-eligibility rule, so his
+        # explicit M4 relation is live (not stale).
+        ProjectMembership.objects.create(
+            project=self.project,
+            user=self.bob,
+            role=ProjectMembership.Role.MEMBER,
+            added_by=self.alice,
+        )
         entries = self._feed_entries(self.bob)
         self.assertEqual(
             self._meeting_event_types(entries, self.m1.pk),
@@ -232,29 +249,43 @@ class MeetingFeedVisibilityTest(_MeetingFeedBase):
             self._meeting_event_types(entries, self.m2.pk),
             {"meeting.created", "meeting.follow_up_scheduled"},
         )
-        # M3: bob is not a participant — no event, no metadata.
-        self.assertNotIn(self.m3.pk, {e["meetingId"] for e in entries})
+        self.assertEqual(
+            self._meeting_event_types(entries, self.m3.pk),
+            {"meeting.created", "meeting.completed"},
+        )
         # M4: bob is a participant.
         self.assertEqual(
             self._meeting_event_types(entries, self.m4.pk),
             {"meeting.created"},
         )
 
-    def test_group_membership_alone_grants_no_meeting_events(self):
-        """carol is a full group member and a Project member would see
-        project things — but Meetings follow creator/participant only.
-        carol participates ONLY in M2."""
+        # carol is a Research Group member too, but NOT a participant
+        # of (and without access to) the project-scoped M4: she sees
+        # the group Meetings but not M4 — no event, no metadata.
+        carol_entries = self._feed_entries(self.carol)
+        for meeting in (self.m1, self.m2, self.m3):
+            self.assertIn(
+                meeting.pk,
+                {e["meetingId"] for e in carol_entries},
+            )
+        self.assertNotIn(self.m4.pk, {e["meetingId"] for e in carol_entries})
+
+    def test_group_membership_grants_group_meetings_but_not_project(self):
+        """carol is a full group member: the group-scoped Meetings'
+        events are visible to her, but the project-scoped M4 (which
+        she is not part of and has no Project access to) stays
+        hidden — group membership alone grants no project Meeting
+        visibility."""
         entries = self._feed_entries(self.carol)
         meeting_ids = {e["meetingId"] for e in entries if e["meetingId"]}
-        self.assertEqual(meeting_ids, {self.m2.pk})
         self.assertEqual(
-            {e["eventType"] for e in entries},
-            {"meeting.created"},
+            meeting_ids,
+            {self.m1.pk, self.m2.pk, self.m3.pk},
         )
-        # No leak of M1/M3 titles or actors anywhere in the payload.
+        self.assertNotIn(self.m4.pk, meeting_ids)
+        # No leak of the project Meeting's title anywhere in the
+        # payload.
         payload = str(entries)
-        self.assertNotIn("Standup", payload)
-        self.assertNotIn("Review", payload)
         self.assertNotIn("Project Sync", payload)
 
     def test_group_outsider_gets_empty_meeting_feed(self):
@@ -292,9 +323,15 @@ class MeetingFeedFollowUpVisibilityTest(_MeetingFeedBase):
                 )
 
     def test_target_only_readable_does_not_see_follow_up(self):
-        """carol can read the target (M2) but not the source (M1): the
+        """carol can read the target (M2) but not the source: the
         event must stay hidden — otherwise the source Meeting's title
         and id would leak."""
+        # Make the source a Project Meeting carol has no access to
+        # (group membership does not grant project Meeting read).
+        self.m1.scope = Meeting.Scope.PROJECT
+        self.m1.project = self.project
+        self.m1.save(update_fields=["scope", "project"])
+
         entries = self._follow_up_entries(self.carol)
         self.assertEqual(entries, [])
 
@@ -445,30 +482,44 @@ class MeetingFeedFollowUpMalformedSourceTest(_MeetingFeedBase):
 
 
 class MeetingFeedRevocationTest(_MeetingFeedBase):
-    def test_participant_removal_removes_events_at_read_time(self):
-        """Removing bob as a participant of M1 immediately removes M1's
-        historical events from his feed — read-time, not creation-time."""
+    def test_group_membership_loss_removes_events_at_read_time(self):
+        """Removing bob's Research Group membership AND his group
+        Meeting participation immediately removes the group
+        Meetings' historical events from his feed — read-time, not
+        creation-time."""
+        ResearchGroupMembership.objects.filter(
+            research_group=self.group, user=self.bob,
+        ).delete()
         MeetingParticipant.objects.filter(
-            meeting=self.m1, user=self.bob,
+            user=self.bob,
+            meeting__scope=Meeting.Scope.GROUP,
         ).delete()
 
         entries = self._feed_entries(self.bob)
         self.assertNotIn(self.m1.pk, {e["meetingId"] for e in entries})
-        # The follow-up event disappears too: bob can no longer read the
-        # source Meeting.
+        # The follow-up event disappears too: bob can no longer read
+        # the source Meeting (nor the target).
         self.assertNotIn(
             "meeting.follow_up_scheduled",
             {e["eventType"] for e in entries},
         )
+        # His M4 participant relation survives the group membership
+        # loss, but without current Project access it is STALE: the
+        # canonical read rule grants no access from a stale
+        # participant relation, so M4 is gone from the feed too.
+        self.assertNotIn(self.m4.pk, {e["meetingId"] for e in entries})
         # The events are still durable in the database.
         from audit_history.models import AuditEvent
         self.assertTrue(
             AuditEvent.objects.filter(meeting=self.m1).exists()
         )
 
-    def test_target_participant_removal_removes_follow_up_event(self):
+    def test_target_read_loss_removes_follow_up_event(self):
         MeetingParticipant.objects.filter(
             meeting=self.m2, user=self.bob,
+        ).delete()
+        ResearchGroupMembership.objects.filter(
+            research_group=self.group, user=self.bob,
         ).delete()
         entries = self._feed_entries(self.bob)
         self.assertNotIn(
@@ -540,6 +591,14 @@ class MeetingFeedPayloadContractTest(_MeetingFeedBase):
         self.assertEqual(entry["changes"], {})
 
     def test_project_scoped_meeting_entry_carries_project_context(self):
+        # bob reads M4 through his explicit participation + a valid
+        # current ProjectMembership (canonical eligibility).
+        ProjectMembership.objects.create(
+            project=self.project,
+            user=self.bob,
+            role=ProjectMembership.Role.MEMBER,
+            added_by=self.alice,
+        )
         entries = self._feed_entries(self.bob)
         entry = self._entry_for(
             entries, "meeting.created", self.m4.pk,

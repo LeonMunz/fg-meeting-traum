@@ -148,9 +148,12 @@ class MeetingApiTest(TestCase):
             [self.alex.pk],
         )
 
-    def test_create_meeting_accepts_external_initial_participants(self):
+    def test_create_meeting_rejects_outside_group_initial_participants(self):
         self.login(self.alex)
 
+        # maria is not a Research Group member: the create request is
+        # rejected and nothing is persisted, with no membership created
+        # as a side effect.
         response = self.client.post(
             f"/api/research-groups/{self.group.pk}/meetings/",
             {
@@ -160,6 +163,36 @@ class MeetingApiTest(TestCase):
                     self.alex.pk,
                     self.chris.pk,
                     self.maria.pk,
+                ],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            Meeting.objects.filter(
+                title="API Weekly with guests"
+            ).count(),
+            0,
+        )
+        self.assertFalse(
+            ResearchGroupMembership.objects.filter(
+                research_group=self.group,
+                user=self.maria,
+            ).exists()
+        )
+
+        # Eligible current Research Group members can be initial
+        # participants; duplicates are collapsed.
+        response = self.client.post(
+            f"/api/research-groups/{self.group.pk}/meetings/",
+            {
+                "title": "API Weekly with members",
+                "scheduledAt": self.scheduled_at.isoformat(),
+                "participantIds": [
+                    self.alex.pk,
+                    self.chris.pk,
+                    self.laura.pk,
                     self.chris.pk,
                 ],
             },
@@ -170,28 +203,13 @@ class MeetingApiTest(TestCase):
         data = response.json()
         self.assertEqual(
             data["participantIds"],
-            [self.alex.pk, self.chris.pk, self.maria.pk],
+            [self.alex.pk, self.chris.pk, self.laura.pk],
         )
         self.assertEqual(
             MeetingParticipant.objects.filter(
                 meeting_id=data["id"],
             ).count(),
             3,
-        )
-        self.assertFalse(
-            ResearchGroupMembership.objects.filter(
-                research_group=self.group,
-                user=self.maria,
-            ).exists()
-        )
-
-        self.login(self.maria)
-        detail_response = self.client.get(
-            f"/api/meetings/{data['id']}/"
-        )
-        self.assertEqual(
-            detail_response.status_code,
-            status.HTTP_200_OK,
         )
 
     def test_invalid_initial_participant_rolls_back_entire_create(self):
@@ -708,11 +726,13 @@ class MeetingApiTest(TestCase):
             self.chris.pk,
         )
 
-    def test_non_group_member_can_be_added_as_participant(self):
+    def test_non_group_member_cannot_be_added_as_participant(self):
         meeting = self.create_default_meeting()
 
         self.login(self.alex)
 
+        # maria is not a current Research Group member of the
+        # Meeting's Research Group, so the group Meeting rejects her.
         response = self.client.post(
             f"/api/meetings/{meeting.pk}/participants/",
             {
@@ -723,11 +743,19 @@ class MeetingApiTest(TestCase):
 
         self.assertEqual(
             response.status_code,
-            status.HTTP_201_CREATED,
+            status.HTTP_400_BAD_REQUEST,
         )
-        self.assertEqual(
-            response.json()["user"]["id"],
-            self.maria.pk,
+        self.assertFalse(
+            MeetingParticipant.objects.filter(
+                meeting=meeting,
+                user=self.maria,
+            ).exists()
+        )
+        self.assertFalse(
+            ResearchGroupMembership.objects.filter(
+                research_group=self.group,
+                user=self.maria,
+            ).exists()
         )
 
     def test_participants_can_be_listed(self):
@@ -1285,6 +1313,12 @@ class MeetingAccessModelTest(TestCase):
 
     def test_explicit_participant_can_list_and_read_project_meeting(self):
         meeting = self._project_meeting()
+        add_project_membership(
+            project=self.project,
+            actor=self.alex,
+            target_user=self.chris,
+            role=ProjectMembership.Role.MEMBER,
+        )
         add_meeting_participant(
             meeting=meeting, actor=self.alex, target_user=self.chris,
         )
@@ -1355,15 +1389,57 @@ class MeetingAccessModelTest(TestCase):
         detail = self.client.get(f"/api/meetings/{meeting.pk}/")
         self.assertEqual(detail.status_code, status.HTTP_404_NOT_FOUND)
 
-    # ── external participant ────────────────────────────────────
-    def test_external_user_participant_can_read_project_meeting(self):
+    # ── participant whose Project access later lapses ───────────
+    def test_participant_whose_project_access_was_revoked_loses_read(self):
+        """Canonical project Meeting read boundary: the
+        creator/participant relationship AND a valid current
+        ProjectMembership are both required. A stale participant
+        relation (Project access removed later) grants neither read
+        nor write access — non-leaking 404 on the detail and no
+        discovery through the permission-filtered list."""
         meeting = self._project_meeting()
-        add_meeting_participant(
-            meeting=meeting, actor=self.alex, target_user=self.sofia,
+        add_project_membership(
+            project=self.project,
+            actor=self.alex,
+            target_user=self.chris,
+            role=ProjectMembership.Role.MEMBER,
         )
-        self.login(self.sofia)
+        add_meeting_participant(
+            meeting=meeting, actor=self.alex, target_user=self.chris,
+        )
+        self.login(self.chris)
+
+        # While the Project access is current, the participant reads.
         detail = self.client.get(f"/api/meetings/{meeting.pk}/")
         self.assertEqual(detail.status_code, status.HTTP_200_OK)
+
+        # Removing the ProjectMembership revokes Meeting read: the
+        # stale participant row alone grants nothing.
+        self.project.memberships.filter(user=self.chris).delete()
+        detail = self.client.get(f"/api/meetings/{meeting.pk}/")
+        self.assertEqual(detail.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(
+            detail.json(), {"error": "Meeting not found"}
+        )
+        write_response = self.client.patch(
+            f"/api/meetings/{meeting.pk}/",
+            {"title": "Revoked write"},
+            format="json",
+        )
+        self.assertEqual(
+            write_response.status_code,
+            status.HTTP_404_NOT_FOUND,
+        )
+
+        # Discovery: the Meeting no longer appears in the
+        # permission-filtered list for the stale participant.
+        listing = self.client.get(
+            f"/api/research-groups/{self.group.pk}/meetings/"
+        )
+        self.assertEqual(listing.status_code, status.HTTP_200_OK)
+        self.assertNotIn(
+            meeting.pk, [row["id"] for row in listing.json()]
+        )
 
     def test_external_user_without_participation_cannot_read(self):
         meeting = self._project_meeting()
@@ -1371,15 +1447,19 @@ class MeetingAccessModelTest(TestCase):
         detail = self.client.get(f"/api/meetings/{meeting.pk}/")
         self.assertEqual(detail.status_code, status.HTTP_404_NOT_FOUND)
 
-    def test_participation_does_not_grant_project_access(self):
-        meeting = self._project_meeting()
-        add_meeting_participant(
-            meeting=meeting, actor=self.alex, target_user=self.sofia,
+    def test_meeting_access_does_not_grant_project_access(self):
+        group_meeting = create_meeting(
+            research_group=self.group,
+            actor=self.alex,
+            title="G-Weekly",
+            scheduled_at=self.scheduled_at,
         )
-        self.login(self.sofia)
+        # chris is a Research Group member (so he reads the group
+        # Meeting) but holds NO ProjectMembership.
+        self.login(self.chris)
 
-        # Read access to the meeting (participant).
-        detail = self.client.get(f"/api/meetings/{meeting.pk}/")
+        # Read access to the Meeting (current group member).
+        detail = self.client.get(f"/api/meetings/{group_meeting.pk}/")
         self.assertEqual(detail.status_code, status.HTTP_200_OK)
 
         # But NO Project access: the project detail and work items
@@ -1396,19 +1476,39 @@ class MeetingAccessModelTest(TestCase):
         )
         self.assertEqual(work_items.status_code, status.HTTP_404_NOT_FOUND)
 
-    # ── participant add: creator and participants can add ───────
-    def test_creator_can_add_external_user(self):
+    # ── participant add: eligible users only ───────────────────
+    def test_creator_cannot_add_user_without_project_access(self):
         meeting = self._project_meeting()
         self.login(self.alex)
+        # sofia has no ProjectMembership, so the Project Meeting
+        # rejects her; nothing is created as a side effect.
         response = self.client.post(
             f"/api/meetings/{meeting.pk}/participants/",
             {"userId": self.sofia.pk},
             format="json",
         )
-        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(
+            MeetingParticipant.objects.filter(
+                meeting=meeting,
+                user=self.sofia,
+            ).exists()
+        )
+        self.assertFalse(
+            ProjectMembership.objects.filter(
+                project=self.project,
+                user=self.sofia,
+            ).exists()
+        )
 
-    def test_participant_can_add_external_user(self):
+    def test_participant_cannot_add_user_without_project_access(self):
         meeting = self._project_meeting()
+        add_project_membership(
+            project=self.project,
+            actor=self.alex,
+            target_user=self.chris,
+            role=ProjectMembership.Role.MEMBER,
+        )
         add_meeting_participant(
             meeting=meeting, actor=self.alex, target_user=self.chris,
         )
@@ -1418,7 +1518,7 @@ class MeetingAccessModelTest(TestCase):
             {"userId": self.sofia.pk},
             format="json",
         )
-        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
     def test_non_participant_group_member_cannot_add(self):
         meeting = self._project_meeting()
@@ -1475,6 +1575,12 @@ class MeetingAccessModelTest(TestCase):
 
     def test_items_endpoint_allowed_for_participant(self):
         meeting = self._project_meeting()
+        add_project_membership(
+            project=self.project,
+            actor=self.alex,
+            target_user=self.chris,
+            role=ProjectMembership.Role.MEMBER,
+        )
         add_meeting_participant(
             meeting=meeting, actor=self.alex, target_user=self.chris,
         )

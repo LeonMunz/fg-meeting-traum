@@ -192,13 +192,16 @@ class _ContinueBase(TestCase):
             due_date=due_date.isoformat() if due_date is not None else None,
         )
 
-    def _make_meeting(self, *, title, actor=None, participants=()):
+    def _make_meeting(self, *, title, actor=None, participants=(),
+                      scope=Meeting.Scope.GROUP, project=None):
         return create_meeting(
             research_group=self.data["group"],
             actor=actor or self.data["alex"],
             title=title,
             scheduled_at=MEETING_AT,
             participants=participants,
+            scope=scope,
+            project=project,
         )
 
     def _live_meeting_with_item(self, *, title="Notes M", participants=()):
@@ -662,7 +665,13 @@ class MeetingExclusionAndAuthorizationTest(_ContinueBase):
 
     def test_participant_removal_removes_historical_candidate(self):
         chris = self.data["chris"]
-        m = self._make_meeting(title="Drop", participants=[chris])
+        # Project-scoped Meeting: read is creator-or-participant, so
+        # removing the participant row revokes the historical
+        # candidate at read time.
+        m = self._make_meeting(
+            title="Drop", participants=[chris],
+            scope=Meeting.Scope.PROJECT, project=self.project,
+        )
         update_meeting(
             meeting=m, actor=chris,
             scheduled_at=MEETING_AT + timedelta(hours=3),
@@ -672,13 +681,20 @@ class MeetingExclusionAndAuthorizationTest(_ContinueBase):
 
         MeetingParticipant.objects.filter(meeting=m, user=chris).delete()
 
-        # No candidate row at all — no title or timestamp leak.
+        # No candidate row at all — no title or timestamp leak;
+        # Project access alone grants no Meeting read.
         self.assertEqual(self._candidates(chris), [])
 
-    def test_meeting_write_without_meeting_read_does_not_surface_candidate(self):
-        chris = self.data["chris"]  # RG member → group-scope Meeting write
-        # chris is NEITHER creator NOR participant of this Meeting.
-        m = self._make_meeting(title="Write only")
+    def test_stale_event_without_current_read_does_not_surface_candidate(self):
+        chris = self.data["chris"]
+        # chris is a participant of this project Meeting and adds an
+        # agenda item (a qualifying personal Meeting action).
+        m = self._make_meeting(
+            title="Write only",
+            scope=Meeting.Scope.PROJECT,
+            project=self.project,
+            participants=[chris],
+        )
         create_meeting_item(
             meeting=m,
             meeting_section=m.meeting_sections.first(),
@@ -689,10 +705,13 @@ class MeetingExclusionAndAuthorizationTest(_ContinueBase):
             chris, t(6), meeting=m,
             event_type="meeting.agenda_item_added",
         )
+        self.assertIsNotNone(self._meeting_candidate(chris, m.pk))
 
-        # chris is the actor of a qualifying event but holds no
-        # canonical MEETING_READ: scope-based write access grants
+        # Revocation: the participant row is removed. The historical
+        # event no longer surfaces a candidate — current
+        # MEETING_READ is required, and Project access alone grants
         # nothing.
+        MeetingParticipant.objects.filter(meeting=m, user=chris).delete()
         self.assertEqual(self._candidates(chris), [])
 
     def test_deleted_meeting_disappears(self):
@@ -1021,7 +1040,11 @@ class SecurityLeakTest(_ContinueBase):
 
     def test_lost_meeting_read_access_leaks_nothing(self):
         chris = self.data["chris"]
-        m = self._make_meeting(title="Secret meeting", participants=[chris])
+        # Project-scoped Meeting: read is creator-or-participant.
+        m = self._make_meeting(
+            title="Secret meeting", participants=[chris],
+            scope=Meeting.Scope.PROJECT, project=self.project,
+        )
         update_meeting(
             meeting=m, actor=chris,
             scheduled_at=MEETING_AT + timedelta(hours=4),
@@ -1036,8 +1059,12 @@ class SecurityLeakTest(_ContinueBase):
     def test_follow_up_candidate_exposes_target_only(self):
         chris = self.data["chris"]
         alex = self.data["alex"]
-        # chris can read the target but NOT the source Meeting.
-        source = self._make_meeting(title="Secret source", actor=alex)
+        # chris can read the target (explicit participant) but NOT
+        # the source (a project Meeting he is not part of).
+        source = self._make_meeting(
+            title="Secret source", actor=alex,
+            scope=Meeting.Scope.PROJECT, project=self.project,
+        )
         target = self._make_meeting(
             title="Visible target", actor=alex, participants=[chris],
         )
@@ -1051,7 +1078,12 @@ class SecurityLeakTest(_ContinueBase):
             source_meeting_item=item,
             target_meeting=target,
             target_meeting_section=target.meeting_sections.first(),
-            actor=chris,
+            actor=alex,
+        )
+        # chris's personal activity on the target: a reschedule.
+        update_meeting(
+            meeting=target, actor=chris,
+            scheduled_at=MEETING_AT + timedelta(hours=2),
         )
 
         candidates = self._candidates(chris)
@@ -1069,9 +1101,19 @@ class SecurityLeakTest(_ContinueBase):
     def test_follow_up_with_unreadable_target_surfaces_nothing(self):
         chris = self.data["chris"]
         alex = self.data["alex"]
-        # chris is readable on neither Meeting (write-only access).
-        source = self._make_meeting(title="Source X", actor=alex)
-        target = self._make_meeting(title="Target X", actor=alex)
+        # chris is initially a participant of both project Meetings
+        # and schedules the follow-up; his participation is then
+        # revoked, so he can read neither Meeting.
+        source = self._make_meeting(
+            title="Source X", actor=alex,
+            scope=Meeting.Scope.PROJECT, project=self.project,
+            participants=[chris],
+        )
+        target = self._make_meeting(
+            title="Target X", actor=alex,
+            scope=Meeting.Scope.PROJECT, project=self.project,
+            participants=[chris],
+        )
         item = create_meeting_item(
             meeting=source,
             meeting_section=source.meeting_sections.first(),
@@ -1084,5 +1126,6 @@ class SecurityLeakTest(_ContinueBase):
             target_meeting_section=target.meeting_sections.first(),
             actor=chris,
         )
+        MeetingParticipant.objects.filter(user=chris).delete()
 
         self.assertEqual(self._candidates(chris), [])

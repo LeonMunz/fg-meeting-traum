@@ -263,23 +263,29 @@ class GroupReadMatrixTest(SecurityMatrixBase):
             resolve_project_scope(self.chris, self.project_p.pk)
         )
 
-    def test_removed_group_member_participant_read_but_no_write(self):
-        """Settled Meeting rule: read is creator-or-participant and
-        orthogonal to membership; scoped WRITE is revoked on removal."""
+    def test_removed_group_member_participant_loses_all_meeting_access(self):
+        """Canonical Meeting read boundary: offboarding chris revokes
+        the group membership AND the child ProjectMembership, so the
+        stale participant relation on the project Meeting grants
+        neither read nor write (non-leaking 404), and group Meeting
+        read (current membership only) is gone as well."""
         self._offboard_chris()
         self._login(self.chris)
 
-        # chris is still an explicit participant of PM: read stays.
+        # Project Meeting: stale participant row — non-leaking 404.
         response = self.client.get(
             f"/api/meetings/{self.project_meeting.pk}/"
         )
-        self.assertEqual(response.status_code, 200)
-
-        # But the scoped write capability is gone: write is DENY.
-        response = self.client.post(
-            f"/api/meetings/{self.project_meeting.pk}/start"
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(
+            response.json(), {"error": "Meeting not found"}
         )
-        self.assertEqual(response.status_code, 403)
+
+        # Group Meeting: no current membership — non-leaking 404.
+        response = self.client.get(
+            f"/api/meetings/{self.group_meeting.pk}/"
+        )
+        self.assertEqual(response.status_code, 404)
 
 
 class ProjectReadMatrixTest(SecurityMatrixBase):

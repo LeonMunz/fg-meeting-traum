@@ -910,32 +910,52 @@ class LiveStateMachineIsolationTest(LiveStateMachineBase):
         b = self.create_item(meeting, section, "B")
         return meeting, section, a, b
 
-    def test_viewer_cannot_focus_project_meeting_item(self):
+    def test_viewer_participant_can_focus_project_meeting_item(self):
         meeting, section, a, b = self._project_meeting_with_items("P1")
+        # laura (Project VIEWER) is an explicit participant; chris
+        # (Project MEMBER) is neither the creator nor a participant.
+        add_meeting_participant(
+            meeting=meeting,
+            actor=self.alex,
+            target_user=self.laura,
+        )
         start_meeting(meeting=meeting, actor=self.alex)
 
-        focus_meeting_item(meeting_item=b, actor=self.chris)
+        # The explicit participant (Project viewer role is sufficient)
+        # can drive the Live Meeting.
+        focus_meeting_item(meeting_item=b, actor=self.laura)
         self.assertEqual(self.current_id(meeting), b.pk)
 
+        # A Project member who is not the creator and not an explicit
+        # participant cannot.
         with self.assertRaises(MeetingDomainError):
-            focus_meeting_item(meeting_item=a, actor=self.laura)
+            focus_meeting_item(meeting_item=a, actor=self.chris)
 
-    def test_reopen_uses_project_meeting_write_permission(self):
+    def test_reopen_uses_meeting_collaboration_permission(self):
         meeting, section, a, b = self._project_meeting_with_items("P reopen")
         self.set_outcome(a, MeetingItem.Outcome.DONE)
         self.set_outcome(b, MeetingItem.Outcome.DONE)
+        # laura (Project VIEWER) is an explicit participant; chris
+        # (Project MEMBER) is neither the creator nor a participant.
+        add_meeting_participant(
+            meeting=meeting,
+            actor=self.alex,
+            target_user=self.laura,
+        )
         start_meeting(meeting=meeting, actor=self.alex)
 
-        with self.assertRaises(MeetingDomainError):
-            reopen_meeting_item(meeting_item=a, actor=self.laura)
-
-        reopen_meeting_item(meeting_item=b, actor=self.chris)
+        # The explicit participant can reopen a completed item.
+        reopen_meeting_item(meeting_item=b, actor=self.laura)
         self.assertEqual(
             self.item_outcome(a), MeetingItem.Outcome.DONE
         )
         self.assertEqual(
             self.item_outcome(b), MeetingItem.Outcome.NOT_DISCUSSED
         )
+
+        # The non-participant Project member still cannot.
+        with self.assertRaises(MeetingDomainError):
+            reopen_meeting_item(meeting_item=a, actor=self.chris)
 
     def test_group_meeting_member_can_drive_state_machine(self):
         meeting = self.create_meeting()

@@ -26,7 +26,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient, APITestCase
 
 from audit_history.models import AuditEvent
-from meetings.models import MeetingSection
+from meetings.models import Meeting, MeetingSection
 from meetings.services import (
     MeetingAuditEventType,
     create_meeting,
@@ -295,6 +295,11 @@ class ActivityFeedDomainsTest(APITestCase):
                 )
 
     def test_domain_filter_never_widens_visibility(self):
+        # The probe Meeting is a Project Meeting: group membership
+        # alone does not grant Meeting read.
+        self.meeting.scope = Meeting.Scope.PROJECT
+        self.meeting.project = self.probe_project
+        self.meeting.save(update_fields=["scope", "project"])
         # maria: current group member with NO Paper XYZ / probe-project
         # membership -> cannot read those work items or project events,
         # and is not a participant/creator of the probe Meeting.

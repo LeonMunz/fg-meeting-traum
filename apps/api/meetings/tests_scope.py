@@ -121,7 +121,7 @@ class MeetingScopeDomainTest(MeetingScopeBase):
         self.assertEqual(meeting.scope, Meeting.Scope.PROJECT)
         self.assertEqual(meeting.project, self.project)
 
-    def test_project_meeting_participant_does_not_require_project_access(self):
+    def test_project_meeting_participant_requires_project_access(self):
         series = create_meeting_series(
             research_group=self.group,
             actor=self.alex,
@@ -135,21 +135,37 @@ class MeetingScopeDomainTest(MeetingScopeBase):
             scheduled_at=self.scheduled_at,
         )
 
-        # A Project Meeting does NOT require the invited user to have
-        # Project membership; the added participant only gains Meeting
-        # read access, never Project access.
-        participant = add_meeting_participant(
-            meeting=meeting,
-            actor=self.alex,
-            target_user=self.maria,
+        # A Project Meeting participant must hold a valid current
+        # ProjectMembership. A user without Project access (maria) is
+        # rejected and no ProjectMembership is created as a side
+        # effect.
+        with self.assertRaises(MeetingDomainError):
+            add_meeting_participant(
+                meeting=meeting,
+                actor=self.alex,
+                target_user=self.maria,
+            )
+        self.assertFalse(
+            MeetingParticipant.objects.filter(
+                meeting=meeting,
+                user=self.maria,
+            ).exists()
         )
-        self.assertEqual(participant.user, self.maria)
         self.assertFalse(
             ProjectMembership.objects.filter(
                 project=self.project,
                 user=self.maria,
             ).exists()
         )
+
+        # A user with a valid ProjectMembership (chris, MEMBER) can be
+        # added as a participant.
+        participant = add_meeting_participant(
+            meeting=meeting,
+            actor=self.alex,
+            target_user=self.chris,
+        )
+        self.assertEqual(participant.user, self.chris)
 
     def test_project_access_revocation_blocks_nested_mutation(self):
         series = create_meeting_series(
@@ -203,7 +219,10 @@ class MeetingScopeDomainTest(MeetingScopeBase):
             title="Original item",
         )
 
-        operations = {
+        # Template (series) operations remain governed by the Project
+        # write role: the viewer cannot create or mutate the Template,
+        # its Sections, or occurrences.
+        series_operations = {
             "series create": lambda: create_meeting_series(
                 research_group=self.group,
                 actor=self.laura,
@@ -245,40 +264,66 @@ class MeetingScopeDomainTest(MeetingScopeBase):
                 scope=Meeting.Scope.PROJECT,
                 project=self.project,
             ),
-            "meeting update": lambda: update_meeting(
-                meeting=meeting,
-                actor=self.laura,
-                title="Viewer meeting title",
-            ),
-            # Participant add is NOT blocked for the viewer — laura
-            # is an explicit Meeting participant and may add further
-            # participants (see test_participant_add_for_participant).
-            # The remove below is still blocked because the meeting
-            # write access is Project-owned and the viewer has no
-            # Project write role.
-            "participant remove": lambda: remove_meeting_participant(
-                participant=participant,
-                actor=self.laura,
-            ),
-            "item create": lambda: create_meeting_item(
-                meeting=meeting,
-                meeting_section=MeetingSection.objects.filter(
-                    meeting=meeting,
-                ).first(),
-                actor=self.laura,
-                title="Viewer item",
-            ),
-            "item update": lambda: update_meeting_item(
-                meeting_item=item,
-                actor=self.laura,
-                title="Viewer item title",
-            ),
         }
 
-        for label, operation in operations.items():
+        for label, operation in series_operations.items():
             with self.subTest(operation=label):
                 with self.assertRaises(MeetingDomainError):
                     operation()
+
+        # Meeting-level collaboration on an explicit Meeting: laura
+        # is an explicit participant and may edit and run this
+        # Meeting; her Project VIEWER role is sufficient for
+        # collaboration and is not upgraded by doing so. Destructive
+        # administration (participant removal) is asserted separately
+        # below as viewer-denied.
+        update_meeting(
+            meeting=meeting,
+            actor=self.laura,
+            title="Viewer meeting title",
+        )
+        added = add_meeting_participant(
+            meeting=meeting,
+            actor=self.laura,
+            target_user=self.chris,
+        )
+        self.assertEqual(added.user, self.chris)
+        # Adding is collaboration (viewer OK); removing is
+        # administration — done here by the Project owner.
+        remove_meeting_participant(participant=added, actor=self.alex)
+        create_meeting_item(
+            meeting=meeting,
+            meeting_section=MeetingSection.objects.filter(
+                meeting=meeting,
+            ).first(),
+            actor=self.laura,
+            title="Viewer item",
+        )
+        update_meeting_item(
+            meeting_item=item,
+            actor=self.laura,
+            title="Viewer item title",
+        )
+
+        # Participant removal is destructive Meeting administration:
+        # the viewer-participant may NOT remove participants (neither
+        # others nor her own row); the Project write role is required.
+        readded = add_meeting_participant(
+            meeting=meeting,
+            actor=self.laura,
+            target_user=self.chris,
+        )
+        with self.assertRaises(MeetingDomainError):
+            remove_meeting_participant(
+                participant=readded, actor=self.laura,
+            )
+        remove_meeting_participant(participant=readded, actor=self.alex)
+        with self.assertRaises(MeetingDomainError):
+            remove_meeting_participant(
+                participant=participant, actor=self.laura,
+            )
+        # The Project owner removes laura's participation.
+        remove_meeting_participant(participant=participant, actor=self.alex)
 
         series.refresh_from_db()
         first.refresh_from_db()
@@ -289,19 +334,27 @@ class MeetingScopeDomainTest(MeetingScopeBase):
         self.assertFalse(series.is_archived)
         self.assertEqual(first.name, "First")
         self.assertEqual([first.position, second.position], [0, 1])
-        self.assertEqual(meeting.title, "Project Weekly")
-        self.assertEqual(item.title, "Original item")
+        self.assertEqual(meeting.title, "Viewer meeting title")
+        self.assertEqual(item.title, "Viewer item title")
         self.assertEqual(
             Meeting.objects.filter(project=self.project).count(),
             1,
         )
         self.assertEqual(
             MeetingItem.objects.filter(meeting=meeting).count(),
-            1,
+            2,
         )
-        self.assertTrue(
+        self.assertFalse(
+            MeetingParticipant.objects.filter(pk=added.pk).exists()
+        )
+        self.assertFalse(
             MeetingParticipant.objects.filter(pk=participant.pk).exists()
         )
+        laura_membership = ProjectMembership.objects.get(
+            project=self.project,
+            user=self.laura,
+        )
+        self.assertEqual(laura_membership.role, ProjectMembership.Role.VIEWER)
 
 
 class MeetingScopeApiTest(MeetingScopeBase):
@@ -533,7 +586,7 @@ class MeetingScopeApiTest(MeetingScopeBase):
         self.assertEqual(direct_response.status_code, status.HTTP_403_FORBIDDEN)
         self.assertEqual(Meeting.objects.count(), before_count)
 
-    def test_project_meeting_accepts_initial_participant_without_access(self):
+    def test_project_meeting_participants_require_project_access(self):
         self.assertFalse(
             ProjectMembership.objects.filter(
                 project=self.project,
@@ -542,6 +595,9 @@ class MeetingScopeApiTest(MeetingScopeBase):
         )
         self.login(self.alex)
 
+        # A user without ProjectMembership cannot be an initial
+        # participant of a Project Meeting; nothing is persisted and
+        # no ProjectMembership is created as a side effect.
         response = self.client.post(
             f"/api/research-groups/{self.group.pk}/meetings/",
             {
@@ -553,14 +609,12 @@ class MeetingScopeApiTest(MeetingScopeBase):
             },
             format="json",
         )
-
-        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        meeting_id = response.json()["id"]
-        self.assertTrue(
-            MeetingParticipant.objects.filter(
-                meeting_id=meeting_id,
-                user=self.maria,
-            ).exists()
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            Meeting.objects.filter(
+                title="Project meeting with guest"
+            ).count(),
+            0,
         )
         self.assertFalse(
             ProjectMembership.objects.filter(
@@ -569,17 +623,36 @@ class MeetingScopeApiTest(MeetingScopeBase):
             ).exists()
         )
 
-        self.login(self.maria)
+        # A user with a valid ProjectMembership (chris) can be an
+        # initial participant and gains Meeting read access — never
+        # Project access beyond the membership already held.
+        response = self.client.post(
+            f"/api/research-groups/{self.group.pk}/meetings/",
+            {
+                "title": "Project meeting with member",
+                "scheduledAt": self.scheduled_at.isoformat(),
+                "scope": "project",
+                "projectId": self.project.pk,
+                "participantIds": [self.chris.pk],
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        meeting_id = response.json()["id"]
+        self.assertTrue(
+            MeetingParticipant.objects.filter(
+                meeting_id=meeting_id,
+                user=self.chris,
+            ).exists()
+        )
+
+        self.login(self.chris)
         self.assertEqual(
             self.client.get(f"/api/meetings/{meeting_id}/").status_code,
             status.HTTP_200_OK,
         )
-        self.assertEqual(
-            self.client.get(f"/api/projects/{self.project.pk}/").status_code,
-            status.HTTP_404_NOT_FOUND,
-        )
 
-    def test_viewer_cannot_mutate_meeting_participants_or_items(self):
+    def test_viewer_participant_can_mutate_meeting_participants_and_items(self):
         create_series_section(
             meeting_series=self.project_series,
             actor=self.alex,
@@ -590,7 +663,7 @@ class MeetingScopeApiTest(MeetingScopeBase):
             actor=self.alex,
             scheduled_at=self.scheduled_at,
         )
-        participant = add_meeting_participant(
+        add_meeting_participant(
             meeting=meeting,
             actor=self.alex,
             target_user=self.laura,
@@ -601,29 +674,23 @@ class MeetingScopeApiTest(MeetingScopeBase):
             actor=self.alex,
             title="Original item",
         )
-        participant_count = meeting.participant_relations.count()
         item_count = meeting.items.count()
-        original_title = meeting.title
         self.login(self.laura)
 
-        # Participant add IS allowed for the viewer (she is a Meeting
-        # participant). Everything else is blocked by the Project
-        # write rule.
-        add_response = self.client.post(
-            f"/api/meetings/{meeting.pk}/participants/",
-            {"userId": self.chris.pk},
-            format="json",
-        )
-        self.assertEqual(add_response.status_code, status.HTTP_201_CREATED)
-
+        # Meeting collaboration is explicit-participant-governed, not
+        # Project-write-role-governed: laura (Project VIEWER, explicit
+        # participant) may add/remove participants, edit the Meeting,
+        # and mutate its items and sections.
         responses = [
+            self.client.post(
+                f"/api/meetings/{meeting.pk}/participants/",
+                {"userId": self.chris.pk},
+                format="json",
+            ),
             self.client.patch(
                 f"/api/meetings/{meeting.pk}/",
                 {"title": "Viewer meeting update"},
                 format="json",
-            ),
-            self.client.delete(
-                f"/api/meetings/{meeting.pk}/participants/{participant.pk}/",
             ),
             self.client.post(
                 f"/api/meetings/{meeting.pk}/items/",
@@ -642,28 +709,41 @@ class MeetingScopeApiTest(MeetingScopeBase):
             ),
         ]
 
-        for response in responses:
-            self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        expected = (
+            status.HTTP_201_CREATED,
+            status.HTTP_200_OK,
+            status.HTTP_201_CREATED,
+            status.HTTP_200_OK,
+        )
+        for response, expected_code in zip(responses, expected):
+            self.assertEqual(response.status_code, expected_code)
+
         meeting.refresh_from_db()
         item.refresh_from_db()
-        self.assertEqual(meeting.title, original_title)
-        self.assertEqual(item.title, "Original item")
-        # The participant-add by laura is allowed (she is a Meeting
-        # participant); the only new participant is chris.
+        self.assertEqual(meeting.title, "Viewer meeting update")
+        self.assertEqual(item.title, "Viewer item update")
         self.assertEqual(
-            meeting.participant_relations.count(),
-            participant_count + 1,
-        )
-        self.assertEqual(meeting.items.count(), item_count)
-        self.assertTrue(
-            MeetingParticipant.objects.filter(pk=participant.pk).exists()
-        )
-        self.assertTrue(
             MeetingParticipant.objects.filter(
                 meeting=meeting,
                 user=self.chris,
-            ).exists()
+            ).exists(),
+            True,
         )
+        self.assertEqual(meeting.items.count(), item_count + 1)
+        # Meeting collaboration did not upgrade laura's Project role.
+        laura_membership = ProjectMembership.objects.get(
+            project=self.project,
+            user=self.laura,
+        )
+        self.assertEqual(laura_membership.role, ProjectMembership.Role.VIEWER)
+        # Nor did it grant Project writes: the viewer still cannot
+        # mutate the Project itself.
+        project_patch = self.client.patch(
+            f"/api/projects/{self.project.pk}/",
+            {"name": "Hijacked project"},
+            format="json",
+        )
+        self.assertEqual(project_patch.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_group_only_member_cannot_create_project_series(self):
         self.login(self.maria)

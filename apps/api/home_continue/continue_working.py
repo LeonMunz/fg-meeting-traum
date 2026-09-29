@@ -80,12 +80,14 @@ at all** (no title, timestamp, or metadata leak):
   ``ResearchGroupMembership`` in the Project's Research Group.
   Losing either membership removes the candidate immediately;
   deleted Work Items fail closed.
-- **Meeting read** — the canonical ``MEETING_READ`` rule: creator
-  or explicit current ``MeetingParticipant``. Research Group or
-  Project membership, ownership, admin status, or Meeting **write**
-  access alone never grant a candidate. Losing Meeting read access
-  (e.g. participant removal) removes historical candidates
-  immediately; deleted Meetings fail closed.
+- **Meeting read** — the canonical ``MEETING_READ`` rule: group
+  Meetings are readable by every current member of the Meeting's
+  Research Group; project Meetings are readable by the creator or an
+  explicit current ``MeetingParticipant`` (Project membership,
+  ownership, or admin status alone grant nothing). Losing Meeting
+  read access (e.g. participant removal from a project Meeting, or
+  Research Group membership loss for a group Meeting) removes
+  historical candidates immediately; deleted Meetings fail closed.
 
 Recency semantics:
 
@@ -294,16 +296,39 @@ def _readable_project_ids(user):
     )
 
 
+def _readable_meeting_predicate(user):
+    """The canonical Meeting read rule as one DB-level Q predicate.
+
+    Group-scoped Meetings: every current member of the Meeting's
+    Research Group. Project-scoped Meetings: the creator or an
+    explicit current participant with valid current Project access
+    (the canonical Project-read boundary; Project membership,
+    ownership, or admin status alone grant nothing, and a stale
+    creator/participant relation without current Project access
+    grants nothing). Identical to the Activity feed's, the
+    Today-&-next, and the Meeting list rule.
+    """
+    return (
+        (
+            Q(scope=Meeting.Scope.GROUP, project__isnull=True)
+            & Q(research_group__memberships__user=user)
+        )
+        | (
+            (Q(created_by=user)
+                | Q(participant_relations__user=user))
+            & Q(project__memberships__user=user)
+        )
+    )
+
+
 def _readable_meeting_ids(user):
     """Meetings the user can read RIGHT NOW — the canonical
-    ``MEETING_READ`` rule (creator-or-explicit-current-participant)
-    as one DB-level subquery (identical to the Activity feed's and
-    the Today-&-next rule). Group/Project membership, ownership,
-    admin status, and Meeting write access grant nothing.
+    ``MEETING_READ`` rule as one DB-level subquery (identical to the
+    Activity feed's and the Today-&-next rule).
     """
     return (
         Meeting.objects
-        .filter(Q(created_by=user) | Q(participant_relations__user=user))
+        .filter(_readable_meeting_predicate(user))
         .values_list("pk", flat=True)
     )
 
@@ -427,7 +452,7 @@ def _meeting_candidates(*, user, readable_meeting_ids):
         Meeting.objects
         .filter(
             Q(pk__in=latest_by_id.keys())
-            & (Q(created_by=user) | Q(participant_relations__user=user)),
+            & _readable_meeting_predicate(user),
         )
         .distinct()
         .select_related("research_group")

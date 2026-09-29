@@ -96,19 +96,22 @@ def _require_research_group_membership(*, research_group, user):
 
 
 def _has_canonical_meeting_read_access(*, meeting, user):
-    """Canonical Meeting read-access rule.
+    """Canonical Meeting read-access rule (MEETING_READ).
 
-    A Meeting is visible/readable iff the user:
+    - group scope: the user is a CURRENT member of the Meeting's
+      Research Group (any group role);
+    - project scope: the user created the Meeting (``created_by``)
+      or is an explicit ``MeetingParticipant``, AND holds a valid
+      current ProjectMembership in the Meeting's Project (the
+      canonical Project-read boundary). A stale creator /
+      participant relation without current Project access grants no
+      read access.
 
-    1. created the Meeting (``created_by``), or
-    2. is an explicit ``MeetingParticipant``.
-
-    Research Group membership, Project membership, ownership, or
-    admin status alone must NOT grant Meeting visibility. A
-    Meeting invitation grants Meeting read access only — it does
-    NOT create Research Group membership, Project membership,
-    Project permissions, or access to otherwise protected Work
-    Items.
+    Project membership, ownership, or admin status alone must NOT
+    grant project Meeting visibility. Meeting read access grants
+    Meeting read access only — it does NOT create Research Group
+    membership, Project membership, Project permissions, or access
+    to otherwise protected Work Items.
     """
     scope = resolve_meeting_scope(user, meeting)
     return scope is not None and scope.has(Capability.MEETING_READ)
@@ -232,17 +235,15 @@ def _require_series_write_access(*, meeting_series, user):
     )
 
 
-def _require_meeting_write_access(*, meeting, user):
-    _require_scoped_write_access(
-        research_group=meeting.research_group,
-        scope=meeting.scope,
-        project=meeting.project,
-        user=user,
-    )
+def _is_meeting_collaborator(*, meeting, user):
+    """The Meeting's collaboration identity.
 
-
-def _has_can_meet_participant_add_access(*, meeting, user):
-    """A Meeting creator or existing participant may add participants."""
+    The creator or an explicit ``MeetingParticipant``. This is the
+    Meeting-level collaboration identity; it is independent of the
+    moderator (which is not an authorization gate) and of scope write
+    roles (meeting collaboration never grants Project/Work Item
+    rights).
+    """
     if meeting.created_by_id == user.pk:
         return True
     return MeetingParticipant.objects.filter(
@@ -251,14 +252,229 @@ def _has_can_meet_participant_add_access(*, meeting, user):
     ).exists()
 
 
-def _require_can_meet_participant_adder(*, meeting, user):
-    if not _has_can_meet_participant_add_access(
-        meeting=meeting,
-        user=user,
+def _require_meeting_write_access(*, meeting, user):
+    """Canonical Meeting-level write rule (MEETING_WRITE).
+
+    Mutating an EXISTING Meeting occurrence follows the Meeting
+    collaboration rule of the authorization kernel
+    (``resolve_meeting_scope``):
+
+    - group scope: any current Research Group member;
+    - project scope: the Meeting creator or an explicit participant
+      with a valid current ProjectMembership satisfying the canonical
+      Project-read boundary, while the Project is not archived.
+
+    Scope-level CREATION operations (creating a Meeting, Series, or
+    Recurrence) keep the stricter ``_require_scoped_write_access``
+    rule. Destructive Meeting administration (deleting the Meeting,
+    cancelling a materialized recurrence occurrence, removing a
+    Meeting participant) uses ``_require_meeting_admin_access``
+    instead. This rule never grants Project/Work Item permissions.
+    """
+    scope = resolve_meeting_scope(user, meeting)
+    if scope is not None and scope.has(Capability.MEETING_WRITE):
+        return
+
+    if meeting.scope == Meeting.Scope.GROUP:
+        raise MeetingDomainError(
+            "User is not a member of this Research Group."
+        )
+
+    if not _is_meeting_collaborator(meeting=meeting, user=user):
+        raise MeetingDomainError(
+            "Only the Meeting creator or an explicit participant "
+            "can modify this Meeting."
+        )
+
+    project = meeting.project
+    if (
+        project is not None
+        and project.research_group_id != meeting.research_group_id
     ):
         raise MeetingDomainError(
-            "Only a Meeting creator or participant may add participants."
+            "Project must belong to the Meeting's Research Group."
         )
+
+    if not has_project_capability(
+        user, meeting.project_id, Capability.PROJECT_READ
+    ):
+        raise MeetingDomainError(
+            "User does not have access to this Project."
+        )
+
+    if project is not None and project.archived_at is not None:
+        raise MeetingDomainError(
+            "Archived Projects are read-only. Restore the Project first."
+        )
+
+    raise MeetingDomainError(
+        "You do not have permission to modify this Meeting."
+    )
+
+
+def _require_meeting_admin_access(*, meeting, user):
+    """Destructive Meeting administration rule (MEETING_ADMIN).
+
+    Governs the destructive operations on an EXISTING Meeting
+    occurrence: permanently deleting the Meeting, cancelling a
+    materialized recurrence occurrence, and removing a Meeting
+    participant.
+
+    - group scope: any current Research Group member (group Meetings
+      are fully collaborative for every current member);
+    - project scope: the Meeting creator or an explicit participant
+      with ``PROJECT_WORK`` (Project owner or member) in the
+      Project, while the Project is not archived. Participation
+      with a ``viewer`` role never grants destructive
+      administration on a Project Meeting.
+
+    This rule never grants Project/Work Item permissions beyond the
+    canonical ``PROJECT_WORK`` check itself.
+    """
+    scope = resolve_meeting_scope(user, meeting)
+    if scope is not None and scope.has(Capability.MEETING_ADMIN):
+        return
+
+    if meeting.scope == Meeting.Scope.GROUP:
+        raise MeetingDomainError(
+            "User is not a member of this Research Group."
+        )
+
+    if not _is_meeting_collaborator(meeting=meeting, user=user):
+        raise MeetingDomainError(
+            "Only the Meeting creator or an explicit participant "
+            "can modify this Meeting."
+        )
+
+    project = meeting.project
+    if (
+        project is not None
+        and project.research_group_id != meeting.research_group_id
+    ):
+        raise MeetingDomainError(
+            "Project must belong to the Meeting's Research Group."
+        )
+
+    if not has_project_capability(
+        user, meeting.project_id, Capability.PROJECT_WORK
+    ):
+        raise MeetingDomainError(
+            "Only a Project owner or member can perform this "
+            "administrative action on this Meeting."
+        )
+
+    if project is not None and project.archived_at is not None:
+        raise MeetingDomainError(
+            "Archived Projects are read-only. Restore the Project first."
+        )
+
+    raise MeetingDomainError(
+        "You do not have permission to modify this Meeting."
+    )
+
+
+def _require_eligible_participant_for_scope(
+    *,
+    research_group,
+    scope,
+    project,
+    user,
+):
+    """Participant eligibility for a Meeting scope.
+
+    - group scope: the user must CURRENTLY hold a
+      ``ResearchGroupMembership`` in the Research Group;
+    - project scope: the user must hold a valid current
+      ``ProjectMembership`` in the Project that satisfies the
+      canonical Project-read boundary.
+
+    Satisfied, this check creates nothing: adding a participant never
+    creates or alters Research Group membership, Project membership,
+    or any other permission.
+    """
+    if scope == Meeting.Scope.GROUP:
+        if project is not None:
+            raise MeetingDomainError(
+                "A group-scoped Meeting cannot reference a Project."
+            )
+        if not has_group_capability(
+            user,
+            research_group.pk,
+            Capability.GROUP_READ,
+        ):
+            raise MeetingDomainError(
+                "Only current Research Group members can participate "
+                "in this group Meeting."
+            )
+        return
+
+    if project is None:
+        raise MeetingDomainError(
+            "A project-scoped Meeting requires a Project."
+        )
+    if project.research_group_id != research_group.pk:
+        raise MeetingDomainError(
+            "Project must belong to the Meeting's Research Group."
+        )
+    if not has_project_capability(
+        user, project.pk, Capability.PROJECT_READ
+    ):
+        raise MeetingDomainError(
+            "Only users with access to this Project can participate "
+            "in its Meetings."
+        )
+
+
+def _require_eligible_meeting_participant(*, meeting, user):
+    """Participant eligibility for the Meeting's actual scope."""
+    _require_eligible_participant_for_scope(
+        research_group=meeting.research_group,
+        scope=meeting.scope,
+        project=meeting.project,
+        user=user,
+    )
+
+
+def eligible_meeting_participant_user_ids(
+    *,
+    research_group,
+    scope,
+    project,
+):
+    """User IDs eligible to participate in a Meeting of the given scope.
+
+    - group scope: current members of the Research Group;
+    - project scope: users with a valid current ``ProjectMembership``
+      in the Project (any role satisfies the canonical Project-read
+      boundary; the composite FK keeps the group membership current).
+
+    Read-only: creates no participant or membership records.
+    """
+    if scope == Meeting.Scope.GROUP:
+        if project is not None:
+            raise MeetingDomainError(
+                "A group-scoped Meeting cannot reference a Project."
+            )
+        return list(
+            ResearchGroupMembership.objects
+            .filter(research_group=research_group)
+            .values_list("user_id", flat=True)
+        )
+
+    if project is None:
+        raise MeetingDomainError(
+            "A project-scoped Meeting requires a Project."
+        )
+    if project.research_group_id != research_group.pk:
+        raise MeetingDomainError(
+            "Project must belong to the Meeting's Research Group."
+        )
+    return list(
+        ProjectMembership.objects
+        .filter(project=project)
+        .values_list("user_id", flat=True)
+        .distinct()
+    )
 
 
 # ── MeetingSeries ────────────────────────────────────────────────
@@ -1521,11 +1737,13 @@ def reschedule_meeting_recurrence_occurrence(
             )
         # Already materialized: move the existing row only. The
         # request's title is deliberately NOT applied — a reschedule
-        # never renames an existing Meeting. The canonical Meeting
-        # update preserves recurrence provenance and records the
-        # meeting.rescheduled event; it re-checks the scoped write
-        # rule for the Meeting itself.
-        return update_meeting(
+        # never renames an existing Meeting. The scoped write rule of
+        # the recurrence (identical for the Meeting, which inherits
+        # the recurrence's scope) was already enforced at the top of
+        # this operation, so the unauthenticated update core is used
+        # directly; the Meeting-level collaboration rule must not
+        # re-gate a recurrence-level operation.
+        return _apply_meeting_update(
             meeting=meeting,
             actor=actor,
             scheduled_at=scheduled_at,
@@ -1545,7 +1763,7 @@ def reschedule_meeting_recurrence_occurrence(
             actor=actor,
             title=title,
         )
-        return update_meeting(
+        return _apply_meeting_update(
             meeting=meeting,
             actor=actor,
             scheduled_at=scheduled_at,
@@ -1723,10 +1941,12 @@ def cancel_meeting_recurrence_occurrence(
       has no concrete Meeting (use
       ``exclude_meeting_recurrence_occurrence`` for that; this
       operation never materializes);
-    - the canonical scoped Meeting write rule (group scope → group
-      read members; project scope → Project owner/member,
-      non-archived Projects only) — the same rule every other Meeting
-      mutation uses;
+    - the canonical destructive Meeting administration permission
+      (MEETING_ADMIN) — group scope: any current Research Group
+      member; project scope: the creator or an explicit participant
+      with ``PROJECT_WORK`` (Project owner or member), non-archived
+      Projects only; a participant with a ``viewer`` role is NOT
+      sufficient;
     - the Meeting status must be ``upcoming``: a ``live`` or
       ``completed`` Meeting is rejected and left completely unchanged
       (historical / in-progress Meetings are never retroactively
@@ -1766,9 +1986,9 @@ def cancel_meeting_recurrence_occurrence(
             "Only persisted Meetings can be cancelled."
         )
 
-    # Canonical scoped Meeting write rule — the same rule every other
-    # Meeting mutation enforces.
-    _require_meeting_write_access(meeting=meeting, user=actor)
+    # Canonical destructive Meeting administration rule
+    # (MEETING_ADMIN).
+    _require_meeting_admin_access(meeting=meeting, user=actor)
 
     # The locked row is a separate instance; the caller's instance is
     # refreshed at the end so it reflects the authoritative state
@@ -2145,6 +2365,18 @@ def create_meeting_from_series(
     if meeting_status not in Meeting.Status.values:
         raise MeetingDomainError("Invalid Meeting status.")
 
+    # Explicit initial participants must satisfy the occurrence's
+    # scope eligibility (group: current Research Group member;
+    # project: valid current Project access), validated before
+    # anything is persisted.
+    for participant in participants:
+        _require_eligible_participant_for_scope(
+            research_group=meeting_series.research_group,
+            scope=meeting_series.scope,
+            project=meeting_series.project,
+            user=participant,
+        )
+
     meeting = Meeting.objects.create(
         research_group=meeting_series.research_group,
         scope=meeting_series.scope,
@@ -2213,6 +2445,19 @@ def create_meeting(
     if meeting_status not in Meeting.Status.values:
         raise MeetingDomainError("Invalid Meeting status.")
 
+    # Explicit initial participants must satisfy the Meeting's scope
+    # eligibility (group: current Research Group member; project:
+    # valid current Project access). Validated before anything is
+    # persisted, so an ineligible participant rolls back the whole
+    # creation.
+    for participant in participants:
+        _require_eligible_participant_for_scope(
+            research_group=research_group,
+            scope=scope,
+            project=project,
+            user=participant,
+        )
+
     meeting = Meeting.objects.create(
         research_group=research_group,
         scope=scope,
@@ -2259,7 +2504,15 @@ def _create_initial_meeting_participants(
     actor,
     participants,
 ):
-    """Add the creator and unique initial participants to a Meeting."""
+    """Add the creator and unique initial participants to a Meeting.
+
+    Pure initialization: eligibility is enforced by the caller.
+    User-facing creation paths (standalone Meeting creation and
+    occurrence creation from a Template) validate every supplied
+    participant for the Meeting's scope before calling this;
+    recurrence materialization snapshots the recurrence's persisted
+    intended participant set without re-judging it.
+    """
     participants_by_id = {actor.pk: actor}
     for participant in participants:
         participants_by_id[participant.pk] = participant
@@ -2276,7 +2529,14 @@ def add_meeting_participant(
     actor,
     target_user,
 ):
-    _require_can_meet_participant_adder(
+    """Add one eligible participant to an existing Meeting.
+
+    The actor needs the canonical Meeting write permission
+    (MEETING_WRITE); the target user must satisfy the Meeting's scope
+    eligibility (group: current Research Group member; project:
+    valid current Project access). Membership is never created.
+    """
+    _require_meeting_write_access(
         meeting=meeting,
         user=actor,
     )
@@ -2288,6 +2548,11 @@ def add_meeting_participant(
         raise MeetingDomainError(
             "User is already a Meeting participant."
         )
+
+    _require_eligible_meeting_participant(
+        meeting=meeting,
+        user=target_user,
+    )
 
     return MeetingParticipant.objects.create(
         meeting=meeting,
@@ -2874,26 +3139,22 @@ def reorder_meeting_sections(
 
 
 @transaction.atomic
-def update_meeting(
+def _apply_meeting_update(
     *,
     meeting,
     actor,
     title=None,
     scheduled_at=None,
 ):
-    """Update editable Meeting metadata (title / scheduled time).
+    """Apply editable Meeting metadata (title / scheduled time).
 
-    Lifecycle transitions are intentionally not part of this service.
-    Status moves from upcoming to live and from live to completed must
-    go through the explicit start/end domain actions below, so clients
-    cannot bypass the state machine with an arbitrary status PATCH.
-
-    A real date-time change records exactly one structured
-    ``meeting.rescheduled`` event inside this transaction; a title-only
-    or no-op update records no Meeting Activity event.
+    Unauthenticated core of :func:`update_meeting`; the caller is
+    responsible for authorization. Lifecycle transitions are not
+    part of this update. A real date-time change records exactly one
+    structured ``meeting.rescheduled`` event inside the caller's
+    transaction; a title-only or no-op update records no Meeting
+    Activity event.
     """
-    _require_meeting_write_access(meeting=meeting, user=actor)
-
     previous_scheduled_at = meeting.scheduled_at
 
     update_fields = []
@@ -2943,6 +3204,34 @@ def update_meeting(
         )
 
     return meeting
+
+
+def update_meeting(
+    *,
+    meeting,
+    actor,
+    title=None,
+    scheduled_at=None,
+):
+    """Update editable Meeting metadata (title / scheduled time).
+
+    Lifecycle transitions are intentionally not part of this service.
+    Status moves from upcoming to live and from live to completed must
+    go through the explicit start/end domain actions below, so clients
+    cannot bypass the state machine with an arbitrary status PATCH.
+
+    A real date-time change records exactly one structured
+    ``meeting.rescheduled`` event inside this transaction; a title-only
+    or no-op update records no Meeting Activity event.
+    """
+    _require_meeting_write_access(meeting=meeting, user=actor)
+
+    return _apply_meeting_update(
+        meeting=meeting,
+        actor=actor,
+        title=title,
+        scheduled_at=scheduled_at,
+    )
 
 
 @transaction.atomic
@@ -3069,7 +3358,11 @@ def reopen_meeting(*, meeting, actor):
 def delete_meeting(*, meeting, actor):
     """Permanently delete one Meeting occurrence.
 
-    Uses the existing scoped Meeting write rule. Deletes the Meeting
+    Uses the canonical destructive Meeting administration rule
+    (``MEETING_ADMIN``): group scope — any current Research Group
+    member; project scope — the Meeting creator or an explicit
+    participant with ``PROJECT_WORK`` (Project owner or member)
+    while the Project is not archived. Deletes the Meeting
     together with its Meeting-owned dependents (Sections, Items,
     Participants, MeetingItemWorkItem links) through the existing
     relational CASCADE semantics.
@@ -3089,7 +3382,7 @@ def delete_meeting(*, meeting, actor):
     bypass it. Standalone (non-recurring) Meetings keep the existing
     hard-delete semantics unchanged.
     """
-    _require_meeting_write_access(meeting=meeting, user=actor)
+    _require_meeting_admin_access(meeting=meeting, user=actor)
 
     # Serialize against concurrent lifecycle transitions on this Meeting.
     Meeting.objects.select_for_update().get(pk=meeting.pk)
@@ -3116,7 +3409,20 @@ def remove_meeting_participant(
     participant,
     actor,
 ):
-    _require_meeting_write_access(meeting=participant.meeting, user=actor)
+    """Remove one MeetingParticipant row.
+
+    Destructive Meeting administration (MEETING_ADMIN): group scope —
+    any current Research Group member; project scope — the Meeting
+    creator or an explicit participant with ``PROJECT_WORK`` (Project
+    owner or member) while the Project is not archived. A
+    participant with a ``viewer`` role alone may NOT remove
+    participants. Removing a participant never creates or alters any
+    membership.
+    """
+    _require_meeting_admin_access(
+        meeting=participant.meeting,
+        user=actor,
+    )
 
     participant.delete()
 

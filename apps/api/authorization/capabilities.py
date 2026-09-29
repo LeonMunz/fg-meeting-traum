@@ -26,6 +26,10 @@ class Capability(str, Enum):
 
     MEETING_READ = "meeting.read"
     MEETING_WRITE = "meeting.write"
+    # Destructive Meeting administration on an EXISTING occurrence
+    # (permanently deleting the Meeting, cancelling a materialized
+    # recurrence occurrence, removing a Meeting participant).
+    MEETING_ADMIN = "meeting.admin"
 
     MEETING_SERIES_READ = "meeting_series.read"
     MEETING_SERIES_WRITE = "meeting_series.write"

@@ -105,7 +105,7 @@ class MeetingParticipantCandidateApiTest(TestCase):
             "project_memberships": ProjectMembership.objects.count(),
         }
 
-    def test_standalone_search_returns_group_member_and_external_user(self):
+    def test_standalone_search_returns_group_members_only(self):
         before = self.snapshot_row_counts()
         self.login(self.creator)
 
@@ -119,19 +119,18 @@ class MeetingParticipantCandidateApiTest(TestCase):
             candidate["username"]: candidate
             for candidate in response.json()
         }
+        # Group scope exposes only current Research Group members;
+        # the external user is not leaked.
         self.assertIn(self.group_member.username, by_username)
-        self.assertIn(self.external_user.username, by_username)
+        self.assertIn(self.viewer.username, by_username)
+        self.assertNotIn(self.external_user.username, by_username)
         self.assertEqual(
-            set(by_username[self.external_user.username]),
-            {"id", "username", "firstName", "lastName"},
-        )
-        self.assertEqual(
-            by_username[self.external_user.username],
+            by_username[self.group_member.username],
             {
-                "id": self.external_user.pk,
-                "username": "candidate-external",
-                "firstName": "Erin",
-                "lastName": "External",
+                "id": self.group_member.pk,
+                "username": "candidate-group-member",
+                "firstName": "Morgan",
+                "lastName": "Member",
             },
         )
         self.assertEqual(self.snapshot_row_counts(), before)
@@ -142,7 +141,7 @@ class MeetingParticipantCandidateApiTest(TestCase):
             ).exists()
         )
 
-    def test_project_meeting_search_returns_user_without_project_access(self):
+    def test_project_meeting_search_returns_project_members_only(self):
         before = self.snapshot_row_counts()
         self.login(self.creator)
 
@@ -151,14 +150,17 @@ class MeetingParticipantCandidateApiTest(TestCase):
             {
                 "scope": Meeting.Scope.PROJECT,
                 "projectId": self.project.pk,
-                "q": "candidate-external",
+                "q": "candidate",
             },
         )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
+        # Project scope exposes only users with a valid current
+        # ProjectMembership: the owner and the viewer, not the external
+        # user or plain group members.
         self.assertEqual(
-            [candidate["id"] for candidate in response.json()],
-            [self.external_user.pk],
+            {candidate["id"] for candidate in response.json()},
+            {self.creator.pk, self.viewer.pk},
         )
         self.assertFalse(
             ProjectMembership.objects.filter(
@@ -187,26 +189,34 @@ class MeetingParticipantCandidateApiTest(TestCase):
         )
         self.assertEqual(project_response.status_code, status.HTTP_403_FORBIDDEN)
 
-    def test_occurrence_search_returns_external_user(self):
+    def test_occurrence_search_returns_scope_members_only(self):
         before = self.snapshot_row_counts()
         self.login(self.creator)
 
-        response = self.client.get(
+        group_response = self.client.get(
             f"/api/meeting-series/{self.group_series.pk}/participant-candidates/",
-            {"q": "candidate-external"},
+            {"q": "candidate"},
         )
 
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(group_response.status_code, status.HTTP_200_OK)
+        # A group-scope Template occurrence exposes only current
+        # Research Group members.
         self.assertEqual(
-            response.json(),
-            [
-                {
-                    "id": self.external_user.pk,
-                    "username": "candidate-external",
-                    "firstName": "Erin",
-                    "lastName": "External",
-                }
-            ],
+            {candidate["id"] for candidate in group_response.json()},
+            {self.creator.pk, self.group_member.pk, self.viewer.pk},
+        )
+
+        project_response = self.client.get(
+            f"/api/meeting-series/{self.project_series.pk}/participant-candidates/",
+            {"q": "candidate"},
+        )
+
+        self.assertEqual(project_response.status_code, status.HTTP_200_OK)
+        # A project-scope Template occurrence exposes only users with
+        # a valid current ProjectMembership.
+        self.assertEqual(
+            {candidate["id"] for candidate in project_response.json()},
+            {self.creator.pk, self.viewer.pk},
         )
         self.assertEqual(self.snapshot_row_counts(), before)
 

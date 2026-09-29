@@ -25,6 +25,7 @@ from .models import (
 )
 from .services import (
     MeetingDomainError,
+    add_meeting_participant,
     create_meeting,
     create_meeting_item,
     create_meeting_section,
@@ -530,6 +531,10 @@ class CancelFollowUpDomainTest(CancelFollowUpBase):
             target_user=self.other,
             role=ProjectMembership.Role.VIEWER,
         )
+        # 'other' is a MEMBER of source_project AND an explicit
+        # participant of the source Meeting, which is what the
+        # Meeting collaboration rule requires to run the source
+        # Meeting (and cancel the follow-up from it).
 
         source_meeting = create_meeting(
             research_group=self.group,
@@ -556,24 +561,24 @@ class CancelFollowUpDomainTest(CancelFollowUpBase):
             title="Source topic",
         )
 
-        # 'other' can write source (member of group, no project
-        # restriction for group meetings… actually source_project
-        # requires membership). Let's make 'other' a member of
-        # source_project and viewer of target_project.
+        # 'other' holds source_project MEMBER and target_project
+        # VIEWER: with explicit participation on the source Meeting,
+        # 'other' can write the source Meeting but NOT the target
+        # Meeting (viewer, non-participant).
         add_project_membership(
             project=source_project,
             actor=self.actor,
             target_user=self.other,
             role=ProjectMembership.Role.MEMBER,
         )
+        add_meeting_participant(
+            meeting=source_meeting,
+            actor=self.actor,
+            target_user=self.other,
+        )
 
-        # Schedule as 'other' (can write both source and target
-        # project meetings at this point since they're members of
-        # source_project and viewers of target_project — but viewer
-        # can't write!).
-        # Actually, scheduling requires write on BOTH meetings.
-        # Let's simplify: actor schedules (has write on both),
-        # then 'other' (viewer on target) tries to cancel.
+        # Actor schedules (has write on both), then 'other' (viewer
+        # on target, non-participant there) cancels.
         follow_up = schedule_meeting_item_follow_up(
             source_meeting_item=source_item,
             target_meeting=target_meeting,
@@ -582,8 +587,9 @@ class CancelFollowUpDomainTest(CancelFollowUpBase):
         )
         target_item_pk = follow_up.target_meeting_item_id
 
-        # 'other' is a member of source_project (can write source)
-        # but only a viewer of target_project (cannot write target).
+        # 'other' can write the source Meeting (explicit participant
+        # with Project access) but cannot write the target Meeting
+        # (viewer, non-participant), so the target item is preserved.
         result = cancel_meeting_item_follow_up(
             follow_up_id=follow_up.pk,
             actor=self.other,

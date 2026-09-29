@@ -26,6 +26,7 @@ import {
   markMeetingItemFollowUp,
   reopenMeetingItem,
   scheduleMeetingItemFollowUp,
+  searchMeetingParticipantCandidates,
   searchMeetingSeriesParticipantCandidates,
   searchStandaloneMeetingParticipantCandidates,
 } from './meetings'
@@ -213,6 +214,16 @@ describe('Meeting creation participant API client', () => {
 
     expect(apiGet).toHaveBeenCalledWith(
       '/api/meeting-series/7/participant-candidates/?q=chris',
+    )
+  })
+
+  it('searches candidates for an existing Meeting by its ID', async () => {
+    vi.mocked(apiGet).mockResolvedValue([])
+
+    await searchMeetingParticipantCandidates(11, 'chris e')
+
+    expect(apiGet).toHaveBeenCalledWith(
+      '/api/meetings/11/participant-candidates/?q=chris+e',
     )
   })
 

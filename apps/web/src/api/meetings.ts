@@ -135,6 +135,17 @@ export async function reopenMeeting(
   )
 }
 
+export async function searchMeetingParticipantCandidates(
+  meetingId: number,
+  query: string,
+): Promise<ApiMeetingParticipantCandidate[]> {
+  const params = new URLSearchParams({ q: query })
+
+  return apiGet<ApiMeetingParticipantCandidate[]>(
+    `/api/meetings/${meetingId}/participant-candidates/?${params.toString()}`,
+  )
+}
+
 export async function listMeetingParticipants(
   meetingId: number,
 ): Promise<ApiMeetingParticipant[]> {

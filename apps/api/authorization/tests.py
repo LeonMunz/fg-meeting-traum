@@ -4,7 +4,7 @@ Covers:
 - central role → capability mapping (group + project)
 - default DENY (no membership, unknown role, inactive account)
 - Project scope requires BOTH memberships
-- Meeting creator-or-participant read + scope write capability
+- Meeting scope-aware read + Meeting collaboration write rule
 - Meeting Series scope capabilities
 """
 
@@ -255,39 +255,102 @@ class MeetingScopeTest(ScopeResolutionScenario, TestCase):
         self.assertTrue(scope.has(Capability.MEETING_READ))
         self.assertTrue(scope.has(Capability.MEETING_WRITE))
 
-    def test_non_participant_group_member_has_write_not_read(self):
-        """Settled rule (docs/domain/authorization.md §5): MEETING_WRITE
-        is the scoped write rule and is independent of the
-        creator/participant MEETING_READ rule. A group member who is
-        neither creator nor participant gets the scoped write
-        capability but no read capability. API views still gate every
-        mutation on read access first (non-participants get 404)."""
+    def test_non_participant_group_member_has_read_and_write(self):
+        """Settled rule (docs/domain/authorization.md §5): every
+        CURRENT Research Group member can read AND fully collaborate
+        on group-scoped Meetings, independent of the
+        creator/participant identity. No admin role is required."""
         meeting = self._group_meeting(self.admin)
         # viewer is a group member but neither creator nor participant.
         scope = resolve_meeting_scope(self.viewer, meeting)
         self.assertIsNotNone(scope)
+        self.assertTrue(scope.has(Capability.MEETING_READ))
         self.assertTrue(scope.has(Capability.MEETING_WRITE))
-        self.assertFalse(scope.has(Capability.MEETING_READ))
+        # Group Meetings are fully collaborative: every current
+        # member has the destructive administration capability too.
+        self.assertTrue(scope.has(Capability.MEETING_ADMIN))
 
-    def test_outsider_participant_read_only(self):
+    def test_group_outsider_participant_gets_nothing(self):
+        """Group Meetings are readable only by current Research Group
+        members: an explicit participant row for a non-member grants
+        nothing (participant eligibility is enforced at add time)."""
         meeting = self._group_meeting(self.admin)
         MeetingParticipant.objects.create(
             meeting=meeting, user=self.outsider
         )
-        scope = resolve_meeting_scope(self.outsider, meeting)
-        self.assertTrue(scope.has(Capability.MEETING_READ))
-        self.assertFalse(scope.has(Capability.MEETING_WRITE))
+        self.assertIsNone(resolve_meeting_scope(self.outsider, meeting))
         with self.assertRaises(AuthorizationDenied):
             require_meeting_write(self.outsider, meeting)
 
-    def test_project_meeting_viewer_read_only(self):
+    def test_group_membership_loss_revokes_meeting_access(self):
+        meeting = self._group_meeting(self.admin)
+        # Removing group membership requires the ProjectMembership
+        # cleanup first (composite FK invariant).
+        ProjectMembership.objects.filter(
+            project=self.project, user=self.viewer
+        ).delete()
+        ResearchGroupMembership.objects.filter(
+            research_group=self.group, user=self.viewer
+        ).delete()
+        self.assertIsNone(resolve_meeting_scope(self.viewer, meeting))
+
+    def test_project_meeting_viewer_participant_collaborates(self):
+        """A Project VIEWER who is an explicit participant can read
+        AND collaborate on the Meeting (no Project write role
+        required) — but gains no Project/Work Item capability."""
         meeting = self._project_meeting(self.admin)
         MeetingParticipant.objects.create(
             meeting=meeting, user=self.viewer
         )
         scope = resolve_meeting_scope(self.viewer, meeting)
         self.assertTrue(scope.has(Capability.MEETING_READ))
-        self.assertFalse(scope.has(Capability.MEETING_WRITE))
+        self.assertTrue(scope.has(Capability.MEETING_WRITE))
+        # Destructive administration is a separate capability a
+        # viewer-participant never gets.
+        self.assertFalse(scope.has(Capability.MEETING_ADMIN))
+        # Meeting collaboration never grants PROJECT_WORK.
+        project_scope = resolve_project_scope(self.viewer, self.project.pk)
+        self.assertFalse(project_scope.has(Capability.PROJECT_WORK))
+
+    def test_project_meeting_non_participant_member_gets_nothing(self):
+        """Project membership alone never grants Meeting visibility
+        or collaboration: a non-participant member gets nothing."""
+        meeting = self._project_meeting(self.admin)
+        # member is a Project MEMBER but neither creator nor
+        # participant.
+        self.assertIsNone(resolve_meeting_scope(self.member, meeting))
+        with self.assertRaises(AuthorizationDenied):
+            require_meeting_write(self.member, meeting)
+
+    def test_project_meeting_participant_without_project_access_gets_nothing(self):
+        """A participant who LOST Project access loses Meeting read
+        AND collaboration: the canonical project Meeting read
+        boundary requires BOTH the creator/participant relationship
+        and a valid current ProjectMembership (the canonical
+        Project-read boundary). The stale participant relation
+        grants nothing."""
+        meeting = self._project_meeting(self.admin)
+        MeetingParticipant.objects.create(
+            meeting=meeting, user=self.member
+        )
+        ProjectMembership.objects.filter(
+            project=self.project, user=self.member
+        ).delete()
+        self.assertIsNone(resolve_meeting_scope(self.member, meeting))
+        with self.assertRaises(AuthorizationDenied):
+            require_meeting_write(self.member, meeting)
+
+    def test_project_meeting_creator_without_project_access_gets_nothing(self):
+        """The creator is bound by the same read boundary: losing
+        Project access revokes Meeting read even for created
+        Meetings."""
+        meeting = self._project_meeting(self.admin)
+        # Group membership survives; only the Project access is
+        # gone — the project read boundary still revokes everything.
+        ProjectMembership.objects.filter(
+            project=self.project, user=self.admin
+        ).delete()
+        self.assertIsNone(resolve_meeting_scope(self.admin, meeting))
 
     def test_project_meeting_member_write(self):
         meeting = self._project_meeting(self.admin)
@@ -296,6 +359,18 @@ class MeetingScopeTest(ScopeResolutionScenario, TestCase):
         )
         scope = resolve_meeting_scope(self.member, meeting)
         self.assertTrue(scope.has(Capability.MEETING_WRITE))
+        # A participant with the Project write role (owner/member)
+        # keeps the destructive administration capability.
+        self.assertTrue(scope.has(Capability.MEETING_ADMIN))
+
+    def test_project_meeting_creator_owner_has_admin(self):
+        """The creator (Project owner here) has the destructive
+        administration capability in addition to collaboration."""
+        meeting = self._project_meeting(self.admin)
+        scope = resolve_meeting_scope(self.admin, meeting)
+        self.assertTrue(scope.has(Capability.MEETING_READ))
+        self.assertTrue(scope.has(Capability.MEETING_WRITE))
+        self.assertTrue(scope.has(Capability.MEETING_ADMIN))
 
     def test_archived_project_blocks_write(self):
         from django.utils import timezone
@@ -309,6 +384,7 @@ class MeetingScopeTest(ScopeResolutionScenario, TestCase):
         scope = resolve_meeting_scope(self.member, meeting)
         self.assertTrue(scope.has(Capability.MEETING_READ))
         self.assertFalse(scope.has(Capability.MEETING_WRITE))
+        self.assertFalse(scope.has(Capability.MEETING_ADMIN))
 
 
 class MeetingSeriesScopeTest(ScopeResolutionScenario, TestCase):

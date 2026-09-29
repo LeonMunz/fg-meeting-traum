@@ -205,7 +205,6 @@ class MeetingItemFollowUpTargetsApiTest(TestCase):
             target_user=self.viewer,
             role=ProjectMembership.Role.MEMBER,
         )
-        archive_project(project=archived_project, actor=self.actor)
         writable = self._standalone_meeting(
             "Writable",
             days=4,
@@ -218,12 +217,27 @@ class MeetingItemFollowUpTargetsApiTest(TestCase):
             scope=Meeting.Scope.PROJECT,
             project=read_only_project,
         )
-        self._standalone_meeting(
+        archived_meeting = self._standalone_meeting(
             "Archived",
             days=6,
             scope=Meeting.Scope.PROJECT,
             project=archived_project,
         )
+        # The viewer is an explicit participant of the writable and
+        # the (not yet) archived Meetings, but NOT of the read-only
+        # Meeting.
+        add_meeting_participant(
+            meeting=writable,
+            actor=self.actor,
+            target_user=self.viewer,
+        )
+        add_meeting_participant(
+            meeting=archived_meeting,
+            actor=self.actor,
+            target_user=self.viewer,
+        )
+        # Archived projects are read-only even for collaborators.
+        archive_project(project=archived_project, actor=self.actor)
         other_group = ResearchGroup.objects.create(
             name="Private group",
             created_by=self.outsider,

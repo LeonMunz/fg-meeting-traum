@@ -12,10 +12,18 @@ Rules:
 - Knowing a valid resource ID never grants access: scope resolution
   always re-reads the current persisted membership state.
 
-Meeting-specific access (creator-or-participant read rule) is expressed
-here as the ``MEETING_READ`` / ``MEETING_WRITE`` capabilities so the
-Meeting domain uses the same foundation (invariant: Work Items and
-Meetings share the scope/authorization foundation).
+Meeting-specific access is expressed here as the ``MEETING_READ`` /
+``MEETING_WRITE`` capabilities so the Meeting domain uses the same
+foundation (invariant: Work Items and Meetings share the scope/
+authorization foundation):
+
+- group scope: every CURRENT Research Group member can read and fully
+  collaborate on the group's Meetings;
+- project scope: read stays restricted to the creator / explicit
+  participants, and collaboration additionally requires a valid current
+  ProjectMembership (canonical Project-read boundary). Meeting
+  collaboration never grants PROJECT_WORK or any other Project / Work
+  Item right.
 """
 
 from typing import Optional
@@ -189,12 +197,27 @@ def project_scope_for(user, project: Project) -> Optional[ScopeContext]:
 
 # ── Meeting scope ─────────────────────────────────────────────────
 #
-# Meeting read access is creator-or-participant (MeetingParticipant).
-# Group/Project membership, ownership, or admin status alone do NOT
-# grant Meeting visibility. Meeting write access additionally requires
-# the scope capability of the Meeting's scope:
-#   group scope    → GROUP_READ
-#   project scope  → PROJECT_WORK (and the Project not archived)
+# Meeting read access:
+#   group scope    → any CURRENT Research Group member (GROUP_READ);
+#   project scope  → the Meeting's creator or an explicit
+#                    MeetingParticipant WITH a valid current Project
+#                    access (the canonical Project-read boundary).
+#                    Scope membership, ownership, or admin status
+#                    alone grant nothing, and a stale creator /
+#                    participant relation without current Project
+#                    access grants no read access either.
+# Meeting collaboration (write) follows the Meeting's scope:
+#   group scope    → GROUP_READ (any current Research Group member);
+#   project scope  → the creator or an explicit participant with a
+#                    valid current ProjectMembership satisfying the
+#                    canonical Project-read boundary, and the Project
+#                    not archived.
+# Destructive Meeting administration (admin):
+#   group scope    → GROUP_READ (any current Research Group member);
+#   project scope  → the creator or an explicit participant with
+#                    PROJECT_WORK (Project owner or member), and the
+#                    Project not archived.
+# The moderator identity is NOT an authorization gate.
 
 
 def _meeting_participant_or_creator(meeting, user) -> bool:
@@ -214,25 +237,43 @@ def resolve_meeting_scope(
 ) -> Optional[ScopeContext]:
     """Resolve the user's scope for one Meeting occurrence.
 
-    The two capabilities are independent (canonical model):
+    The capabilities are independent (canonical model):
 
-    - ``MEETING_READ``: the user created the Meeting or is an explicit
-      ``MeetingParticipant``. Group/Project membership alone does not
-      grant read access.
-    - ``MEETING_WRITE``: the scoped write rule of the Meeting's scope
-      (group: ``GROUP_READ``; project: ``PROJECT_WORK`` and the Project
-      is not archived).
+    - ``MEETING_READ``:
+      - group scope: any CURRENT Research Group member (``GROUP_READ``);
+      - project scope: the user created the Meeting or is an explicit
+        ``MeetingParticipant`` AND holds a valid current
+        ProjectMembership satisfying the canonical Project-read
+        boundary. Project membership, ownership, or admin status
+        alone do NOT grant read access, and a stale creator /
+        participant relation without current Project access grants
+        no read access either.
+    - ``MEETING_WRITE`` (Meeting collaboration):
+      - group scope: ``GROUP_READ`` (any current Research Group
+        member);
+      - project scope: the creator or an explicit participant with a
+        valid current ProjectMembership satisfying the canonical
+        Project-read boundary, and the Project not archived.
+    - ``MEETING_ADMIN`` (destructive Meeting administration):
+      - group scope: ``GROUP_READ`` (any current Research Group
+        member — group Meetings are fully collaborative);
+      - project scope: the creator or an explicit participant with
+        ``PROJECT_WORK`` (Project owner or member), and the Project
+        not archived. Participation with a ``viewer`` role alone
+        never grants destructive administration.
 
-    Returns None when the user has neither, so views answer 404.
+    Meeting collaboration is NOT Project access: it never grants
+    ``PROJECT_WORK`` or any other Project / Work Item capability, and
+    the moderator identity is not an authorization gate.
+
+    Returns None when the user has none, so views answer 404.
     """
     auth = get_auth_context(user)
     if not auth.is_active:
         return None
 
     caps = set()
-
-    if _meeting_participant_or_creator(meeting, user):
-        caps.add(Capability.MEETING_READ)
+    is_collaborator = _meeting_participant_or_creator(meeting, user)
 
     if meeting.scope == "group":
         if meeting.project_id is not None:
@@ -245,19 +286,31 @@ def resolve_meeting_scope(
         if group_scope is not None and group_scope.has(
             Capability.GROUP_READ
         ):
+            caps.add(Capability.MEETING_READ)
             caps.add(Capability.MEETING_WRITE)
+            caps.add(Capability.MEETING_ADMIN)
     else:
         if meeting.project_id is None:
             return None
-        project_scope = resolve_project_scope(user, meeting.project_id)
+        if not is_collaborator:
+            return None
         project = Project.objects.filter(pk=meeting.project_id).first()
-        if (
-            project_scope is not None
-            and project is not None
-            and project.archived_at is None
-            and project_scope.has(Capability.PROJECT_WORK)
-        ):
-            caps.add(Capability.MEETING_WRITE)
+        project_scope = (
+            resolve_project_scope(user, meeting.project_id)
+            if project is not None
+            else None
+        )
+        if project_scope is None:
+            # A stale creator / participant relation without valid
+            # current Project access grants nothing.
+            return None
+        if project_scope.has(Capability.PROJECT_READ):
+            caps.add(Capability.MEETING_READ)
+        if project is not None and project.archived_at is None:
+            if project_scope.has(Capability.PROJECT_READ):
+                caps.add(Capability.MEETING_WRITE)
+            if project_scope.has(Capability.PROJECT_WORK):
+                caps.add(Capability.MEETING_ADMIN)
 
     if not caps:
         return None
@@ -273,6 +326,13 @@ def resolve_meeting_scope(
 def require_meeting_write(user, meeting) -> ScopeContext:
     scope = resolve_meeting_scope(user, meeting)
     if scope is None or not scope.has(Capability.MEETING_WRITE):
+        raise AuthorizationDenied()
+    return scope
+
+
+def require_meeting_admin(user, meeting) -> ScopeContext:
+    scope = resolve_meeting_scope(user, meeting)
+    if scope is None or not scope.has(Capability.MEETING_ADMIN):
         raise AuthorizationDenied()
     return scope
 
@@ -396,6 +456,7 @@ __all__ = [
     "require_project_capability",
     "project_scope_for",
     "resolve_meeting_scope",
+    "require_meeting_admin",
     "require_meeting_write",
     "resolve_meeting_series_scope",
     "resolve_meeting_recurrence_scope",

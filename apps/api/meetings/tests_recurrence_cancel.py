@@ -896,14 +896,20 @@ class MeetingRecurrenceCancelAuthorizationTest(MeetingRecurrenceCancelBase):
             1,
         )
 
-    # 33. Canonical project write authorization is preserved.
+    # 33. Project Meeting collaboration: an explicit participant with
+    # Project access can cancel the occurrence.
 
-    def test_project_member_can_cancel(self):
+    def test_project_member_participant_can_cancel(self):
         recurrence = self._create_recurrence(
             scope="project", project=self.project,
         )
         occurrence = self._occurrence_on(recurrence, (2026, 1, 6))
         meeting = self._materialize(recurrence, occurrence)
+        add_meeting_participant(
+            meeting=meeting,
+            actor=self.alex,
+            target_user=self.chris,
+        )
 
         cancelled = self._cancel(meeting, actor=self.chris)
 
