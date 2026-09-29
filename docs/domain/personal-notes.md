@@ -286,11 +286,12 @@ The V1 persisted foundation is exactly:
 - AI fields
 - task/status/due-date/assignee fields
 - Trash / soft-delete (`deleted_at`) lifecycle
-- Notes UI beyond the implemented read-only shell (route, navigation,
-  list presentation, backend-driven search, and read-only note display
-  ARE implemented; still excluded): New Note UI, title/content editing
-  and rich editing interactions, autosave, pin/unpin UI, archive/restore
-  UI, and the archived-notes view
+- Notes UI beyond the implemented create/edit slice (route,
+  navigation, list presentation, backend-driven search, read-only
+  note display, New Note UI, editable title/content with rich
+  Markdown editing, and race-safe autosave ARE implemented — see
+  §12; still excluded): pin/unpin UI, archive/restore UI, and the
+  archived-notes view
 
 ## 12. Implementation references
 
@@ -308,12 +309,32 @@ The V1 persisted foundation is exactly:
 - Tests: `apps/api/personal_notes/tests.py` (domain) and
   `apps/api/personal_notes/tests_api.py` (HTTP lifecycle,
   privacy, CSRF, and representation contract).
-- Frontend client (frontend-only; the read-only Notes UI shell above
-  it is the only consumer in this phase):
+- Frontend client (frontend-only; the Notes UI above it is the only
+  consumer in this phase):
   `apps/web/src/api/personal-notes.ts` — typed client on the
   `apiGet` / `apiPost` / `apiPatch` convention covering the complete
   §10 contract (canonical `ApiPersonalNote` DTO, title/content-only
   create/update inputs, the full read/write/action surface, trimmed
   + URL-encoded `?q=` search); pinned by
   `apps/web/src/api/personal-notes.test.ts`.
+- Frontend Notes UI (frontend-only; the §10 HTTP contract is
+  unchanged): `apps/web/src/features/personal-notes/NotesPage.tsx` —
+  the authenticated `/notes` workspace: capture-first New Note
+  (exactly one `POST /api/me/notes/` per explicit activation,
+  authoritative created representation inserted + selected
+  immediately, active search cleared first, compact retryable
+  failure state), an editable title (empty valid, `Untitled`
+  presentation-only, §7 max-length respected) and editable content
+  through the canonical `RichMarkdownEditor` (`variant="full"`,
+  canonical Markdown string — no second editor or Markdown
+  implementation), an explicit page-local per-note local draft, and a
+  debounced race-safe autosave: per-note save generations + an
+  in-flight duplicate guard (a slower response to an older draft can
+  never overwrite newer local text, a newer acknowledged response, or
+  another note), per-note reconciliation of list/search responses
+  against locally acknowledged saves, plain-list recency move on
+  save vs. in-place reconciliation while a search is active, flush on
+  selection switch / editor blur / unmount, and `Saving…` / `Saved` /
+  `Couldn't save` + Retry feedback. Pinned by
+  `apps/web/src/features/personal-notes/NotesPage.test.tsx`.
 - Checkpoint: `docs/CURRENT_STATE.md` (§Personal Notes).

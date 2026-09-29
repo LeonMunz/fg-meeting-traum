@@ -586,6 +586,26 @@ button {
   padding-left: 1.15em;
 }
 
+/* Personal Notes document surface — a document, not a 520px
+ * inspector: slightly larger body text with the same quiet rhythm.
+ * Applied via the editor wrapper (the wrapper `className` prop),
+ * so it never touches the Work Item Description / Comments
+ * surfaces. The `.fg-prose` font-size is the only thing scaled;
+ * everything else (spacing, colors, list padding) inherits the
+ * shared document rhythm. */
+.fg-note-document .fg-prose {
+  font-size: 0.9375rem;
+  line-height: 1.5rem;
+}
+
+.fg-note-document .fg-prose h2 {
+  font-size: 1.125rem;
+}
+
+.fg-note-document .fg-prose h3 {
+  font-size: 1rem;
+}
+
 .fg-prose p {
   margin: 0;
 }

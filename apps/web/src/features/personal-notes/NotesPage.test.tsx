@@ -17,7 +17,13 @@ import {
   it,
   vi,
 } from 'vitest'
-import { StrictMode } from 'react'
+import {
+  StrictMode,
+  forwardRef,
+  useImperativeHandle,
+  useRef,
+} from 'react'
+import type { ForwardedRef } from 'react'
 import { MemoryRouter } from 'react-router'
 
 import { App } from '../../app/App'
@@ -41,36 +47,112 @@ import {
 } from './NotesPage'
 
 /*
- * The read-only Markdown surface is the canonical
- * RichMarkdownEditor (readOnly) — the Tiptap graph is covered by its
- * own suites; here the module boundary stands in and records the
- * props the page passes, which is exactly the read-only contract
- * this slice must hold.
+ * The canonical RichMarkdownEditor (the single Markdown surface in the
+ * app) is mocked at the module boundary: the mock records the props the
+ * page passes (the exact editor contract this slice must hold —
+ * canonical Markdown value, editable, variant "full", labels,
+ * placeholder, onChange/onCommit wiring) and renders the value plus a
+ * toolbar stub in edit mode and a typed textarea standing in for the
+ * ProseMirror document, so typing behavior is testable without the
+ * Tiptap graph. The real editor's Markdown semantics are covered by
+ * the editor's own suites.
  */
 const richMarkdownEditor = vi.hoisted(() => ({
   lastProps: null as Record<string, unknown> | null,
+  focusEndCalls: 0,
 }))
 
 vi.mock('../../components/editor/RichMarkdownEditor', () => ({
-  RichMarkdownEditor: (props: Record<string, unknown>) => {
-    richMarkdownEditor.lastProps = props
-    return (
-      <div
-        data-testid="note-content"
-        data-read-only={String(Boolean(props.readOnly))}
-      >
-        {String(props.value ?? '')}
-      </div>
-    )
-  },
+  RichMarkdownEditor: forwardRef(
+    (
+      props: Record<string, unknown>,
+      ref: ForwardedRef<{ focusEnd: () => void }>,
+    ) => {
+      richMarkdownEditor.lastProps = props
+      const editable = props.readOnly !== true
+      const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+      // The page's writing handoff (Enter in the title, click on
+      // free document surface) goes through the imperative handle:
+      // the stand-in focuses the editable surface with the caret at
+      // the end — mirroring the real editor's focusEnd() contract —
+      // and records that the handoff happened.
+      useImperativeHandle(ref, () => ({
+        focusEnd: () => {
+          const el = textareaRef.current
+          if (!el) {
+            return
+          }
+          richMarkdownEditor.focusEndCalls += 1
+          el.focus()
+          const end = el.value.length
+          el.setSelectionRange(end, end)
+        },
+      }))
+
+      return (
+        <div data-testid="note-editor">
+        <div
+          data-testid="note-content"
+          data-editable={String(editable)}
+        >
+          {String(props.value ?? '')}
+        </div>
+
+        {editable && (
+          <>
+            {/* Selection-anchored bubble toolbar — present in every
+                editable mode (default and contextual), mirroring the
+                real editor. */}
+            <div
+              role="toolbar"
+              aria-label="Selection formatting"
+              data-testid="note-editor-bubble-toolbar"
+            />
+
+            {/* Permanent bottom toolbar — default mode only;
+                contextual mode (Notes) mounts no permanent bar. */}
+            {props.toolbarMode !== 'contextual' && (
+              <div
+                role="toolbar"
+                aria-label="Formatting"
+                data-testid="note-editor-toolbar"
+              />
+            )}
+
+            <textarea
+              ref={textareaRef}
+              aria-label={String(props.ariaLabel ?? '')}
+              placeholder={String(props.placeholder ?? '')}
+              value={String(props.value ?? '')}
+              onChange={(event) =>
+                (
+                  props.onChange as
+                    | ((markdown: string) => void)
+                    | undefined
+                )?.(event.target.value)
+              }
+              onBlur={() =>
+                (
+                  props.onCommit as
+                    | ((markdown: string) => void)
+                    | undefined
+                )?.(String(props.value ?? ''))
+              }
+            />
+          </>
+        )}
+        </div>
+      )
+    },
+  ),
 }))
 
 /*
- * The page must talk to exactly one canonical client function for the
- * whole slice (listPersonalNotes — initial list AND search). Every
- * other client function is mocked too: any call to a detail, create,
- * update, pin, archive, restore, or archive-listing request is a test
- * failure.
+ * The page must talk to the canonical client functions. Every client
+ * function is mocked: listPersonalNotes (list + search), create and
+ * update (this slice), and pin / archive / restore / detail /
+ * archive-listing, which must NOT be called in this slice.
  */
 vi.mock('../../api/personal-notes', () => ({
   listPersonalNotes: vi.fn(),
@@ -125,6 +207,19 @@ vi.mock('../../api/research-groups', () => ({
   ]),
 }))
 
+/*
+ * The page source itself, inlined as raw text by Vite: the
+ * "single canonical editor" contract is a structural one, so the
+ * check inspects the page's imports directly.
+ */
+const notesPageSource = (
+  import.meta.glob('./NotesPage.tsx', {
+    query: '?raw',
+    import: 'default',
+    eager: true,
+  })['./NotesPage.tsx'] as string
+)
+
 /* ── Fixtures ─────────────────────────────────────────────────── */
 
 function note(
@@ -163,6 +258,22 @@ const GAMMA = note({
 
 const DEFAULT_NOTES = [ALPHA, BETA, GAMMA]
 
+const KNOWN_NOTES: Record<number, ApiPersonalNote> = {
+  1: ALPHA,
+  2: BETA,
+  3: GAMMA,
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
 /* ── Render helpers ───────────────────────────────────────────── */
 
 function resetApiMocks() {
@@ -175,6 +286,40 @@ function resetApiMocks() {
   vi.mocked(archivePersonalNote).mockReset()
   vi.mocked(restorePersonalNote).mockReset()
   richMarkdownEditor.lastProps = null
+  richMarkdownEditor.focusEndCalls = 0
+  createdCounter = 0
+
+  // Default echo for saves: apply the changed fields to the known
+  // fixture note and bump updatedAt (tests override per scenario).
+  vi.mocked(updatePersonalNote).mockImplementation(
+    async (id, input) => {
+      const base = KNOWN_NOTES[id] ??
+        note({
+          id,
+          title: '',
+          content: '',
+          createdAt: '2026-09-29T12:00:00Z',
+          updatedAt: '2026-09-29T12:00:00Z',
+        })
+      return { ...base, ...input, updatedAt: '2026-09-29T10:00:00Z' }
+    },
+  )
+}
+
+let createdCounter = 0
+
+function freshCreatedNote(
+  overrides: Partial<ApiPersonalNote> = {},
+): ApiPersonalNote {
+  createdCounter += 1
+  return note({
+    id: 9000 + createdCounter,
+    title: '',
+    content: '',
+    createdAt: '2026-09-29T12:00:00Z',
+    updatedAt: '2026-09-29T12:00:00Z',
+    ...overrides,
+  })
 }
 
 /**
@@ -193,6 +338,12 @@ function renderPage(
   } else {
     vi.mocked(listPersonalNotes).mockImplementation(
       async () => initialNotes,
+    )
+  }
+
+  if (vi.mocked(createPersonalNote).mockImplementation === undefined) {
+    vi.mocked(createPersonalNote).mockImplementation(
+      async () => freshCreatedNote(),
     )
   }
 
@@ -219,6 +370,12 @@ function renderStrictPage(
   } else {
     vi.mocked(listPersonalNotes).mockImplementation(
       async () => initialNotes,
+    )
+  }
+
+  if (vi.mocked(createPersonalNote).mockImplementation === undefined) {
+    vi.mocked(createPersonalNote).mockImplementation(
+      async () => freshCreatedNote(),
     )
   }
 
@@ -253,7 +410,15 @@ function listRegion() {
 }
 
 function rowButtons() {
-  return within(listRegion()).getAllByRole('button')
+  // The navigator region also hosts the New-note action; the note
+  // rows are exactly the list items' buttons.
+  return within(listRegion())
+    .getAllByRole('listitem')
+    .map((item) => within(item).getByRole('button'))
+}
+
+function rowTitles() {
+  return rowButtons().map(rowTitle)
 }
 
 function rowTitle(button: HTMLElement): string {
@@ -262,10 +427,50 @@ function rowTitle(button: HTMLElement): string {
   )
 }
 
+function titleInput() {
+  return screen.getByRole('textbox', {
+    name: 'Note title',
+  })
+}
+
+function contentInput() {
+  return screen.getByRole('textbox', {
+    name: 'Note content',
+  })
+}
+
+function noteContent() {
+  return screen.getByTestId('note-content')
+}
+
+function newNoteButton() {
+  return screen.getByRole('button', {
+    name: 'New note',
+  })
+}
+
+/*
+ * A row's accessible name is its title FOLLOWED by the quiet
+ * "updated" date (both spans are part of the button), so lookups
+ * match on the title prefix.
+ */
+function rowNamePrefix(title: string) {
+  const escaped = title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`^${escaped}`)
+}
+
+function rowByTitle(title: string) {
+  return screen.getByRole('button', {
+    name: rowNamePrefix(title),
+  })
+}
+
 /*
  * Debounce block in the repository's canonical shape: the page
  * mounts and settles on REAL timers first; fake timers are enabled
- * only around the debounce window, and restored in finally.
+ * only around the debounce window, and restored in finally. Both the
+ * search debounce and the autosave debounce use the same 300 ms
+ * window.
  */
 async function flushDebounce() {
   await act(async () => {
@@ -280,6 +485,1277 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.useRealTimers()
+})
+
+/* ── New note ─────────────────────────────────────────────────── */
+
+describe('new note', () => {
+  it('offers a keyboard-accessible "+ New note" action in the navigator', async () => {
+    renderPage()
+    await settleInitialLoad()
+
+    const button = newNoteButton()
+    expect(button).toBeInTheDocument()
+    expect(button).toBeEnabled()
+    // A native <button> is keyboard-activatable by construction.
+    expect(button.tagName).toBe('BUTTON')
+    // The compact icon button: the icon is decorative, the
+    // accessible name comes from the label (keyboard/screen-reader
+    // users get the same "New note" name).
+    expect(button).toHaveAccessibleName('New note')
+    // …and it is focusable by keyboard.
+    button.focus()
+    expect(button).toHaveFocus()
+    // The action belongs to the Notes navigator — it no longer
+    // floats in the far corner of the document pane.
+    expect(listRegion().contains(button)).toBe(true)
+    expect(
+      screen
+        .getByRole('region', {
+          name: 'Selected note',
+        })
+        .contains(button),
+    ).toBe(false)
+  })
+
+  it('keeps the create action visible and obvious in the empty state', async () => {
+    renderPage([])
+    await settleInitialLoad()
+
+    expect(screen.getByText('No notes yet.')).toBeInTheDocument()
+    expect(newNoteButton()).toBeEnabled()
+  })
+
+  it('sends exactly one capture-first createPersonalNote({}) on click', async () => {
+    const created = freshCreatedNote({
+      title: 'Fresh idea',
+      content: 'Fresh body',
+    })
+    vi.mocked(createPersonalNote).mockResolvedValue(
+      created,
+    )
+    renderPage()
+    await settleInitialLoad()
+
+    fireEvent.click(newNoteButton())
+    await screen.findByRole('button', {
+      name: rowNamePrefix('Fresh idea'),
+    })
+
+    expect(createPersonalNote).toHaveBeenCalledTimes(1)
+    expect(createPersonalNote).toHaveBeenCalledWith({})
+  })
+
+  it('does not duplicate the POST on repeated clicks while it is pending', async () => {
+    const gate = deferred<ApiPersonalNote>()
+    vi.mocked(createPersonalNote).mockImplementation(
+      () => gate.promise,
+    )
+    renderPage()
+    await settleInitialLoad()
+
+    fireEvent.click(newNoteButton())
+    expect(newNoteButton()).toBeDisabled()
+    fireEvent.click(newNoteButton())
+    fireEvent.click(newNoteButton())
+
+    expect(createPersonalNote).toHaveBeenCalledTimes(1)
+
+    gate.resolve(freshCreatedNote({ title: 'Fresh idea' }))
+    await screen.findByRole('button', {
+      name: rowNamePrefix('Fresh idea'),
+    })
+    expect(newNoteButton()).toBeEnabled()
+  })
+
+  it('inserts the authoritative created note first, selects it, and moves focus to its title', async () => {
+    const created = freshCreatedNote({
+      title: 'Fresh idea',
+      content: 'Fresh body',
+    })
+    vi.mocked(createPersonalNote).mockResolvedValue(
+      created,
+    )
+    renderPage()
+    await settleInitialLoad()
+
+    fireEvent.click(newNoteButton())
+    await screen.findByRole('button', {
+      name: rowNamePrefix('Fresh idea'),
+    })
+
+    // Newest updated/created first — the created note leads the
+    // active list and is selected…
+    expect(rowTitles()[0]).toBe('Fresh idea')
+    expect(rowByTitle('Fresh idea')).toHaveAttribute(
+      'aria-current',
+      'true',
+    )
+    // …the writing surface shows the AUTHORITATIVE created
+    // representation (never a client-fabricated one)…
+    expect(titleInput()).toHaveValue('Fresh idea')
+    expect(noteContent()).toHaveTextContent('Fresh body')
+    // …and focus moved into the new note's writing flow (title).
+    expect(document.activeElement).toBe(titleInput())
+    // No collection refetch was needed to display it.
+    expect(listPersonalNotes).toHaveBeenCalledTimes(1)
+  })
+
+  it('clears an active search before creating so the new note is visible and selected', async () => {
+    const gate = deferred<ApiPersonalNote>()
+    vi.mocked(createPersonalNote).mockImplementation(
+      () => gate.promise,
+    )
+    renderPage(
+      undefined,
+      async (query?: string) =>
+        query === 'alpha'
+          ? [ALPHA]
+          : Promise.resolve(DEFAULT_NOTES),
+    )
+    await settleInitialLoad()
+
+    vi.useFakeTimers()
+    try {
+      fireEvent.change(searchInput(), {
+        target: { value: 'alpha' },
+      })
+      await flushDebounce()
+      expect(rowTitles()).toEqual(['Alpha'])
+
+      // Create while the search is active: the created note does
+      // NOT match 'alpha' — it must still become visible.
+      fireEvent.click(newNoteButton())
+      await act(async () => {
+        gate.resolve(freshCreatedNote())
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+
+    // The search query was cleared first…
+    expect(searchInput()).toHaveValue('')
+    // …and the created (untitled) note is visible + selected.
+    expect(rowTitles()[0]).toBe('Untitled')
+    expect(rowByTitle('Untitled')).toHaveAttribute(
+      'aria-current',
+      'true',
+    )
+  })
+
+  it('keeps the previous state on create failure and allows creating again', async () => {
+    let attempts = 0
+    vi.mocked(createPersonalNote).mockImplementation(
+      async () => {
+        attempts += 1
+        if (attempts === 1) {
+          throw new ApiError(500, {
+            error: 'Create exploded.',
+          })
+        }
+
+        return freshCreatedNote({ title: 'Retry me' })
+      },
+    )
+    renderPage()
+    await settleInitialLoad()
+
+    fireEvent.click(newNoteButton())
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent(
+      "Note couldn't be created.",
+    )
+    expect(alert).toHaveTextContent('Create exploded.')
+
+    // Previous list/selection/content untouched; nothing
+    // fabricated…
+    expect(rowTitles()).toEqual([
+      'Alpha',
+      'Beta',
+      'Gamma',
+    ])
+    expect(rowByTitle('Alpha')).toHaveAttribute(
+      'aria-current',
+      'true',
+    )
+    expect(noteContent()).toHaveTextContent('Alpha body')
+    expect(
+      screen.queryByRole('button', { name: /Retry me/ }),
+    ).not.toBeInTheDocument()
+    // …search state preserved (still empty, still functional).
+    expect(searchInput()).toHaveValue('')
+    // …and the action is usable again.
+    expect(newNoteButton()).toBeEnabled()
+
+    fireEvent.click(newNoteButton())
+    await screen.findByRole('button', {
+      name: rowNamePrefix('Retry me'),
+    })
+    expect(createPersonalNote).toHaveBeenCalledTimes(2)
+    expect(
+      screen.queryByRole('alert'),
+    ).not.toBeInTheDocument()
+    expect(rowByTitle('Retry me')).toHaveAttribute(
+      'aria-current',
+      'true',
+    )
+  })
+
+  it('requires no list refetch to display the created note', async () => {
+    const gate = deferred<ApiPersonalNote>()
+    vi.mocked(createPersonalNote).mockImplementation(
+      () => gate.promise,
+    )
+    renderPage(
+      undefined,
+      async (query?: string) =>
+        query === 'alpha'
+          ? [ALPHA]
+          : Promise.resolve(DEFAULT_NOTES),
+    )
+    await settleInitialLoad()
+
+    vi.useFakeTimers()
+    try {
+      fireEvent.change(searchInput(), {
+        target: { value: 'alpha' },
+      })
+      await flushDebounce()
+      expect(listPersonalNotes).toHaveBeenCalledTimes(2)
+
+      fireEvent.click(newNoteButton())
+      await act(async () => {
+        gate.resolve(freshCreatedNote({ title: 'Instant' }))
+      })
+
+      // The created note renders IMMEDIATELY from the POST
+      // response — the debounced re-request caused by clearing the
+      // search has not even fired yet…
+      expect(rowTitles()[0]).toBe('Instant')
+      expect(rowByTitle('Instant')).toHaveAttribute(
+        'aria-current',
+        'true',
+      )
+      expect(listPersonalNotes).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+/* ── Title editing ────────────────────────────────────────────── */
+
+describe('title editing', () => {
+  it('edits the selected note title directly (no modal, no separate edit mode)', async () => {
+    renderPage()
+    await settleInitialLoad()
+
+    const title = titleInput()
+    expect(title).toHaveValue('Alpha')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+
+    fireEvent.change(title, {
+      target: { value: 'Alpha, revised' },
+    })
+
+    // Title editing is local immediately: input AND list row.
+    expect(title).toHaveValue('Alpha, revised')
+    expect(rowTitles()[0]).toBe('Alpha, revised')
+    // Nothing persisted before the debounce window.
+    expect(updatePersonalNote).not.toHaveBeenCalled()
+  })
+
+  it('shows "Untitled" for an empty local title without ever persisting the literal', async () => {
+    renderPage()
+    await settleInitialLoad()
+
+    vi.useFakeTimers()
+    try {
+      fireEvent.change(titleInput(), {
+        target: { value: '' },
+      })
+
+      // Presentation fallback in the list row…
+      expect(rowTitles()[0]).toBe('Untitled')
+      // …while the input holds the empty string (the fallback is
+      // a placeholder, never the value).
+      expect(titleInput()).toHaveValue('')
+      expect(titleInput()).toHaveAttribute(
+        'placeholder',
+        'Untitled',
+      )
+
+      await flushDebounce()
+      await act(async () => {})
+    } finally {
+      vi.useRealTimers()
+    }
+
+    // The PATCH carries the empty title — never "Untitled".
+    expect(updatePersonalNote).toHaveBeenCalledTimes(1)
+    expect(updatePersonalNote).toHaveBeenCalledWith(1, {
+      title: '',
+    })
+  })
+
+  it('respects the backend 255-character title contract', async () => {
+    renderPage()
+    await settleInitialLoad()
+
+    expect(titleInput()).toHaveAttribute(
+      'maxlength',
+      '255',
+    )
+  })
+})
+
+/* ── Content editing ──────────────────────────────────────────── */
+
+describe('content editing', () => {
+  it('renders the selected content in the editable canonical editor (a continuous writing surface)', async () => {
+    renderPage()
+    await settleInitialLoad()
+
+    expect(noteContent()).toHaveAttribute(
+      'data-editable',
+      'true',
+    )
+    expect(richMarkdownEditor.lastProps).toMatchObject({
+      variant: 'full',
+      value: 'Alpha body',
+      placeholder: 'Start writing…',
+      ariaLabel: 'Note content',
+    })
+    expect(
+      richMarkdownEditor.lastProps?.readOnly,
+    ).toBeFalsy()
+    expect(
+      typeof richMarkdownEditor.lastProps?.onChange,
+    ).toBe('function')
+    expect(
+      typeof richMarkdownEditor.lastProps?.onCommit,
+    ).toBe('function')
+    // No read-only mode, no "no content" card.
+    expect(
+      screen.queryByText('This note has no content.'),
+    ).not.toBeInTheDocument()
+  })
+
+  it('initializes the editor from the note\'s existing canonical Markdown', async () => {
+    const markdown =
+      '# Heading\n\n- first\n- **bold** item'
+    renderPage([
+      note({
+        id: 7,
+        title: 'Markdown note',
+        content: markdown,
+      }),
+    ])
+    await settleInitialLoad()
+
+    // The canonical Markdown string is the editor's value — no
+    // re-parsing, no second representation.
+    expect(richMarkdownEditor.lastProps).toMatchObject({
+      value: markdown,
+      variant: 'full',
+    })
+    expect(noteContent().textContent).toBe(markdown)
+    expect(contentInput()).toHaveValue(markdown)
+  })
+
+  it('typing updates the visible draft immediately (before any save)', async () => {
+    renderPage()
+    await settleInitialLoad()
+
+    fireEvent.change(contentInput(), {
+      target: { value: 'Alpha body plus more' },
+    })
+
+    // The visible draft (editor surface + underlying value) updates
+    // immediately, with no PATCH yet.
+    expect(noteContent()).toHaveTextContent(
+      'Alpha body plus more',
+    )
+    expect(contentInput()).toHaveValue(
+      'Alpha body plus more',
+    )
+    expect(richMarkdownEditor.lastProps).toMatchObject({
+      value: 'Alpha body plus more',
+    })
+    expect(updatePersonalNote).not.toHaveBeenCalled()
+  })
+})
+
+/* ── Autosave ─────────────────────────────────────────────────── */
+
+describe('autosave', () => {
+  it('debounces a title edit into a PATCH carrying only the changed field', async () => {
+    renderPage()
+    await settleInitialLoad()
+
+    vi.useFakeTimers()
+    try {
+      fireEvent.change(titleInput(), {
+        target: { value: 'Alpha v2' },
+      })
+      expect(updatePersonalNote).not.toHaveBeenCalled()
+
+      await act(async () => {
+        vi.advanceTimersByTime(299)
+      })
+      expect(updatePersonalNote).not.toHaveBeenCalled()
+
+      await act(async () => {
+        vi.advanceTimersByTime(1)
+      })
+      await act(async () => {})
+    } finally {
+      vi.useRealTimers()
+    }
+
+    // Title-only change → title-only PATCH (no no-op content).
+    expect(updatePersonalNote).toHaveBeenCalledTimes(1)
+    expect(updatePersonalNote).toHaveBeenCalledWith(
+      1,
+      { title: 'Alpha v2' },
+    )
+  })
+
+  it('debounces a content edit into a PATCH carrying only the changed field', async () => {
+    renderPage()
+    await settleInitialLoad()
+
+    vi.useFakeTimers()
+    try {
+      fireEvent.change(contentInput(), {
+        target: { value: 'Alpha body v2' },
+      })
+      await flushDebounce()
+      await act(async () => {})
+    } finally {
+      vi.useRealTimers()
+    }
+
+    expect(updatePersonalNote).toHaveBeenCalledTimes(1)
+    expect(updatePersonalNote).toHaveBeenCalledWith(
+      1,
+      { content: 'Alpha body v2' },
+    )
+  })
+
+  it('coalesces rapid title+content edits into a single PATCH with the latest values', async () => {
+    renderPage()
+    await settleInitialLoad()
+
+    vi.useFakeTimers()
+    try {
+      fireEvent.change(titleInput(), {
+        target: { value: 'Alpha v2' },
+      })
+      fireEvent.change(titleInput(), {
+        target: { value: 'Alpha v3' },
+      })
+      fireEvent.change(contentInput(), {
+        target: { value: 'Alpha body v2' },
+      })
+      await flushDebounce()
+      await act(async () => {})
+    } finally {
+      vi.useRealTimers()
+    }
+
+    expect(updatePersonalNote).toHaveBeenCalledTimes(1)
+    expect(updatePersonalNote).toHaveBeenCalledWith(1, {
+      title: 'Alpha v3',
+      content: 'Alpha body v2',
+    })
+  })
+
+  it('sends no PATCH when the draft is unchanged from the last acknowledged state', async () => {
+    renderPage()
+    await settleInitialLoad()
+
+    vi.useFakeTimers()
+    try {
+      // Type, then revert back to the acknowledged title.
+      fireEvent.change(titleInput(), {
+        target: { value: 'Temporary' },
+      })
+      fireEvent.change(titleInput(), {
+        target: { value: 'Alpha' },
+      })
+      await flushDebounce()
+      await act(async () => {})
+    } finally {
+      vi.useRealTimers()
+    }
+
+    // No timestamp churn from a no-op save.
+    expect(updatePersonalNote).not.toHaveBeenCalled()
+  })
+
+  it('updates updatedAt from the latest server response (list row + surface)', async () => {
+    vi.mocked(updatePersonalNote).mockImplementation(
+      async (id, input) => ({
+        ...KNOWN_NOTES[id],
+        ...input,
+        updatedAt: '2026-09-30T09:00:00Z',
+      }),
+    )
+    renderPage()
+    await settleInitialLoad()
+
+    vi.useFakeTimers()
+    try {
+      fireEvent.change(titleInput(), {
+        target: { value: 'Alpha v2' },
+      })
+      await flushDebounce()
+      await act(async () => {})
+    } finally {
+      vi.useRealTimers()
+    }
+
+    const updatedLabel = `Updated ${formatNoteUpdatedDate(
+      '2026-09-30T09:00:00Z',
+    )}`
+    expect(screen.getByText(updatedLabel)).toBeInTheDocument()
+    expect(
+      rowByTitle('Alpha v2').textContent,
+    ).toContain(formatNoteUpdatedDate('2026-09-30T09:00:00Z'))
+  })
+
+  it('has no explicit Save button anywhere in the page', async () => {
+    renderPage()
+    await settleInitialLoad()
+
+    expect(
+      screen.queryByRole('button', {
+        name: /^save$/i,
+      }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('moves a saved note to the front in the plain active list (canonical recency) and keeps the selection stable', async () => {
+    vi.mocked(updatePersonalNote).mockImplementation(
+      async (id, input) => ({
+        ...KNOWN_NOTES[id],
+        ...input,
+        updatedAt: '2026-09-30T09:00:00Z',
+      }),
+    )
+    renderPage()
+    await settleInitialLoad()
+    expect(rowTitles()).toEqual([
+      'Alpha',
+      'Beta',
+      'Gamma',
+    ])
+
+    fireEvent.click(rowByTitle('Beta'))
+    await waitFor(() =>
+      expect(noteContent()).toHaveTextContent('Beta body'),
+    )
+
+    vi.useFakeTimers()
+    try {
+      fireEvent.change(titleInput(), {
+        target: { value: 'Beta v2' },
+      })
+      await flushDebounce()
+      await act(async () => {})
+    } finally {
+      vi.useRealTimers()
+    }
+
+    // The save bumped Beta's updatedAt → canonical recency puts it
+    // FIRST, while the selection stays on Beta.
+    expect(rowTitles()[0]).toBe('Beta v2')
+    expect(rowByTitle('Beta v2')).toHaveAttribute(
+      'aria-current',
+      'true',
+    )
+  })
+
+  it('replaces the saved entry in place while a search is active (no reordering mid-search)', async () => {
+    renderPage(
+      undefined,
+      async (query?: string) =>
+        query === 'am'
+          ? [GAMMA, BETA]
+          : Promise.resolve(DEFAULT_NOTES),
+    )
+    await settleInitialLoad()
+
+    vi.useFakeTimers()
+    try {
+      fireEvent.change(searchInput(), {
+        target: { value: 'am' },
+      })
+      await flushDebounce()
+    } finally {
+      vi.useRealTimers()
+    }
+
+    // Backend search order: Gamma first, Beta second.
+    expect(rowTitles()).toEqual(['Gamma', 'Beta'])
+
+    fireEvent.click(rowByTitle('Beta'))
+    await waitFor(() =>
+      expect(noteContent()).toHaveTextContent('Beta body'),
+    )
+
+    vi.useFakeTimers()
+    try {
+      fireEvent.change(titleInput(), {
+        target: { value: 'Beta v2' },
+      })
+      await flushDebounce()
+      await act(async () => {})
+    } finally {
+      vi.useRealTimers()
+    }
+
+    // Deliberate list-order handling: the entry is reconciled IN
+    // PLACE — the backend's search order stays authoritative.
+    expect(rowTitles()).toEqual(['Gamma', 'Beta v2'])
+  })
+})
+
+/* ── Save race safety ─────────────────────────────────────────── */
+
+describe('save race safety', () => {
+  it('a slower response to an older draft can never overwrite the newer local text', async () => {
+    const older = deferred<ApiPersonalNote>()
+    const newer = deferred<ApiPersonalNote>()
+    vi.mocked(updatePersonalNote).mockImplementation(
+      async (_id, input) =>
+        input.content === 'draft A'
+          ? older.promise
+          : newer.promise,
+    )
+    renderPage()
+    await settleInitialLoad()
+
+    vi.useFakeTimers()
+    try {
+      // draft A → PATCH A
+      fireEvent.change(contentInput(), {
+        target: { value: 'draft A' },
+      })
+      await flushDebounce()
+      expect(updatePersonalNote).toHaveBeenCalledTimes(1)
+
+      // user types more → draft B → PATCH B
+      fireEvent.change(contentInput(), {
+        target: { value: 'draft AB' },
+      })
+      await flushDebounce()
+      expect(updatePersonalNote).toHaveBeenCalledTimes(2)
+
+      // PATCH B resolves first…
+      newer.resolve({
+        ...ALPHA,
+        content: 'draft AB',
+        updatedAt: '2026-09-29T10:00:00Z',
+      })
+      await act(async () => {})
+      expect(noteContent()).toHaveTextContent('draft AB')
+
+      // …PATCH A (the OLDER draft) resolves LAST — dropped.
+      older.resolve({
+        ...ALPHA,
+        content: 'draft A',
+        updatedAt: '2026-09-29T09:30:00Z',
+      })
+      await act(async () => {})
+    } finally {
+      vi.useRealTimers()
+    }
+
+    // Final visible state stays at B — never reverts to A.
+    expect(noteContent()).toHaveTextContent('draft AB')
+    expect(richMarkdownEditor.lastProps).toMatchObject({
+      value: 'draft AB',
+    })
+  })
+
+  it('out-of-order PATCH responses cannot regress the acknowledged state', async () => {
+    const older = deferred<ApiPersonalNote>()
+    const newer = deferred<ApiPersonalNote>()
+    vi.mocked(updatePersonalNote).mockImplementation(
+      async (_id, input) =>
+        input.title === 'Older title'
+          ? older.promise
+          : newer.promise,
+    )
+    renderPage()
+    await settleInitialLoad()
+
+    vi.useFakeTimers()
+    try {
+      fireEvent.change(titleInput(), {
+        target: { value: 'Older title' },
+      })
+      await flushDebounce()
+
+      fireEvent.change(titleInput(), {
+        target: { value: 'Newer title' },
+      })
+      await flushDebounce()
+
+      // Newer resolves first (acknowledged)…
+      newer.resolve({
+        ...ALPHA,
+        title: 'Newer title',
+        updatedAt: '2026-09-30T09:00:00Z',
+      })
+      await act(async () => {})
+
+      // …older resolves last — it must not regress the row
+      // metadata or the title.
+      older.resolve({
+        ...ALPHA,
+        title: 'Older title',
+        updatedAt: '2026-09-29T09:30:00Z',
+      })
+      await act(async () => {})
+    } finally {
+      vi.useRealTimers()
+    }
+
+    expect(titleInput()).toHaveValue('Newer title')
+    expect(rowTitles()[0]).toBe('Newer title')
+    // Acknowledged updatedAt is the NEWER save's.
+    expect(
+      screen.getByText(
+        `Updated ${formatNoteUpdatedDate('2026-09-30T09:00:00Z')}`,
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it('a save for note A cannot mutate the selected note B', async () => {
+    const aSave = deferred<ApiPersonalNote>()
+    vi.mocked(updatePersonalNote).mockImplementation(
+      async (id, input) => {
+        if (id === 1) {
+          return aSave.promise
+        }
+
+        return {
+          ...KNOWN_NOTES[id],
+          ...input,
+          updatedAt: '2026-09-29T11:00:00Z',
+        }
+      },
+    )
+    renderPage()
+    await settleInitialLoad()
+
+    vi.useFakeTimers()
+    try {
+      // A (selected) becomes dirty…
+      fireEvent.change(contentInput(), {
+        target: { value: 'Alpha dirty' },
+      })
+      // …and the user switches to B: A's draft is flushed
+      // immediately (no debounce), selection changes without
+      // waiting for the network.
+      fireEvent.click(rowByTitle('Beta'))
+      await act(async () => {})
+
+      expect(updatePersonalNote).toHaveBeenCalledTimes(1)
+      expect(updatePersonalNote).toHaveBeenLastCalledWith(
+        1,
+        { content: 'Alpha dirty' },
+      )
+      // B's surface shows B — never A's draft.
+      expect(noteContent()).toHaveTextContent('Beta body')
+      expect(titleInput()).toHaveValue('Beta')
+
+      // Edit B while A's save is still in flight…
+      fireEvent.change(contentInput(), {
+        target: { value: 'Beta dirty' },
+      })
+
+      // A's save resolves — it may update ONLY A.
+      aSave.resolve({
+        ...ALPHA,
+        content: 'Alpha dirty',
+        updatedAt: '2026-09-30T09:00:00Z',
+      })
+      await act(async () => {})
+
+      // B's draft is untouched…
+      expect(noteContent()).toHaveTextContent('Beta dirty')
+      expect(titleInput()).toHaveValue('Beta')
+      // …A's row is updated and A moved first (plain-list
+      // canonical recency)…
+      expect(rowTitles()[0]).toBe('Alpha')
+      // …and B's own autosave proceeds independently with B's
+      // draft.
+      await flushDebounce()
+      await act(async () => {})
+      expect(updatePersonalNote).toHaveBeenLastCalledWith(
+        2,
+        { content: 'Beta dirty' },
+      )
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('switching A → B with A dirty does not lose A\'s draft', async () => {
+    vi.mocked(updatePersonalNote).mockImplementation(
+      () => deferred<ApiPersonalNote>().promise,
+    )
+    renderPage()
+    await settleInitialLoad()
+
+    vi.useFakeTimers()
+    try {
+      fireEvent.change(titleInput(), {
+        target: { value: 'Alpha in progress' },
+      })
+
+      // Switch before the debounce fires — the latest draft is
+      // flushed immediately.
+      fireEvent.click(rowByTitle('Beta'))
+      await act(async () => {})
+    } finally {
+      vi.useRealTimers()
+    }
+
+    // A's latest draft was saved…
+    expect(updatePersonalNote).toHaveBeenCalledWith(1, {
+      title: 'Alpha in progress',
+    })
+    // …the list row reflects the local title immediately…
+    expect(
+      rowTitle(screen.getByRole('button', { name: /Alpha/ })),
+    ).toBe('Alpha in progress')
+    // …and B's surface shows B's own content — never A's draft.
+    expect(noteContent()).toHaveTextContent('Beta body')
+    expect(titleInput()).toHaveValue('Beta')
+  })
+
+  it('switching back to A before its save resolves still shows the latest local draft', async () => {
+    const aSave = deferred<ApiPersonalNote>()
+    vi.mocked(updatePersonalNote).mockImplementation(
+      () => aSave.promise,
+    )
+    renderPage()
+    await settleInitialLoad()
+
+    vi.useFakeTimers()
+    try {
+      fireEvent.change(contentInput(), {
+        target: { value: 'Alpha latest' },
+      })
+      // A → B (A's draft flushes, save in flight)…
+      fireEvent.click(rowByTitle('Beta'))
+      await act(async () => {})
+      // …and straight back to A before the save resolves.
+      fireEvent.click(screen.getByRole('button', { name: /Alpha/ }))
+      await act(async () => {})
+    } finally {
+      vi.useRealTimers()
+    }
+
+    // The LATEST local draft is shown, not the stale canonical
+    // content…
+    expect(noteContent()).toHaveTextContent('Alpha latest')
+    expect(richMarkdownEditor.lastProps).toMatchObject({
+      value: 'Alpha latest',
+    })
+    // …and the in-flight save is NOT duplicated for the same
+    // draft.
+    expect(updatePersonalNote).toHaveBeenCalledTimes(1)
+
+    // The eventual save response updates ONLY A.
+    vi.useFakeTimers()
+    try {
+      await act(async () => {
+        aSave.resolve({
+          ...ALPHA,
+          content: 'Alpha latest',
+          updatedAt: '2026-09-29T10:00:00Z',
+        })
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+
+    expect(noteContent()).toHaveTextContent('Alpha latest')
+  })
+
+  it('unmount performs the final flush without unsafe state writes afterwards', async () => {
+    const gate = deferred<ApiPersonalNote>()
+    vi.mocked(updatePersonalNote).mockImplementation(
+      () => gate.promise,
+    )
+    const view = renderPage()
+    await settleInitialLoad()
+
+    fireEvent.change(contentInput(), {
+      target: { value: 'Alpha before unmount' },
+    })
+
+    act(() => {
+      view.unmount()
+    })
+
+    // The pending draft was flushed (latest content) before the
+    // page went away…
+    expect(updatePersonalNote).toHaveBeenCalledTimes(1)
+    expect(updatePersonalNote).toHaveBeenLastCalledWith(1, {
+      content: 'Alpha before unmount',
+    })
+
+    // …and the response resolving AFTER unmount performs no state
+    // write (no crash, no re-render of the dead page).
+    await act(async () => {
+      gate.resolve({
+        ...ALPHA,
+        content: 'Alpha before unmount',
+        updatedAt: '2026-09-29T10:00:00Z',
+      })
+    })
+    expect(updatePersonalNote).toHaveBeenCalledTimes(1)
+  })
+})
+
+/* ── Save failure ─────────────────────────────────────────────── */
+
+describe('save failure', () => {
+  it('keeps the local draft intact and shows a quiet error state', async () => {
+    vi.mocked(updatePersonalNote).mockRejectedValue(
+      new ApiError(500, { error: 'Save exploded.' }),
+    )
+    renderPage()
+    await settleInitialLoad()
+
+    vi.useFakeTimers()
+    try {
+      fireEvent.change(contentInput(), {
+        target: { value: 'Alpha kept' },
+      })
+      await flushDebounce()
+      await act(async () => {})
+    } finally {
+      vi.useRealTimers()
+    }
+
+    // The error is visible, non-destructive…
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent("Couldn't save.")
+    expect(alert).toHaveTextContent('Save exploded.')
+    // …the draft is intact (no revert to the old server text)…
+    expect(noteContent()).toHaveTextContent('Alpha kept')
+    expect(contentInput()).toHaveValue('Alpha kept')
+    expect(richMarkdownEditor.lastProps).toMatchObject({
+      value: 'Alpha kept',
+    })
+    // …the list row keeps the local title/content truth.
+    expect(rowTitles()[0]).toBe('Alpha')
+  })
+
+  it('a later edit saves successfully and clears the error', async () => {
+    let attempts = 0
+    vi.mocked(updatePersonalNote).mockImplementation(
+      async (id, input) => {
+        attempts += 1
+        if (attempts === 1) {
+          throw new ApiError(500, {
+            error: 'Save exploded.',
+          })
+        }
+
+        return {
+          ...KNOWN_NOTES[id],
+          ...input,
+          updatedAt: '2026-09-29T10:00:00Z',
+        }
+      },
+    )
+    renderPage()
+    await settleInitialLoad()
+
+    vi.useFakeTimers()
+    try {
+      fireEvent.change(contentInput(), {
+        target: { value: 'Alpha kept' },
+      })
+      await flushDebounce()
+      await act(async () => {})
+    } finally {
+      vi.useRealTimers()
+    }
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      "Couldn't save.",
+    )
+
+    // A later edit reschedules the save (no retry storm — exactly
+    // one new PATCH).
+    vi.useFakeTimers()
+    try {
+      fireEvent.change(contentInput(), {
+        target: { value: 'Alpha kept v2' },
+      })
+      await flushDebounce()
+      await act(async () => {})
+    } finally {
+      vi.useRealTimers()
+    }
+
+    expect(updatePersonalNote).toHaveBeenCalledTimes(2)
+    expect(
+      screen.queryByRole('alert'),
+    ).not.toBeInTheDocument()
+    expect(noteContent()).toHaveTextContent('Alpha kept v2')
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Saved',
+    )
+  })
+
+  it('Retry saves the preserved draft and clears the error', async () => {
+    let attempts = 0
+    vi.mocked(updatePersonalNote).mockImplementation(
+      async (id, input) => {
+        attempts += 1
+        if (attempts === 1) {
+          throw new ApiError(500, {
+            error: 'Save exploded.',
+          })
+        }
+
+        return {
+          ...KNOWN_NOTES[id],
+          ...input,
+          updatedAt: '2026-09-29T10:00:00Z',
+        }
+      },
+    )
+    renderPage()
+    await settleInitialLoad()
+
+    vi.useFakeTimers()
+    try {
+      fireEvent.change(contentInput(), {
+        target: { value: 'Alpha kept' },
+      })
+      await flushDebounce()
+      await act(async () => {})
+    } finally {
+      vi.useRealTimers()
+    }
+
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent("Couldn't save.")
+
+    fireEvent.click(
+      within(alert).getByRole('button', {
+        name: 'Retry',
+      }),
+    )
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole('alert'),
+      ).not.toBeInTheDocument()
+    })
+
+    expect(updatePersonalNote).toHaveBeenCalledTimes(2)
+    expect(noteContent()).toHaveTextContent('Alpha kept')
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Saved',
+    )
+  })
+})
+
+/* ── Search interaction with saving ───────────────────────────── */
+
+describe('search interaction', () => {
+  it('a search response cannot clobber a newer local draft of the matching note', async () => {
+    const saveGate = deferred<ApiPersonalNote>()
+    const searchGate = deferred<ApiPersonalNote[]>()
+    vi.mocked(listPersonalNotes).mockImplementation(
+      async (query?: string) => {
+        if (query === 'alpha') {
+          return searchGate.promise
+        }
+
+        return Promise.resolve(DEFAULT_NOTES)
+      },
+    )
+    vi.mocked(updatePersonalNote).mockImplementation(
+      async () => saveGate.promise,
+    )
+    renderPage()
+    await settleInitialLoad()
+
+    vi.useFakeTimers()
+    try {
+      // The user's draft is NEWER than what the (stale) search
+      // will return.
+      fireEvent.change(contentInput(), {
+        target: {
+          value: 'Alpha body, editing',
+        },
+      })
+      fireEvent.change(searchInput(), {
+        target: { value: 'alpha' },
+      })
+      // Both 300 ms windows come due: the autosave PATCH goes out,
+      // then the search request.
+      await flushDebounce()
+      expect(updatePersonalNote).toHaveBeenCalledTimes(1)
+
+      // The stale search response arrives — it must not replace
+      // the newer local draft.
+      searchGate.resolve([
+        { ...ALPHA, content: 'Alpha body' },
+      ])
+      await act(async () => {})
+
+      expect(noteContent()).toHaveTextContent(
+        'Alpha body, editing',
+      )
+
+      // The save acknowledges — then an even LATER stale search
+      // must not clobber the ACKNOWLEDGED state either.
+      saveGate.resolve({
+        ...ALPHA,
+        content: 'Alpha body, editing',
+        updatedAt: '2026-09-29T09:30:00Z',
+      })
+      await act(async () => {})
+    } finally {
+      vi.useRealTimers()
+    }
+
+    vi.useFakeTimers()
+    try {
+      const staleAgain = deferred<ApiPersonalNote[]>()
+      vi.mocked(listPersonalNotes).mockImplementation(
+        async (query?: string) => {
+          if (query === 'alph') {
+            return staleAgain.promise
+          }
+
+          return Promise.resolve(DEFAULT_NOTES)
+        },
+      )
+
+      fireEvent.change(searchInput(), {
+        target: { value: 'alph' },
+      })
+      await flushDebounce()
+      staleAgain.resolve([
+        {
+          ...ALPHA,
+          content: 'Alpha body',
+          updatedAt: '2026-09-29T08:59:00Z',
+        },
+      ])
+      await act(async () => {})
+    } finally {
+      vi.useRealTimers()
+    }
+
+    // The acknowledged save survived both stale search responses.
+    expect(noteContent()).toHaveTextContent(
+      'Alpha body, editing',
+    )
+    expect(richMarkdownEditor.lastProps).toMatchObject({
+      value: 'Alpha body, editing',
+    })
+    expect(
+      screen.getByText(
+        `Updated ${formatNoteUpdatedDate('2026-09-29T09:30:00Z')}`,
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it('completes a pending save when a search drops the selected note (no data loss)', async () => {
+    const saveGate = deferred<ApiPersonalNote>()
+    const searchGate = deferred<ApiPersonalNote[]>()
+    vi.mocked(updatePersonalNote).mockImplementation(
+      async (id, input) => {
+        if (id === 1) {
+          return saveGate.promise
+        }
+
+        return {
+          ...KNOWN_NOTES[id],
+          ...input,
+          updatedAt: '2026-09-29T10:00:00Z',
+        }
+      },
+    )
+    renderPage(
+      undefined,
+      async (query?: string) => {
+        if (query === 'miss') {
+          return searchGate.promise
+        }
+
+        return Promise.resolve(DEFAULT_NOTES)
+      },
+    )
+    await settleInitialLoad()
+
+    vi.useFakeTimers()
+    try {
+      // Alpha (selected) becomes dirty, then a search arrives that
+      // no longer matches it.
+      fireEvent.change(contentInput(), {
+        target: { value: 'Alpha dirty' },
+      })
+      fireEvent.change(searchInput(), {
+        target: { value: 'miss' },
+      })
+      // Autosave flush + search request both come due at 300 ms.
+      await flushDebounce()
+      expect(updatePersonalNote).toHaveBeenCalledTimes(1)
+
+      // The search result drops Alpha — the selection falls back
+      // to the first result (Gamma)…
+      searchGate.resolve([GAMMA])
+      await act(async () => {})
+      expect(noteContent()).toHaveTextContent('Gamma body')
+
+      // …and Alpha's pending save completes SAFELY, updating only
+      // Alpha — never the selected Gamma.
+      saveGate.resolve({
+        ...ALPHA,
+        content: 'Alpha dirty',
+        updatedAt: '2026-09-30T09:00:00Z',
+      })
+      await act(async () => {})
+      expect(noteContent()).toHaveTextContent('Gamma body')
+      expect(titleInput()).toHaveValue('Gamma')
+    } finally {
+      vi.useRealTimers()
+    }
+
+    // Clearing the search restores the ordinary active list…
+    vi.useFakeTimers()
+    try {
+      fireEvent.change(searchInput(), {
+        target: { value: '' },
+      })
+      await flushDebounce()
+    } finally {
+      vi.useRealTimers()
+    }
+
+    // …with Alpha's edit intact (no data loss).
+    fireEvent.click(rowByTitle('Alpha'))
+    await act(async () => {})
+    expect(noteContent()).toHaveTextContent('Alpha dirty')
+  })
 })
 
 /* ── Initial load ─────────────────────────────────────────────── */
@@ -311,17 +1787,21 @@ describe('initial load', () => {
     const status = screen.getByRole('status')
     expect(status).toHaveTextContent('Loading notes…')
     expect(listPersonalNotes).toHaveBeenCalledTimes(1)
-    // Nothing selected yet — no fake note in the reading surface.
+    // Nothing selected yet — no fake note in the writing surface.
     expect(
       screen.queryByTestId('note-content'),
     ).not.toBeInTheDocument()
 
     resolveInitial([ALPHA])
-    await screen.findByRole('heading', { name: 'Alpha' })
+    await screen.findByRole('button', {
+      name: rowNamePrefix('Alpha'),
+    })
 
     expect(
       screen.queryByRole('status'),
     ).not.toBeInTheDocument()
+    expect(noteContent()).toHaveTextContent('Alpha body')
+    expect(titleInput()).toHaveValue('Alpha')
   })
 
   it('preserves the backend order (never re-sorts client-side)', async () => {
@@ -344,43 +1824,36 @@ describe('initial load', () => {
     renderPage([older, newer])
     await settleInitialLoad()
 
-    const rows = rowButtons()
-    expect(rowTitle(rows[0])).toBe('Order A')
-    expect(rowTitle(rows[1])).toBe('Order B')
+    expect(rowTitles()).toEqual(['Order A', 'Order B'])
   })
 
   it('automatically selects the first note returned by the backend', async () => {
     renderPage()
     await settleInitialLoad()
 
-    expect(
-      screen.getByRole('heading', { name: 'Alpha' }),
-    ).toBeInTheDocument()
-    expect(
-      screen.getByRole('button', { name: /Alpha/ }),
-    ).toHaveAttribute('aria-current', 'true')
-    expect(
-      screen.getByTestId('note-content'),
-    ).toHaveTextContent('Alpha body')
+    expect(rowByTitle('Alpha')).toHaveAttribute(
+      'aria-current',
+      'true',
+    )
+    expect(noteContent()).toHaveTextContent('Alpha body')
+    expect(titleInput()).toHaveValue('Alpha')
   })
 
-  it('shows a restrained empty state for an empty collection', async () => {
+  it('shows a restrained empty state that still offers creation', async () => {
     renderPage([])
     await settleInitialLoad()
 
     expect(screen.getByText('No notes yet.')).toBeInTheDocument()
-    // No fake selected note and no non-functional create control.
+    // No fake selected note…
     expect(
       screen.getByText('Select a note to read it.'),
     ).toBeInTheDocument()
     expect(
       screen.queryByTestId('note-content'),
     ).not.toBeInTheDocument()
-    expect(
-      screen.queryByRole('button', {
-        name: /new note/i,
-      }),
-    ).not.toBeInTheDocument()
+    // …but the create path is visible and usable.
+    expect(newNoteButton()).toBeInTheDocument()
+    expect(newNoteButton()).toBeEnabled()
   })
 
   it('issues no per-note detail requests when the collection already carries the full note', async () => {
@@ -399,29 +1872,29 @@ describe('selection', () => {
     renderPage()
     await settleInitialLoad()
 
-    fireEvent.click(
-      screen.getByRole('button', { name: /Gamma/ }),
-    )
+    fireEvent.click(rowByTitle('Gamma'))
 
-    expect(
-      screen.getByRole('heading', { name: 'Gamma' }),
-    ).toBeInTheDocument()
-    expect(
-      screen.getByTestId('note-content'),
-    ).toHaveTextContent('Gamma body')
+    expect(rowByTitle('Gamma')).toHaveAttribute(
+      'aria-current',
+      'true',
+    )
+    expect(noteContent()).toHaveTextContent('Gamma body')
+    expect(titleInput()).toHaveValue('Gamma')
   })
 
   it('changes the selection without any new network request', async () => {
     renderPage()
     await settleInitialLoad()
 
-    fireEvent.click(
-      screen.getByRole('button', { name: /Beta/ }),
+    fireEvent.click(rowByTitle('Beta'))
+    await waitFor(() =>
+      expect(noteContent()).toHaveTextContent('Beta body'),
     )
-    await screen.findByRole('heading', { name: 'Beta' })
 
     expect(listPersonalNotes).toHaveBeenCalledTimes(1)
     expect(getPersonalNote).not.toHaveBeenCalled()
+    // A clean previous note is NOT "saved back" on selection.
+    expect(updatePersonalNote).not.toHaveBeenCalled()
   })
 
   it('renders untitled notes with a presentation fallback only', async () => {
@@ -433,14 +1906,15 @@ describe('selection', () => {
     renderPage([untitled, BETA])
     await settleInitialLoad()
 
-    // List row AND reading surface use the fallback…
-    expect(
-      screen.getByRole('button', { name: /Untitled/ }),
-    ).toBeInTheDocument()
-    expect(
-      screen.getByRole('heading', { name: 'Untitled' }),
-    ).toBeInTheDocument()
-    // …while the stored title stays untouched (no update request).
+    // List row AND writing surface use the fallback…
+    expect(rowByTitle('Untitled')).toBeInTheDocument()
+    expect(titleInput()).toHaveValue('')
+    expect(titleInput()).toHaveAttribute(
+      'placeholder',
+      'Untitled',
+    )
+    // …while the stored title stays untouched (no update
+    // request).
     expect(updatePersonalNote).not.toHaveBeenCalled()
   })
 
@@ -448,24 +1922,26 @@ describe('selection', () => {
     renderPage([ALPHA, BETA])
     await settleInitialLoad()
 
-    expect(
-      screen.getByRole('button', { name: /Alpha/ }),
-    ).toHaveAttribute('aria-current', 'true')
-    expect(
-      screen.getByRole('button', { name: /Beta/ }),
-    ).not.toHaveAttribute('aria-current')
-
-    fireEvent.click(
-      screen.getByRole('button', { name: /Beta/ }),
+    expect(rowByTitle('Alpha')).toHaveAttribute(
+      'aria-current',
+      'true',
     )
-    await screen.findByRole('heading', { name: 'Beta' })
+    expect(rowByTitle('Beta')).not.toHaveAttribute(
+      'aria-current',
+    )
 
-    expect(
-      screen.getByRole('button', { name: /Beta/ }),
-    ).toHaveAttribute('aria-current', 'true')
-    expect(
-      screen.getByRole('button', { name: /Alpha/ }),
-    ).not.toHaveAttribute('aria-current')
+    fireEvent.click(rowByTitle('Beta'))
+    await waitFor(() =>
+      expect(noteContent()).toHaveTextContent('Beta body'),
+    )
+
+    expect(rowByTitle('Beta')).toHaveAttribute(
+      'aria-current',
+      'true',
+    )
+    expect(rowByTitle('Alpha')).not.toHaveAttribute(
+      'aria-current',
+    )
   })
 })
 
@@ -507,8 +1983,7 @@ describe('search', () => {
       'alp',
     )
     // The backend result (only ALPHA) is what renders.
-    expect(rowButtons()).toHaveLength(1)
-    expect(rowTitle(rowButtons()[0])).toBe('Alpha')
+    expect(rowTitles()).toEqual(['Alpha'])
   })
 
   it('renders the backend result set verbatim (no client-side filtering)', async () => {
@@ -532,9 +2007,7 @@ describe('search', () => {
       vi.useRealTimers()
     }
 
-    const rows = rowButtons()
-    expect(rows).toHaveLength(1)
-    expect(rowTitle(rows[0])).toBe('Gamma')
+    expect(rowTitles()).toEqual(['Gamma'])
   })
 
   it('re-requests the ordinary active list when the query is cleared', async () => {
@@ -551,7 +2024,7 @@ describe('search', () => {
         target: { value: 'alp' },
       })
       await flushDebounce()
-      expect(rowButtons()).toHaveLength(1)
+      expect(rowTitles()).toEqual(['Alpha'])
 
       fireEvent.change(searchInput(), {
         target: { value: '' },
@@ -562,7 +2035,11 @@ describe('search', () => {
     }
 
     expect(listPersonalNotes).toHaveBeenLastCalledWith('')
-    expect(rowButtons()).toHaveLength(3)
+    expect(rowTitles()).toEqual([
+      'Alpha',
+      'Beta',
+      'Gamma',
+    ])
   })
 
   it('keeps the current selection when it still exists in the result', async () => {
@@ -575,10 +2052,10 @@ describe('search', () => {
     )
     await settleInitialLoad()
 
-    fireEvent.click(
-      screen.getByRole('button', { name: /Beta/ }),
+    fireEvent.click(rowByTitle('Beta'))
+    await waitFor(() =>
+      expect(noteContent()).toHaveTextContent('Beta body'),
     )
-    await screen.findByRole('heading', { name: 'Beta' })
 
     vi.useFakeTimers()
     try {
@@ -590,14 +2067,14 @@ describe('search', () => {
       vi.useRealTimers()
     }
 
-    // Backend order rendered (Gamma first) — but Beta stays selected.
-    expect(rowTitle(rowButtons()[0])).toBe('Gamma')
-    expect(
-      screen.getByRole('button', { name: /Beta/ }),
-    ).toHaveAttribute('aria-current', 'true')
-    expect(
-      screen.getByRole('heading', { name: 'Beta' }),
-    ).toBeInTheDocument()
+    // Backend order rendered (Gamma first) — but Beta stays
+    // selected.
+    expect(rowTitles()[0]).toBe('Gamma')
+    expect(rowByTitle('Beta')).toHaveAttribute(
+      'aria-current',
+      'true',
+    )
+    expect(noteContent()).toHaveTextContent('Beta body')
   })
 
   it('falls back to the first result when the selection is gone', async () => {
@@ -608,10 +2085,10 @@ describe('search', () => {
     )
     await settleInitialLoad()
 
-    fireEvent.click(
-      screen.getByRole('button', { name: /Beta/ }),
+    fireEvent.click(rowByTitle('Beta'))
+    await waitFor(() =>
+      expect(noteContent()).toHaveTextContent('Beta body'),
     )
-    await screen.findByRole('heading', { name: 'Beta' })
 
     vi.useFakeTimers()
     try {
@@ -623,12 +2100,11 @@ describe('search', () => {
       vi.useRealTimers()
     }
 
-    expect(
-      screen.getByRole('button', { name: /Gamma/ }),
-    ).toHaveAttribute('aria-current', 'true')
-    expect(
-      screen.getByRole('heading', { name: 'Gamma' }),
-    ).toBeInTheDocument()
+    expect(rowByTitle('Gamma')).toHaveAttribute(
+      'aria-current',
+      'true',
+    )
+    expect(noteContent()).toHaveTextContent('Gamma body')
   })
 
   it('clears the selection when the search has no results', async () => {
@@ -639,10 +2115,10 @@ describe('search', () => {
     )
     await settleInitialLoad()
 
-    fireEvent.click(
-      screen.getByRole('button', { name: /Beta/ }),
+    fireEvent.click(rowByTitle('Beta'))
+    await waitFor(() =>
+      expect(noteContent()).toHaveTextContent('Beta body'),
     )
-    await screen.findByRole('heading', { name: 'Beta' })
 
     vi.useFakeTimers()
     try {
@@ -654,8 +2130,10 @@ describe('search', () => {
       vi.useRealTimers()
     }
 
+    // No note rows at all (the navigator's New-note action is a
+    // region resident, not a row).
     expect(
-      within(listRegion()).queryAllByRole('button'),
+      within(listRegion()).queryAllByRole('listitem'),
     ).toHaveLength(0)
     expect(
       screen.queryByRole('button', {
@@ -708,9 +2186,7 @@ describe('search', () => {
       })
       await flushDebounce()
 
-      const rowsAfterFast = rowButtons()
-      expect(rowsAfterFast).toHaveLength(1)
-      expect(rowTitle(rowsAfterFast[0])).toBe('Gamma')
+      expect(rowTitles()).toEqual(['Gamma'])
 
       // The stale response arrives LATE — it must be dropped.
       resolveSlow([ALPHA, BETA])
@@ -719,12 +2195,8 @@ describe('search', () => {
       vi.useRealTimers()
     }
 
-    const rowsAfterStale = rowButtons()
-    expect(rowsAfterStale).toHaveLength(1)
-    expect(rowTitle(rowsAfterStale[0])).toBe('Gamma')
-    expect(
-      screen.getByRole('heading', { name: 'Gamma' }),
-    ).toBeInTheDocument()
+    expect(rowTitles()).toEqual(['Gamma'])
+    expect(noteContent()).toHaveTextContent('Gamma body')
   })
 
   it('distinguishes "no notes exist" from "no notes match this search"', async () => {
@@ -795,7 +2267,9 @@ describe('errors', () => {
     fireEvent.click(
       screen.getByRole('button', { name: 'Try again' }),
     )
-    await screen.findByRole('heading', { name: 'Alpha' })
+    await screen.findByRole('button', {
+      name: rowNamePrefix('Alpha'),
+    })
 
     expect(listPersonalNotes).toHaveBeenCalledTimes(2)
     expect(
@@ -834,26 +2308,24 @@ describe('errors', () => {
     const rows = within(
       within(listRegion()).getByRole('list'),
     ).getAllByRole('button')
-    expect(rows).toHaveLength(3)
     expect(rows.map(rowTitle)).toEqual([
       'Alpha',
       'Beta',
       'Gamma',
     ])
-    expect(
-      screen.getByRole('heading', { name: 'Alpha' }),
-    ).toBeInTheDocument()
-    // Header and search remain intact…
+    expect(noteContent()).toHaveTextContent('Alpha body')
+    // Header, create action, and search remain intact…
     expect(
       screen.getByRole('heading', { name: 'Notes', level: 1 }),
     ).toBeInTheDocument()
+    expect(newNoteButton()).toBeInTheDocument()
     expect(searchInput()).toBeInTheDocument()
     // …and the failure is compact + retryable.
     const alert = screen.getByRole('alert')
     expect(alert).toHaveTextContent('Search failed.')
     expect(alert).toHaveTextContent('Search exploded.')
     expect(
-      screen.getByRole('button', { name: 'Retry' }),
+      within(alert).getByRole('button', { name: 'Retry' }),
     ).toBeInTheDocument()
   })
 })
@@ -890,14 +2362,16 @@ describe('StrictMode lifecycle', () => {
   it('renders notes and selects the first note under StrictMode', async () => {
     renderStrictPage([ALPHA, BETA])
 
-    await screen.findByRole('heading', { name: 'Alpha' })
+    await screen.findByRole('button', {
+      name: rowNamePrefix('Alpha'),
+    })
 
-    expect(
-      screen.getByRole('button', { name: /Alpha/ }),
-    ).toHaveAttribute('aria-current', 'true')
-    expect(
-      screen.getByTestId('note-content'),
-    ).toHaveTextContent('Alpha body')
+    expect(rowByTitle('Alpha')).toHaveAttribute(
+      'aria-current',
+      'true',
+    )
+    expect(noteContent()).toHaveTextContent('Alpha body')
+    expect(titleInput()).toHaveValue('Alpha')
   })
 
   it('lets no stale replayed request overwrite the live render', async () => {
@@ -926,7 +2400,9 @@ describe('StrictMode lifecycle', () => {
       },
     )
 
-    await screen.findByRole('heading', { name: 'Gamma' })
+    await screen.findByRole('button', {
+      name: rowNamePrefix('Gamma'),
+    })
 
     // The stale first response arrives LATE — it must be
     // dropped.
@@ -937,9 +2413,7 @@ describe('StrictMode lifecycle', () => {
       within(listRegion()).getByRole('list'),
     ).getAllByRole('button')
     expect(rows.map(rowTitle)).toEqual(['Gamma'])
-    expect(
-      screen.getByRole('heading', { name: 'Gamma' }),
-    ).toBeInTheDocument()
+    expect(noteContent()).toHaveTextContent('Gamma body')
   })
 
   it('keeps ordinary search race protection under StrictMode', async () => {
@@ -994,54 +2468,56 @@ describe('StrictMode lifecycle', () => {
       within(listRegion()).getByRole('list'),
     ).getAllByRole('button')
     expect(rowsAfterStale.map(rowTitle)).toEqual(['Gamma'])
-    expect(
-      screen.getByRole('heading', { name: 'Gamma' }),
-    ).toBeInTheDocument()
+    expect(noteContent()).toHaveTextContent('Gamma body')
   })
 })
 
+/* ── Editable rendering ────────────────────────────────────────── */
 
-/* ── Rendering ────────────────────────────────────────────────── */
-
-describe('read-only rendering', () => {
-  it('renders the selected content read-only through the canonical Markdown surface', async () => {
-    renderPage([ALPHA])
-    await settleInitialLoad()
-
-    const content = screen.getByTestId('note-content')
-    expect(content).toHaveTextContent('Alpha body')
-    expect(content).toHaveAttribute(
-      'data-read-only',
-      'true',
-    )
-    expect(richMarkdownEditor.lastProps).toMatchObject({
-      readOnly: true,
-      value: 'Alpha body',
-    })
-  })
-
-  it('mounts no editable control or formatting toolbar', async () => {
+describe('editable rendering', () => {
+  it('renders the selected note as a writing surface (title + editor), not a read-only card', async () => {
     renderPage()
     await settleInitialLoad()
 
-    expect(richMarkdownEditor.lastProps).toMatchObject({
-      readOnly: true,
-    })
+    // The title is an editable, explicitly labeled input.
+    const title = titleInput()
+    expect(title).toBeInTheDocument()
+    expect(title).toHaveValue('Alpha')
     expect(
-      screen.queryByRole('toolbar'),
+      title.getAttribute('aria-label'),
+    ).toBe('Note title')
+
+    // The content is the canonical editor, editable, with an
+    // explicit label and a quiet placeholder.
+    const content = contentInput()
+    expect(content).toBeInTheDocument()
+    expect(
+      content.getAttribute('aria-label'),
+    ).toBe('Note content')
+    expect(content).toHaveAttribute(
+      'placeholder',
+      'Start writing…',
+    )
+
+    // The formatting toolbar is contextual (secondary, while
+    // editing): the selection bubble toolbar is present…
+    expect(
+      screen.getByRole('toolbar', {
+        name: 'Selection formatting',
+      }),
+    ).toBeInTheDocument()
+    // …and NO permanent bottom toolbar sits under the document…
+    expect(
+      screen.queryByRole('toolbar', {
+        name: 'Formatting',
+      }),
     ).not.toBeInTheDocument()
-    // The only input on the page is the search field.
-    expect(
-      screen.queryByRole('textbox'),
-    ).not.toBeInTheDocument()
-    expect(
-      screen.getAllByRole('searchbox'),
-    ).toHaveLength(1)
-    // The only buttons are the note rows themselves.
+    // …and the only other buttons are the note rows + the create
+    // action.
     expect(rowButtons()).toHaveLength(DEFAULT_NOTES.length)
   })
 
-  it('shows a quiet empty-content state without fabricating content', async () => {
+  it('shows an editable empty editor with a quiet placeholder for empty content', async () => {
     const empty = note({
       id: 5,
       title: 'Empty',
@@ -1050,26 +2526,69 @@ describe('read-only rendering', () => {
     renderPage([empty])
     await settleInitialLoad()
 
+    // The editor IS mounted (editable, empty) — no read-only
+    // "no content" state…
+    expect(noteContent()).toBeInTheDocument()
+    expect(noteContent()).toHaveTextContent('')
+    expect(noteContent()).toHaveAttribute(
+      'data-editable',
+      'true',
+    )
     expect(
-      screen.getByText('This note has no content.'),
-    ).toBeInTheDocument()
-    // The Markdown surface is never mounted for empty content
-    // (the read-only empty state is the caller's, per the
-    // RichMarkdownEditor contract).
-    expect(
-      screen.queryByTestId('note-content'),
+      screen.queryByText('This note has no content.'),
     ).not.toBeInTheDocument()
-    expect(richMarkdownEditor.lastProps).toBeNull()
+    expect(contentInput()).toHaveValue('')
+    expect(contentInput()).toHaveAttribute(
+      'placeholder',
+      'Start writing…',
+    )
+    // …and nothing is fabricated or persisted.
+    expect(richMarkdownEditor.lastProps).toMatchObject({
+      value: '',
+    })
+    expect(updatePersonalNote).not.toHaveBeenCalled()
   })
 
-  it('issues no create/pin/archive/restore/detail requests in this slice', async () => {
+  it('mounts no read-only editor mode or duplicate surface', async () => {
     renderPage()
     await settleInitialLoad()
 
-    fireEvent.click(
-      screen.getByRole('button', { name: /Beta/ }),
+    expect(richMarkdownEditor.lastProps).toMatchObject({
+      variant: 'full',
+    })
+    expect(
+      richMarkdownEditor.lastProps?.readOnly,
+    ).toBeFalsy()
+    // One editor surface per selected note.
+    expect(screen.getAllByTestId('note-editor')).toHaveLength(
+      1,
     )
-    await screen.findByRole('heading', { name: 'Beta' })
+  })
+
+  it('introduces no second editor or Markdown implementation', () => {
+    const source =
+      notesPageSource
+
+    // The page composes the single canonical editor…
+    expect(source).toContain(
+      "from '../../components/editor/RichMarkdownEditor'",
+    )
+    // …and never reaches for Tiptap or another Markdown library
+    // itself.
+    expect(source).not.toMatch(/@tiptap/)
+    expect(source).not.toMatch(
+      /react-markdown|marked|showdown|remark/,
+    )
+  })
+
+  it('issues no pin/archive/restore/detail requests while browsing, and no save for clean notes', async () => {
+    renderPage()
+    await settleInitialLoad()
+
+    fireEvent.click(rowByTitle('Beta'))
+    await waitFor(() =>
+      expect(noteContent()).toHaveTextContent('Beta body'),
+    )
 
     vi.useFakeTimers()
     try {
@@ -1083,6 +2602,7 @@ describe('read-only rendering', () => {
     }
 
     expect(createPersonalNote).not.toHaveBeenCalled()
+    // No save for a note whose draft was never touched.
     expect(updatePersonalNote).not.toHaveBeenCalled()
     expect(setPersonalNotePinned).not.toHaveBeenCalled()
     expect(archivePersonalNote).not.toHaveBeenCalled()
@@ -1092,11 +2612,379 @@ describe('read-only rendering', () => {
   })
 })
 
+/* ── Document-first workspace (presentation contract) ─────────── */
+
+describe('document-first workspace', () => {
+  it('owns the Notes identity in the navigator (heading + create + search)', async () => {
+    renderPage()
+    await settleInitialLoad()
+
+    const navigator = listRegion()
+    // The Notes-level heading lives in the navigator…
+    const heading = navigator.querySelector('h1')
+    expect(heading).not.toBeNull()
+    expect(heading).toHaveTextContent('Notes')
+    // …together with the create action and the search field — one
+    // control area, not a header above both columns.
+    expect(navigator.contains(newNoteButton())).toBe(true)
+    expect(navigator.contains(searchInput())).toBe(true)
+  })
+
+  it('keeps note rows keyboard-selectable inside the navigator', async () => {
+    renderPage([ALPHA, BETA])
+    await settleInitialLoad()
+
+    // Native buttons: focusable + keyboard-activatable by
+    // construction.
+    rowButtons().forEach((row) =>
+      expect(row.tagName).toBe('BUTTON'),
+    )
+
+    // Selection semantics unchanged.
+    expect(rowByTitle('Alpha')).toHaveAttribute(
+      'aria-current',
+      'true',
+    )
+    fireEvent.click(rowByTitle('Beta'))
+    await waitFor(() =>
+      expect(noteContent()).toHaveTextContent('Beta body'),
+    )
+    expect(rowByTitle('Beta')).toHaveAttribute(
+      'aria-current',
+      'true',
+    )
+  })
+
+  it('requests the contextual (bubble-only) toolbar for the Notes editor', async () => {
+    renderPage()
+    await settleInitialLoad()
+
+    // The page composes the canonical editor in contextual mode…
+    expect(richMarkdownEditor.lastProps).toMatchObject({
+      variant: 'full',
+      toolbarMode: 'contextual',
+    })
+    // …the selection bubble toolbar stays available in the
+    // editable Notes editor…
+    expect(
+      screen.getByRole('toolbar', {
+        name: 'Selection formatting',
+      }),
+    ).toBeInTheDocument()
+    // …and no permanent bottom toolbar (with its "Markdown
+    // supported" copy) sits under the document.
+    expect(
+      screen.queryByRole('toolbar', {
+        name: 'Formatting',
+      }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByText('Markdown supported'),
+    ).not.toBeInTheDocument()
+  })
+
+  it('fabricates no custom-property controls or fake metadata', async () => {
+    renderPage()
+    await settleInitialLoad()
+
+    expect(
+      screen.queryByRole('button', {
+        name: /add property/i,
+      }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByText(/property/i),
+    ).not.toBeInTheDocument()
+  })
+
+  it('presents the selected note as a borderless document (no card panel)', async () => {
+    renderPage()
+    await settleInitialLoad()
+
+    const region = screen.getByRole('region', {
+      name: 'Selected note',
+    })
+    const article = screen.getByRole('article')
+
+    // Neither the pane nor the document carries a card
+    // treatment: no borders, no shadows.
+    expect(region.className).not.toMatch(
+      /border|shadow-/,
+    )
+    expect(article.className).not.toMatch(
+      /border|shadow-/,
+    )
+    // The title stays a borderless, transparent input — no
+    // resting form-field rectangle.
+    expect(titleInput()).toHaveClass('bg-transparent')
+  })
+
+  it('keeps the zero-note state quiet with an obvious create path', async () => {
+    renderPage([])
+    await settleInitialLoad()
+
+    // No dashed placeholder card — one quiet line of copy…
+    expect(screen.getByText('Select a note to read it.')).toBeInTheDocument()
+    expect(
+      screen.queryByRole('region', {
+        name: 'Selected note',
+      }),
+    ).not.toHaveClass('border-dashed')
+    // …and the navigator still clearly offers New note.
+    expect(newNoteButton()).toBeEnabled()
+  })
+})
+
+/* ── Writing focus handoff (interaction contract) ─────────────── */
+
+describe('writing focus handoff', () => {
+  it('renders the title with the stronger document-title presentation', async () => {
+    renderPage()
+    await settleInitialLoad()
+
+    const title = titleInput()
+    // Slightly stronger than the previous 30px treatment…
+    expect(title).toHaveClass('text-[32px]')
+    expect(title).toHaveClass('font-semibold')
+    // …still a borderless, transparent surface — no form-field
+    // chrome.
+    expect(title).toHaveClass('bg-transparent')
+    expect(title.className).not.toMatch(/border-/)
+  })
+
+  it('Enter in the title prevents the default and hands focus to the editor', async () => {
+    renderPage()
+    await settleInitialLoad()
+
+    const title = titleInput()
+    title.focus()
+    expect(title).toHaveFocus()
+
+    const seen: KeyboardEvent[] = []
+    title.addEventListener('keydown', (event) =>
+      seen.push(event),
+    )
+
+    fireEvent.keyDown(title, { key: 'Enter' })
+
+    // No newline, no submit: the default is suppressed…
+    expect(seen).toHaveLength(1)
+    expect(seen[0].defaultPrevented).toBe(true)
+    // …the title value is untouched…
+    expect(title).toHaveValue('Alpha')
+    // …and the editor received the handoff — focused, caret at
+    // the end of the document content.
+    expect(richMarkdownEditor.focusEndCalls).toBe(1)
+    const editor =
+      contentInput() as HTMLTextAreaElement
+    expect(editor).toHaveFocus()
+    expect(editor.selectionStart).toBe(
+      editor.value.length,
+    )
+    expect(editor.selectionEnd).toBe(
+      editor.value.length,
+    )
+  })
+
+  it('Enter in the title never creates a note', async () => {
+    renderPage()
+    await settleInitialLoad()
+
+    const title = titleInput()
+    title.focus()
+    fireEvent.keyDown(title, { key: 'Enter' })
+
+    expect(createPersonalNote).not.toHaveBeenCalled()
+    expect(
+      rowByTitle('Alpha'),
+    ).toHaveAttribute('aria-current', 'true')
+  })
+
+  it('Enter in the title flushes the draft exactly once (no duplicate PATCH)', async () => {
+    renderPage()
+    await settleInitialLoad()
+
+    vi.useFakeTimers()
+    try {
+      fireEvent.change(titleInput(), {
+        target: { value: 'Alpha v2' },
+      })
+      const title = titleInput()
+      title.focus()
+      fireEvent.keyDown(title, { key: 'Enter' })
+      await flushDebounce()
+      await act(async () => {})
+    } finally {
+      vi.useRealTimers()
+    }
+
+    expect(updatePersonalNote).toHaveBeenCalledTimes(1)
+    expect(updatePersonalNote).toHaveBeenCalledWith(
+      1,
+      { title: 'Alpha v2' },
+    )
+  })
+
+  it('empty note: title → Enter → the editor is immediately writable', async () => {
+    vi.mocked(createPersonalNote).mockResolvedValue(
+      freshCreatedNote(),
+    )
+    renderPage([])
+    await settleInitialLoad()
+
+    fireEvent.click(newNoteButton())
+    await screen.findByRole('button', {
+      name: rowNamePrefix('Untitled'),
+    })
+    await waitFor(() =>
+      expect(titleInput()).toHaveFocus(),
+    )
+
+    fireEvent.change(titleInput(), {
+      target: { value: 'Fresh thought' },
+    })
+    fireEvent.keyDown(titleInput(), { key: 'Enter' })
+
+    expect(contentInput()).toHaveFocus()
+    // The empty editor is ready: editable, quiet placeholder.
+    expect(noteContent()).toHaveAttribute(
+      'data-editable',
+      'true',
+    )
+    expect(contentInput()).toHaveValue('')
+    expect(contentInput()).toHaveAttribute(
+      'placeholder',
+      'Start writing…',
+    )
+
+    // …and typing lands in the document draft.
+    fireEvent.change(contentInput(), {
+      target: { value: 'First words.' },
+    })
+    expect(richMarkdownEditor.lastProps).toMatchObject({
+      value: 'First words.',
+    })
+  })
+
+  it('clicking free document surface focuses the editor at the end', async () => {
+    renderPage()
+    await settleInitialLoad()
+
+    const article = screen.getByRole('article')
+
+    // A genuine click (press, no movement, release) on the
+    // article's own surface — not on a descendant.
+    fireEvent.mouseDown(article, {
+      clientX: 40,
+      clientY: 200,
+    })
+    fireEvent.mouseUp(article, {
+      clientX: 40,
+      clientY: 200,
+    })
+    fireEvent.click(article, {
+      clientX: 40,
+      clientY: 200,
+    })
+
+    expect(richMarkdownEditor.focusEndCalls).toBe(1)
+    const editor =
+      contentInput() as HTMLTextAreaElement
+    expect(editor).toHaveFocus()
+    expect(editor.selectionStart).toBe(
+      editor.value.length,
+    )
+
+    // …and below the writing column (the column container).
+    const column =
+      article.parentElement as HTMLElement
+    fireEvent.mouseDown(column, {
+      clientX: 40,
+      clientY: 400,
+    })
+    fireEvent.mouseUp(column, {
+      clientX: 40,
+      clientY: 400,
+    })
+    fireEvent.click(column, {
+      clientX: 40,
+      clientY: 400,
+    })
+    expect(richMarkdownEditor.focusEndCalls).toBe(2)
+  })
+
+  it('clicks on title, editor content, and Retry keep their native behavior', async () => {
+    renderPage()
+    await settleInitialLoad()
+
+    // Title input…
+    fireEvent.click(titleInput())
+    // …and editor content: no handoff.
+    fireEvent.click(contentInput())
+    expect(richMarkdownEditor.focusEndCalls).toBe(0)
+
+    // With a failing save, the Retry control INSIDE the document
+    // surface must still re-send the save…
+    vi.mocked(updatePersonalNote).mockRejectedValue(
+      new ApiError(500, {
+        error: 'Save exploded.',
+      }),
+    )
+    vi.useFakeTimers()
+    try {
+      fireEvent.change(contentInput(), {
+        target: { value: 'Alpha kept' },
+      })
+      await flushDebounce()
+      await act(async () => {})
+    } finally {
+      vi.useRealTimers()
+    }
+
+    const retry = screen.getByRole('button', {
+      name: 'Retry',
+    })
+    fireEvent.click(retry)
+
+    expect(updatePersonalNote).toHaveBeenCalledTimes(2)
+    expect(richMarkdownEditor.focusEndCalls).toBe(0)
+  })
+
+  it('a press-drag-release (text selection) is never converted into the handoff', async () => {
+    renderPage()
+    await settleInitialLoad()
+
+    const column =
+      screen.getByRole('article').parentElement as HTMLElement
+
+    // Press, drag across the surface, release — the browser's
+    // synthetic click then lands on the surface itself.
+    fireEvent.mouseDown(column, {
+      clientX: 100,
+      clientY: 100,
+    })
+    fireEvent.mouseUp(column, {
+      clientX: 180,
+      clientY: 100,
+    })
+    fireEvent.click(column, {
+      clientX: 180,
+      clientY: 100,
+    })
+
+    expect(richMarkdownEditor.focusEndCalls).toBe(0)
+    expect(contentInput()).not.toHaveFocus()
+  })
+})
+
 /* ── AppShell integration & structure ─────────────────────────── */
 
 describe('AppShell integration', () => {
   it('renders /notes inside the authenticated AppShell with one Notes workspace (no second shell)', async () => {
     vi.mocked(listPersonalNotes).mockResolvedValue([ALPHA])
+    vi.mocked(createPersonalNote).mockImplementation(
+      async () => freshCreatedNote(),
+    )
 
     render(
       <MemoryRouter initialEntries={['/notes']}>
@@ -1130,7 +3018,10 @@ describe('AppShell integration', () => {
     expect(notesLink).toHaveAttribute('href', '/notes')
 
     // The workspace itself rendered with its note.
-    await screen.findByRole('heading', { name: 'Alpha' })
+    await screen.findByRole('button', {
+      name: rowNamePrefix('Alpha'),
+    })
+    expect(noteContent()).toHaveTextContent('Alpha body')
   })
 })
 

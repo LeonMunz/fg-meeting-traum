@@ -1,5 +1,7 @@
 import {
+  forwardRef,
   useEffect,
+  useImperativeHandle,
   useRef,
   useState,
 } from 'react'
@@ -12,11 +14,30 @@ import {
 import { createMarkdownExtensions, safeIsActive } from './markdownExtensions'
 import type { MarkdownEditorVariant } from './markdownExtensions'
 import { EditorBottomToolbar, EditorBubbleToolbar } from './EditorToolbar'
+import { LinkPopover } from './LinkPopover'
 
 // Re-exported for callers that only need the variant type (the schema
 // itself — what each variant actually supports — lives in
 // markdownExtensions.ts, the single source of truth described there).
 export type { MarkdownEditorVariant } from './markdownExtensions'
+
+/** See `RichMarkdownEditorProps.toolbarMode`. */
+export type RichMarkdownEditorToolbarMode = 'default' | 'contextual'
+
+/**
+ * Imperative handle for callers that need to place the caret in the
+ * document (Personal Notes uses it for the Enter-in-title and
+ * free-surface-click writing handoff). Pass a `ref` to opt in —
+ * every existing consumer renders without one and is unaffected.
+ */
+export type RichMarkdownEditorHandle = {
+  /**
+   * Move focus into the editor and place the caret at the END of
+   * the document. Never mutates content; no-op until the editor is
+   * ready.
+   */
+  focusEnd: () => void
+}
 
 export type RichMarkdownEditorProps = {
   /** Canonical Markdown — the only shape this component's API ever
@@ -33,6 +54,25 @@ export type RichMarkdownEditorProps = {
   onEscape?: () => void
   readOnly?: boolean
   variant?: MarkdownEditorVariant
+  /**
+   * Which formatting surfaces the editing mode mounts.
+   *
+   * - `'default'` (the historical behavior, unchanged): the permanent
+   *   bottom toolbar PLUS the selection-anchored Bubble toolbar. This
+   *   is what the Work Item Description / Comments surfaces use.
+   * - `'contextual'`: only the selection-anchored Bubble toolbar —
+   *   formatting is progressively disclosed with the selection, there
+   *   is no permanent bar under the content (and with it no
+   *   "Markdown supported" hint). The Link popover still works: it is
+   *   opened from the Bubble toolbar's Link button or Cmd/Ctrl+K and
+   *   anchored to the editor surface. Used by Personal Notes, where
+   *   the document is the work surface and a permanent toolbar would
+   *   be chrome.
+   *
+   * Both modes render the identical editor schema/keybindings — only
+   * the toolbar presentation differs.
+   */
+  toolbarMode?: RichMarkdownEditorToolbarMode
   /** Empty-state placeholder shown inside the editable surface only —
    * the read-only empty state is handled by the caller (kept lightweight
    * per PHASE 1 SCOPE, never mounts this component at all). */
@@ -55,19 +95,32 @@ export type RichMarkdownEditorProps = {
  * same bottom toolbar/BubbleMenu surfaces while editing — only the
  * button set and the underlying Markdown schema (see
  * markdownExtensions.ts) actually differ between them.
+ *
+ * `toolbarMode` is orthogonal to `variant`: by default (`'default'`)
+ * editing mounts the permanent bottom toolbar plus the BubbleMenu,
+ * exactly as before; `'contextual'` mounts only the BubbleMenu (see
+ * the prop docs) — the editor schema, keybindings, and Markdown
+ * contract are identical in both modes.
  */
-export function RichMarkdownEditor({
-  value,
-  onChange,
-  onCommit,
-  onEscape,
-  readOnly = false,
-  variant = 'full',
-  placeholder,
-  autoFocus = false,
-  ariaLabel,
-  className,
-}: RichMarkdownEditorProps) {
+export const RichMarkdownEditor = forwardRef<
+  RichMarkdownEditorHandle,
+  RichMarkdownEditorProps
+>(function RichMarkdownEditor(
+  {
+    value,
+    onChange,
+    onCommit,
+    onEscape,
+    readOnly = false,
+    variant = 'full',
+    toolbarMode = 'default',
+    placeholder,
+    autoFocus = false,
+    ariaLabel,
+    className,
+  }: RichMarkdownEditorProps,
+  ref,
+) {
   const suppressNextBlurCommitRef = useRef(false)
   const hasAutoFocusedRef = useRef(false)
 
@@ -184,6 +237,25 @@ export function RichMarkdownEditor({
     [readOnly, variant],
   )
 
+  // The additive focus contract (see RichMarkdownEditorHandle):
+  // Tiptap's own `focus` command with the 'end' position moves focus
+  // into the view AND places the caret at the document end — no
+  // manual selection surgery, no remount, no content mutation.
+  // Re-registered whenever the editor instance changes.
+  useImperativeHandle(
+    ref,
+    () => ({
+      focusEnd: () => {
+        if (!editor) {
+          return
+        }
+
+        editor.commands.focus('end')
+      },
+    }),
+    [editor],
+  )
+
   // Keep the editor's document in sync with an externally-changed
   // `value` (e.g. switching Work Items, or a value passed in fresh after
   // this component remounted readOnly) — but never while the user is
@@ -286,13 +358,32 @@ export function RichMarkdownEditor({
             editor={editor}
             linkPopover={linkPopover}
           />
-          <EditorBottomToolbar
-            editor={editor}
-            linkPopover={linkPopover}
-            variant={variant}
-          />
+
+          {toolbarMode === 'default' ? (
+            <EditorBottomToolbar
+              editor={editor}
+              linkPopover={linkPopover}
+              variant={variant}
+            />
+          ) : (
+            /*
+             * Contextual mode: no permanent bottom toolbar. The Link
+             * popover (Bubble toolbar Link button / Cmd/Ctrl+K) still
+             * needs a mount point — anchored to the editor surface,
+             * mirroring how the bottom toolbar anchors it above
+             * itself in default mode.
+             */
+            linkPopover.open && (
+              <div className="relative mt-2">
+                <LinkPopover
+                  editor={editor}
+                  onClose={linkPopover.onClose}
+                />
+              </div>
+            )
+          )}
         </>
       )}
     </div>
   )
-}
+})
