@@ -4,17 +4,18 @@
  * Covers the complete implemented Personal Notes backend contract:
  *   GET/POST /api/me/notes/
  *   GET /api/me/notes/archive/
- *   GET/PATCH /api/me/notes/{noteId}/
+ *   GET/PATCH/DELETE /api/me/notes/{noteId}/
  *   POST /api/me/notes/{noteId}/pin/ | /archive/ | /restore/
  *
  * The client is a thin typed layer over the existing `apiGet` /
- * `apiPost` / `apiPatch` transport: it performs no client-side
- * filtering, invents no default title/content, and fabricates no
- * Note — every returned Note is the authoritative server response,
- * and transport errors (ApiError) propagate unchanged.
+ * `apiPost` / `apiPatch` / `apiDelete` transport: it performs no
+ * client-side filtering, invents no default title/content, and
+ * fabricates no Note — every returned Note is the authoritative
+ * server response, and transport errors (ApiError) propagate
+ * unchanged.
  */
 
-import { apiGet, apiPatch, apiPost } from './client'
+import { apiDelete, apiGet, apiPatch, apiPost } from './client'
 
 import type {
   ApiCreatePersonalNoteInput,
@@ -104,4 +105,16 @@ export async function restorePersonalNote(
   noteId: number,
 ): Promise<ApiPersonalNote> {
   return apiPost<ApiPersonalNote>(`/api/me/notes/${noteId}/restore/`, {})
+}
+
+/**
+ * Permanently delete the note (active or archived). The server
+ * physically removes the row — irreversible, no trash, no soft
+ * delete. The success contract is `204 No Content` with no body,
+ * so this resolves to `void` and fabricates no Note.
+ */
+export async function deletePersonalNote(
+  noteId: number,
+): Promise<void> {
+  await apiDelete<void>(`/api/me/notes/${noteId}/`)
 }

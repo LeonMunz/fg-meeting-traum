@@ -11,6 +11,10 @@ Covers:
   Project membership grants no note access
 - lifecycle: active/archived partitioning, identity preservation across
   archive/restore, idempotent replay, owner immutability
+- permanent delete: owner-only physical row removal (active and
+  archived), no tombstone, foreign/unknown ids yield the same
+  non-leaking domain error, a failed foreign delete leaves the row
+  untouched
 - ordering: most recently updated first with a deterministic id
   tie-breaker (active and archived listings)
 - search: owner-scoped, ACTIVE-only, case-insensitive substring
@@ -29,6 +33,7 @@ from personal_notes.services import (
     PersonalNoteNotFoundError,
     archive_personal_note,
     create_personal_note,
+    delete_personal_note,
     get_personal_note,
     list_active_notes,
     list_archived_notes,
@@ -575,3 +580,114 @@ class PersonalNoteSearchServiceTest(TestCase):
                 self.title_note.pk,
             ],
         )
+
+
+class PersonalNoteDeleteTest(TestCase):
+    """Permanent delete: the owner may permanently destroy the
+    PersonalNote row.
+
+    Canonical reference: ``docs/domain/personal-notes.md``. The
+    operation resolves through the SAME owner-scoped lookup as every
+    other existing-note operation; a nonexistent id and a foreign id
+    produce the SAME non-leaking ``PersonalNoteNotFoundError``. The
+    row is physically removed (no tombstone, no recovery); both
+    active and archived notes may be deleted.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.alice = User.objects.create_user(
+            username="pn_del_alice", password="TestPass1!"
+        )
+        cls.bob = User.objects.create_user(
+            username="pn_del_bob", password="TestPass1!"
+        )
+
+    # 1. The owner permanently deletes an active note.
+    def test_owner_permanently_deletes_active_note(self):
+        note = create_personal_note(
+            actor=self.alice, title="doomed", content="gone",
+        )
+
+        delete_personal_note(actor=self.alice, note_id=note.pk)
+
+        self.assertFalse(
+            PersonalNote.objects.filter(pk=note.pk).exists()
+        )
+        self.assertNotIn(
+            note.pk, _note_ids(list_active_notes(actor=self.alice))
+        )
+        self.assertNotIn(
+            note.pk, _note_ids(list_archived_notes(actor=self.alice))
+        )
+
+    # 2. The owner permanently deletes an archived note.
+    def test_owner_permanently_deletes_archived_note(self):
+        note = create_personal_note(
+            actor=self.alice, title="archived doomer",
+        )
+        archive_personal_note(actor=self.alice, note_id=note.pk)
+        self.assertIsNotNone(
+            PersonalNote.objects.get(pk=note.pk).archived_at
+        )
+
+        delete_personal_note(actor=self.alice, note_id=note.pk)
+
+        self.assertFalse(
+            PersonalNote.objects.filter(pk=note.pk).exists()
+        )
+        self.assertNotIn(
+            note.pk, _note_ids(list_archived_notes(actor=self.alice))
+        )
+        self.assertNotIn(
+            note.pk, _note_ids(list_active_notes(actor=self.alice))
+        )
+
+    # 3. Deletion physically removes the row: no tombstone, no
+    #    soft-delete state, nothing left behind for that pk.
+    def test_deletion_removes_the_row_physically(self):
+        note = create_personal_note(
+            actor=self.alice, title="physical",
+        )
+        delete_personal_note(actor=self.alice, note_id=note.pk)
+
+        with self.assertRaises(PersonalNote.DoesNotExist):
+            PersonalNote.objects.get(pk=note.pk)
+
+    # 4. A foreign owner cannot delete the note.
+    def test_foreign_owner_cannot_delete(self):
+        note = create_personal_note(
+            actor=self.alice, title="foreign",
+        )
+
+        with self.assertRaises(PersonalNoteNotFoundError):
+            delete_personal_note(actor=self.bob, note_id=note.pk)
+
+        # The failed foreign delete leaves the row untouched.
+        note.refresh_from_db()
+        self.assertEqual(note.title, "foreign")
+        self.assertIsNone(note.archived_at)
+
+    # 5. A foreign id and a nonexistent id produce the SAME domain
+    #    error (never distinguishable to the caller).
+    def test_foreign_and_nonexistent_produce_same_domain_error(self):
+        note = create_personal_note(
+            actor=self.alice, title="foreign",
+        )
+
+        for note_id in (note.pk, 999999):
+            with self.assertRaises(PersonalNoteNotFoundError):
+                delete_personal_note(actor=self.bob, note_id=note_id)
+
+        note.refresh_from_db()
+
+    # 6. Deleting an already-deleted note follows the ordinary
+    #    not-found contract (no second "deleted" state).
+    def test_deleting_an_already_deleted_note_is_not_found(self):
+        note = create_personal_note(
+            actor=self.alice, title="once",
+        )
+        delete_personal_note(actor=self.alice, note_id=note.pk)
+
+        with self.assertRaises(PersonalNoteNotFoundError):
+            delete_personal_note(actor=self.alice, note_id=note.pk)

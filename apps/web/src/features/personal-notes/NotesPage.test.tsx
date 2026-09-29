@@ -31,6 +31,7 @@ import { ApiError } from '../../api/client'
 import {
   archivePersonalNote,
   createPersonalNote,
+  deletePersonalNote,
   getPersonalNote,
   listArchivedPersonalNotes,
   listPersonalNotes,
@@ -160,6 +161,7 @@ vi.mock('../../api/personal-notes', () => ({
   getPersonalNote: vi.fn(),
   createPersonalNote: vi.fn(),
   updatePersonalNote: vi.fn(),
+  deletePersonalNote: vi.fn(),
   setPersonalNotePinned: vi.fn(),
   archivePersonalNote: vi.fn(),
   restorePersonalNote: vi.fn(),
@@ -285,6 +287,7 @@ function resetApiMocks() {
   vi.mocked(setPersonalNotePinned).mockReset()
   vi.mocked(archivePersonalNote).mockReset()
   vi.mocked(restorePersonalNote).mockReset()
+  vi.mocked(deletePersonalNote).mockReset()
   richMarkdownEditor.lastProps = null
   richMarkdownEditor.focusEndCalls = 0
   createdCounter = 0
@@ -410,11 +413,34 @@ function listRegion() {
 }
 
 function rowButtons() {
-  // The navigator region also hosts the New-note action; the note
-  // rows are exactly the list items' buttons.
+  // The navigator region also hosts the New-note action; each note
+  // row holds exactly TWO sibling buttons: the selection button
+  // (the whole practical title/date region) and the overflow
+  // trigger ("More actions for …"). This helper returns the
+  // selection buttons — the trigger carries the aria-label, the
+  // selection button derives its name from its content.
   return within(listRegion())
     .getAllByRole('listitem')
-    .map((item) => within(item).getByRole('button'))
+    .map((item) => {
+      const buttons = within(item).getAllByRole('button')
+      return buttons.find(
+        (button) => !button.hasAttribute('aria-label'),
+      ) as HTMLElement
+    })
+}
+
+/** The row's overflow trigger ("More actions for <title>"). */
+function overflowTrigger(title: string) {
+  return screen.getByRole('button', {
+    name: `More actions for ${title}`,
+  })
+}
+
+/** The selection buttons of a list element (no overflow triggers). */
+function selectionButtonsIn(list: HTMLElement) {
+  return Array.from(list.querySelectorAll('button')).filter(
+    (button) => !button.hasAttribute('aria-label'),
+  ) as HTMLElement[]
 }
 
 function rowTitles() {
@@ -1332,7 +1358,7 @@ describe('save race safety', () => {
     })
     // …the list row reflects the local title immediately…
     expect(
-      rowTitle(screen.getByRole('button', { name: /Alpha/ })),
+      rowTitle(rowByTitle('Alpha in progress')),
     ).toBe('Alpha in progress')
     // …and B's surface shows B's own content — never A's draft.
     expect(noteContent()).toHaveTextContent('Beta body')
@@ -1356,7 +1382,7 @@ describe('save race safety', () => {
       fireEvent.click(rowByTitle('Beta'))
       await act(async () => {})
       // …and straight back to A before the save resolves.
-      fireEvent.click(screen.getByRole('button', { name: /Alpha/ }))
+      fireEvent.click(rowByTitle('Alpha'))
       await act(async () => {})
     } finally {
       vi.useRealTimers()
@@ -2305,9 +2331,9 @@ describe('errors', () => {
     // The last successful result set is preserved (rows are scoped
     // to the list itself — the search-error Retry button lives in
     // the same section but outside the list).
-    const rows = within(
+    const rows = selectionButtonsIn(
       within(listRegion()).getByRole('list'),
-    ).getAllByRole('button')
+    )
     expect(rows.map(rowTitle)).toEqual([
       'Alpha',
       'Beta',
@@ -2409,9 +2435,9 @@ describe('StrictMode lifecycle', () => {
     resolveFirst([ALPHA])
     await act(async () => {})
 
-    const rows = within(
+    const rows = selectionButtonsIn(
       within(listRegion()).getByRole('list'),
-    ).getAllByRole('button')
+    )
     expect(rows.map(rowTitle)).toEqual(['Gamma'])
     expect(noteContent()).toHaveTextContent('Gamma body')
   })
@@ -2450,9 +2476,9 @@ describe('StrictMode lifecycle', () => {
       })
       await flushDebounce()
 
-      const rowsAfterFast = within(
+      const rowsAfterFast = selectionButtonsIn(
         within(listRegion()).getByRole('list'),
-      ).getAllByRole('button')
+      )
       expect(rowsAfterFast.map(rowTitle)).toEqual(
         ['Gamma'],
       )
@@ -2464,9 +2490,9 @@ describe('StrictMode lifecycle', () => {
       vi.useRealTimers()
     }
 
-    const rowsAfterStale = within(
+    const rowsAfterStale = selectionButtonsIn(
       within(listRegion()).getByRole('list'),
-    ).getAllByRole('button')
+    )
     expect(rowsAfterStale.map(rowTitle)).toEqual(['Gamma'])
     expect(noteContent()).toHaveTextContent('Gamma body')
   })
@@ -2743,8 +2769,10 @@ describe('writing focus handoff', () => {
     await settleInitialLoad()
 
     const title = titleInput()
-    // Slightly stronger than the previous 30px treatment…
-    expect(title).toHaveClass('text-[32px]')
+    // The document title carries the strongest type in the
+    // pane; the empty placeholder matches its weight so it
+    // never reads as small, weak text.
+    expect(title).toHaveClass('text-[34px]')
     expect(title).toHaveClass('font-semibold')
     // …still a borderless, transparent surface — no form-field
     // chrome.
@@ -3097,5 +3125,931 @@ describe('presentation helpers', () => {
 
     expect(formatNoteUpdatedDate(null)).toBe('')
     expect(formatNoteUpdatedDate('not-a-date')).toBe('')
+  })
+})
+
+/* ── Permanent delete: overflow menu ───────────────────────────── */
+
+describe('permanent delete: overflow menu', () => {
+  it('exposes one overflow action per rendered note, secondary to the row', async () => {
+    renderPage()
+    await settleInitialLoad()
+
+    for (const title of ['Alpha', 'Beta', 'Gamma']) {
+      const trigger = overflowTrigger(title)
+      expect(trigger).toBeInTheDocument()
+      expect(trigger).toHaveAttribute(
+        'aria-haspopup',
+        'menu',
+      )
+      expect(trigger).toHaveAttribute(
+        'aria-expanded',
+        'false',
+      )
+    }
+
+    // Every rendered note gets its OWN trigger (three total —
+    // one per row, none shared).
+    expect(
+      screen.getAllByRole('button', {
+        name: /More actions for /,
+      }),
+    ).toHaveLength(DEFAULT_NOTES.length)
+  })
+
+  it('opening the menu does not select an unselected note', async () => {
+    renderPage()
+    await settleInitialLoad()
+
+    expect(rowByTitle('Alpha')).toHaveAttribute(
+      'aria-current',
+      'true',
+    )
+
+    fireEvent.click(overflowTrigger('Beta'))
+    const menu = screen.getByRole('menu')
+
+    // The menu opened…
+    expect(menu).toBeInTheDocument()
+    expect(overflowTrigger('Beta')).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    )
+    // …but the selection never moved.
+    expect(rowByTitle('Beta')).not.toHaveAttribute(
+      'aria-current',
+    )
+    expect(rowByTitle('Alpha')).toHaveAttribute(
+      'aria-current',
+      'true',
+    )
+    expect(noteContent()).toHaveTextContent(
+      'Alpha body',
+    )
+  })
+
+  it('contains exactly one menu item: Delete note', async () => {
+    renderPage()
+    await settleInitialLoad()
+
+    fireEvent.click(overflowTrigger('Alpha'))
+
+    expect(
+      screen.getAllByRole('menu'),
+    ).toHaveLength(1)
+    const items = screen.getAllByRole('menuitem')
+    expect(items).toHaveLength(1)
+    expect(items[0]).toHaveAccessibleName(
+      'Delete note',
+    )
+  })
+
+  it('closes on Escape and on an outside click', async () => {
+    renderPage()
+    await settleInitialLoad()
+
+    // Escape closes.
+    fireEvent.click(overflowTrigger('Alpha'))
+    expect(screen.getByRole('menu')).toBeInTheDocument()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(
+      screen.queryByRole('menu'),
+    ).not.toBeInTheDocument()
+    expect(overflowTrigger('Alpha')).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    )
+
+    // An outside click closes.
+    fireEvent.click(overflowTrigger('Beta'))
+    expect(screen.getByRole('menu')).toBeInTheDocument()
+    fireEvent.mouseDown(searchInput())
+    expect(
+      screen.queryByRole('menu'),
+    ).not.toBeInTheDocument()
+    expect(overflowTrigger('Beta')).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    )
+  })
+
+  it('keeps the trigger and the menu item keyboard-activatable', async () => {
+    renderPage()
+    await settleInitialLoad()
+
+    // Native <button> elements: keyboard-activatable by
+    // construction (the repository's convention for row
+    // actions).
+    const trigger = overflowTrigger('Gamma')
+    expect(trigger.tagName).toBe('BUTTON')
+    trigger.focus()
+    expect(trigger).toHaveFocus()
+
+    fireEvent.click(trigger)
+    const item = screen.getByRole('menuitem', {
+      name: 'Delete note',
+    })
+    expect(item.tagName).toBe('BUTTON')
+    item.focus()
+    expect(item).toHaveFocus()
+  })
+
+  it('renders the row as sibling buttons (no nested interactive controls)', async () => {
+    renderPage()
+    await settleInitialLoad()
+
+    const items = within(listRegion()).getAllByRole('listitem')
+    expect(items).toHaveLength(DEFAULT_NOTES.length)
+
+    for (const item of items) {
+      const buttons = within(item).getAllByRole('button')
+      // Exactly two siblings: the selection button + the
+      // overflow trigger.
+      expect(buttons).toHaveLength(2)
+      // No button is nested inside ANOTHER button.
+      buttons.forEach((button) =>
+        expect(
+          button.parentElement?.closest('button'),
+        ).toBeNull(),
+      )
+    }
+  })
+
+  it('keeps selection and overflow controls inside one row container', async () => {
+    renderPage()
+    await settleInitialLoad()
+
+    const items = within(listRegion()).getAllByRole('listitem')
+
+    for (const item of items) {
+      const buttons = within(item).getAllByRole('button')
+      // Both controls live inside a single direct child of the
+      // <li> — the row container that owns the selected/hovered
+      // surface. (The trigger additionally sits in the menu's
+      // own non-interactive positioning wrapper.)
+      const row = item.firstElementChild as HTMLElement
+      expect(row).not.toBeNull()
+      expect(row.contains(buttons[0]!)).toBe(true)
+      expect(row.contains(buttons[1]!)).toBe(true)
+      // Neither control is nested inside ANOTHER button.
+      buttons.forEach((button) =>
+        expect(button.parentElement?.closest('button')).toBeNull(),
+      )
+    }
+  })
+})
+
+/* ── Permanent delete: confirmation ────────────────────────────── */
+
+function dialogRegion() {
+  return screen.getByRole('dialog')
+}
+
+function dialogButton(name: string) {
+  return within(dialogRegion()).getByRole(
+    'button',
+    { name },
+  )
+}
+
+async function openDeleteDialog(title: string) {
+  fireEvent.click(overflowTrigger(title))
+  fireEvent.click(
+    screen.getByRole('menuitem', {
+      name: 'Delete note',
+    }),
+  )
+  await screen.findByRole('dialog')
+}
+
+describe('permanent delete: confirmation', () => {
+  it('opens the confirmation from Delete note without issuing a DELETE yet', async () => {
+    renderPage()
+    await settleInitialLoad()
+
+    fireEvent.click(overflowTrigger('Alpha'))
+    fireEvent.click(
+      screen.getByRole('menuitem', {
+        name: 'Delete note',
+      }),
+    )
+    const dialog = await screen.findByRole('dialog')
+
+    // The menu closed; the confirmation is open with the exact
+    // copy contract.
+    expect(
+      screen.queryByRole('menu'),
+    ).not.toBeInTheDocument()
+    expect(dialog).toHaveAccessibleName('Delete note?')
+    expect(dialog).toHaveTextContent(
+      'Permanently delete "Alpha"?',
+    )
+    expect(dialog).toHaveTextContent(
+      "This can't be undone.",
+    )
+    // No DELETE request has been issued yet.
+    expect(deletePersonalNote).not.toHaveBeenCalled()
+  })
+
+  it('Cancel performs no DELETE and keeps the note', async () => {
+    renderPage()
+    await settleInitialLoad()
+
+    fireEvent.click(overflowTrigger('Alpha'))
+    fireEvent.click(
+      screen.getByRole('menuitem', {
+        name: 'Delete note',
+      }),
+    )
+    await screen.findByRole('dialog')
+    fireEvent.click(dialogButton('Cancel'))
+
+    expect(
+      screen.queryByRole('dialog'),
+    ).not.toBeInTheDocument()
+    expect(deletePersonalNote).not.toHaveBeenCalled()
+    expect(
+      screen.queryByRole('button', {
+        name: rowNamePrefix('Alpha'),
+      }),
+    ).toBeInTheDocument()
+  })
+
+  it('uses the Untitled fallback for an empty title', async () => {
+    const untitled = note({
+      id: 9,
+      title: '',
+      content: 'Untitled body',
+    })
+    renderPage([untitled])
+    await settleInitialLoad()
+
+    await openDeleteDialog('Untitled')
+    expect(dialogRegion()).toHaveTextContent(
+      'Permanently delete "Untitled"?',
+    )
+  })
+
+  it('issues exactly one DELETE for one explicit confirmation', async () => {
+    renderPage()
+    await settleInitialLoad()
+
+    await openDeleteDialog('Alpha')
+    fireEvent.click(dialogButton('Delete'))
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('button', {
+          name: rowNamePrefix('Alpha'),
+        }),
+      ).not.toBeInTheDocument(),
+    )
+
+    expect(deletePersonalNote).toHaveBeenCalledTimes(1)
+    expect(deletePersonalNote).toHaveBeenCalledWith(1)
+  })
+
+  it('blocks duplicate confirmations while the delete is pending', async () => {
+    const gate = deferred<void>()
+    vi.mocked(deletePersonalNote).mockImplementation(
+      () => gate.promise,
+    )
+    renderPage()
+    await settleInitialLoad()
+
+    await openDeleteDialog('Alpha')
+    fireEvent.click(dialogButton('Delete'))
+    expect(deletePersonalNote).toHaveBeenCalledTimes(1)
+
+    // Pending: restrained "Deleting…" state and both actions
+    // locked (no duplicate activation possible).
+    const deleteButton = dialogButton('Deleting…')
+    expect(deleteButton).toBeDisabled()
+    expect(dialogButton('Cancel')).toBeDisabled()
+    fireEvent.click(deleteButton)
+    expect(deletePersonalNote).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      gate.resolve()
+    })
+    expect(
+      screen.queryByRole('dialog'),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', {
+        name: rowNamePrefix('Alpha'),
+      }),
+    ).not.toBeInTheDocument()
+  })
+})
+
+/* ── Permanent delete: success reconciliation ──────────────────── */
+
+describe('permanent delete: success reconciliation', () => {
+  it('removes the row without any list refetch', async () => {
+    renderPage()
+    await settleInitialLoad()
+
+    await openDeleteDialog('Alpha')
+    fireEvent.click(dialogButton('Delete'))
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('button', {
+          name: rowNamePrefix('Alpha'),
+        }),
+      ).not.toBeInTheDocument(),
+    )
+
+    // No refetch was required or performed to prove the delete.
+    expect(listPersonalNotes).toHaveBeenCalledTimes(1)
+    expect(rowTitles()).toEqual([
+      'Beta',
+      'Gamma',
+    ])
+  })
+
+  it('deleting an unselected note preserves the current selection', async () => {
+    renderPage()
+    await settleInitialLoad()
+
+    await openDeleteDialog('Beta')
+    fireEvent.click(dialogButton('Delete'))
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('button', {
+          name: rowNamePrefix('Beta'),
+        }),
+      ).not.toBeInTheDocument(),
+    )
+
+    expect(rowByTitle('Alpha')).toHaveAttribute(
+      'aria-current',
+      'true',
+    )
+    expect(noteContent()).toHaveTextContent(
+      'Alpha body',
+    )
+    expect(titleInput()).toHaveValue('Alpha')
+  })
+
+  it('deleting the selected middle note selects the next row', async () => {
+    renderPage()
+    await settleInitialLoad()
+    fireEvent.click(rowByTitle('Beta'))
+
+    await openDeleteDialog('Beta')
+    fireEvent.click(dialogButton('Delete'))
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('button', {
+          name: rowNamePrefix('Beta'),
+        }),
+      ).not.toBeInTheDocument(),
+    )
+
+    expect(rowByTitle('Gamma')).toHaveAttribute(
+      'aria-current',
+      'true',
+    )
+    expect(noteContent()).toHaveTextContent(
+      'Gamma body',
+    )
+  })
+
+  it('deleting the selected final row selects the previous row', async () => {
+    renderPage()
+    await settleInitialLoad()
+    fireEvent.click(rowByTitle('Gamma'))
+
+    await openDeleteDialog('Gamma')
+    fireEvent.click(dialogButton('Delete'))
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('button', {
+          name: rowNamePrefix('Gamma'),
+        }),
+      ).not.toBeInTheDocument(),
+    )
+
+    expect(rowByTitle('Beta')).toHaveAttribute(
+      'aria-current',
+      'true',
+    )
+    expect(noteContent()).toHaveTextContent(
+      'Beta body',
+    )
+  })
+
+  it('deleting the only note lands in the quiet empty state', async () => {
+    renderPage([ALPHA])
+    await settleInitialLoad()
+
+    await openDeleteDialog('Alpha')
+    fireEvent.click(dialogButton('Delete'))
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('button', {
+          name: rowNamePrefix('Alpha'),
+        }),
+      ).not.toBeInTheDocument(),
+    )
+
+    // Navigator + create path remain; the restrained empty
+    // state is shown (no error, no broken editor surface).
+    expect(
+      screen.getByText('No notes yet.'),
+    ).toBeInTheDocument()
+    expect(newNoteButton()).toBeEnabled()
+    expect(
+      screen.getByText('Select a note to read it.'),
+    ).toBeInTheDocument()
+    // Focus moved to the sensible next action (New note).
+    expect(newNoteButton()).toHaveFocus()
+  })
+
+  it('keeps an active search query intact after deleting a result', async () => {
+    renderPage(
+      undefined,
+      (query?: string) =>
+        query === 'alph'
+          ? Promise.resolve([ALPHA])
+          : Promise.resolve(DEFAULT_NOTES),
+    )
+    await settleInitialLoad()
+
+    vi.useFakeTimers()
+    try {
+      fireEvent.change(searchInput(), {
+        target: { value: 'alph' },
+      })
+      await flushDebounce()
+    } finally {
+      vi.useRealTimers()
+    }
+    expect(rowTitles()).toEqual(['Alpha'])
+
+    await openDeleteDialog('Alpha')
+    fireEvent.click(dialogButton('Delete'))
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('button', {
+          name: rowNamePrefix('Alpha'),
+        }),
+      ).not.toBeInTheDocument(),
+    )
+
+    // The query stays exactly as it was — no reset, no
+    // re-request — and the search empty state explains the
+    // (now empty) result set.
+    expect(searchInput()).toHaveValue('alph')
+    expect(listPersonalNotes).toHaveBeenCalledTimes(2)
+    expect(
+      screen.getByText('No notes match "alph".'),
+    ).toBeInTheDocument()
+  })
+
+  it('lets no stale list/search response resurrect the deleted note', async () => {
+    let resolveStale!: (value: ApiPersonalNote[]) => void
+
+    renderPage(
+      undefined,
+      (query?: string) => {
+        if (query === 'stale') {
+          return new Promise<ApiPersonalNote[]>(
+            (resolve) => {
+              resolveStale = resolve
+            },
+          )
+        }
+
+        return Promise.resolve(DEFAULT_NOTES)
+      },
+    )
+    await settleInitialLoad()
+
+    // Issue a search whose response will arrive LATE (after the
+    // delete) and still contain the doomed note.
+    vi.useFakeTimers()
+    try {
+      fireEvent.change(searchInput(), {
+        target: { value: 'stale' },
+      })
+      await flushDebounce()
+    } finally {
+      vi.useRealTimers()
+    }
+
+    await openDeleteDialog('Alpha')
+    fireEvent.click(dialogButton('Delete'))
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('button', {
+          name: rowNamePrefix('Alpha'),
+        }),
+      ).not.toBeInTheDocument(),
+    )
+
+    // The stale response (search mode) arrives — it must NOT
+    // resurrect the deleted note.
+    resolveStale([ALPHA])
+    await act(async () => {})
+
+    expect(
+      screen.queryByRole('button', {
+        name: rowNamePrefix('Alpha'),
+      }),
+    ).not.toBeInTheDocument()
+  })
+})
+
+/* ── Permanent delete: autosave race safety ────────────────────── */
+
+describe('permanent delete: autosave race safety', () => {
+  it('lets no pending debounce send a new PATCH after confirmation', async () => {
+    renderPage()
+    await settleInitialLoad()
+
+    vi.useFakeTimers()
+    try {
+      // Dirty draft waiting for its debounce (no PATCH yet).
+      fireEvent.change(titleInput(), {
+        target: { value: 'Alpha doomed' },
+      })
+      expect(updatePersonalNote).not.toHaveBeenCalled()
+
+      // Open the menu + confirmation and confirm with
+      // SYNCHRONOUS queries (async findBy polling cannot run on
+      // the fake clock).
+      fireEvent.click(overflowTrigger('Alpha doomed'))
+      fireEvent.click(
+        screen.getByRole('menuitem', {
+          name: 'Delete note',
+        }),
+      )
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+      fireEvent.click(dialogButton('Delete'))
+
+      // The full debounce window elapses after the deletion is
+      // confirmed: nothing may be sent for this note.
+      await act(async () => {
+        vi.advanceTimersByTime(500)
+      })
+      await act(async () => {})
+    } finally {
+      vi.useRealTimers()
+    }
+
+    expect(updatePersonalNote).not.toHaveBeenCalled()
+    expect(deletePersonalNote).toHaveBeenCalledTimes(1)
+    expect(
+      screen.queryByRole('button', {
+        name: rowNamePrefix('Alpha doomed'),
+      }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('lets no stale PATCH success reinsert or overwrite after deletion', async () => {
+    const staleSave = deferred<ApiPersonalNote>()
+    vi.mocked(updatePersonalNote).mockImplementation(
+      () => staleSave.promise,
+    )
+    renderPage()
+    await settleInitialLoad()
+
+    vi.useFakeTimers()
+    try {
+      fireEvent.change(titleInput(), {
+        target: { value: 'Alpha stale save' },
+      })
+      await flushDebounce()
+    } finally {
+      vi.useRealTimers()
+    }
+    expect(updatePersonalNote).toHaveBeenCalledTimes(1)
+
+    // Delete while that PATCH is still in flight.
+    await openDeleteDialog('Alpha stale save')
+    fireEvent.click(dialogButton('Delete'))
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('button', {
+          name: rowNamePrefix('Alpha stale save'),
+        }),
+      ).not.toBeInTheDocument(),
+    )
+
+    // The stale PATCH SUCCEEDS late — it must not reinsert the
+    // note or overwrite the surviving selection.
+    staleSave.resolve({
+      ...ALPHA,
+      title: 'Alpha stale save',
+      updatedAt: '2026-09-30T09:00:00Z',
+    })
+    await act(async () => {})
+
+    expect(
+      screen.queryByRole('button', {
+        name: rowNamePrefix('Alpha stale save'),
+      }),
+    ).not.toBeInTheDocument()
+    // Selection moved to the next row and shows ITS content.
+    expect(rowByTitle('Beta')).toHaveAttribute(
+      'aria-current',
+      'true',
+    )
+    expect(noteContent()).toHaveTextContent(
+      'Beta body',
+    )
+  })
+
+  it('lets no stale PATCH failure surface a save error after a successful delete', async () => {
+    const staleSave = deferred<ApiPersonalNote>()
+    vi.mocked(updatePersonalNote).mockImplementation(
+      () => staleSave.promise,
+    )
+    renderPage()
+    await settleInitialLoad()
+
+    vi.useFakeTimers()
+    try {
+      fireEvent.change(titleInput(), {
+        target: { value: 'Alpha doomed save' },
+      })
+      await flushDebounce()
+    } finally {
+      vi.useRealTimers()
+    }
+
+    await openDeleteDialog('Alpha doomed save')
+    fireEvent.click(dialogButton('Delete'))
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('button', {
+          name: rowNamePrefix('Alpha doomed save'),
+        }),
+      ).not.toBeInTheDocument(),
+    )
+
+    // The stale PATCH FAILS late — no "Couldn't save" may appear
+    // for a note the user already destroyed.
+    staleSave.reject(new ApiError(500, {
+      error: 'Save exploded.',
+    }))
+    await act(async () => {})
+
+    expect(
+      screen.queryByText("Couldn't save."),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', {
+        name: rowNamePrefix('Alpha doomed save'),
+      }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('keeps the note and its draft intact when the DELETE fails', async () => {
+    const straggler = deferred<ApiPersonalNote>()
+    vi.mocked(deletePersonalNote).mockRejectedValue(
+      new ApiError(500, {
+        error: 'Delete exploded.',
+      }),
+    )
+    vi.mocked(updatePersonalNote).mockImplementation(
+      () => straggler.promise,
+    )
+    renderPage()
+    await settleInitialLoad()
+
+    // A dirty draft exists (no flush before the dialog).
+    fireEvent.change(titleInput(), {
+      target: { value: 'Alpha keep me' },
+    })
+
+    await openDeleteDialog('Alpha keep me')
+    fireEvent.click(dialogButton('Delete'))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent(
+      'Delete exploded.',
+    )
+
+    // The note is still here with its draft intact…
+    expect(
+      screen.getByRole('button', {
+        name: rowNamePrefix('Alpha keep me'),
+      }),
+    ).toBeInTheDocument()
+    expect(titleInput()).toHaveValue(
+      'Alpha keep me',
+    )
+    // …the dialog stayed open with the error (retryable), and
+    // the delete was attempted exactly once.
+    expect(dialogRegion()).toBeInTheDocument()
+    expect(deletePersonalNote).toHaveBeenCalledTimes(1)
+
+    // Settle the failure-path save flush (no save error may
+    // appear for the acknowledged draft).
+    straggler.resolve({
+      ...ALPHA,
+      title: 'Alpha keep me',
+      updatedAt: '2026-09-30T09:00:00Z',
+    })
+    await act(async () => {})
+    expect(
+      screen.queryByText("Couldn't save."),
+    ).not.toBeInTheDocument()
+  })
+
+  it('permits a retry after a failed DELETE', async () => {
+    let attempts = 0
+    vi.mocked(deletePersonalNote).mockImplementation(
+      () => {
+        attempts += 1
+        if (attempts === 1) {
+          throw new ApiError(500, {
+            error: 'Delete exploded.',
+          })
+        }
+
+        return Promise.resolve(undefined)
+      },
+    )
+    renderPage()
+    await settleInitialLoad()
+
+    await openDeleteDialog('Alpha')
+    fireEvent.click(dialogButton('Delete'))
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent(
+      'Delete exploded.',
+    )
+
+    // The destructive action is usable again (Retry).
+    const deleteButton = dialogButton('Delete')
+    expect(deleteButton).toBeEnabled()
+    fireEvent.click(deleteButton)
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('button', {
+          name: rowNamePrefix('Alpha'),
+        }),
+      ).not.toBeInTheDocument(),
+    )
+
+    expect(deletePersonalNote).toHaveBeenCalledTimes(2)
+    expect(
+      screen.queryByRole('dialog'),
+    ).not.toBeInTheDocument()
+  })
+
+  it('lets autosave resume safely after a failed deletion', async () => {
+    const resumeSave = deferred<ApiPersonalNote>()
+    vi.mocked(deletePersonalNote).mockRejectedValue(
+      new ApiError(500, {
+        error: 'Delete exploded.',
+      }),
+    )
+    vi.mocked(updatePersonalNote).mockImplementation(
+      () => resumeSave.promise,
+    )
+    renderPage()
+    await settleInitialLoad()
+
+    // Dirty draft; the failed delete must not lose it — and
+    // autosave must be able to resume.
+    fireEvent.change(titleInput(), {
+      target: { value: 'Alpha still here' },
+    })
+
+    await openDeleteDialog('Alpha still here')
+    fireEvent.click(dialogButton('Delete'))
+    await screen.findByRole('alert')
+
+    // The failure path re-flushed the dirty draft (the canonical
+    // save path — exactly the changed field).
+    expect(updatePersonalNote).toHaveBeenCalledTimes(1)
+    expect(updatePersonalNote).toHaveBeenCalledWith(1, {
+      title: 'Alpha still here',
+    })
+
+    // The resumed save acknowledges without a save error.
+    resumeSave.resolve({
+      ...ALPHA,
+      title: 'Alpha still here',
+      updatedAt: '2026-09-30T09:00:00Z',
+    })
+    await act(async () => {})
+
+    expect(
+      screen.getByRole('button', {
+        name: rowNamePrefix('Alpha still here'),
+      }),
+    ).toBeInTheDocument()
+    expect(titleInput()).toHaveValue(
+      'Alpha still here',
+    )
+    expect(
+      screen.queryByText("Couldn't save."),
+    ).not.toBeInTheDocument()
+  })
+})
+
+/* ── Permanent delete: accessibility ───────────────────────────── */
+
+describe('permanent delete: accessibility', () => {
+  it('wires the trigger, menu, and dialog roles and names correctly', async () => {
+    renderPage()
+    await settleInitialLoad()
+
+    const trigger = overflowTrigger('Alpha')
+    expect(trigger).toHaveAttribute(
+      'aria-haspopup',
+      'menu',
+    )
+    expect(trigger).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    )
+
+    fireEvent.click(trigger)
+    expect(screen.getByRole('menu')).toBeInTheDocument()
+    expect(trigger).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    )
+    expect(
+      screen.getByRole('menuitem', {
+        name: 'Delete note',
+      }),
+    ).toBeInTheDocument()
+
+    fireEvent.click(
+      screen.getByRole('menuitem', {
+        name: 'Delete note',
+      }),
+    )
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog).toHaveAttribute(
+      'aria-modal',
+      'true',
+    )
+    expect(dialog).toHaveAccessibleName(
+      'Delete note?',
+    )
+
+    // The description carries the irreversible warning (not
+    // color-only: the destructive state is written out).
+    const description = document.getElementById(
+      'note-delete-description',
+    )
+    expect(description).not.toBeNull()
+    expect(description).toHaveTextContent(
+      "This can't be undone.",
+    )
+  })
+
+  it('focuses the safe action first, traps Tab, and returns focus to the trigger on Escape', async () => {
+    renderPage()
+    await settleInitialLoad()
+
+    const trigger = overflowTrigger('Beta')
+    fireEvent.click(trigger)
+    fireEvent.click(
+      screen.getByRole('menuitem', {
+        name: 'Delete note',
+      }),
+    )
+    await screen.findByRole('dialog')
+
+    // The SAFE (non-destructive) action is focused first.
+    const cancel = dialogButton('Cancel')
+    expect(cancel).toHaveFocus()
+
+    // Tab trap: Shift+Tab from the first focusable wraps to the
+    // last (the destructive action).
+    const destroy = dialogButton('Delete')
+    fireEvent.keyDown(cancel, {
+      key: 'Tab',
+      shiftKey: true,
+    })
+    expect(destroy).toHaveFocus()
+
+    // Escape cancels — and focus returns to the originating
+    // overflow trigger.
+    fireEvent.keyDown(window, { key: 'Escape' })
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('dialog'),
+      ).not.toBeInTheDocument(),
+    )
+    await act(async () => {})
+    expect(trigger).toHaveFocus()
   })
 })

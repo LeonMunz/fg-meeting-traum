@@ -217,3 +217,24 @@ def restore_personal_note(*, actor, note_id):
         note.archived_at = None
         note.save(update_fields=["archived_at", "updated_at"])
     return note
+
+
+# ── Permanent delete ──────────────────────────────────────────────
+
+
+def delete_personal_note(*, actor, note_id):
+    """Permanently delete the actor's own note.
+
+    Resolves through the SAME owner-scoped lookup as every other
+    existing-note operation (``filter(user=actor, pk=note_id)``):
+    only the owner can delete, and an unknown id and a foreign id
+    produce the SAME non-leaking ``PersonalNoteNotFoundError``.
+
+    The row is PHYSICALLY removed — there is no ``deleted_at``
+    tombstone, no Trash state, and no recovery after success. Both
+    active and archived notes may be deleted; Archive remains the
+    separate, reversible lifecycle. Deleting an already-deleted note
+    follows the ordinary not-found contract.
+    """
+    note = _get_note_for_actor(actor, note_id)
+    note.delete()

@@ -77,7 +77,7 @@ e.g. `filter(user=actor, pk=note_id)`.
 - Listing operations are owner-scoped querysets: a user's list can
   never contain another user's notes.
 
-## 5. Active vs. archived state
+## 5. Lifecycle states: active, archived, and permanent delete
 
 Archive state is the single persisted fact `archived_at`:
 
@@ -97,7 +97,33 @@ Semantics:
    requested state is left completely unchanged (no new timestamp, no
    state churn).
 
-There is no Trash / permanent-delete lifecycle in V1 (see §11).
+### Permanent delete (owner-only, irreversible)
+
+The owner may **permanently delete** a note through one canonical
+domain operation (`delete_personal_note`):
+
+1. **Owner-only.** The delete resolves through the SAME owner-scoped
+   lookup rule as every other existing-note operation (§4):
+   `filter(user=actor, pk=note_id)`. There is no ownership fallback
+   of any kind (no Project / ResearchGroup / Meeting relationship).
+2. **Physical row removal.** A successful delete PHYSICALLY removes
+   the `PersonalNote` row. There is no `deleted_at` tombstone, no
+   Trash state, and **no recovery** after success.
+3. **Distinct from Archive.** Archive remains the separate,
+   REVERSIBLE lifecycle: it keeps the same row and id (restoring
+   clears `archived_at` on the same row). Archiving never deletes a
+   row; permanently deleting an archived note destroys the archived
+   row.
+4. **Both states deletable.** The delete works for active AND
+   archived notes.
+5. **Indistinguishable unknown/foreign.** An unknown note id and a
+   foreign note id produce the SAME non-leaking domain outcome
+   (§4). Deleting an already-deleted note follows the ordinary
+   not-found contract — no second "deleted" state exists.
+
+Trash / soft delete (`deleted_at`) is NOT part of this lifecycle
+(see §11): permanent delete is a physical row removal, not a
+soft-delete flag.
 
 ## 6. Pin semantics
 
@@ -167,6 +193,7 @@ foreign note id — maps to one identical `404` body
 | `GET /api/me/notes/archive/`      | The current user's ARCHIVED notes, canonical ordering (§9).         |
 | `GET /api/me/notes/{noteId}/`     | One of the current user's notes (active or archived).               |
 | `PATCH /api/me/notes/{noteId}/`   | Partial update of `title` and/or `content` only.                    |
+| `DELETE /api/me/notes/{noteId}/`  | Permanently delete the note (owner-only; active or archived): `204` No Content with an EMPTY body; the row is physically removed (§5). |
 | `POST /api/me/notes/{noteId}/pin/` | Set pin state: `{"pinned": true \| false}` (required boolean).    |
 | `POST /api/me/notes/{noteId}/archive/` | Archive the note (idempotent; never deletes).                |
 | `POST /api/me/notes/{noteId}/restore/` | Restore the note (idempotent; same row, same id).             |
@@ -178,7 +205,7 @@ browser-mutation CSRF contract (DRF `SessionAuthentication` CSRF
 enforcement for authenticated unsafe requests — see
 `docs/domain/authentication-sessions.md` §7).
 
-NOT part of this contract: `DELETE`, a separate search endpoint
+NOT part of this contract: a separate search endpoint
 (`GET /api/me/notes/search/` — search is the `?q=` parameter on the
 active listing only), Daily Notes, Work Item / Meeting relations,
 Convert to Work Item, sharing, and tags/folders.
@@ -259,6 +286,15 @@ construction and the payload must not leak it.
   including `archivedAt` and `updatedAt` — completely unchanged.
   Archive never deletes the row; restore clears `archived_at` on
   the SAME row (the note keeps its id).
+- **Delete** (DELETE on the detail resource) takes no body and
+  answers `204` with NO body and no note representation. It
+  delegates to the canonical `delete_personal_note` service, which
+  physically removes the row for the owner (active or archived) —
+  irreversible, with no trash/tombstone/recovery (§5). A foreign or
+  unknown id answers with the same non-leaking 404 as every other
+  endpoint and leaves a foreign row untouched. DELETE follows the
+  same canonical browser-mutation CSRF contract as the other
+  mutations.
 
 ## 11. Persisted fields in this slice
 
@@ -285,7 +321,8 @@ The V1 persisted foundation is exactly:
 - comments, version history
 - AI fields
 - task/status/due-date/assignee fields
-- Trash / soft-delete (`deleted_at`) lifecycle
+- Trash / soft-delete (`deleted_at`) lifecycle (permanent delete
+  is a PHYSICAL row removal, not a soft delete — §5)
 - Notes UI beyond the implemented create/edit slice (route,
   navigation, list presentation, backend-driven search, read-only
   note display, New Note UI, editable title/content with rich
@@ -298,8 +335,8 @@ The V1 persisted foundation is exactly:
 - Model: `apps/api/personal_notes/models.py` (`PersonalNote`).
 - Canonical service/query layer: `apps/api/personal_notes/services.py`
   (create, get, list active / archived, search active,
-  update title/content, pin/unpin, archive, restore — all
-  owner-scoped).
+  update title/content, pin/unpin, archive, restore, permanent
+  delete — all owner-scoped).
 - HTTP layer: `apps/api/personal_notes/views.py` +
   `apps/api/personal_notes/serializers.py` (routes in
   `apps/api/config/urls.py`) — the thin authenticated boundary
@@ -312,11 +349,12 @@ The V1 persisted foundation is exactly:
 - Frontend client (frontend-only; the Notes UI above it is the only
   consumer in this phase):
   `apps/web/src/api/personal-notes.ts` — typed client on the
-  `apiGet` / `apiPost` / `apiPatch` convention covering the complete
-  §10 contract (canonical `ApiPersonalNote` DTO, title/content-only
-  create/update inputs, the full read/write/action surface, trimmed
-  + URL-encoded `?q=` search); pinned by
-  `apps/web/src/api/personal-notes.test.ts`.
+  `apiGet` / `apiPost` / `apiPatch` / `apiDelete` convention
+  covering the complete §10 contract (canonical `ApiPersonalNote`
+  DTO, title/content-only create/update inputs, the full
+  read/write/action surface incl. `deletePersonalNote(noteId)` —
+  `204`/void, no fabricated Note — and trimmed + URL-encoded `?q=`
+  search); pinned by `apps/web/src/api/personal-notes.test.ts`.
 - Frontend Notes UI (frontend-only; the §10 HTTP contract is
   unchanged): `apps/web/src/features/personal-notes/NotesPage.tsx` —
   the authenticated `/notes` workspace: capture-first New Note
@@ -335,6 +373,22 @@ The V1 persisted foundation is exactly:
   against locally acknowledged saves, plain-list recency move on
   save vs. in-place reconciliation while a search is active, flush on
   selection switch / editor blur / unmount, and `Saving…` / `Saved` /
-  `Couldn't save` + Retry feedback. Pinned by
-  `apps/web/src/features/personal-notes/NotesPage.test.tsx`.
+  `Couldn't save` + Retry feedback. Permanent delete: a subtle
+  per-row three-dot overflow trigger (sibling of the row's selection
+  button — no nested interactive controls; opening it never selects
+  the note) carrying exactly one destructive `Delete note` entry, an
+  explicit in-app confirmation dialog (irreversibility warning,
+  safe-action default focus, focus trap, destructive `Deleting…`
+  pending state, compact retryable error, no `window.confirm`), and
+  race-safe reconciliation with the autosave machinery: deletion
+  intent wins over autosave for the deleting note (no new autosave
+  starts; a stale PATCH success/failure can never reinsert,
+  overwrite, or surface a save error for it; a stale list/search
+  response can never resurrect a successfully deleted note), a
+  failed DELETE keeps the note + draft and lets autosave resume
+  safely, the deleted note is removed locally from the rendered
+  result set without any refetch, the active search query stays
+  intact, and selection resolves deterministically from the rendered
+  rows (next row, previous row when last, none when empty). Pinned
+  by `apps/web/src/features/personal-notes/NotesPage.test.tsx`.
 - Checkpoint: `docs/CURRENT_STATE.md` (§Personal Notes).

@@ -1,9 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { apiGet, apiPatch, apiPost, ApiError } from './client'
+import {
+  apiDelete,
+  apiGet,
+  apiPatch,
+  apiPost,
+  ApiError,
+} from './client'
 import {
   archivePersonalNote,
   createPersonalNote,
+  deletePersonalNote,
   getPersonalNote,
   listArchivedPersonalNotes,
   listPersonalNotes,
@@ -15,6 +22,7 @@ import {
 import type { ApiPersonalNote } from './types'
 
 vi.mock('./client', () => ({
+  apiDelete: vi.fn(),
   apiGet: vi.fn(),
   apiPatch: vi.fn(),
   apiPost: vi.fn(),
@@ -58,8 +66,10 @@ describe('Personal Notes client', () => {
     vi.mocked(apiGet).mockReset()
     vi.mocked(apiPost).mockReset()
     vi.mocked(apiPatch).mockReset()
+    vi.mocked(apiDelete).mockReset()
 
     vi.mocked(apiGet).mockResolvedValue(listFixture)
+    vi.mocked(apiDelete).mockResolvedValue(undefined)
     vi.mocked(apiPost).mockResolvedValue(activeNote)
     vi.mocked(apiPatch).mockResolvedValue(activeNote)
   })
@@ -228,6 +238,25 @@ describe('Personal Notes client', () => {
     })
   })
 
+  describe('permanent delete', () => {
+    it('requests the exact detail URL with the canonical DELETE method', async () => {
+      await deletePersonalNote(12)
+
+      expect(apiDelete).toHaveBeenCalledTimes(1)
+      expect(apiDelete).toHaveBeenCalledWith('/api/me/notes/12/')
+    })
+
+    it('sends no request body', async () => {
+      await deletePersonalNote(12)
+
+      expect(vi.mocked(apiDelete).mock.calls[0]).toHaveLength(1)
+    })
+
+    it('resolves void for the 204 contract (no fabricated Note)', async () => {
+      await expect(deletePersonalNote(12)).resolves.toBeUndefined()
+    })
+  })
+
   describe('authoritative server responses', () => {
     it('returns the mocked active list response unchanged', async () => {
       const result = await listPersonalNotes()
@@ -319,6 +348,15 @@ describe('Personal Notes client', () => {
       vi.mocked(apiPatch).mockRejectedValue(error)
 
       await expect(updatePersonalNote(12, { title: 'T' })).rejects.toBe(error)
+    })
+
+    it('propagates a DELETE ApiError unchanged', async () => {
+      const error = new ApiError(404, {
+        error: 'Personal note not found.',
+      })
+      vi.mocked(apiDelete).mockRejectedValue(error)
+
+      await expect(deletePersonalNote(99)).rejects.toBe(error)
     })
   })
 })

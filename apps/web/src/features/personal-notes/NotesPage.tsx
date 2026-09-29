@@ -9,6 +9,7 @@ import type { MouseEvent as ReactMouseEvent } from 'react'
 import { ApiError } from '../../api/client'
 import {
   createPersonalNote,
+  deletePersonalNote,
   listPersonalNotes,
   updatePersonalNote,
 } from '../../api/personal-notes'
@@ -20,6 +21,11 @@ import {
   RichMarkdownEditor,
   type RichMarkdownEditorHandle,
 } from '../../components/editor/RichMarkdownEditor'
+
+import {
+  NoteActionsMenu,
+  NoteDeleteDialog,
+} from './noteDelete'
 
 /**
  * Personal Notes workspace (Personal → Notes): capture-first note
@@ -269,6 +275,19 @@ export function NotesPage() {
   const [createError, setCreateError] =
     useState<string | null>(null)
 
+  /**
+   * Permanent-delete confirmation state (page-local): the note
+   * whose confirmation dialog is open, the note whose DELETE is in
+   * flight (one at a time), and the failure message the dialog
+   * shows after a failed delete.
+   */
+  const [deleteTargetId, setDeleteTargetId] =
+    useState<number | null>(null)
+  const [deletingNoteId, setDeletingNoteId] =
+    useState<number | null>(null)
+  const [deleteError, setDeleteError] =
+    useState<string | null>(null)
+
   /*
    * Request race safety: every outgoing list/search request claims a
    * monotonically increasing id; only the LATEST claim may write state,
@@ -327,6 +346,44 @@ export function NotesPage() {
     >
   >({})
 
+  /*
+   * Permanent-delete race guards (consistent with the
+   * generation/ref architecture above):
+   *
+   * - pendingDeleteIdsRef: the note whose DELETE is IN FLIGHT.
+   *   While an id is present, no new autosave may be scheduled or
+   *   flushed for that note (deletion intent wins over autosave).
+   *   The row stays rendered (no optimistic removal) so a FAILED
+   *   delete leaves the note and its draft exactly in place.
+   * - removedNoteIdsRef: the notes whose delete SUCCEEDED. A
+   *   stale list/search response predating the delete must never
+   *   resurrect them (applyNotes drops them).
+   * - deleteTriggerRefs / rowButtonRefs: each row's overflow
+   *   trigger and selection-button elements — focus returns to the
+   *   originating trigger on cancel and to the surviving selected
+   *   row after a successful delete.
+   * - deleteFocusRef: the one-shot focus target after a dialog
+   *   closes via a successful delete.
+   */
+  const pendingDeleteIdsRef = useRef<
+    Set<number>
+  >(new Set())
+  const removedNoteIdsRef = useRef<
+    Set<number>
+  >(new Set())
+  const deleteTriggerRefs = useRef<
+    Map<number, HTMLButtonElement>
+  >(new Map())
+  const rowButtonRefs = useRef<
+    Map<number, HTMLButtonElement>
+  >(new Map())
+  const deleteFocusRef = useRef<
+    | { kind: 'row'; noteId: number }
+    | { kind: 'trigger'; noteId: number }
+    | { kind: 'new-note' }
+    | null
+  >(null)
+
   /**
    * Latest render values for the event/cleanup paths (selection
    * flush, list-response flush, unmount flush) — always current,
@@ -344,6 +401,9 @@ export function NotesPage() {
     number | null
   >(null)
   const titleInputRef = useRef<HTMLInputElement>(null)
+
+  /** New-note action — the sensible focus target in the empty state. */
+  const newNoteButtonRef = useRef<HTMLButtonElement>(null)
 
   /**
    * Imperative handle into the canonical editor: the writing
@@ -567,6 +627,14 @@ export function NotesPage() {
         return
       }
 
+      // A note under permanent-deletion intent is never written:
+      // the user chose destruction, and the DELETE outcome owns
+      // this note from this point on (a FAILED delete explicitly
+      // re-enables saving in confirmDeleteNote).
+      if (pendingDeleteIdsRef.current.has(noteId)) {
+        return
+      }
+
       const {
         notes: currentNotes,
         drafts: currentDrafts,
@@ -681,6 +749,17 @@ export function NotesPage() {
     )
     const draft = drafts[selectedNoteId]
     if (!note || !draft) {
+      return
+    }
+
+    // Deletion intent wins over autosave: no new save may be
+    // scheduled for a note whose DELETE is in flight (its pending
+    // debounce was cancelled when the deletion was confirmed).
+    if (
+      pendingDeleteIdsRef.current.has(
+        selectedNoteId,
+      )
+    ) {
       return
     }
 
@@ -803,6 +882,15 @@ export function NotesPage() {
           return picked
         }),
       ]
+        // A note whose permanent delete already SUCCEEDED must
+        // never reappear from a stale list/search response
+        // (deleting it removed it from the server).
+        .filter(
+          (note) =>
+            !removedNoteIdsRef.current.has(
+              note.id,
+            ),
+        )
 
       const nextSelected =
         currentSelected != null &&
@@ -930,6 +1018,14 @@ export function NotesPage() {
 
   const selectedNote =
     notes?.find((note) => note.id === selectedNoteId) ?? null
+
+  /** The note whose delete confirmation dialog is open. */
+  const deleteTargetNote =
+    deleteTargetId != null
+      ? (notes?.find(
+          (note) => note.id === deleteTargetId,
+        ) ?? null)
+      : null
 
   /*
    * The writing surface always renders the local draft when one
@@ -1072,6 +1168,208 @@ export function NotesPage() {
   }
 
   /*
+   * Permanent delete (docs/domain/personal-notes.md): the overflow
+   * menu's "Delete note" entry opens the explicit confirmation
+   * dialog; only the dialog's destructive action issues a DELETE.
+   * Opening the menu or the dialog never selects the note and
+   * never touches its content or autosave state.
+   */
+  function handleRequestDelete(noteId: number) {
+    if (deleteTargetId != null || deletingNoteId != null) {
+      return
+    }
+
+    setDeleteError(null)
+    setDeleteTargetId(noteId)
+  }
+
+  /** Close the dialog WITHOUT deleting (Cancel / Escape / overlay). */
+  function closeDeleteDialog() {
+    if (deletingNoteId != null) {
+      return
+    }
+
+    const id = deleteTargetId
+    setDeleteTargetId(null)
+    setDeleteError(null)
+
+    // Restore focus to the originating overflow trigger.
+    if (id != null) {
+      queueMicrotask(() =>
+        deleteTriggerRefs.current.get(id)?.focus(),
+      )
+    }
+  }
+
+  /** The one explicit confirmation — exactly one DELETE request. */
+  async function confirmDeleteNote() {
+    const noteId = deleteTargetId
+    if (noteId == null || deletingNoteId != null) {
+      return
+    }
+
+    // From this moment, deletion intent wins over autosave for
+    // this note (consistent with the existing generation/ref
+    // architecture):
+    // 1. mark the id as pending — no new autosave may be scheduled
+    //    or flushed for it (guards in the autosave effect and in
+    //    flushNow); the row stays rendered while the request is in
+    //    flight (no optimistic removal);
+    // 2. cancel the pending debounced save;
+    // 3. claim a newer save generation so EVERY in-flight PATCH for
+    //    this note (an older draft) is dropped by the existing
+    //    saveSeqRef guard: its success can never reinsert or
+    //    reconcile the note, its failure can never surface a save
+    //    error. No request is aborted — the guards are enough.
+    pendingDeleteIdsRef.current.add(noteId)
+
+    const pendingTimer = saveTimerRef.current[noteId]
+    if (pendingTimer) {
+      clearTimeout(pendingTimer)
+      delete saveTimerRef.current[noteId]
+    }
+    saveSeqRef.current[noteId] =
+      (saveSeqRef.current[noteId] ?? 0) + 1
+
+    setDeleteError(null)
+    setDeletingNoteId(noteId)
+    const wasSelected = selectedNoteId === noteId
+
+    try {
+      await deletePersonalNote(noteId)
+    } catch (error) {
+      if (!liveRef.current) {
+        return
+      }
+
+      // The delete FAILED: the note is alive again. Lift the
+      // pending intent (stale responses may legitimately carry it),
+      // keep the note + draft intact, and let autosave resume
+      // safely: a stale in-flight marker is cleared and the
+      // canonical flush re-acknowledges the current draft (a no-op
+      // when it is already clean).
+      pendingDeleteIdsRef.current.delete(noteId)
+      delete inFlightRef.current[noteId]
+      setDeletingNoteId(null)
+      setDeleteError(
+        getErrorMessage(error, 'Something went wrong.'),
+      )
+      flushNow(noteId)
+      return
+    }
+
+    if (!liveRef.current) {
+      return
+    }
+
+    // Success: the row is physically gone server-side. Purge every
+    // page-local trace of this note so neither a stale draft, a
+    // stale save, nor a stale list/search response can bring it
+    // back — and remove the row from the CURRENT rendered set (no
+    // refetch).
+    pendingDeleteIdsRef.current.delete(noteId)
+    removedNoteIdsRef.current.add(noteId)
+
+    const pending = saveTimerRef.current[noteId]
+    if (pending) {
+      clearTimeout(pending)
+      delete saveTimerRef.current[noteId]
+    }
+    delete saveSeqRef.current[noteId]
+    delete inFlightRef.current[noteId]
+    lastKnownRef.current.delete(noteId)
+    sessionCreatedRef.current.delete(noteId)
+
+    setDrafts((prev) => {
+      if (!(noteId in prev)) {
+        return prev
+      }
+
+      const next = { ...prev }
+      delete next[noteId]
+      return next
+    })
+
+    setSaveStates((prev) => {
+      if (!(noteId in prev)) {
+        return prev
+      }
+
+      const next = { ...prev }
+      delete next[noteId]
+      return next
+    })
+
+    const currentNotes = latestRef.current.notes
+    const index = currentNotes?.findIndex(
+      (entry) => entry.id === noteId,
+    ) ?? -1
+    const remaining = currentNotes
+      ? currentNotes.filter(
+          (entry) => entry.id !== noteId,
+        )
+      : []
+
+    setNotes((prev) =>
+      prev == null
+        ? prev
+        : prev.filter((entry) => entry.id !== noteId),
+    )
+
+    if (wasSelected) {
+      // Deterministic selection from the currently rendered rows:
+      // the row that occupied the FOLLOWING position; the previous
+      // row when the deleted row was last; nothing when no notes
+      // remain. No note is created; the search query is untouched.
+      const nextId =
+        remaining.length > 0
+          ? remaining[Math.min(
+              index,
+              remaining.length - 1,
+            )]?.id ?? null
+          : null
+      setSelectedNoteId(nextId)
+      deleteFocusRef.current =
+        nextId != null
+          ? { kind: 'row', noteId: nextId }
+          : { kind: 'new-note' }
+    } else {
+      // The current selection is untouched; focus returns to the
+      // originating overflow trigger (the row survives).
+      deleteFocusRef.current = {
+        kind: 'trigger',
+        noteId,
+      }
+    }
+
+    setDeleteTargetId(null)
+    setDeletingNoteId(null)
+    setDeleteError(null)
+  }
+
+  /*
+   * One-shot focus handoff after a successful delete: the surviving
+   * selected row, the originating trigger (unselected delete), or
+   * the New-note action (empty state).
+   */
+  useEffect(() => {
+    const target = deleteFocusRef.current
+    if (target == null) {
+      return
+    }
+
+    deleteFocusRef.current = null
+
+    if (target.kind === 'row') {
+      rowButtonRefs.current.get(target.noteId)?.focus()
+    } else if (target.kind === 'trigger') {
+      deleteTriggerRefs.current.get(target.noteId)?.focus()
+    } else {
+      newNoteButtonRef.current?.focus()
+    }
+  }, [notes, selectedNoteId])
+
+  /*
    * After creating a note, move focus into its writing flow — the
    * title input (the editor conventions of the repository start
    * free-form surfaces from the top field).
@@ -1146,6 +1444,7 @@ export function NotesPage() {
               </h1>
 
               <button
+                ref={newNoteButtonRef}
                 type="button"
                 onClick={() => void handleCreateNote()}
                 disabled={creating}
@@ -1297,32 +1596,81 @@ export function NotesPage() {
 
                     return (
                       <li key={note.id}>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            handleSelectNote(note.id)
-                          }
-                          aria-current={
-                            selected ? 'true' : undefined
-                          }
+                        {/*
+                         * One row container owns the subtle
+                         * selected/hovered surface across the
+                         * COMPLETE row (title/date + trigger);
+                         * the selection button + overflow
+                         * trigger are SIBLINGS inside it — no
+                         * button nested in another, and the 24px
+                         * inline trigger sits in the row's right
+                         * edge, never outside the row surface.
+                         */}
+                        <div
                           className={[
-                            'w-full rounded-md px-2.5 py-[5px] text-left transition-colors',
-                            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-canvas',
+                            'group flex items-center rounded-md transition-colors',
                             selected
-                              ? 'bg-surface-muted text-text'
-                              : 'text-text hover:bg-surface-muted/50',
+                              ? 'bg-surface-muted'
+                              : 'hover:bg-surface-muted/50',
                           ].join(' ')}
                         >
-                          <span className="block truncate text-[13px] font-medium leading-[1.3]">
-                            {displayNoteTitle(rowNote)}
-                          </span>
+                          <button
+                            type="button"
+                            ref={(element) => {
+                              if (element) {
+                                rowButtonRefs.current.set(
+                                  note.id,
+                                  element,
+                                )
+                              } else {
+                                rowButtonRefs.current.delete(
+                                  note.id,
+                                )
+                              }
+                            }}
+                            onClick={() =>
+                              handleSelectNote(note.id)
+                            }
+                            aria-current={
+                              selected ? 'true' : undefined
+                            }
+                            className={[
+                              'min-w-0 flex-1 rounded-md px-2.5 py-[5px] text-left text-text',
+                              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-canvas',
+                            ].join(' ')}
+                          >
+                            <span className="block truncate text-[13px] font-medium leading-[1.3]">
+                              {displayNoteTitle(rowNote)}
+                            </span>
 
-                          <span className="mt-px block text-[11px] leading-[1.3] text-text-muted">
-                            {formatNoteUpdatedDate(
-                              note.updatedAt,
+                            <span className="mt-px block text-[11px] leading-[1.3] text-text-muted">
+                              {formatNoteUpdatedDate(
+                                note.updatedAt,
+                              )}
+                            </span>
+                          </button>
+
+                          <NoteActionsMenu
+                            displayTitle={displayNoteTitle(
+                              rowNote,
                             )}
-                          </span>
-                        </button>
+                            onTriggerRef={(element) => {
+                              if (element) {
+                                deleteTriggerRefs.current.set(
+                                  note.id,
+                                  element,
+                                )
+                              } else {
+                                deleteTriggerRefs.current.delete(
+                                  note.id,
+                                )
+                              }
+                            }}
+                            onRequestDelete={() =>
+                              handleRequestDelete(note.id)
+                            }
+                          />
+                        </div>
                       </li>
                     )
                   })}
@@ -1399,7 +1747,7 @@ export function NotesPage() {
                     onBlur={() =>
                       flushNow(selectedNoteId)
                     }
-                    className="w-full min-w-0 bg-transparent text-[32px] font-semibold tracking-tight text-text outline-none placeholder:font-normal placeholder:text-text-muted/60 focus-visible:rounded-[4px] focus-visible:ring-2 focus-visible:ring-focus/40"
+                    className="w-full min-w-0 bg-transparent text-[34px] font-semibold tracking-tight text-text outline-none placeholder:font-semibold placeholder:text-text-muted/55 focus-visible:rounded-[4px] focus-visible:ring-2 focus-visible:ring-focus/40"
                   />
 
                   {/*
@@ -1534,6 +1882,20 @@ export function NotesPage() {
             </div>
           </section>
         </div>
+      )}
+
+      {deleteTargetId != null && (
+        <NoteDeleteDialog
+          title={
+            deleteTargetNote
+              ? displayNoteTitle(deleteTargetNote)
+              : 'Untitled'
+          }
+          deleting={deletingNoteId != null}
+          error={deleteError}
+          onCancel={closeDeleteDialog}
+          onConfirm={() => void confirmDeleteNote()}
+        />
       )}
     </div>
   )

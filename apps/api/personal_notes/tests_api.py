@@ -24,6 +24,10 @@ Covers the slice contract:
   timestamp churn, non-leaking 404
 - archive/restore: list partitioning, same-id identity, idempotent
   replays, non-leaking 404
+- delete: permanent owner-only row removal — 204 with no body, the
+  row is physically gone, active/archived listings reflect it
+  immediately, foreign/unknown ids answer with the identical
+  non-leaking 404
 - privacy: ResearchGroup / Project membership grants no access
   through any endpoint; the representation exposes no owner/user
   identifier
@@ -31,8 +35,9 @@ Covers the slice contract:
   browser-mutation CSRF contract (DRF ``SessionAuthentication``
   enforcement) — rejected without a token, honored with one
 - contract: exact representation shape and nullability, status
-  codes, and no deferred endpoints (separate search / delete / daily
-  / relations routes)
+  codes, and no deferred endpoints (separate search / daily /
+  relations routes — DELETE on the detail resource IS part of the
+  contract)
 """
 
 from datetime import timedelta
@@ -121,6 +126,13 @@ class _AuthMixin:
             HTTP_X_CSRFTOKEN=csrf,
         )
 
+    def _delete(self, url):
+        csrf = self._csrf()
+        return self.client.delete(
+            url,
+            HTTP_X_CSRFTOKEN=csrf,
+        )
+
 
 # ── Authentication ──
 
@@ -175,6 +187,10 @@ class PersonalNoteAuthTest(APITestCase):
             self.client.post(
                 f"{base}restore/", data={}, content_type="application/json",
             ).status_code,
+            401,
+        )
+        self.assertEqual(
+            self.client.delete(base).status_code,
             401,
         )
 
@@ -1065,6 +1081,124 @@ class PersonalNoteArchiveRestoreTest(_AuthMixin, APITestCase):
         self.assertEqual(self.alice_note.pk, note_id)
 
 
+class PersonalNoteDeleteTest(_AuthMixin, APITestCase):
+    """DELETE /api/me/notes/{note_id}/ — permanent, owner-only.
+
+    Success is a 204 with an EMPTY body (no note representation);
+    the row is physically removed; a foreign note id and a
+    nonexistent note id produce the identical non-leaking 404 and
+    leave the foreign row untouched.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.alice = User.objects.create_user(
+            username="pn_del_alice", password=SEED_PASSWORD,
+        )
+        cls.bob = User.objects.create_user(
+            username="pn_del_bob", password=SEED_PASSWORD,
+        )
+        cls.alice_note = create_personal_note(
+            actor=cls.alice, title="deletable", content="bye",
+        )
+        cls.alice_other = create_personal_note(
+            actor=cls.alice, title="survivor",
+        )
+        cls.bob_note = create_personal_note(
+            actor=cls.bob, title="foreign",
+        )
+
+    def test_owner_delete_returns_204_with_empty_body(self):
+        self._login("pn_del_alice")
+        note_id = self.alice_note.pk
+
+        response = self._delete(f"/api/me/notes/{note_id}/")
+
+        self.assertEqual(response.status_code, 204)
+        self.assertEqual(response.content, b"")
+        self.assertFalse(
+            PersonalNote.objects.filter(pk=note_id).exists()
+        )
+
+    def test_get_after_delete_is_the_canonical_404(self):
+        self._login("pn_del_alice")
+        note_id = self.alice_note.pk
+        self._delete(f"/api/me/notes/{note_id}/")
+
+        response = self.client.get(f"/api/me/notes/{note_id}/")
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(
+            response.json(), {"error": "Personal note not found."},
+        )
+
+    def test_deleted_active_note_disappears_from_active_listing(self):
+        self._login("pn_del_alice")
+        note_id = self.alice_note.pk
+
+        self._delete(f"/api/me/notes/{note_id}/")
+
+        active = self.client.get("/api/me/notes/")
+        self.assertEqual(
+            {note["id"] for note in active.json()},
+            {self.alice_other.pk},
+        )
+        self.alice_other.refresh_from_db()
+        self.assertEqual(self.alice_other.title, "survivor")
+
+    def test_deleted_archived_note_disappears_from_archive_listing(self):
+        self._login("pn_del_alice")
+        note_id = self.alice_note.pk
+        archive_personal_note(actor=self.alice, note_id=note_id)
+        self.assertEqual(
+            {note["id"] for note in
+             self.client.get("/api/me/notes/archive/").json()},
+            {note_id},
+        )
+
+        self._delete(f"/api/me/notes/{note_id}/")
+
+        archived = self.client.get("/api/me/notes/archive/")
+        self.assertEqual(archived.json(), [])
+        self.assertEqual(
+            {note["id"] for note in
+             self.client.get("/api/me/notes/").json()},
+            {self.alice_other.pk},
+        )
+
+    def test_foreign_and_nonexistent_delete_same_404(self):
+        self._login("pn_del_bob")
+
+        foreign = self._delete(f"/api/me/notes/{self.alice_note.pk}/")
+        missing = self._delete("/api/me/notes/999999/")
+
+        self.assertEqual(foreign.status_code, 404)
+        self.assertEqual(missing.status_code, 404)
+        self.assertEqual(foreign.json(), missing.json())
+        self.assertEqual(
+            foreign.json(), {"error": "Personal note not found."},
+        )
+
+    def test_failed_foreign_delete_leaves_the_row_untouched(self):
+        self._login("pn_del_bob")
+        self._delete(f"/api/me/notes/{self.alice_note.pk}/")
+
+        self.alice_note.refresh_from_db()
+        self.assertEqual(self.alice_note.title, "deletable")
+        self.assertEqual(self.alice_note.content, "bye")
+        self.assertIsNone(self.alice_note.archived_at)
+
+    def test_delete_never_leaks_owner_or_ownership(self):
+        """The 204 carries no representation at all — there is no
+        owner identifier to leak on success, and the 404 body is the
+        one non-leaking contract."""
+        self._login("pn_del_alice")
+        response = self._delete(
+            f"/api/me/notes/{self.alice_note.pk}/",
+        )
+        self.assertEqual(response.status_code, 204)
+        self.assertEqual(response.content, b"")
+
+
 # ── Privacy ──
 
 
@@ -1199,11 +1333,17 @@ class PersonalNoteCSRFTest(TestCase):
             ("post", f"/api/me/notes/{note_id}/pin/", {"pinned": True}),
             ("post", f"/api/me/notes/{note_id}/archive/", {}),
             ("post", f"/api/me/notes/{note_id}/restore/", {}),
+            ("delete", f"/api/me/notes/{note_id}/", None),
         ]
         for method, url, data in attempts:
-            response = getattr(self.client, method)(
-                url, data=data, content_type="application/json",
-            )
+            if data is None:
+                response = getattr(self.client, method)(url)
+            else:
+                response = getattr(self.client, method)(
+                    url,
+                    data=data,
+                    content_type="application/json",
+                )
             self.assertEqual(
                 response.status_code, 403,
                 f"{method.upper()} {url} must require CSRF",
@@ -1233,6 +1373,16 @@ class PersonalNoteCSRFTest(TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertIsNotNone(response.json()["archivedAt"])
+
+        token = self._token()
+        response = self.client.delete(
+            f"/api/me/notes/{note_id}/",
+            HTTP_X_CSRFTOKEN=token,
+        )
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(
+            PersonalNote.objects.filter(pk=note_id).exists()
+        )
 
     def test_reads_do_not_require_csrf_token(self):
         response = self.client.get("/api/me/notes/")
@@ -1307,17 +1457,16 @@ class PersonalNoteContractTest(_AuthMixin, APITestCase):
         self.assertEqual(
             self.client.get("/api/me/notes/archive/").status_code, 200,
         )
+        self.assertEqual(
+            self._delete(f"/api/me/notes/{note_id}/").status_code,
+            204,
+        )
 
     def test_no_deferred_endpoints_or_behavior_introduced(self):
         self._login("pn_contract_alice")
         create = self._post("/api/me/notes/", {"title": "findable"})
         note_id = create.json()["id"]
 
-        # No DELETE / trash lifecycle.
-        self.assertEqual(
-            self.client.delete(f"/api/me/notes/{note_id}/").status_code,
-            405,
-        )
         # No separate search route: search is ?q= on the list only.
         self.assertEqual(
             self.client.get("/api/me/notes/search/").status_code, 404,

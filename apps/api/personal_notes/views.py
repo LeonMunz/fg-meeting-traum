@@ -37,6 +37,7 @@ from .services import (
     PersonalNoteNotFoundError,
     archive_personal_note,
     create_personal_note,
+    delete_personal_note,
     get_personal_note,
     list_active_notes,
     list_archived_notes,
@@ -150,7 +151,7 @@ class PersonalNoteArchiveListView(APIView):
 
 
 class PersonalNoteDetailView(APIView):
-    """GET/PATCH /api/me/notes/{note_id}/
+    """GET/PATCH/DELETE /api/me/notes/{note_id}/
 
     GET: one of the current user's notes (active or archived). A
     foreign note id and a nonexistent note id both yield the same
@@ -160,6 +161,12 @@ class PersonalNoteDetailView(APIView):
     Ownership, pin state, archive state, and system timestamps are
     never directly mutable (rejected fail-closed); pin and archive
     lifecycle use their explicit action endpoints.
+
+    DELETE: permanently delete the note (owner-only, active OR
+    archived). Delegates to the canonical ``delete_personal_note``
+    service, which physically removes the row — no trash, no
+    tombstone, no recovery. Success answers ``204`` with no body
+    and no note representation.
     """
 
     permission_classes = [IsAuthenticated]
@@ -212,6 +219,17 @@ class PersonalNoteDetailView(APIView):
         except PersonalNoteNotFoundError:
             return _note_not_found_response()
         return Response(PersonalNoteSerializer(note).data)
+
+    def delete(self, request, note_id):
+        # Ownership resolution and the physical delete happen in the
+        # canonical service layer (single owner-scoped lookup); the
+        # view only maps the non-leaking domain outcome to 404 and
+        # answers 204 with NO body and no note representation.
+        try:
+            delete_personal_note(actor=request.user, note_id=note_id)
+        except PersonalNoteNotFoundError:
+            return _note_not_found_response()
+        return Response(status=204)
 
 
 class PersonalNotePinView(APIView):
