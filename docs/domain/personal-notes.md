@@ -97,7 +97,7 @@ Semantics:
    requested state is left completely unchanged (no new timestamp, no
    state churn).
 
-There is no Trash / permanent-delete lifecycle in V1 (see §10).
+There is no Trash / permanent-delete lifecycle in V1 (see §11).
 
 ## 6. Pin semantics
 
@@ -146,7 +146,91 @@ restore, pin state change) updates `updated_at`; an idempotent no-op
 replay does not. No second persisted ordering system (no folders, no
 manual positions) exists or may be introduced in this slice.
 
-## 10. Persisted fields in this slice
+## 10. HTTP API (core lifecycle — implemented)
+
+The Personal Notes domain is exposed through an authenticated REST
+API under `/api/me/notes/`. The HTTP layer is a THIN boundary: it
+authenticates, validates the transport shape, and delegates
+ownership resolution and every mutation to the canonical service
+layer (§11). It contains no authorization logic of its own and
+never queries notes unscoped. `PersonalNoteNotFoundError` — the
+single non-leaking domain outcome for BOTH an unknown note id and a
+foreign note id — maps to one identical `404` body
+(`{"error": "Personal note not found."}`) in every endpoint.
+
+### Endpoints
+
+| Method & path                     | Behavior                                                            |
+| --------------------------------- | ------------------------------------------------------------------- |
+| `GET /api/me/notes/`              | The current user's ACTIVE notes, canonical ordering (§9).           |
+| `POST /api/me/notes/`             | Create one note owned by the current user (`201`).                  |
+| `GET /api/me/notes/archive/`      | The current user's ARCHIVED notes, canonical ordering (§9).         |
+| `GET /api/me/notes/{noteId}/`     | One of the current user's notes (active or archived).               |
+| `PATCH /api/me/notes/{noteId}/`   | Partial update of `title` and/or `content` only.                    |
+| `POST /api/me/notes/{noteId}/pin/` | Set pin state: `{"pinned": true \| false}` (required boolean).    |
+| `POST /api/me/notes/{noteId}/archive/` | Archive the note (idempotent; never deletes).                |
+| `POST /api/me/notes/{noteId}/restore/` | Restore the note (idempotent; same row, same id).             |
+
+Every endpoint requires authentication; anonymous requests receive
+the repository's canonical `401` (`WWW-Authenticate: Session`).
+Mutating endpoints follow the repository's canonical
+browser-mutation CSRF contract (DRF `SessionAuthentication` CSRF
+enforcement for authenticated unsafe requests — see
+`docs/domain/authentication-sessions.md` §7).
+
+NOT part of this contract: `DELETE`, search (`q`), Daily Notes,
+Work Item / Meeting relations, Convert to Work Item, sharing, and
+tags/folders.
+
+### Note representation
+
+Every read and write answer carries the same full note
+representation (camelCase):
+
+```json
+{
+  "id": 1,
+  "title": "string",
+  "content": "string",
+  "pinned": false,
+  "archivedAt": null,
+  "createdAt": "2026-09-29T12:00:00.000000Z",
+  "updatedAt": "2026-09-29T12:00:00.000000Z"
+}
+```
+
+`archivedAt` is `null` exactly while the note is active. The
+representation exposes NO `user` / `userId` / `owner` or other
+owner identifier: the owner is the authenticated user by
+construction and the payload must not leak it.
+
+### Create / update / lifecycle contracts
+
+- **Create** accepts `{"title"?: string, "content"?: string}`; both
+  are optional (an empty object is valid and creates `title = ""`,
+  `content = ""`). `title` is validated against the §7 max-length
+  constraint; an over-length title is rejected (`400`) with nothing
+  persisted. The owner is always `request.user`; client ownership
+  fields (`user` / `userId` / `user_id` / `owner` / `ownerId` /
+  `owner_id`) are rejected fail-closed (`400`) — they can never
+  create or imply an ownership contract.
+- **Update** (PATCH) accepts a subset of `{"title"?: string,
+  "content"?: string}` (partial update). `owner`, `pinned`,
+  `archivedAt`, `createdAt`, and `updatedAt` are NEVER directly
+  mutable and are rejected fail-closed (`400`); pin and archive
+  lifecycle use their explicit action endpoints. An empty PATCH is
+  a valid no-op: nothing is persisted and `updatedAt` is not
+  churned. A valid persisted change updates `updatedAt` (see §9).
+- **Pin** requires exactly one boolean `pinned` (missing or
+  non-boolean → `400`). Setting the already-current state persists
+  nothing (no `updatedAt` churn).
+- **Archive / restore** delegate directly to the idempotent domain
+  services: a repeated archive or restore leaves the row —
+  including `archivedAt` and `updatedAt` — completely unchanged.
+  Archive never deletes the row; restore clears `archived_at` on
+  the SAME row (the note keeps its id).
+
+## 11. Persisted fields in this slice
 
 The V1 persisted foundation is exactly:
 
@@ -173,13 +257,21 @@ The V1 persisted foundation is exactly:
 - task/status/due-date/assignee fields
 - Trash / soft-delete (`deleted_at`) lifecycle
 - Search
-- HTTP API, serializers, and any UI
+- frontend client types and any Notes UI
 
-## 11. Implementation references
+## 12. Implementation references
 
 - Model: `apps/api/personal_notes/models.py` (`PersonalNote`).
 - Canonical service/query layer: `apps/api/personal_notes/services.py`
   (create, get, list active / archived, update title/content,
   pin/unpin, archive, restore — all owner-scoped).
-- Tests: `apps/api/personal_notes/tests.py`.
+- HTTP layer: `apps/api/personal_notes/views.py` +
+  `apps/api/personal_notes/serializers.py` (routes in
+  `apps/api/config/urls.py`) — the thin authenticated boundary
+  described in §10: it authenticates, validates the transport
+  shape, and delegates every ownership resolution and mutation to
+  the canonical service layer.
+- Tests: `apps/api/personal_notes/tests.py` (domain) and
+  `apps/api/personal_notes/tests_api.py` (HTTP lifecycle,
+  privacy, CSRF, and representation contract).
 - Checkpoint: `docs/CURRENT_STATE.md` (§Personal Notes).

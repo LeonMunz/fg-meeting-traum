@@ -67,6 +67,15 @@ from work_items.views import (
     WorkItemStatusTransitionView,
 )
 
+from personal_notes.views import (
+    PersonalNoteArchiveListView,
+    PersonalNoteArchiveView,
+    PersonalNoteDetailView,
+    PersonalNoteListCreateView,
+    PersonalNotePinView,
+    PersonalNoteRestoreView,
+)
+
 from meetings.views import (
     MeetingCancelView,
     MeetingDetailView,
@@ -170,6 +179,15 @@ urlpatterns = [
     # My Work preferences — persisted personal view state (never authorization)
     path('api/me/preferences/my-work/', MyWorkPreferencesView.as_view(), name='my-work-preferences'),
     path('api/research-groups/<int:group_id>/my-work/', MyWorkView.as_view(), name='research-group-my-work'),
+
+    # Personal Notes — private, owner-only capture space (no search,
+    # no delete/trash, no relations in this slice)
+    path('api/me/notes/', PersonalNoteListCreateView.as_view(), name='personal-notes-list'),
+    path('api/me/notes/archive/', PersonalNoteArchiveListView.as_view(), name='personal-notes-archive-list'),
+    path('api/me/notes/<int:note_id>/', PersonalNoteDetailView.as_view(), name='personal-note-detail'),
+    path('api/me/notes/<int:note_id>/pin/', PersonalNotePinView.as_view(), name='personal-note-pin'),
+    path('api/me/notes/<int:note_id>/archive/', PersonalNoteArchiveView.as_view(), name='personal-note-archive'),
+    path('api/me/notes/<int:note_id>/restore/', PersonalNoteRestoreView.as_view(), name='personal-note-restore'),
 
     # Home aggregate — read-only authenticated composition of the
     # four Home read models (Activity remains the separate /api/activity/)
