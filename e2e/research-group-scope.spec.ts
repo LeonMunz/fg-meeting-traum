@@ -390,7 +390,7 @@ test(
       .fill(datePartPlusDays(9))
 
     await page
-      .getByLabel('Time')
+      .getByRole('combobox', { name: 'Time', exact: true })
       .fill('09:00')
 
     await page

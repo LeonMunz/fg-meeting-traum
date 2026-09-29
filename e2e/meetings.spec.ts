@@ -73,7 +73,7 @@ async function createMeetingFromTemplate(
         Date.now() + daysAhead * 24 * 60 * 60 * 1000,
       ).toISOString().slice(0, 10),
     )
-  await page.getByLabel('Time').fill(time)
+  await page.getByRole('combobox', { name: 'Time', exact: true }).fill(time)
 
   await page
     .locator('form')
@@ -156,7 +156,7 @@ test(
       .fill(datePartPlusDays(7))
 
     await page
-      .getByLabel('Time')
+      .getByRole('combobox', { name: 'Time', exact: true })
       .fill('10:30')
 
     await page
@@ -622,7 +622,7 @@ test(
       .fill(datePartPlusDays(10))
 
     await page
-      .getByLabel('Time')
+      .getByRole('combobox', { name: 'Time', exact: true })
       .fill('11:00')
 
     await page
@@ -830,7 +830,7 @@ test(
       .fill(datePartPlusDays(12))
 
     await page
-      .getByLabel('Time')
+      .getByRole('combobox', { name: 'Time', exact: true })
       .fill('09:00')
 
     await page
@@ -953,7 +953,7 @@ test(
       .fill(datePartPlusDays(14))
 
     await page
-      .getByLabel('Time')
+      .getByRole('combobox', { name: 'Time', exact: true })
       .fill('09:00')
 
     await page
@@ -1343,7 +1343,7 @@ test(
       .fill(datePartPlusDays(16))
 
     await page
-      .getByLabel('Time')
+      .getByRole('combobox', { name: 'Time', exact: true })
       .fill('10:00')
 
     await page
@@ -1405,7 +1405,7 @@ test(
       .fill(datePartPlusDays(18))
 
     await page
-      .getByLabel('Time')
+      .getByRole('combobox', { name: 'Time', exact: true })
       .fill('09:00')
 
     await page
@@ -1806,7 +1806,7 @@ test(
       .fill(datePartPlusDays(20))
 
     await page
-      .getByLabel('Time')
+      .getByRole('combobox', { name: 'Time', exact: true })
       .fill('10:00')
 
     await page
@@ -2146,7 +2146,7 @@ test(
       .fill(datePartPlusDays(22))
 
     await page
-      .getByLabel('Time')
+      .getByRole('combobox', { name: 'Time', exact: true })
       .fill('10:00')
 
     await page
@@ -2600,7 +2600,7 @@ test(
       .fill(datePartPlusDays(24))
 
     await newMeetingDialog
-      .getByLabel('Time')
+      .getByRole('combobox', { name: 'Time', exact: true })
       .fill('09:00')
 
     await page
@@ -2743,7 +2743,7 @@ test(
       .fill(datePartPlusDays(26))
 
     await page
-      .getByLabel('Time')
+      .getByRole('combobox', { name: 'Time', exact: true })
       .fill('10:00')
 
     await page
@@ -2916,7 +2916,7 @@ test(
       .fill('2031-01-20')
 
     await page
-      .getByLabel('Time')
+      .getByRole('combobox', { name: 'Time', exact: true })
       .fill('09:00')
     await page
       .locator('form')
@@ -3025,7 +3025,7 @@ test(
       .fill('2030-02-10')
 
     await page
-      .getByLabel('Time')
+      .getByRole('combobox', { name: 'Time', exact: true })
       .fill('09:00')
 
     await page
@@ -3052,7 +3052,7 @@ test(
       .fill(datePartPlusDays(28))
 
     await page
-      .getByLabel('Time')
+      .getByRole('combobox', { name: 'Time', exact: true })
       .fill('09:00')
 
     await page
