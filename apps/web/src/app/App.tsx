@@ -11,6 +11,7 @@ import { LoginPage } from '../features/auth/LoginPage'
 import { RegistrationPage } from '../features/auth/RegistrationPage'
 import { HomePage } from '../features/home/HomePage'
 import { MyWorkPage } from '../features/my-work/MyWorkPage'
+import { NotesPage } from '../features/personal-notes/NotesPage'
 import { MeetingListPage } from '../features/meetings/MeetingListPage'
 import { MeetingDetailPage } from '../features/meetings/MeetingDetailPage'
 import { MeetingSeriesListPage } from '../features/meetings/MeetingSeriesListPage'
@@ -120,6 +121,11 @@ function AppRoutes() {
                 <Route
                   path="/my-work"
                   element={<MyWorkPage />}
+                />
+
+                <Route
+                  path="/notes"
+                  element={<NotesPage />}
                 />
 
                 <Route

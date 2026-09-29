@@ -14,6 +14,11 @@ const personalNavigation = [
     path: '/my-work',
     icon: 'assignment',
   },
+  {
+    label: 'Notes',
+    path: '/notes',
+    icon: 'sticky_note_2',
+  },
 ]
 
 const groupNavigation = [

@@ -34,6 +34,42 @@ function renderSidebar(initialEntry = '/meetings?group=17') {
   )
 }
 
+describe('Sidebar personal navigation', () => {
+  it('renders Notes directly with Home and My Work, in that order', () => {
+    renderSidebar()
+
+    // The personal navigation is the first (unlabeled) nav in the
+    // aside, ahead of the research-group section.
+    const personalNav = screen.getAllByRole('navigation')[0]
+    const entries = Array.from(personalNav.children)
+
+    expect(entries.map((entry) => entry.textContent)).toEqual([
+      'homeHome',
+      'assignmentMy Work',
+      'sticky_note_2Notes',
+    ])
+  })
+
+  it('points Notes at /notes without any research-group scoping', () => {
+    // An active research group is in effect (the mocked
+    // useResearchGroup provides activeResearchGroupId 17) — the
+    // group-scoped entries carry ?group=…, Notes must not.
+    renderSidebar()
+
+    const notes = screen.getByRole('link', { name: /Notes/ })
+    expect(notes).toHaveAttribute('href', '/notes')
+    expect(notes.getAttribute('href')).not.toContain('group')
+  })
+
+  it('highlights Notes when /notes is active', () => {
+    renderSidebar('/notes')
+
+    expect(
+      screen.getByRole('link', { name: /Notes/ }),
+    ).toHaveAttribute('aria-current', 'page')
+  })
+})
+
 describe('Sidebar research group navigation', () => {
   it('renders active and future sections in the planned order', () => {
     renderSidebar()

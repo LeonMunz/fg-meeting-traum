@@ -286,7 +286,11 @@ The V1 persisted foundation is exactly:
 - AI fields
 - task/status/due-date/assignee fields
 - Trash / soft-delete (`deleted_at`) lifecycle
-- any Notes UI (route, navigation, list presentation, editor interaction, autosave, archive UI)
+- Notes UI beyond the implemented read-only shell (route, navigation,
+  list presentation, backend-driven search, and read-only note display
+  ARE implemented; still excluded): New Note UI, title/content editing
+  and rich editing interactions, autosave, pin/unpin UI, archive/restore
+  UI, and the archived-notes view
 
 ## 12. Implementation references
 
@@ -304,7 +308,8 @@ The V1 persisted foundation is exactly:
 - Tests: `apps/api/personal_notes/tests.py` (domain) and
   `apps/api/personal_notes/tests_api.py` (HTTP lifecycle,
   privacy, CSRF, and representation contract).
-- Frontend client (frontend-only, NO Notes UI):
+- Frontend client (frontend-only; the read-only Notes UI shell above
+  it is the only consumer in this phase):
   `apps/web/src/api/personal-notes.ts` — typed client on the
   `apiGet` / `apiPost` / `apiPatch` convention covering the complete
   §10 contract (canonical `ApiPersonalNote` DTO, title/content-only
