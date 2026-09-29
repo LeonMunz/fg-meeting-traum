@@ -209,13 +209,23 @@ class _HomeAggregateBase(TestCase):
         )
 
     def _make_meeting(self, *, title, scheduled_at, actor=None,
-                      participants=()):
+                      participants=(), project=None):
+        """Standalone Meeting in the standard scenario. Passing
+        ``project`` switches to project scope (the standard Research
+        Group remains the scope anchor); omitted keeps group scope."""
+        scope = (
+            Meeting.Scope.PROJECT
+            if project is not None
+            else Meeting.Scope.GROUP
+        )
         return create_meeting(
             research_group=self.group,
             actor=actor or self.data["alex"],
             title=title,
             scheduled_at=scheduled_at,
             participants=participants,
+            scope=scope,
+            project=project,
         )
 
     def _pin(self, user, when, **filters):
@@ -791,23 +801,41 @@ class HomeAggregateAuthorizationTest(_HomeAggregateBase):
 
     def test_inaccessible_meeting_does_not_surface(self):
         chris = self.data["chris"]
-        # Alex's Meeting without Chris as creator/participant: group
-        # and Project membership alone never grant MEETING_READ.
-        meeting = self._make_meeting(
-            title="Closed group sync",
+        # Project-scoped Meeting: Chris holds a valid current Project
+        # membership but is neither creator nor explicit participant,
+        # and Project membership alone never grants MEETING_READ; the
+        # Meeting must stay out of every aggregate section.
+        closed = self._make_meeting(
+            title="Closed project sync",
+            scheduled_at=_at(TODAY + timedelta(days=1)),
+            project=self.project,
+        )
+        # Group-scoped positive control: a current Research Group
+        # member reads a group Meeting without explicit Meeting
+        # participation (creator Alex only; no participant row for
+        # Chris).
+        group_meeting = self._make_meeting(
+            title="Open group sync",
             scheduled_at=_at(TODAY + timedelta(days=1)),
         )
 
         data = self._get(chris).json()
-        self.assertNotIn(meeting.pk, self._today_ids(data))
-        self.assertNotIn(meeting.pk, self._continue_ids(data))
+        self.assertNotIn(closed.pk, self._today_ids(data))
+        self.assertNotIn(closed.pk, self._continue_ids(data))
+        self.assertIn(group_meeting.pk, self._today_ids(data))
 
     def test_participant_removal_affects_the_aggregate_immediately(self):
         chris = self.data["chris"]
+        # Project-scoped Meeting: Chris holds valid current Project
+        # access, and explicit participation is his only access path
+        # (group membership alone never grants project Meeting read),
+        # so removing the participant row revokes read access at read
+        # time.
         meeting = self._make_meeting(
-            title="Participant sync",
+            title="Project participant sync",
             scheduled_at=_at(TODAY + timedelta(days=1)),
             participants=[chris],
+            project=self.project,
         )
         before = self._get(chris).json()
         self.assertIn(meeting.pk, self._today_ids(before))
