@@ -28,6 +28,7 @@ canonical boundary for every PersonalNote read and write:
   not.
 """
 
+from django.db.models import Q
 from django.utils import timezone
 
 from .models import PersonalNote
@@ -117,6 +118,31 @@ def list_archived_notes(*, actor):
         PersonalNote.objects.filter(
             user=actor,
             archived_at__isnull=False,
+        )
+    )
+
+
+def search_active_notes(*, actor, query):
+    """Search the actor's ACTIVE notes for a case-insensitive substring.
+
+    ``query`` is the transport-trimmed, non-empty search string. A note
+    matches when the substring occurs in its ``title`` OR its
+    ``content`` (case-insensitive; no tokenization, stemming, or
+    ranking — V1 simple substring search).
+
+    The predicate is applied on top of the SAME owner-scoped active
+    base as ``list_active_notes`` (``user=actor`` AND
+    ``archived_at IS NULL``) inside one query: archived notes and
+    another user's notes are excluded by the query itself, and the
+    canonical ordering (``updated_at`` desc, ``id`` desc tie-break —
+    the model's ``Meta.ordering``) is preserved.
+    """
+    return list(
+        PersonalNote.objects.filter(
+            user=actor,
+            archived_at__isnull=True,
+        ).filter(
+            Q(title__icontains=query) | Q(content__icontains=query),
         )
     )
 

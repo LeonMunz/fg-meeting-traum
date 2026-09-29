@@ -13,6 +13,9 @@ Covers:
   archive/restore, idempotent replay, owner immutability
 - ordering: most recently updated first with a deterministic id
   tie-breaker (active and archived listings)
+- search: owner-scoped, ACTIVE-only, case-insensitive substring
+  matching over title OR content (canonical ordering preserved;
+  archived and foreign notes never match)
 """
 
 import inspect
@@ -30,6 +33,7 @@ from personal_notes.services import (
     list_active_notes,
     list_archived_notes,
     restore_personal_note,
+    search_active_notes,
     set_personal_note_pinned,
     update_personal_note,
 )
@@ -464,3 +468,110 @@ class PersonalNoteOrderingTest(TestCase):
 
         listed = _note_ids(list_archived_notes(actor=self.alice))
         self.assertEqual(listed, [n_second.pk, n_first.pk])
+
+
+class PersonalNoteSearchServiceTest(TestCase):
+    """search_active_notes: owner-scoped case-insensitive substring
+    search over ACTIVE notes (title OR content)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.alice = User.objects.create_user(
+            username="pns_alice", password="TestPass1!"
+        )
+        cls.bob = User.objects.create_user(
+            username="pns_bob", password="TestPass1!"
+        )
+
+        cls.title_note = create_personal_note(
+            actor=cls.alice, title="Quantum flux notes",
+        )
+        cls.content_note = create_personal_note(
+            actor=cls.alice, title="Plain", content="the QUANTUM drift",
+        )
+        cls.both_note = create_personal_note(
+            actor=cls.alice,
+            title="QUANTUM summary", content="quantum recap",
+        )
+        cls.none_note = create_personal_note(
+            actor=cls.alice, title="Unrelated", content="nothing",
+        )
+        cls.archived_note = create_personal_note(
+            actor=cls.alice, title="Quantum archived",
+        )
+        archive_personal_note(
+            actor=cls.alice, note_id=cls.archived_note.pk,
+        )
+        cls.foreign_note = create_personal_note(
+            actor=cls.bob, title="Quantum foreign",
+        )
+
+    def test_matches_title_or_content_case_insensitively(self):
+        ids = _note_ids(
+            search_active_notes(actor=self.alice, query="quantum"),
+        )
+        self.assertEqual(
+            set(ids),
+            {
+                self.title_note.pk,
+                self.content_note.pk,
+                self.both_note.pk,
+            },
+        )
+        # Uppercase query matches the mixed-case stored text too.
+        self.assertEqual(
+            _note_ids(search_active_notes(actor=self.alice, query="QUANTUM")),
+            _note_ids(search_active_notes(actor=self.alice, query="quantum")),
+        )
+
+    def test_note_matching_both_fields_appears_exactly_once(self):
+        ids = _note_ids(
+            search_active_notes(actor=self.alice, query="quantum"),
+        )
+        self.assertEqual(ids.count(self.both_note.pk), 1)
+        self.assertEqual(len(ids), len(set(ids)))
+
+    def test_archived_notes_never_match(self):
+        ids = _note_ids(
+            search_active_notes(actor=self.alice, query="quantum"),
+        )
+        self.assertNotIn(self.archived_note.pk, ids)
+
+    def test_foreign_notes_never_match(self):
+        alice_ids = _note_ids(
+            search_active_notes(actor=self.alice, query="quantum"),
+        )
+        bob_ids = _note_ids(
+            search_active_notes(actor=self.bob, query="quantum"),
+        )
+        self.assertNotIn(self.foreign_note.pk, alice_ids)
+        self.assertEqual(bob_ids, [self.foreign_note.pk])
+
+    def test_non_matching_query_returns_empty_list(self):
+        self.assertEqual(
+            search_active_notes(actor=self.alice, query="zzz-not-there"),
+            [],
+        )
+
+    def test_preserves_canonical_ordering(self):
+        now = timezone.now()
+        _set_updated_at(
+            self.title_note, now - timezone.timedelta(hours=3),
+        )
+        _set_updated_at(
+            self.content_note, now - timezone.timedelta(hours=1),
+        )
+        _set_updated_at(
+            self.both_note, now - timezone.timedelta(hours=2),
+        )
+        ids = _note_ids(
+            search_active_notes(actor=self.alice, query="quantum"),
+        )
+        self.assertEqual(
+            ids,
+            [
+                self.content_note.pk,
+                self.both_note.pk,
+                self.title_note.pk,
+            ],
+        )

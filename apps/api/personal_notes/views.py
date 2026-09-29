@@ -41,6 +41,7 @@ from .services import (
     list_active_notes,
     list_archived_notes,
     restore_personal_note,
+    search_active_notes,
     set_personal_note_pinned,
     update_personal_note,
 )
@@ -86,7 +87,15 @@ class PersonalNoteListCreateView(APIView):
 
     GET: the current user's ACTIVE notes, in canonical service order
     (most recently updated first, id tie-break). Never contains
-    another user's notes.
+    another user's notes. The optional ``?q=`` parameter searches
+    that listing: only transport-level whitespace is trimmed, an
+    absent or effectively empty ``q`` behaves EXACTLY like the
+    ordinary active list, and a non-empty ``q`` keeps only the notes
+    whose title or content contains it (case-insensitive substring;
+    no tokenization, ranking, or special syntax). Search is
+    owner-scoped in the query itself (canonical service layer);
+    archived notes never match. The archive listing
+    (``GET /api/me/notes/archive/``) does not search.
 
     POST: create one note owned by the current user. Both ``title``
     and ``content`` are optional (capture-first); an empty object is
@@ -97,7 +106,14 @@ class PersonalNoteListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        notes = list_active_notes(actor=request.user)
+        raw_query = request.query_params.get("q")
+        query = raw_query.strip() if raw_query is not None else ""
+        if query:
+            notes = search_active_notes(
+                actor=request.user, query=query,
+            )
+        else:
+            notes = list_active_notes(actor=request.user)
         return Response(PersonalNoteSerializer(notes, many=True).data)
 
     def post(self, request):

@@ -162,7 +162,7 @@ foreign note id — maps to one identical `404` body
 
 | Method & path                     | Behavior                                                            |
 | --------------------------------- | ------------------------------------------------------------------- |
-| `GET /api/me/notes/`              | The current user's ACTIVE notes, canonical ordering (§9).           |
+| `GET /api/me/notes/`              | The current user's ACTIVE notes, canonical ordering (§9); optional `?q=` search (see Search below). |
 | `POST /api/me/notes/`             | Create one note owned by the current user (`201`).                  |
 | `GET /api/me/notes/archive/`      | The current user's ARCHIVED notes, canonical ordering (§9).         |
 | `GET /api/me/notes/{noteId}/`     | One of the current user's notes (active or archived).               |
@@ -178,9 +178,39 @@ browser-mutation CSRF contract (DRF `SessionAuthentication` CSRF
 enforcement for authenticated unsafe requests — see
 `docs/domain/authentication-sessions.md` §7).
 
-NOT part of this contract: `DELETE`, search (`q`), Daily Notes,
-Work Item / Meeting relations, Convert to Work Item, sharing, and
-tags/folders.
+NOT part of this contract: `DELETE`, a separate search endpoint
+(`GET /api/me/notes/search/` — search is the `?q=` parameter on the
+active listing only), Daily Notes, Work Item / Meeting relations,
+Convert to Work Item, sharing, and tags/folders.
+
+### Search (``?q=`` on the active listing — implemented)
+
+``GET /api/me/notes/`` accepts the optional ``q`` query parameter.
+V1 search is a simple case-insensitive substring search over the
+current user's **ACTIVE** notes only:
+
+- a note matches when ``q`` occurs in its **title OR content**;
+- matching is **case-insensitive**; there is NO tokenization,
+  stemming, relevance ranking, or special search syntax;
+- only **transport-level whitespace** is trimmed from ``q``: an
+  absent ``q`` and an effectively empty (whitespace-only) ``q``
+  behave EXACTLY like the ordinary active listing;
+- **archived notes never match** — the search base is
+  ``archived_at IS NULL`` only, and the archive listing
+  (``GET /api/me/notes/archive/``) does not gain search;
+- the **canonical ordering** (§9) is retained: most recently
+  updated first, id tie-break;
+- search is **owner-scoped in the query itself**: the predicate is
+  applied in one query that starts from the authenticated user
+  (``user = <request user>``) AND ``archived_at IS NULL``. No
+  Research Group / Project / Meeting membership of any kind grants
+  search visibility (§8), and a search answer never reveals the
+  existence of another user's notes (no counts, no errors);
+- the response uses the unchanged note representation below — no
+  highlights, excerpts, relevance scores, or owner fields;
+- the view delegates to the canonical service
+  ``search_active_notes`` (``personal_notes.services``); there is
+  no separate search endpoint.
 
 ### Note representation
 
@@ -256,15 +286,15 @@ The V1 persisted foundation is exactly:
 - AI fields
 - task/status/due-date/assignee fields
 - Trash / soft-delete (`deleted_at`) lifecycle
-- Search
 - frontend client types and any Notes UI
 
 ## 12. Implementation references
 
 - Model: `apps/api/personal_notes/models.py` (`PersonalNote`).
 - Canonical service/query layer: `apps/api/personal_notes/services.py`
-  (create, get, list active / archived, update title/content,
-  pin/unpin, archive, restore — all owner-scoped).
+  (create, get, list active / archived, search active,
+  update title/content, pin/unpin, archive, restore — all
+  owner-scoped).
 - HTTP layer: `apps/api/personal_notes/views.py` +
   `apps/api/personal_notes/serializers.py` (routes in
   `apps/api/config/urls.py`) — the thin authenticated boundary

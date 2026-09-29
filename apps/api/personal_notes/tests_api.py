@@ -11,6 +11,10 @@ Covers the slice contract:
 - lists: active and archived listings contain only the current
   user's notes in the canonical service ordering (updated_at desc,
   id desc tie-break)
+- search: ``?q=`` on the active listing — owner-scoped,
+  case-insensitive substring over title OR content (trimmed empty
+  query = ordinary active list, canonical ordering retained, archived
+  / foreign notes never match, no separate search route)
 - detail: owner reads active and archived notes; a foreign note id
   and a nonexistent note id produce the identical non-leaking 404
 - update: partial title/content updates only; owner, pin state,
@@ -27,7 +31,8 @@ Covers the slice contract:
   browser-mutation CSRF contract (DRF ``SessionAuthentication``
   enforcement) — rejected without a token, honored with one
 - contract: exact representation shape and nullability, status
-  codes, and no deferred endpoints (search/delete/daily/relations)
+  codes, and no deferred endpoints (separate search / delete / daily
+  / relations routes)
 """
 
 from datetime import timedelta
@@ -377,6 +382,294 @@ class PersonalNoteListTest(_AuthMixin, APITestCase):
             [note["id"] for note in response.json()],
             [self.alice_archived.pk],
         )
+
+
+class PersonalNoteSearchTest(_AuthMixin, APITestCase):
+    """GET /api/me/notes/?q= — owner-scoped V1 substring search over
+    the current user's ACTIVE notes (title OR content,
+    case-insensitive)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.alice = User.objects.create_user(
+            username="pn_search_alice", password=SEED_PASSWORD,
+        )
+        cls.bob = User.objects.create_user(
+            username="pn_search_bob", password=SEED_PASSWORD,
+        )
+
+        # Alice's ACTIVE notes.
+        cls.alice_title = create_personal_note(
+            actor=cls.alice, title="Quantum flux notes",
+        )
+        cls.alice_content = create_personal_note(
+            actor=cls.alice,
+            title="Plain title", content="observed the QUANTUM drift",
+        )
+        cls.alice_both = create_personal_note(
+            actor=cls.alice,
+            title="QUANTUM summary", content="quantum recap",
+        )
+        cls.alice_none = create_personal_note(
+            actor=cls.alice, title="Unrelated", content="nothing here",
+        )
+        # Alice's ARCHIVED note that matches the search term.
+        cls.alice_archived = create_personal_note(
+            actor=cls.alice, title="Quantum archived",
+        )
+        archive_personal_note(
+            actor=cls.alice, note_id=cls.alice_archived.pk,
+        )
+        # Bob's matching notes (active + archived).
+        cls.bob_active = create_personal_note(
+            actor=cls.bob, title="Quantum bob active",
+        )
+        cls.bob_archived = create_personal_note(
+            actor=cls.bob, title="Quantum bob archived",
+        )
+        archive_personal_note(
+            actor=cls.bob, note_id=cls.bob_archived.pk,
+        )
+
+    def _search_ids(self, q):
+        response = self.client.get("/api/me/notes/", {"q": q})
+        self.assertEqual(response.status_code, 200)
+        return [note["id"] for note in response.json()]
+
+    # ── Core search ──
+
+    def test_without_q_returns_unchanged_active_list(self):
+        self._login("pn_search_alice")
+        response = self.client.get("/api/me/notes/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            {note["id"] for note in response.json()},
+            {
+                self.alice_title.pk,
+                self.alice_content.pk,
+                self.alice_both.pk,
+                self.alice_none.pk,
+            },
+        )
+
+    def test_title_substring_matches(self):
+        self._login("pn_search_alice")
+        self.assertEqual(
+            set(self._search_ids("flux")),
+            {self.alice_title.pk},
+        )
+        self.assertEqual(
+            set(self._search_ids("uant")),
+            {
+                self.alice_title.pk,
+                self.alice_content.pk,
+                self.alice_both.pk,
+            },
+        )
+
+    def test_content_substring_matches(self):
+        self._login("pn_search_alice")
+        self.assertEqual(
+            set(self._search_ids("drift")),
+            {self.alice_content.pk},
+        )
+        self.assertEqual(
+            set(self._search_ids("recap")),
+            {self.alice_both.pk},
+        )
+
+    def test_matching_is_case_insensitive(self):
+        self._login("pn_search_alice")
+        self.assertEqual(
+            self._search_ids("QUANTUM"),
+            self._search_ids("quantum"),
+        )
+        self.assertEqual(
+            set(self._search_ids("quAnTuM")),
+            {
+                self.alice_title.pk,
+                self.alice_content.pk,
+                self.alice_both.pk,
+            },
+        )
+        self.assertEqual(
+            set(self._search_ids("FLUX NOTES")),
+            {self.alice_title.pk},
+        )
+
+    def test_query_whitespace_is_trimmed(self):
+        self._login("pn_search_alice")
+        self.assertEqual(
+            self._search_ids("  quantum  "),
+            self._search_ids("quantum"),
+        )
+
+    def test_empty_q_behaves_like_ordinary_active_list(self):
+        self._login("pn_search_alice")
+        empty_q = self.client.get("/api/me/notes/?q=")
+        plain = self.client.get("/api/me/notes/")
+        self.assertEqual(empty_q.status_code, 200)
+        self.assertEqual(empty_q.json(), plain.json())
+        self.assertEqual(
+            {note["id"] for note in plain.json()},
+            {
+                self.alice_title.pk,
+                self.alice_content.pk,
+                self.alice_both.pk,
+                self.alice_none.pk,
+            },
+        )
+
+    def test_whitespace_only_q_behaves_like_ordinary_active_list(self):
+        self._login("pn_search_alice")
+        blank_q = self.client.get("/api/me/notes/", {"q": " \t "})
+        plain = self.client.get("/api/me/notes/")
+        self.assertEqual(blank_q.status_code, 200)
+        self.assertEqual(blank_q.json(), plain.json())
+
+    def test_non_matching_q_returns_empty_list(self):
+        self._login("pn_search_alice")
+        response = self.client.get(
+            "/api/me/notes/", {"q": "zzz-not-there"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), [])
+
+    def test_note_matching_both_fields_appears_only_once(self):
+        self._login("pn_search_alice")
+        ids = self._search_ids("quantum")
+        self.assertEqual(ids.count(self.alice_both.pk), 1)
+        self.assertEqual(len(ids), len(set(ids)))
+
+    def test_search_preserves_canonical_ordering(self):
+        # Explicit recency + a same-moment tie broken by id (higher
+        # id first).
+        now = timezone.now()
+        tie_a = create_personal_note(
+            actor=self.alice, content="quantum tie a",
+        )
+        tie_b = create_personal_note(
+            actor=self.alice, content="quantum tie b",
+        )
+        _backdate_updated_at(self.alice_title, now - timedelta(hours=3))
+        _backdate_updated_at(self.alice_both, now - timedelta(hours=2))
+        _backdate_updated_at(self.alice_content, now - timedelta(hours=1))
+        _backdate_updated_at(tie_a, now - timedelta(minutes=90))
+        _backdate_updated_at(tie_b, now - timedelta(minutes=90))
+        _backdate_updated_at(self.alice_none, now - timedelta(hours=5))
+        self.assertGreater(tie_b.pk, tie_a.pk)
+
+        self._login("pn_search_alice")
+        ids = self._search_ids("quantum")
+        self.assertEqual(
+            ids,
+            [
+                self.alice_content.pk,  # most recently updated
+                tie_b.pk,               # tie: higher id first
+                tie_a.pk,
+                self.alice_both.pk,
+                self.alice_title.pk,
+            ],
+        )
+
+    # ── Privacy / lifecycle ──
+
+    def test_foreign_matching_notes_never_appear(self):
+        self._login("pn_search_alice")
+        ids = self._search_ids("quantum")
+        self.assertNotIn(self.bob_active.pk, ids)
+        self.assertNotIn(self.bob_archived.pk, ids)
+
+    def test_search_returns_only_the_requesting_users_notes(self):
+        self._login("pn_search_bob")
+        self.assertEqual(
+            self._search_ids("quantum"),
+            [self.bob_active.pk],
+        )
+
+    def test_archived_matching_notes_never_appear(self):
+        self._login("pn_search_alice")
+        self.assertNotIn(
+            self.alice_archived.pk, self._search_ids("quantum"),
+        )
+
+    def test_anonymous_search_rejected(self):
+        response = self.client.get("/api/me/notes/", {"q": "quantum"})
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(
+            response.headers.get("WWW-Authenticate"), "Session",
+        )
+
+    # ── Contract ──
+
+    def test_search_response_representation_unchanged(self):
+        self._login("pn_search_alice")
+        response = self.client.get("/api/me/notes/", {"q": "quantum"})
+        self.assertEqual(response.status_code, 200)
+        for note in response.json():
+            self.assertEqual(set(note.keys()), NOTE_REPRESENTATION_KEYS)
+            self.assertIsNone(note["archivedAt"])
+
+    def test_archive_collection_does_not_gain_search(self):
+        self._login("pn_search_alice")
+        plain = self.client.get("/api/me/notes/archive/")
+        with_q = self.client.get("/api/me/notes/archive/", {"q": "quantum"})
+        self.assertEqual(with_q.status_code, 200)
+        self.assertEqual(with_q.json(), plain.json())
+        # The archived matching note is still listed: q is ignored
+        # entirely on the archive collection.
+        self.assertEqual(
+            [note["id"] for note in plain.json()],
+            [self.alice_archived.pk],
+        )
+
+
+class PersonalNoteSearchPrivacyTest(_AuthMixin, APITestCase):
+    """ResearchGroup / Project membership never exposes another
+    user's matching note through search."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.alice = User.objects.create_user(
+            username="pn_sp_alice", password=SEED_PASSWORD,
+        )
+        cls.bob = User.objects.create_user(
+            username="pn_sp_bob", password=SEED_PASSWORD,
+        )
+        cls.group = ResearchGroup.objects.create(
+            name="PN Search Privacy Group", created_by=cls.alice,
+        )
+        ResearchGroupMembership.objects.create(
+            research_group=cls.group, user=cls.alice,
+            role=ResearchGroupMembership.Role.ADMIN,
+        )
+        ResearchGroupMembership.objects.create(
+            research_group=cls.group, user=cls.bob,
+            role=ResearchGroupMembership.Role.MEMBER,
+        )
+        cls.project = create_project(
+            research_group=cls.group, creator=cls.alice,
+            name="PN Search Privacy Project",
+        )
+        add_project_membership(
+            project=cls.project, actor=cls.alice, target_user=cls.bob,
+            role=ProjectMembership.Role.MEMBER,
+        )
+        cls.alice_note = create_personal_note(
+            actor=cls.alice, title="secret", content="very private",
+        )
+
+    def test_membership_does_not_expose_foreign_matching_note(self):
+        self._login("pn_sp_bob")
+        for q in ("secret", "private", "very private"):
+            response = self.client.get("/api/me/notes/", {"q": q})
+            # No error, no count, no existence leak: a plain 200 with
+            # the requesting user's own (here: empty) matching set.
+            self.assertEqual(response.status_code, 200)
+            self.assertNotIn(
+                self.alice_note.pk,
+                [note["id"] for note in response.json()],
+            )
 
 
 # ── Detail ──
@@ -1025,7 +1318,7 @@ class PersonalNoteContractTest(_AuthMixin, APITestCase):
             self.client.delete(f"/api/me/notes/{note_id}/").status_code,
             405,
         )
-        # No search route, and no q= search behavior on the list.
+        # No separate search route: search is ?q= on the list only.
         self.assertEqual(
             self.client.get("/api/me/notes/search/").status_code, 404,
         )
@@ -1038,13 +1331,17 @@ class PersonalNoteContractTest(_AuthMixin, APITestCase):
             ).status_code,
             404,
         )
+        # ?q= IS the owner-scoped active-note search (V1 substring):
+        # a matching query returns the matching note...
         response = self.client.get("/api/me/notes/?q=findable")
         self.assertEqual(response.status_code, 200)
-        # q is NOT a search filter in this slice: the full active list
-        # is returned regardless.
         self.assertEqual(
             {note["id"] for note in response.json()}, {note_id},
         )
+        # ...and a non-matching query returns no notes.
+        no_match = self.client.get("/api/me/notes/?q=not-findable")
+        self.assertEqual(no_match.status_code, 200)
+        self.assertEqual(no_match.json(), [])
 
     def test_archive_list_route_does_not_shadow_note_ids(self):
         """The static /archive/ route never collides with note ids and a
