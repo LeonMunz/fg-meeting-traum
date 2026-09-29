@@ -67,7 +67,7 @@ async function createMeetingFromTemplate(
   // Inside the Upcoming window, so the created Meeting is
   // listed right away.
   await page
-    .getByLabel('Date')
+    .getByRole('textbox', { name: 'Date', exact: true })
     .fill(
       new Date(
         Date.now() + daysAhead * 24 * 60 * 60 * 1000,
@@ -152,7 +152,7 @@ test(
       .fill(MEETING_TITLE)
 
     await page
-      .getByLabel('Date')
+      .getByRole('textbox', { name: 'Date', exact: true })
       .fill(datePartPlusDays(7))
 
     await page
@@ -618,7 +618,7 @@ test(
       .fill('E2E Work Meeting')
 
     await page
-      .getByLabel('Date')
+      .getByRole('textbox', { name: 'Date', exact: true })
       .fill(datePartPlusDays(10))
 
     await page
@@ -826,7 +826,7 @@ test(
       .fill('E2E Lifecycle Weekly')
 
     await page
-      .getByLabel('Date')
+      .getByRole('textbox', { name: 'Date', exact: true })
       .fill(datePartPlusDays(12))
 
     await page
@@ -949,7 +949,7 @@ test(
       .fill('E2E Section Meeting')
 
     await page
-      .getByLabel('Date')
+      .getByRole('textbox', { name: 'Date', exact: true })
       .fill(datePartPlusDays(14))
 
     await page
@@ -1339,7 +1339,7 @@ test(
       .fill('E2E Template Select Meeting')
 
     await page
-      .getByLabel('Date')
+      .getByRole('textbox', { name: 'Date', exact: true })
       .fill(datePartPlusDays(16))
 
     await page
@@ -1401,7 +1401,7 @@ test(
       .fill('E2E Delete Meeting')
 
     await page
-      .getByLabel('Date')
+      .getByRole('textbox', { name: 'Date', exact: true })
       .fill(datePartPlusDays(18))
 
     await page
@@ -1802,7 +1802,7 @@ test(
       .fill(NOTE_MEETING_TITLE)
 
     await page
-      .getByLabel('Date')
+      .getByRole('textbox', { name: 'Date', exact: true })
       .fill(datePartPlusDays(20))
 
     await page
@@ -2142,7 +2142,7 @@ test(
       .fill(meetingTitle)
 
     await page
-      .getByLabel('Date')
+      .getByRole('textbox', { name: 'Date', exact: true })
       .fill(datePartPlusDays(22))
 
     await page
@@ -2596,7 +2596,7 @@ test(
       .fill(meetingTitle)
 
     await newMeetingDialog
-      .getByLabel('Date')
+      .getByRole('textbox', { name: 'Date', exact: true })
       .fill(datePartPlusDays(24))
 
     await newMeetingDialog
@@ -2739,7 +2739,7 @@ test(
       .fill('E2E Note Delete Weekly')
 
     await page
-      .getByLabel('Date')
+      .getByRole('textbox', { name: 'Date', exact: true })
       .fill(datePartPlusDays(26))
 
     await page
@@ -2912,7 +2912,7 @@ test(
     await clickHeaderNewMeeting(page)
     await page.getByLabel('Title').fill('E2E Explicit Follow-up Target')
     await page
-      .getByLabel('Date')
+      .getByRole('textbox', { name: 'Date', exact: true })
       .fill('2031-01-20')
 
     await page
@@ -3021,7 +3021,7 @@ test(
       .fill('E2E Live Follow-up Target')
 
     await page
-      .getByLabel('Date')
+      .getByRole('textbox', { name: 'Date', exact: true })
       .fill('2030-02-10')
 
     await page
@@ -3048,7 +3048,7 @@ test(
       .fill('E2E Live Current And Outcome')
 
     await page
-      .getByLabel('Date')
+      .getByRole('textbox', { name: 'Date', exact: true })
       .fill(datePartPlusDays(28))
 
     await page

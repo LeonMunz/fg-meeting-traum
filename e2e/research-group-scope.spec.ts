@@ -386,7 +386,7 @@ test(
       )
 
     await page
-      .getByLabel('Date')
+      .getByRole('textbox', { name: 'Date', exact: true })
       .fill(datePartPlusDays(9))
 
     await page
