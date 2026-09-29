@@ -1879,7 +1879,7 @@ export function MyWorkPage() {
 
       <div className="overflow-x-auto">
         <div
-          className="grid min-w-max items-start gap-3"
+          className="grid items-start gap-3"
           style={{
             gridTemplateColumns: `repeat(${GLOBAL_STATUS_COLUMNS.length}, minmax(260px, 1fr))`,
           }}
@@ -2710,7 +2710,7 @@ function MyWorkBoard({
         className="overflow-x-auto"
       >
         <div
-          className="grid min-w-max items-start gap-3"
+          className="grid items-start gap-3"
           style={{
             gridTemplateColumns: `repeat(${columns.length}, minmax(260px, 1fr))`,
           }}

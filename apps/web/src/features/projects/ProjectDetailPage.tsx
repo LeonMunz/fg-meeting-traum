@@ -3772,7 +3772,7 @@ function ProjectWorkItemsPanel({
       ) : view === 'board' ? (
         <div className="overflow-x-auto bg-workspace">
           <div
-            className="grid min-w-max gap-3 p-4"
+            className="grid gap-3 p-4"
             style={{
               gridTemplateColumns: `repeat(${Math.max(
                 statusColumns.length,
@@ -4131,7 +4131,7 @@ function WorkItemBoardCard({
 
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-start gap-2">
-            <h3 className="min-w-0 flex-1 text-sm font-semibold leading-5 text-work-content-text">
+            <h3 className="min-w-0 flex-1 truncate text-sm font-semibold leading-5 text-work-content-text">
               {item.title}
             </h3>
 
