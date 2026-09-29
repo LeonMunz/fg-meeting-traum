@@ -4,7 +4,7 @@ import {
   type Page,
 } from './diagnostics/failure-diagnostics'
 
-import { datePartPlusDays, login } from './helpers'
+import { datePartPlusDays, login, replaceControlValue } from './helpers'
 
 async function selectResearchGroup(
   page: Page,
@@ -385,13 +385,15 @@ test(
         'E2E Robotics Scope Meeting',
       )
 
-    await page
-      .getByRole('textbox', { name: 'Date', exact: true })
-      .fill(datePartPlusDays(9))
+    await replaceControlValue(
+      page.getByRole('textbox', { name: 'Date', exact: true }),
+      datePartPlusDays(9),
+    )
 
-    await page
-      .getByRole('combobox', { name: 'Time', exact: true })
-      .fill('09:00')
+    await replaceControlValue(
+      page.getByRole('combobox', { name: 'Time', exact: true }),
+      '09:00',
+    )
 
     await page
       .locator('form')

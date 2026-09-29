@@ -1,5 +1,6 @@
 import {
   expect,
+  type Locator,
   type Page,
 } from '@playwright/test'
 
@@ -218,6 +219,32 @@ export async function openProject(
       { exact: true },
     ).first(),
   ).toBeVisible()
+}
+
+/**
+ * Replaces the complete value of a prefilled, focus-controlled schedule
+ * control (the Meeting create dialog's Date and Time fields).
+ *
+ * Those controls start prefilled with a valid canonical default and
+ * switch between the locale display and the canonical editing form on
+ * focus. A one-step `fill()` from the unfocused prefilled state races
+ * the focus-driven rerender: the replacement text can be appended to
+ * the existing canonical value (e.g. `2026-09-29` becomes
+ * `2026-09-292026-10-06`), leaving the field invalid and the
+ * `Create meeting` submit disabled.
+ *
+ * This helper therefore enters the control's focused editing state with
+ * an explicit click first (the focus rerender commits before the
+ * replacement starts), replaces the complete current value, and asserts
+ * the resulting canonical value exactly.
+ */
+export async function replaceControlValue(
+  control: Locator,
+  value: string,
+) {
+  await control.click()
+  await control.fill(value)
+  await expect(control).toHaveValue(value)
 }
 
 /**

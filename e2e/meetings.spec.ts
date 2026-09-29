@@ -11,6 +11,7 @@ import {
   openProject,
   openProjects,
   quickAddAgendaItem,
+  replaceControlValue,
 } from './helpers'
 
 type ApiMeetingItemLike = {
@@ -66,14 +67,17 @@ async function createMeetingFromTemplate(
 
   // Inside the Upcoming window, so the created Meeting is
   // listed right away.
-  await page
-    .getByRole('textbox', { name: 'Date', exact: true })
-    .fill(
-      new Date(
-        Date.now() + daysAhead * 24 * 60 * 60 * 1000,
-      ).toISOString().slice(0, 10),
-    )
-  await page.getByRole('combobox', { name: 'Time', exact: true }).fill(time)
+  await replaceControlValue(
+    page.getByRole('textbox', { name: 'Date', exact: true }),
+    new Date(
+      Date.now() + daysAhead * 24 * 60 * 60 * 1000,
+    ).toISOString().slice(0, 10),
+  )
+
+  await replaceControlValue(
+    page.getByRole('combobox', { name: 'Time', exact: true }),
+    time,
+  )
 
   await page
     .locator('form')
@@ -151,13 +155,15 @@ test(
       .getByLabel('Title')
       .fill(MEETING_TITLE)
 
-    await page
-      .getByRole('textbox', { name: 'Date', exact: true })
-      .fill(datePartPlusDays(7))
+    await replaceControlValue(
+      page.getByRole('textbox', { name: 'Date', exact: true }),
+      datePartPlusDays(7),
+    )
 
-    await page
-      .getByRole('combobox', { name: 'Time', exact: true })
-      .fill('10:30')
+    await replaceControlValue(
+      page.getByRole('combobox', { name: 'Time', exact: true }),
+      '10:30',
+    )
 
     await page
       .locator('form')
@@ -617,13 +623,15 @@ test(
       .getByLabel('Title')
       .fill('E2E Work Meeting')
 
-    await page
-      .getByRole('textbox', { name: 'Date', exact: true })
-      .fill(datePartPlusDays(10))
+    await replaceControlValue(
+      page.getByRole('textbox', { name: 'Date', exact: true }),
+      datePartPlusDays(10),
+    )
 
-    await page
-      .getByRole('combobox', { name: 'Time', exact: true })
-      .fill('11:00')
+    await replaceControlValue(
+      page.getByRole('combobox', { name: 'Time', exact: true }),
+      '11:00',
+    )
 
     await page
       .locator('form')
@@ -825,13 +833,15 @@ test(
       .getByLabel('Title')
       .fill('E2E Lifecycle Weekly')
 
-    await page
-      .getByRole('textbox', { name: 'Date', exact: true })
-      .fill(datePartPlusDays(12))
+    await replaceControlValue(
+      page.getByRole('textbox', { name: 'Date', exact: true }),
+      datePartPlusDays(12),
+    )
 
-    await page
-      .getByRole('combobox', { name: 'Time', exact: true })
-      .fill('09:00')
+    await replaceControlValue(
+      page.getByRole('combobox', { name: 'Time', exact: true }),
+      '09:00',
+    )
 
     await page
       .locator('form')
@@ -948,13 +958,15 @@ test(
       .getByLabel('Title')
       .fill('E2E Section Meeting')
 
-    await page
-      .getByRole('textbox', { name: 'Date', exact: true })
-      .fill(datePartPlusDays(14))
+    await replaceControlValue(
+      page.getByRole('textbox', { name: 'Date', exact: true }),
+      datePartPlusDays(14),
+    )
 
-    await page
-      .getByRole('combobox', { name: 'Time', exact: true })
-      .fill('09:00')
+    await replaceControlValue(
+      page.getByRole('combobox', { name: 'Time', exact: true }),
+      '09:00',
+    )
 
     await page
       .locator('form')
@@ -1338,13 +1350,15 @@ test(
       .getByLabel('Title')
       .fill('E2E Template Select Meeting')
 
-    await page
-      .getByRole('textbox', { name: 'Date', exact: true })
-      .fill(datePartPlusDays(16))
+    await replaceControlValue(
+      page.getByRole('textbox', { name: 'Date', exact: true }),
+      datePartPlusDays(16),
+    )
 
-    await page
-      .getByRole('combobox', { name: 'Time', exact: true })
-      .fill('10:00')
+    await replaceControlValue(
+      page.getByRole('combobox', { name: 'Time', exact: true }),
+      '10:00',
+    )
 
     await page
       .locator('form')
@@ -1400,13 +1414,15 @@ test(
       .getByLabel('Title')
       .fill('E2E Delete Meeting')
 
-    await page
-      .getByRole('textbox', { name: 'Date', exact: true })
-      .fill(datePartPlusDays(18))
+    await replaceControlValue(
+      page.getByRole('textbox', { name: 'Date', exact: true }),
+      datePartPlusDays(18),
+    )
 
-    await page
-      .getByRole('combobox', { name: 'Time', exact: true })
-      .fill('09:00')
+    await replaceControlValue(
+      page.getByRole('combobox', { name: 'Time', exact: true }),
+      '09:00',
+    )
 
     await page
       .locator('form')
@@ -1801,13 +1817,15 @@ test(
       .getByLabel('Title')
       .fill(NOTE_MEETING_TITLE)
 
-    await page
-      .getByRole('textbox', { name: 'Date', exact: true })
-      .fill(datePartPlusDays(20))
+    await replaceControlValue(
+      page.getByRole('textbox', { name: 'Date', exact: true }),
+      datePartPlusDays(20),
+    )
 
-    await page
-      .getByRole('combobox', { name: 'Time', exact: true })
-      .fill('10:00')
+    await replaceControlValue(
+      page.getByRole('combobox', { name: 'Time', exact: true }),
+      '10:00',
+    )
 
     await page
       .locator('form')
@@ -2141,13 +2159,15 @@ test(
       .getByLabel('Title')
       .fill(meetingTitle)
 
-    await page
-      .getByRole('textbox', { name: 'Date', exact: true })
-      .fill(datePartPlusDays(22))
+    await replaceControlValue(
+      page.getByRole('textbox', { name: 'Date', exact: true }),
+      datePartPlusDays(22),
+    )
 
-    await page
-      .getByRole('combobox', { name: 'Time', exact: true })
-      .fill('10:00')
+    await replaceControlValue(
+      page.getByRole('combobox', { name: 'Time', exact: true }),
+      '10:00',
+    )
 
     await page
       .locator('form')
@@ -2595,13 +2615,15 @@ test(
       .getByLabel('Title')
       .fill(meetingTitle)
 
-    await newMeetingDialog
-      .getByRole('textbox', { name: 'Date', exact: true })
-      .fill(datePartPlusDays(24))
+    await replaceControlValue(
+      newMeetingDialog.getByRole('textbox', { name: 'Date', exact: true }),
+      datePartPlusDays(24),
+    )
 
-    await newMeetingDialog
-      .getByRole('combobox', { name: 'Time', exact: true })
-      .fill('09:00')
+    await replaceControlValue(
+      newMeetingDialog.getByRole('combobox', { name: 'Time', exact: true }),
+      '09:00',
+    )
 
     await page
       .locator('form')
@@ -2738,13 +2760,15 @@ test(
       .getByLabel('Title')
       .fill('E2E Note Delete Weekly')
 
-    await page
-      .getByRole('textbox', { name: 'Date', exact: true })
-      .fill(datePartPlusDays(26))
+    await replaceControlValue(
+      page.getByRole('textbox', { name: 'Date', exact: true }),
+      datePartPlusDays(26),
+    )
 
-    await page
-      .getByRole('combobox', { name: 'Time', exact: true })
-      .fill('10:00')
+    await replaceControlValue(
+      page.getByRole('combobox', { name: 'Time', exact: true }),
+      '10:00',
+    )
 
     await page
       .locator('form')
@@ -2911,13 +2935,15 @@ test(
     await page.getByRole('link', { name: /Meetings/ }).click()
     await clickHeaderNewMeeting(page)
     await page.getByLabel('Title').fill('E2E Explicit Follow-up Target')
-    await page
-      .getByRole('textbox', { name: 'Date', exact: true })
-      .fill('2031-01-20')
+    await replaceControlValue(
+      page.getByRole('textbox', { name: 'Date', exact: true }),
+      '2031-01-20',
+    )
 
-    await page
-      .getByRole('combobox', { name: 'Time', exact: true })
-      .fill('09:00')
+    await replaceControlValue(
+      page.getByRole('combobox', { name: 'Time', exact: true }),
+      '09:00',
+    )
     await page
       .locator('form')
       .getByRole('button', { name: /Create meeting/ })
@@ -3020,13 +3046,15 @@ test(
       .getByLabel('Title')
       .fill('E2E Live Follow-up Target')
 
-    await page
-      .getByRole('textbox', { name: 'Date', exact: true })
-      .fill('2030-02-10')
+    await replaceControlValue(
+      page.getByRole('textbox', { name: 'Date', exact: true }),
+      '2030-02-10',
+    )
 
-    await page
-      .getByRole('combobox', { name: 'Time', exact: true })
-      .fill('09:00')
+    await replaceControlValue(
+      page.getByRole('combobox', { name: 'Time', exact: true }),
+      '09:00',
+    )
 
     await page
       .locator('form')
@@ -3047,13 +3075,15 @@ test(
       .getByLabel('Title')
       .fill('E2E Live Current And Outcome')
 
-    await page
-      .getByRole('textbox', { name: 'Date', exact: true })
-      .fill(datePartPlusDays(28))
+    await replaceControlValue(
+      page.getByRole('textbox', { name: 'Date', exact: true }),
+      datePartPlusDays(28),
+    )
 
-    await page
-      .getByRole('combobox', { name: 'Time', exact: true })
-      .fill('09:00')
+    await replaceControlValue(
+      page.getByRole('combobox', { name: 'Time', exact: true }),
+      '09:00',
+    )
 
     await page
       .locator('form')
