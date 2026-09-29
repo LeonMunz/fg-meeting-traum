@@ -554,6 +554,11 @@ export interface ApiUpdateMeetingItemInput {
 export interface ApiWorkItemTypeDefinition {
   id: number
   name: string
+  // Stable machine-readable semantic kind, system-assigned for the four
+  // canonical starter definitions and null for custom / unclassified
+  // project types. Authoritative for type semantics — the display
+  // `name` is presentation only and must never be inferred from it.
+  kind: ApiWorkItemTypeKind | null
   order: number
   active: boolean
 }

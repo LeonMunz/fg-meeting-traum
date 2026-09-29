@@ -265,6 +265,7 @@ function makeConfiguration(): ApiProjectWorkItemConfiguration {
       {
         id: 4,
         name: 'Sample Batch',
+        kind: null,
         order: 0,
         active: true,
       },

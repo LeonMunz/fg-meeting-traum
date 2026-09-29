@@ -6,6 +6,7 @@ import {
 } from 'react'
 import type {
   FormEvent,
+  MouseEvent as ReactMouseEvent,
   ReactNode,
 } from 'react'
 
@@ -150,6 +151,25 @@ function typeIconForName(name: string): string {
       option.label.toLowerCase() === name.trim().toLowerCase(),
   )
   return match ? match.icon : 'check_box_outline_blank'
+}
+
+// Open the native date picker from ANYWHERE on the Due date field
+// (not just the calendar indicator) inside the user gesture.
+// Disabled / read-only fields never attempt to open it, and browsers
+// without `showPicker` keep the plain native input behavior — the
+// guard never throws.
+function openNativeDueDatePicker(
+  event: ReactMouseEvent<HTMLInputElement>,
+) {
+  const input = event.currentTarget
+
+  if (input.disabled || input.readOnly) {
+    return
+  }
+
+  if (typeof input.showPicker === 'function') {
+    input.showPicker()
+  }
 }
 
 /* ── History presentation helpers ─────────────────────────────────
@@ -1004,6 +1024,8 @@ function CreateWorkItemPanel({
     assigneeQuery,
     setAssigneeQuery,
   ] = useState('')
+  const assigneePickerRef =
+    useRef<HTMLDivElement>(null)
 
   const [submitting, setSubmitting] =
     useState(false)
@@ -1098,16 +1120,24 @@ function CreateWorkItemPanel({
       [parentItems],
     )
 
-  // Seed type/status once the Project's Work Item configuration arrives:
-  // the default type (the configured 'Task' type when present, otherwise
-  // the first configured type), and the Project's default status.
+  // Seed type/status once the Project's Work Item configuration arrives.
+  // The default type is the Project's ACTIVE canonical Task definition,
+  // resolved by the machine-readable `kind` — never by the display
+  // `name` and never by position, so a renamed canonical Task
+  // (`kind = 'task'`, `name = 'Experiment step'`) still wins while a
+  // custom type whose name merely says "Task" (`kind = null`) never
+  // does. When no active canonical Task exists the type is deliberately
+  // left unselected — the create validation (canSubmit) then blocks
+  // submission until the user explicitly chooses a type. Every fresh
+  // drawer session re-seeds, because the panel state starts null and a
+  // manually chosen type keeps the guard `typeDefinitionId == null`
+  // false, so it is never clobbered.
   useEffect(() => {
     if (typeDefinitionId == null) {
-      const defaultType =
-        activeTypeDefinitions.find(
-          (definition) =>
-            definition.name.trim().toLowerCase() === 'task',
-        ) ?? activeTypeDefinitions[0]
+      const defaultType = activeTypeDefinitions.find(
+        (definition) =>
+          definition.kind === 'task',
+      )
       if (defaultType) {
         setTypeDefinitionId(defaultType.id)
       }
@@ -1183,6 +1213,44 @@ function CreateWorkItemPanel({
     onClose,
     submitting,
   ])
+
+  // Outside-click dismissal for the Assignee picker: any pointer press
+  // landing outside the trigger + popover region closes it (and clears
+  // the search query so the next open starts clean). The listener is
+  // attached only while the picker is open and removed on close and
+  // unmount — no global listener leak. Row clicks and search typing
+  // stay INSIDE the region, so multi-select and filtering never
+  // dismiss the picker.
+  useEffect(() => {
+    if (!assigneePickerOpen) {
+      return
+    }
+
+    const handlePointerDown = (
+      event: MouseEvent,
+    ) => {
+      if (
+        event.target instanceof Node &&
+        !assigneePickerRef.current
+          ?.contains(event.target)
+      ) {
+        setAssigneePickerOpen(false)
+        setAssigneeQuery('')
+      }
+    }
+
+    document.addEventListener(
+      'mousedown',
+      handlePointerDown,
+    )
+
+    return () => {
+      document.removeEventListener(
+        'mousedown',
+        handlePointerDown,
+      )
+    }
+  }, [assigneePickerOpen])
 
   const toggleAssignee = (
     assigneeId: string,
@@ -1510,6 +1578,9 @@ function CreateWorkItemPanel({
                     type="date"
                     value={dueDate}
                     disabled={readOnly}
+                    onClick={
+                      openNativeDueDatePicker
+                    }
                     onChange={(event) =>
                       setDueDate(
                         event.target.value,
@@ -1571,18 +1642,27 @@ function CreateWorkItemPanel({
                 ) : null}
 
                 {!readOnly && (
-                  <div className="relative">
+                  <div
+                    ref={assigneePickerRef}
+                    className="relative"
+                  >
                     <button
                       type="button"
                       aria-expanded={
                         assigneePickerOpen
                       }
-                      onClick={() =>
-                        setAssigneePickerOpen(
-                          (current) =>
-                            !current,
-                        )
-                      }
+                      onClick={() => {
+                        if (assigneePickerOpen) {
+                          setAssigneePickerOpen(
+                            false,
+                          )
+                          setAssigneeQuery('')
+                        } else {
+                          setAssigneePickerOpen(
+                            true,
+                          )
+                        }
+                      }}
                       className="flex h-10 w-full items-center justify-between rounded-lg border border-border-structural bg-surface px-3 text-sm text-text-work-faded-70 transition hover:border-focus-ring-primary/40 hover:text-work-content-text"
                     >
                       <span>
@@ -1865,6 +1945,14 @@ function PropertyRow({
 const compactControlClassName =
   'h-9 w-full rounded-lg border border-transparent bg-transparent px-2 text-sm font-medium text-work-content-text outline-none transition hover:border-border-structural hover:bg-work-surface-row-hover focus:border-focus-ring-primary focus:bg-surface focus:ring-2 focus:ring-focus-ring-primary/15 disabled:cursor-default disabled:hover:border-transparent disabled:hover:bg-transparent'
 
+// Single-row Assignees invariant (edit-mode inspector): at most this
+// many selected-assignee pills render individually; any further
+// assignees collapse into one compact "+N" chip. The cap is fixed —
+// no runtime layout measuring — and sized for the drawer's 520px
+// property width; pill names truncate and the pill group may still
+// flex-shrink on narrow viewports, so the row always fits ONE line.
+const MAX_VISIBLE_ASSIGNEES = 2
+
 export function WorkItemInspector({
   projectName,
   item,
@@ -2014,6 +2102,8 @@ export function WorkItemInspector({
     assigneeQuery,
     setAssigneeQuery,
   ] = useState('')
+  const assigneePickerRef =
+    useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     setTitleEditing(false)
@@ -2560,6 +2650,44 @@ export function WorkItemInspector({
     titleEditing,
   ])
 
+  // Outside-click dismissal for the Assignee picker: any pointer press
+  // landing outside the trigger + popover region closes it (and clears
+  // the search query so the next open starts clean). The listener is
+  // attached only while the picker is open and removed on close and
+  // unmount — no global listener leak. Row clicks and search typing
+  // stay INSIDE the region, so multi-select and filtering never
+  // dismiss the picker.
+  useEffect(() => {
+    if (!assigneePickerOpen) {
+      return
+    }
+
+    const handlePointerDown = (
+      event: MouseEvent,
+    ) => {
+      if (
+        event.target instanceof Node &&
+        !assigneePickerRef.current
+          ?.contains(event.target)
+      ) {
+        setAssigneePickerOpen(false)
+        setAssigneeQuery('')
+      }
+    }
+
+    document.addEventListener(
+      'mousedown',
+      handlePointerDown,
+    )
+
+    return () => {
+      document.removeEventListener(
+        'mousedown',
+        handlePointerDown,
+      )
+    }
+  }, [assigneePickerOpen])
+
   const sortedAssignees = useMemo(
     () =>
       [...assignees].sort(
@@ -2602,6 +2730,18 @@ export function WorkItemInspector({
       sortedAssignees,
     ],
   )
+
+  // Deterministic single-row overflow split (no layout measuring):
+  // the first MAX_VISIBLE_ASSIGNEES pills render individually, the
+  // rest collapse into one "+N" chip.
+  const visibleAssignees =
+    selectedAssignees.slice(
+      0,
+      MAX_VISIBLE_ASSIGNEES,
+    )
+  const hiddenAssigneeCount =
+    selectedAssignees.length -
+    visibleAssignees.length
 
   const filteredAssignees = useMemo(() => {
     const normalizedQuery = assigneeQuery
@@ -3371,65 +3511,112 @@ export function WorkItemInspector({
               </PropertyRow>
 
               <PropertyRow label="Assignees">
-                <div className="flex flex-wrap items-center gap-2 py-1">
-                  {selectedAssignees.map(
-                    (assignee) => (
-                      <span
-                        key={assignee.id}
-                        className="inline-flex h-7 break-words items-center gap-1.5 rounded-full bg-work-surface-support py-0.5 pl-1 pr-2 text-xs font-medium text-text-primary transition hover:bg-work-surface-row-hover"
-                      >
-                        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-surface text-[8px] font-semibold text-text-secondary">
-                          {
-                            assignee.initials
-                          }
-                        </span>
-
-                        <span className="min-w-0 break-words">
-                          {assignee.name}
-                        </span>
-
-                        {!readOnly && (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              handleAssigneeToggle(
-                                assignee.id,
-                              )
+                {/* One stable visual row for ANY assignee count: a
+                    shrinkable group of at most MAX_VISIBLE_ASSIGNEES
+                    pills (long names truncate inside the pill), an
+                    optional compact "+N" chip for the hidden rest,
+                    and the Assign trigger — all in one flex-nowrap
+                    row. The pill group takes the remaining width, so
+                    the "+N" + Assign group stays pinned to the value
+                    column's right edge: the trigger never wraps to a
+                    second line and the dropdown anchored to it keeps
+                    the same position regardless of assignee count. */}
+                <div className="flex min-w-0 flex-nowrap items-center gap-2 py-1">
+                  <div className="flex min-w-0 flex-1 flex-nowrap items-center gap-2">
+                    {visibleAssignees.map(
+                      (assignee) => (
+                        <span
+                          key={assignee.id}
+                          className="inline-flex h-7 min-w-0 shrink items-center gap-1.5 rounded-full bg-work-surface-support py-0.5 pl-1 pr-2 text-xs font-medium text-text-primary transition hover:bg-work-surface-row-hover"
+                        >
+                          <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-surface text-[8px] font-semibold text-text-secondary">
+                            {
+                              assignee.initials
                             }
-                            aria-label={`Remove ${assignee.name}`}
-                            className="material-symbols-outlined text-[13px] text-control-foreground hover:text-text-primary"
-                          >
-                            close
-                          </button>
-                        )}
-                      </span>
-                    ),
-                  )}
+                          </span>
 
-                  {selectedAssignees.length ===
-                    0 &&
-                    readOnly && (
-                      <span className="text-sm text-text-work-faded-70">
-                        Unassigned
-                      </span>
+                          <span className="min-w-0 max-w-[4.5rem] truncate">
+                            {assignee.name}
+                          </span>
+
+                          {!readOnly && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleAssigneeToggle(
+                                  assignee.id,
+                                )
+                              }
+                              aria-label={`Remove ${assignee.name}`}
+                              className="material-symbols-outlined shrink-0 text-[13px] text-control-foreground hover:text-text-primary"
+                            >
+                              close
+                            </button>
+                          )}
+                        </span>
+                      ),
                     )}
 
-                  {!readOnly && (
-                    <div className="relative">
-                      <button
-                        type="button"
-                        aria-expanded={
-                          assigneePickerOpen
-                        }
-                        aria-label="Add assignee"
-                        onClick={() =>
-                          setAssigneePickerOpen(
-                            (current) =>
-                              !current,
-                          )
-                        }
-                        className="flex h-7 items-center gap-1 rounded-full border border-dashed border-border-structural px-2.5 text-xs font-medium text-text-work-faded-70 transition hover:border-focus-ring-primary/40 hover:text-work-content-text"
-                      >
+                    {selectedAssignees.length ===
+                      0 &&
+                      readOnly && (
+                        <span className="text-sm text-text-work-faded-70">
+                          Unassigned
+                        </span>
+                      )}
+                  </div>
+
+                  <div
+                    ref={assigneePickerRef}
+                    className="relative flex shrink-0 flex-nowrap items-center gap-2"
+                  >
+                    {hiddenAssigneeCount >
+                      0 &&
+                      (readOnly ? (
+                        <span className="flex h-7 shrink-0 items-center rounded-full bg-work-surface-support px-2 text-xs font-medium text-text-secondary">
+                          +{hiddenAssigneeCount}
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          aria-label={`${hiddenAssigneeCount} more assignees`}
+                          onClick={() => {
+                            if (
+                              !assigneePickerOpen
+                            ) {
+                              setAssigneePickerOpen(
+                                true,
+                              )
+                            }
+                          }}
+                          className="flex h-7 shrink-0 items-center rounded-full bg-work-surface-support px-2 text-xs font-medium text-text-secondary transition hover:bg-work-surface-row-hover"
+                        >
+                          +{hiddenAssigneeCount}
+                        </button>
+                      ))}
+
+                    {!readOnly && (
+                      <>
+                        <button
+                          type="button"
+                          aria-expanded={
+                            assigneePickerOpen
+                          }
+                          aria-label="Add assignee"
+                          onClick={() => {
+                            if (assigneePickerOpen) {
+                              setAssigneePickerOpen(
+                                false,
+                              )
+                              setAssigneeQuery('')
+                            } else {
+                              setAssigneePickerOpen(
+                                true,
+                              )
+                            }
+                          }}
+                          className="flex h-7 shrink-0 items-center gap-1 rounded-full border border-dashed border-border-structural px-2.5 text-xs font-medium text-text-work-faded-70 transition hover:border-focus-ring-primary/40 hover:text-work-content-text"
+                        >
                         <span
                           aria-hidden="true"
                           className="material-symbols-outlined text-[14px]"
@@ -3527,8 +3714,9 @@ export function WorkItemInspector({
                           </div>
                         </div>
                       )}
-                    </div>
-                  )}
+                      </>
+                    )}
+                  </div>
                 </div>
               </PropertyRow>
 
@@ -3537,6 +3725,9 @@ export function WorkItemInspector({
                   type="date"
                   value={item.dueDate ?? ''}
                   disabled={readOnly}
+                  onClick={
+                    openNativeDueDatePicker
+                  }
                   onChange={(event) =>
                     handleDueDateChange(
                       event.target.value,

@@ -15,10 +15,10 @@ import {
 
 const config: ApiProjectWorkItemConfiguration = {
   types: [
-    { id: 1, name: 'Epic', order: 0, active: true },
-    { id: 2, name: 'Milestone', order: 1, active: true },
-    { id: 3, name: 'Deliverable', order: 2, active: true },
-    { id: 4, name: 'Task', order: 3, active: true },
+    { id: 1, name: 'Epic', kind: 'epic', order: 0, active: true },
+    { id: 2, name: 'Milestone', kind: 'milestone', order: 1, active: true },
+    { id: 3, name: 'Deliverable', kind: 'deliverable', order: 2, active: true },
+    { id: 4, name: 'Task', kind: 'task', order: 3, active: true },
   ],
   statuses: [
     {

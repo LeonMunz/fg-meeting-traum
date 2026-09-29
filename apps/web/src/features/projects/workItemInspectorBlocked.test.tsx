@@ -19,7 +19,7 @@ import type { ApiWorkItem } from '../../api/types'
 import { WorkItemInspector } from './WorkItemDrawer'
 
 const CONFIGURATION = {
-  types: [{ id: 1, name: 'Task', order: 1, active: true }],
+  types: [{ id: 1, name: 'Task', kind: 'task', order: 1, active: true }],
   statuses: [
     { id: 1, name: 'Todo', order: 1, active: true, category: 'todo' },
     { id: 2, name: 'Done', order: 2, active: true, category: 'done' },

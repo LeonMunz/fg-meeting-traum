@@ -98,6 +98,7 @@ const CONFIGURATION: ApiProjectWorkItemConfiguration = {
     {
       id: 4,
       name: 'Task',
+      kind: 'task',
       order: 0,
       active: true,
     },

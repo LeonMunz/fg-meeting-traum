@@ -218,6 +218,7 @@ function makeConfiguration(): ApiProjectWorkItemConfiguration {
       {
         id: 1,
         name: 'Task',
+        kind: 'task',
         order: 0,
         active: true,
       },

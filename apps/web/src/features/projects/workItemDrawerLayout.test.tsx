@@ -42,7 +42,7 @@ import { WorkItemInspector } from './WorkItemDrawer'
 //     container.
 
 const CONFIGURATION = {
-  types: [{ id: 1, name: 'Task', order: 1, active: true }],
+  types: [{ id: 1, name: 'Task', kind: 'task', order: 1, active: true }],
   statuses: [
     { id: 1, name: 'Todo', order: 1, active: true, category: 'todo' },
     { id: 2, name: 'Done', order: 2, active: true, category: 'done' },
@@ -344,7 +344,7 @@ describe('Work Item drawer — meeting-origin & assignee chip layout contract', 
     expect(itemTitleSurface.className).not.toMatch(/-mx-/)
   })
 
-  it('assignee chip names render in a shrinkable wrapper for long unbroken names', () => {
+  it('assignee chip names truncate inside a capped, shrinkable pill for long unbroken names', () => {
     const pathologicalName = 'u'.repeat(80)
     const { props } = makeProps(
       makeItem({ assigneeIds: [9] }),
@@ -352,13 +352,22 @@ describe('Work Item drawer — meeting-origin & assignee chip layout contract', 
     )
     render(<WorkItemInspector {...props} />)
 
-    // The name is a direct child of the chip; it must carry the
-    // shrink + wrap contract so a pathological username wraps inside
-    // the chip instead of widening the chip (and the drawer).
+    // Single-row Assignees contract: the name is a direct child of
+    // the pill and must carry the shrink + truncate contract with a
+    // max-width cap, so a pathological username truncates INSIDE the
+    // pill instead of wrapping or widening it (and the row/drawer).
     const nameSurface = screen.getByText(pathologicalName)
     expect(nameSurface.className).toContain('min-w-0')
-    expect(nameSurface.className).toContain('break-words')
-    // The chip container itself must not carry a negative margin.
-    expect(nameSurface.parentElement!.className).not.toMatch(/-mx-/)
+    expect(nameSurface.className).toContain('truncate')
+    expect(nameSurface.className).toContain(
+      'max-w-[4.5rem]',
+    )
+    // The pill itself must be shrinkable (min-w-0 + shrink) so the
+    // single row can still flex down on narrow viewports.
+    const pill = nameSurface.parentElement!
+    expect(pill.className).toContain('min-w-0')
+    expect(pill.className).toContain('shrink')
+    // The pill container itself must not carry a negative margin.
+    expect(pill.className).not.toMatch(/-mx-/)
   })
 })

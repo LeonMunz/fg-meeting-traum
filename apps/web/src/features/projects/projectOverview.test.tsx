@@ -128,12 +128,14 @@ const CONFIGURATION: ApiProjectWorkItemConfiguration = {
     {
       id: 4,
       name: 'Task',
+      kind: 'task',
       order: 0,
       active: true,
     },
     {
       id: 5,
       name: 'Milestone',
+      kind: 'milestone',
       order: 1,
       active: true,
     },
