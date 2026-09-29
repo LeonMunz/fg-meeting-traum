@@ -171,19 +171,29 @@ export function NotesPage() {
    * Request race safety: every outgoing list/search request claims a
    * monotonically increasing id; only the LATEST claim may write state,
    * so a slow initial load can never clobber a newer search result and
-   * a stale search can never clobber a newer one. The mounted flag
-   * keeps a response arriving after unmount from touching state.
+   * a stale search can never clobber a newer one.
+   *
+   * liveRef tracks whether a CURRENT Effect instance is alive: it is
+   * set on every Effect run (including React StrictMode's development
+   * replay, where the first cleanup has already run) and cleared by
+   * cleanup. A replayed Effect therefore re-lives the page, while a
+   * real unmount leaves the flag dead — so a response to the latest
+   * request is dropped only after a real unmount, never after a
+   * StrictMode replay.
+   *
    * hasRenderedNotesRef tracks (synchronously, across awaits) whether
    * any result set has ever rendered — the split between the page-local
    * initial error and the compact search error.
    */
   const requestIdRef = useRef(0)
-  const mountedRef = useRef(true)
+  const liveRef = useRef(false)
   const hasRenderedNotesRef = useRef(false)
 
   useEffect(() => {
+    liveRef.current = true
+
     return () => {
-      mountedRef.current = false
+      liveRef.current = false
     }
   }, [])
 
@@ -237,7 +247,7 @@ export function NotesPage() {
 
         if (
           requestId !== requestIdRef.current ||
-          !mountedRef.current
+          !liveRef.current
         ) {
           return
         }
@@ -248,7 +258,7 @@ export function NotesPage() {
       } catch (error) {
         if (
           requestId !== requestIdRef.current ||
-          !mountedRef.current
+          !liveRef.current
         ) {
           return
         }
@@ -281,18 +291,24 @@ export function NotesPage() {
   }, [runLoad])
 
   /*
-   * Debounced backend search. The first run (empty query at mount) is
-   * skipped — the initial load already requested the ordinary active
-   * list, so the page issues exactly one request on mount. Clearing the
-   * query back to empty re-requests the ordinary active list.
+   * Debounced backend search. `requestedQueryRef` holds the query the
+   * last issued request was for ('' IS the ordinary active list the
+   * initial mount request asked for), so this Effect issues a search
+   * only when the query has CHANGED since that request. That makes the
+   * Effect body idempotent across StrictMode's development replay —
+   * a replayed Effect with the same empty query schedules nothing,
+   * instead of firing a spurious second/third active-list request.
+   * Clearing the query back to empty re-requests the ordinary active
+   * list (the query changed away from and back to '').
    */
-  const skipFirstSearchRun = useRef(true)
+  const requestedQueryRef = useRef('')
 
   useEffect(() => {
-    if (skipFirstSearchRun.current) {
-      skipFirstSearchRun.current = false
+    if (requestedQueryRef.current === query) {
       return
     }
+
+    requestedQueryRef.current = query
 
     const timer = setTimeout(() => {
       void runLoad(query)

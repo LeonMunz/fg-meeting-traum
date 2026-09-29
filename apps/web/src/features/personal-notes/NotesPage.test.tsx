@@ -17,6 +17,7 @@ import {
   it,
   vi,
 } from 'vitest'
+import { StrictMode } from 'react'
 import { MemoryRouter } from 'react-router'
 
 import { App } from '../../app/App'
@@ -199,6 +200,34 @@ function renderPage(
     <MemoryRouter initialEntries={['/notes']}>
       <NotesPage />
     </MemoryRouter>,
+  )
+}
+
+/**
+ * Mount the page inside React.StrictMode — the same wrapper the
+ * real Vite app uses (main.tsx). In development, StrictMode
+ * double-invokes mount Effects: run → cleanup → replay.
+ */
+function renderStrictPage(
+  initialNotes: ApiPersonalNote[] = DEFAULT_NOTES,
+  listImpl?: (
+    query?: string,
+  ) => Promise<ApiPersonalNote[]>,
+) {
+  if (listImpl) {
+    vi.mocked(listPersonalNotes).mockImplementation(listImpl)
+  } else {
+    vi.mocked(listPersonalNotes).mockImplementation(
+      async () => initialNotes,
+    )
+  }
+
+  return render(
+    <StrictMode>
+      <MemoryRouter initialEntries={['/notes']}>
+        <NotesPage />
+      </MemoryRouter>
+    </StrictMode>,
   )
 }
 
@@ -828,6 +857,149 @@ describe('errors', () => {
     ).toBeInTheDocument()
   })
 })
+
+/* ── StrictMode lifecycle ─────────────────────── ───── */
+
+describe('StrictMode lifecycle', () => {
+  it('settles to the empty state when the initial response is [] (no permanent skeleton)', async () => {
+    renderStrictPage([])
+
+    await screen.findByText('No notes yet.')
+
+    // The loading status is gone — the skeleton did NOT persist.
+    expect(
+      screen.queryByRole('status'),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByText('Select a note to read it.'),
+    ).toBeInTheDocument()
+
+    // Exactly the StrictMode dev replay of the single mount Effect
+    // (one request in production, pinned by the non-StrictMode
+    // test above): both request the ordinary active list, and NO
+    // spurious third request (e.g. a replayed empty search) exists.
+    expect(listPersonalNotes).toHaveBeenCalledTimes(2)
+    expect(
+      listPersonalNotes,
+    ).toHaveBeenNthCalledWith(1, undefined)
+    expect(
+      listPersonalNotes,
+    ).toHaveBeenNthCalledWith(2, undefined)
+  })
+
+  it('renders notes and selects the first note under StrictMode', async () => {
+    renderStrictPage([ALPHA, BETA])
+
+    await screen.findByRole('heading', { name: 'Alpha' })
+
+    expect(
+      screen.getByRole('button', { name: /Alpha/ }),
+    ).toHaveAttribute('aria-current', 'true')
+    expect(
+      screen.getByTestId('note-content'),
+    ).toHaveTextContent('Alpha body')
+  })
+
+  it('lets no stale replayed request overwrite the live render', async () => {
+    let resolveFirst!: (value: ApiPersonalNote[]) => void
+
+    renderStrictPage(
+      undefined,
+      () => {
+        // The first mount Effect instance's request stays
+        // pending…
+        if (
+          vi
+            .mocked(listPersonalNotes)
+            .mock.calls.length === 1
+        ) {
+          return new Promise<ApiPersonalNote[]>(
+            (resolve) => {
+              resolveFirst = resolve
+            },
+          )
+        }
+
+        // …the replayed instance's request settles with the
+        // live set.
+        return Promise.resolve([GAMMA])
+      },
+    )
+
+    await screen.findByRole('heading', { name: 'Gamma' })
+
+    // The stale first response arrives LATE — it must be
+    // dropped.
+    resolveFirst([ALPHA])
+    await act(async () => {})
+
+    const rows = within(
+      within(listRegion()).getByRole('list'),
+    ).getAllByRole('button')
+    expect(rows.map(rowTitle)).toEqual(['Gamma'])
+    expect(
+      screen.getByRole('heading', { name: 'Gamma' }),
+    ).toBeInTheDocument()
+  })
+
+  it('keeps ordinary search race protection under StrictMode', async () => {
+    let resolveSlow!: (value: ApiPersonalNote[]) => void
+
+    renderStrictPage(
+      undefined,
+      (query?: string) => {
+        if (query === 'slow') {
+          return new Promise<ApiPersonalNote[]>(
+            (resolve) => {
+              resolveSlow = resolve
+            },
+          )
+        }
+
+        if (query === 'fast') {
+          return Promise.resolve([GAMMA])
+        }
+
+        return Promise.resolve(DEFAULT_NOTES)
+      },
+    )
+    await settleInitialLoad()
+
+    vi.useFakeTimers()
+    try {
+      fireEvent.change(searchInput(), {
+        target: { value: 'slow' },
+      })
+      await flushDebounce()
+      fireEvent.change(searchInput(), {
+        target: { value: 'fast' },
+      })
+      await flushDebounce()
+
+      const rowsAfterFast = within(
+        within(listRegion()).getByRole('list'),
+      ).getAllByRole('button')
+      expect(rowsAfterFast.map(rowTitle)).toEqual(
+        ['Gamma'],
+      )
+
+      // The stale search response arrives LATE — dropped.
+      resolveSlow([ALPHA, BETA])
+      await act(async () => {})
+    } finally {
+      vi.useRealTimers()
+    }
+
+    const rowsAfterStale = within(
+      within(listRegion()).getByRole('list'),
+    ).getAllByRole('button')
+    expect(rowsAfterStale.map(rowTitle)).toEqual(['Gamma'])
+    expect(
+      screen.getByRole('heading', { name: 'Gamma' }),
+    ).toBeInTheDocument()
+  })
+})
+
 
 /* ── Rendering ────────────────────────────────────────────────── */
 
