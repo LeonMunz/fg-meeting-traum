@@ -1098,3 +1098,42 @@ export interface ApiActivityEvent {
   changes: Record<string, unknown>
   createdAt: string
 }
+
+/* ── Personal Notes ────────────────────────────────────────────── */
+
+/**
+ * One private capture note owned by the authenticated user: the
+ * canonical camelCase full note representation of the Personal Notes
+ * HTTP contract. `archivedAt` is null while the note is active. The
+ * API never exposes an owner identifier; preview/excerpt, Daily Note,
+ * relation, tag, and delete fields are NOT part of the V1 contract.
+ */
+export interface ApiPersonalNote {
+  id: number
+  title: string
+  content: string
+  pinned: boolean
+  archivedAt: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+/**
+ * Capture-first create input for `POST /api/me/notes/`: both fields
+ * optional — an empty object creates an empty note. Ownership is
+ * server-owned and never part of the request.
+ */
+export interface ApiCreatePersonalNoteInput {
+  title?: string
+  content?: string
+}
+
+/**
+ * Title/content-only partial update for
+ * `PATCH /api/me/notes/{noteId}/`. `pinned`, `archivedAt`,
+ * timestamps, and owner fields are NOT part of the update contract.
+ */
+export interface ApiUpdatePersonalNoteInput {
+  title?: string
+  content?: string
+}
