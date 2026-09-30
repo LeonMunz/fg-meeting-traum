@@ -16,6 +16,7 @@ import {
 } from 'vitest'
 
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -23,6 +24,8 @@ import {
   waitFor,
   within,
 } from '@testing-library/react'
+
+import { StrictMode } from 'react'
 
 import { MemoryRouter, Route, Routes } from 'react-router'
 
@@ -2009,4 +2012,155 @@ describe('Live Meeting resolution controls follow the current outcome', () => {
   })
 })
 
+})
+
+describe('Live Meeting duplicate-load robustness', () => {
+  it('a stale duplicate initial load cannot clobber a selection made after the page rendered', async () => {
+    // Reproduction of the CI-only Follow-up E2E flake: in
+    // development, React StrictMode double-invokes mount effects,
+    // so the initial load runs twice. If the FIRST-STARTED
+    // duplicate load's responses arrive after the user has already
+    // interacted with the page rendered by the newer load, that
+    // stale load's terminal state writes (in particular the
+    // fresh-load selection reset) must be discarded - otherwise the
+    // local selection the user just made is silently wiped and the
+    // detail pane falls back to "No current item".
+    const items = [
+      makeItem({
+        id: 1,
+        title: 'Alpha',
+        position: 0,
+        outcome: 'follow_up',
+        followUpSchedule: FOLLOW_UP_SCHEDULE,
+      }),
+    ]
+    // Different payload for the stale load: if the stale terminal
+    // writes were applied, the rail/pane would visibly switch to
+    // this data.
+    const staleItems = [
+      makeItem({ id: 9, title: 'Stale Only', position: 0 }),
+    ]
+    const meeting = makeMeeting({ currentMeetingItemId: null })
+
+    type LoadBatch = 'get' | 'participants' | 'items' | 'sections'
+    const resolvers: Record<LoadBatch, Array<() => void>> = {
+      get: [],
+      participants: [],
+      items: [],
+      sections: [],
+    }
+    let nextItemsPayload: ApiMeetingItem[] = items
+
+    vi.mocked(meetingsApi.getMeeting).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.get.push(() => resolve(meeting))
+        }),
+    )
+    vi.mocked(meetingsApi.listMeetingParticipants).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.participants.push(() => resolve([]))
+        }),
+    )
+    vi.mocked(meetingsApi.listMeetingItems).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.items.push(() => resolve(nextItemsPayload))
+        }),
+    )
+    vi.mocked(meetingsApi.listMeetingSections).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.sections.push(() => resolve([makeSection()]))
+        }),
+    )
+    vi.mocked(
+      researchGroupsApi.listResearchGroups,
+    ).mockResolvedValue([{ id: 1, name: 'FG', role: 'admin' }])
+    vi.mocked(
+      researchGroupsApi.listResearchGroupMemberships,
+    ).mockResolvedValue([])
+    vi.mocked(
+      projectsApi.listResearchGroupMembers,
+    ).mockResolvedValue([])
+    vi.mocked(authApi.me).mockResolvedValue({
+      id: 1,
+      username: 'alex',
+      firstName: 'Alex',
+      lastName: 'Dev',
+      email: 'alex@example.com',
+    })
+
+    // StrictMode: the mount effect fires twice, so two initial
+    // loads overlap; the first-started one is the stale one.
+    render(
+      <StrictMode>
+        <MemoryRouter initialEntries={[`/meetings/${MEETING_ID}`]}>
+          <Routes>
+            <Route
+              path="/meetings/:meetingId"
+              element={
+                <SessionProvider>
+                  <ResearchGroupProvider>
+                    <MeetingDetailPage />
+                  </ResearchGroupProvider>
+                </SessionProvider>
+              }
+            />
+          </Routes>
+        </MemoryRouter>
+      </StrictMode>,
+    )
+
+    // The second-started load's responses arrive first: it is the
+    // load that renders the page.
+    await act(async () => {
+      resolvers.get[1]?.()
+    })
+    await act(async () => {
+      resolvers.participants[0]?.()
+      resolvers.items[0]?.()
+      resolvers.sections[0]?.()
+    })
+
+    await waitForLive()
+    const main = () =>
+      screen.getByRole('main', { name: 'Agenda item' })
+    // Fresh Live load with no persisted Current (cleared by the
+    // earlier follow-up scheduling): the calm no-current state.
+    expect(main()).toHaveTextContent('No current item')
+
+    // The user explicitly browses the resolved item while the
+    // duplicate load is still in flight.
+    fireEvent.click(selectRow('Alpha'))
+    await waitFor(() => {
+      expect(
+        screen.getByRole('heading', { name: 'Alpha' }),
+      ).toBeVisible()
+    })
+    expect(main()).toHaveTextContent('Scheduled for FG Weekly')
+
+    // Now the first-started (stale) load's responses arrive last,
+    // carrying data that must NOT be applied.
+    nextItemsPayload = staleItems
+    await act(async () => {
+      resolvers.get[0]?.()
+    })
+    await act(async () => {
+      resolvers.participants[1]?.()
+      resolvers.items[1]?.()
+      resolvers.sections[1]?.()
+    })
+
+    // The stale load's terminal writes were discarded: the user's
+    // selection survived and the page never switched to the stale
+    // data.
+    expect(
+      screen.getByRole('heading', { name: 'Alpha' }),
+    ).toBeVisible()
+    expect(main()).toHaveTextContent('Scheduled for FG Weekly')
+    expect(main()).not.toHaveTextContent('No current item')
+    expect(screen.queryByText('Stale Only')).toBeNull()
+  })
 })

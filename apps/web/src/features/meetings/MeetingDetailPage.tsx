@@ -718,7 +718,21 @@ export function MeetingDetailPage() {
     )
   }, [meeting, isGroupMember, user, project])
 
+  // Monotonic load-sequence guard: every load claims a sequence
+  // number and only the newest load may apply its terminal state
+  // writes. The React StrictMode development double-effect (and an
+  // interrupted meeting-to-meeting navigation) can leave an earlier
+  // duplicate load in flight while the user already interacts with
+  // the page rendered by the newer load; without this guard the
+  // stale load's late terminal writes would clobber that state -
+  // in particular its fresh-load selection reset would silently
+  // wipe a selection the user made in between.
+  const loadSeqRef = useRef(0)
+
   const loadMeeting = useCallback(async () => {
+    const seq = ++loadSeqRef.current
+    const isCurrent = () => seq === loadSeqRef.current
+
     if (meetingId == null) {
       setMeeting(null)
       setParticipants([])
@@ -736,6 +750,7 @@ export function MeetingDetailPage() {
     try {
       const nextMeeting =
         await getMeeting(meetingId)
+      if (!isCurrent()) return
 
       const [
         nextParticipants,
@@ -746,6 +761,7 @@ export function MeetingDetailPage() {
         listMeetingItems(meetingId),
         listMeetingSections(meetingId),
       ])
+      if (!isCurrent()) return
 
       setMeeting(nextMeeting)
       setParticipants(nextParticipants)
@@ -756,6 +772,7 @@ export function MeetingDetailPage() {
       setSelectedItemId(nextMeeting.currentMeetingItemId)
       setPreservedFollowUpNotice(null)
     } catch (error) {
+      if (!isCurrent()) return
       setMeeting(null)
       setParticipants([])
       setItems([])
@@ -768,7 +785,7 @@ export function MeetingDetailPage() {
         ),
       )
     } finally {
-      setLoading(false)
+      if (isCurrent()) setLoading(false)
     }
   }, [meetingId])
 
