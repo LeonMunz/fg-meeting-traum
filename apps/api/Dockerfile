@@ -34,11 +34,29 @@ COPY home ./home
 COPY home_continue ./home_continue
 COPY home_timeline ./home_timeline
 COPY meetings ./meetings
+COPY personal_notes ./personal_notes
 COPY projects ./projects
 COPY research_groups ./research_groups
 COPY work_items ./work_items
 
 USER 10001:10001
+
+# Build-time packaging acceptance (pre-publication gate): initialize Django
+# with the production settings module and load every configured
+# application, using safe non-production dummy values only. No
+# infrastructure is contacted, no migration runs, and nothing is written.
+# If an INSTALLED_APPS entry is missing or unimportable in this image
+# (for example an app that was never copied above), the build fails here
+# and no immutable production image can be published for the revision.
+RUN DJANGO_SECRET_KEY=fg-image-build-check-only \
+    POSTGRES_DB=build_check \
+    POSTGRES_USER=build_check \
+    POSTGRES_PASSWORD=build_check \
+    POSTGRES_HOST=127.0.0.1 \
+    POSTGRES_PORT=5432 \
+    DJANGO_ALLOWED_HOSTS=build-check.invalid \
+    DJANGO_CSRF_TRUSTED_ORIGINS=https://build-check.invalid \
+    python manage.py check
 
 EXPOSE 8000
 
