@@ -455,14 +455,14 @@ test(
       }),
     ).toBeVisible()
 
-    // The list row's accessible name starts with the Meeting title
-    // (then the effective clock time). Activity event rows name the
-    // actor first, so an anchored title match can only ever select
-    // the Meeting row itself.
+    // The list row's accessible name follows the canonical row
+    // label format `Open <title> on <date> at <time>`. Activity
+    // event rows name the actor first, so an anchored match on
+    // that prefix can only ever select the Meeting row itself.
     const invitedMeetingRow = page
       .getByRole('button', {
         name: new RegExp(
-          `^${MEETING_TITLE}`,
+          `^Open ${MEETING_TITLE} `,
         ),
       })
 
@@ -2606,7 +2606,10 @@ test(
       })
 
     await newMeetingDialog
-      .getByLabel('Project')
+      .getByRole('combobox', {
+        name: 'Context',
+        exact: true,
+      })
       .selectOption({
         label: projectName,
       })
@@ -2971,8 +2974,11 @@ test(
       name: /^Section/,
     })
     await expect(meetingSelect).not.toHaveValue('')
+    // The recommended target is the concrete occurrence: the
+    // earliest eligible Meeting of the source's Series (the
+    // source itself is excluded), never the Series title.
     await expect(meetingSelect.locator('option:checked')).toContainText(
-      'E2E Follow-up Series',
+      'E2E Follow-up Second',
     )
     await expect(sectionSelect.locator('option:checked')).toHaveText(
       'For your Info',
@@ -3672,8 +3678,10 @@ test(
     // --------------------------------------------------------
 
     await selectRow('Alpha')
+    // The persisted destination is the concrete target Meeting
+    // (the Series' second occurrence), not the Series title.
     await expect(workspace).toContainText(
-      'Scheduled for E2E Cancel Follow-up Series',
+      'Scheduled for E2E Cancel Follow-up Target',
     )
 
     const cancelTrigger = page.getByRole('button', {
@@ -3752,7 +3760,7 @@ test(
     const groupId = meetingsUrl.searchParams.get('group') ?? '1'
 
     await page.goto(`/meetings/series?group=${groupId}`)
-    await page.getByLabel('Name').fill('E2E Cancel Follow-up Series')
+    await page.getByLabel('Name').fill('E2E Cancel Follow-up Preserved Series')
     await page.getByRole('button', { name: /Create template/ }).click()
     await expect(page).toHaveURL(/\/meetings\/series\/\d+$/)
 
@@ -3765,16 +3773,16 @@ test(
     // First occurrence = source.
     const sourceUrl = await createMeetingFromTemplate(
       page,
-      'E2E Cancel Follow-up Series',
-      'E2E Cancel Follow-up Source',
+      'E2E Cancel Follow-up Preserved Series',
+      'E2E Cancel Follow-up Preserved Source',
       20,
     )
 
     // Second occurrence = target.
     const targetUrl = await createMeetingFromTemplate(
       page,
-      'E2E Cancel Follow-up Series',
-      'E2E Cancel Follow-up Target',
+      'E2E Cancel Follow-up Preserved Series',
+      'E2E Cancel Follow-up Preserved Target',
       27,
     )
     const targetMeetingId = Number(
@@ -3940,7 +3948,7 @@ test(
 
     await selectRow('Alpha')
     await expect(workspace).toContainText(
-      'Scheduled for E2E Cancel Follow-up Series',
+      'Scheduled for E2E Cancel Follow-up Preserved Target',
     )
     const cancelTrigger = page.getByRole('button', {
       name: 'Cancel follow-up for Alpha',
@@ -3962,7 +3970,7 @@ test(
     // invariants (source Selected + open, Current unchanged).
     await expect(
       workspace.getByText(
-        'Follow-up cancelled. The agenda item in E2E Cancel Follow-up Series was kept because it had already been changed.',
+        'Follow-up cancelled. The agenda item in E2E Cancel Follow-up Preserved Target was kept because it had already been changed.',
       ),
     ).toBeVisible()
     await itemHasOutcome('Alpha', 'Open')

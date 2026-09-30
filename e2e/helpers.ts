@@ -25,9 +25,9 @@ export async function quickAddAgendaItem(
 
   const input = page.getByLabel(`Add item to ${sectionName}`)
 
-  // The inline composer stays open after a successful submit (its
-  // input is cleared for the next item). If it is already open for
-  // this exact section, reuse it; otherwise open it via the
+  // The inline composer collapses after a successful submit and
+  // stays open after a failed one. If it is already open for this
+  // exact section, reuse it; otherwise open it via the
   // 'Add item' / 'Add first item' trigger (the trigger is hidden
   // while the composer is open).
   const addButton = section
