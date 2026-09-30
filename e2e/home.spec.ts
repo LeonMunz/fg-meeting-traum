@@ -4,19 +4,14 @@ import {
   type Page,
 } from '@playwright/test'
 
-import { login } from './helpers'
+import {
+  datePartPlusDays,
+  login,
+  replaceControlValue,
+} from './helpers'
 
 const MEETING_TITLE = 'E2E Home Weekly'
 const SEED_WORK_ITEM = 'First Draft Complete'
-
-/** datetime-local value for 12:00 on the current local date. */
-function todayNoon(): string {
-  const d = new Date()
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${day}T12:00`
-}
 
 async function expectNoHorizontalOverflow(page: Page) {
   const overflow = await page.evaluate(
@@ -49,7 +44,19 @@ async function createMeetingToday(page: Page) {
   })
 
   await dialog.getByLabel('Title').fill(MEETING_TITLE)
-  await dialog.getByLabel('Date and time').fill(todayNoon())
+
+  // The Meeting create dialog uses the separate prefilled Date
+  // (textbox) + Time (combobox) schedule controls; the canonical
+  // replacement helper commits the focused editing state first.
+  await replaceControlValue(
+    dialog.getByRole('textbox', { name: 'Date', exact: true }),
+    datePartPlusDays(0),
+  )
+
+  await replaceControlValue(
+    dialog.getByRole('combobox', { name: 'Time', exact: true }),
+    '12:00',
+  )
 
   await page
     .locator('form')
@@ -402,9 +409,22 @@ test('Home stacks primary over Activity on narrow widths', async ({
     }),
   ).toBeVisible()
 
-  const attentionBox = await page
-    .getByRole('region', { name: 'Needs attention' })
-    .boundingBox()
+  // The primary section is measured from its stable semantic
+  // anchor — the exact "Needs attention" h2 (always present) —
+  // resolving the enclosing <section>, so the box covers the full
+  // section (heading + rows). The region role + accessible name is
+  // a Chromium a11y-exposure detail that is not the contract under
+  // test here; the heading and the Activity complementary landmark
+  // are the stable semantic anchors.
+  const attentionSection = () =>
+    page
+      .getByRole('heading', {
+        name: 'Needs attention',
+        level: 2,
+      })
+      .locator('xpath=ancestor::section[1]')
+
+  const attentionBox = await attentionSection().boundingBox()
   const activityBox = await page
     .getByRole('complementary', { name: 'Activity' })
     .boundingBox()
@@ -439,11 +459,9 @@ test('Home stacks primary over Activity on narrow widths', async ({
 
   // Rows remain readable: the Work Item title is visible and the
   // row keeps a tappable height.
-  const attentionRow = page
-    .getByRole('region', { name: 'Needs attention' })
-    .getByRole('button', {
-      name: /First Draft Complete/,
-    })
+  const attentionRow = attentionSection().getByRole('button', {
+    name: /First Draft Complete/,
+  })
   await expect(attentionRow).toBeVisible()
   const rowBox = await attentionRow.boundingBox()
   expect(rowBox).not.toBeNull()
@@ -470,9 +488,8 @@ test('Home stacks primary over Activity on narrow widths', async ({
   ).toBeVisible()
   await expect(attentionRow).toBeVisible()
 
-  const mobileAttentionBox = await page
-    .getByRole('region', { name: 'Needs attention' })
-    .boundingBox()
+  const mobileAttentionBox =
+    await attentionSection().boundingBox()
   const mobileActivityBox = await page
     .getByRole('complementary', { name: 'Activity' })
     .boundingBox()

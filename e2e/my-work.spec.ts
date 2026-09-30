@@ -39,10 +39,12 @@ import {
  * into a later run.
  *
  * That drag test proves the canonical wire contract: exactly one
- * `POST /api/work-items/{id}/transition-status/` carrying only the
- * concrete target `statusDefinitionId` (no boardPosition, no
- * status-changing PATCH, no reorder), followed by exactly one
- * authoritative `GET /api/me/work-items/` refetch.
+ * atomic My Work board move `POST /api/me/work-items/{id}/reorder/`
+ * carrying exactly `statusCategory` + `beforeWorkItemId` (no
+ * boardPosition, no status definition, no standalone
+ * transition-status request, no status-changing PATCH, no Project
+ * reorder), followed by exactly one authoritative
+ * `GET /api/me/work-items/` refetch.
  *
  * My Work preferences are server-persistent, so the two preference
  * scenarios (the rendering scenario and the Research Groups
@@ -969,12 +971,15 @@ test('My Work Projects multiselect filters, persists, restores, and narrows with
   ).toBeVisible()
 
   // Board -> List keeps the same filtered set (one row only), and
-  // back to Board. The coalesced view-mode save is verified
-  // event-based (registered BEFORE the switch).
-  const viewModeSaveFlushed = expectMyWorkPreferenceSave(
+  // back to Board. Each switch is a real change against the last
+  // persisted snapshot, so each complete-snapshot view-mode save is
+  // verified event-based (registered BEFORE the switch) with its
+  // exact payload.
+  const listModeSaveFlushed = expectMyWorkPreferenceSave(
     page,
     {
       ...MY_WORK_PREFERENCES_BASELINE,
+      viewMode: 'list',
       projectIds: [paperXyzId],
     },
   )
@@ -991,10 +996,19 @@ test('My Work Projects multiselect filters, persists, restores, and narrows with
       name: 'Open E2E Analyze robot data',
     }),
   ).toHaveCount(0)
+  await listModeSaveFlushed
+
+  const boardModeSaveFlushed = expectMyWorkPreferenceSave(
+    page,
+    {
+      ...MY_WORK_PREFERENCES_BASELINE,
+      projectIds: [paperXyzId],
+    },
+  )
   await page
     .getByRole('button', { name: 'Board' })
     .click()
-  await viewModeSaveFlushed
+  await boardModeSaveFlushed
 
   // ── Research Group → Project narrowing: with FG Example active,
   // the Projects control exposes only that group's Project. ──
@@ -1078,7 +1092,13 @@ test('My Work Projects multiselect filters, persists, restores, and narrows with
       MY_WORK_PREFERENCES_BASELINE,
     )
   await groupToggle.click()
-  await page.getByRole('button', { name: 'Clear' }).click()
+  // Scope to the OPEN Research groups popover (role dialog): a bare
+  // `name: 'Clear'` also substring-matches the applied-filters row's
+  // "Clear filters" button, which is not the control under test.
+  await page
+    .getByRole('dialog', { name: 'Research groups' })
+    .getByRole('button', { name: 'Clear' })
+    .click()
   // The popover stays open after Clear — close it so the Projects
   // toggle below is not covered.
   await groupToggle.click()
@@ -1339,23 +1359,32 @@ test('My Work Work Item Types multiselect filters, persists, restores, and combi
       name: 'Research groups, none selected',
     })
     .click()
+  // No refetch on a Research Group filter change. The checkpoint
+  // is taken right BEFORE the change: the earlier reload
+  // legitimately issued its own initial loads, so the original
+  // pre-reload baseline is not comparable here.
+  const requestCountBeforeGroupChange =
+    myWorkRequests.length
   await page
     .getByRole('checkbox', { name: 'FG Example' })
     .check()
   await expect(robotCard).toBeHidden()
   await expect(firstDraftCard).toBeVisible()
   expect(myWorkRequests.length).toBe(
-    requestCountBeforeFilterChange,
+    requestCountBeforeGroupChange,
   )
   await combinedSaveFlushed
 
   // Board -> List keeps the SAME effective filtered set (one row
-  // only), and back to Board. The coalesced view-mode save is
-  // verified event-based (registered BEFORE the switch).
-  const viewModeSaveFlushed = expectMyWorkPreferenceSave(
+  // only), and back to Board. Each switch is a real change against
+  // the last persisted snapshot, so each complete-snapshot
+  // view-mode save is verified event-based (registered BEFORE the
+  // switch) with its exact payload.
+  const listModeSaveFlushed = expectMyWorkPreferenceSave(
     page,
     {
       ...MY_WORK_PREFERENCES_BASELINE,
+      viewMode: 'list',
       researchGroupIds: [fgExampleId],
       workItemTypes: ['task', 'milestone'],
     },
@@ -1373,10 +1402,20 @@ test('My Work Work Item Types multiselect filters, persists, restores, and combi
       name: 'Open E2E Analyze robot data',
     }),
   ).toHaveCount(0)
+  await listModeSaveFlushed
+
+  const boardModeSaveFlushed = expectMyWorkPreferenceSave(
+    page,
+    {
+      ...MY_WORK_PREFERENCES_BASELINE,
+      researchGroupIds: [fgExampleId],
+      workItemTypes: ['task', 'milestone'],
+    },
+  )
   await page
     .getByRole('button', { name: 'Board' })
     .click()
-  await viewModeSaveFlushed
+  await boardModeSaveFlushed
 
   // Global "Clear filters" clears ALL THREE categories in one
   // complete snapshot (viewMode preserved) and returns to baseline.
@@ -1421,15 +1460,21 @@ test('My Work Work Item Types multiselect filters, persists, restores, and combi
 })
 
 test('My Work Kanban drag: cross-category drop mutates the canonical status from statusTargets and refetches My Work', async ({ page }, testInfo) => {
-  // Capture the wire contract: exactly one canonical status-only
-  // transition (POST /api/work-items/{id}/transition-status/
-  // carrying only the concrete target statusDefinitionId — no
-  // boardPosition), zero ordinary status-changing PATCH
-  // /api/work-items/{id}/ requests, zero reorder requests, followed
+  // Capture the wire contract: exactly one canonical My Work board
+  // move (POST /api/me/work-items/{id}/reorder/ carrying exactly
+  // statusCategory + beforeWorkItemId — no boardPosition, no status
+  // definition), zero standalone status-only transition
+  // /api/work-items/{id}/transition-status/ requests, zero ordinary
+  // status-changing PATCH /api/work-items/{id}/ requests, zero
+  // Project reorder /api/work-items/{id}/reorder/ requests, followed
   // by exactly one authoritative GET /api/me/work-items/ refetch,
   // with zero per-Project configuration requests.
   const myWorkRequestUrls: string[] = []
   const projectConfigRequestUrls: string[] = []
+  const myWorkReorderRequests: Array<{
+    url: string
+    payload: Record<string, unknown>
+  }> = []
   const transitionRequests: Array<{
     url: string
     payload: Record<string, unknown>
@@ -1456,7 +1501,15 @@ test('My Work Kanban drag: cross-category drop mutates the canonical status from
   page.on('request', (request) => {
     const url = request.url()
 
-    if (url.includes('/api/me/work-items/')) {
+    // Refetch count = canonical list READS (GET) only. The atomic
+    // board move itself (POST /api/me/work-items/{id}/reorder/)
+    // shares the list's URL prefix and is tracked separately in
+    // `myWorkReorderRequests`; counting it here would inflate the
+    // one-refetch contract by the mutation itself.
+    if (
+      request.method() === 'GET' &&
+      url.includes('/api/me/work-items/')
+    ) {
       myWorkRequestUrls.push(url)
     }
 
@@ -1465,6 +1518,20 @@ test('My Work Kanban drag: cross-category drop mutates the canonical status from
     }
 
     const pathname = new URL(url).pathname
+
+    if (
+      request.method() === 'POST' &&
+      /\/api\/me\/work-items\/\d+\/reorder\/$/.test(
+        pathname,
+      )
+    ) {
+      myWorkReorderRequests.push({
+        url,
+        payload: JSON.parse(
+          request.postData() ?? '{}',
+        ) as Record<string, unknown>,
+      })
+    }
 
     if (
       request.method() === 'POST' &&
@@ -1575,6 +1642,7 @@ test('My Work Kanban drag: cross-category drop mutates the canonical status from
   expect(myWorkRequestsAfterLoad).toBeGreaterThanOrEqual(
     1,
   )
+  expect(myWorkReorderRequests).toEqual([])
   expect(transitionRequests).toEqual([])
   expect(statusPatchRequests).toEqual([])
   expect(reorderRequests).toEqual([])
@@ -1652,27 +1720,34 @@ test('My Work Kanban drag: cross-category drop mutates the canonical status from
   ).toHaveAttribute('aria-pressed', 'true')
 
   // --------------------------------------------------------
-  // 3. Wire contract: exactly one canonical mutation carrying only
-  //    the concrete target statusDefinitionId (no boardPosition),
-  //    followed by exactly one authoritative My Work refetch and
-  //    zero Project configuration requests.
+  // 3. Wire contract: exactly one canonical My Work board move
+  //    (statusCategory + beforeWorkItemId only — no boardPosition,
+  //    no status definition; the server resolves the concrete
+  //    target from the item's statusTargets), followed by exactly
+  //    one authoritative My Work refetch and zero Project
+  //    configuration requests.
   // --------------------------------------------------------
 
-  // Exactly one canonical status-only transition — and the exact
-  // payload match proves nothing else (no boardPosition, no status
-  // name, no My Work state) was sent.
-  expect(transitionRequests).toHaveLength(1)
-  const [transition] = transitionRequests
-  expect(transition.url).toBe(
-    `http://127.0.0.1:4173/api/work-items/${item.id}/transition-status/`,
+  // Exactly one canonical My Work reorder — and the exact payload
+  // match proves nothing else (no boardPosition, no status
+  // definition, no My Work state) was sent. The drop target is the
+  // EMPTY In progress column, so the anchor is the column end
+  // (null).
+  expect(myWorkReorderRequests).toHaveLength(1)
+  const [myWorkReorder] = myWorkReorderRequests
+  expect(myWorkReorder.url).toBe(
+    `http://127.0.0.1:4173/api/me/work-items/${item.id}/reorder/`,
   )
-  expect(transition.payload).toEqual({
-    statusDefinitionId: target.statusDefinitionId,
+  expect(myWorkReorder.payload).toEqual({
+    statusCategory: 'in_progress',
+    beforeWorkItemId: null,
   })
 
-  // The ordinary status PATCH (Project-board reposition-to-end
-  // semantics) and the reorder endpoint must NOT be used for the
-  // My Work move — project-local board_position is preserved.
+  // The standalone status-only transition, the ordinary status
+  // PATCH (Project-board reposition-to-end semantics), and the
+  // Project reorder endpoint must NOT be used for the My Work
+  // move — project-local board_position is preserved.
+  expect(transitionRequests).toEqual([])
   expect(statusPatchRequests).toEqual([])
   expect(reorderRequests).toEqual([])
 
@@ -1703,8 +1778,10 @@ test('My Work Kanban drag: cross-category drop mutates the canonical status from
   })
 
   // --------------------------------------------------------
-  // 4. Same-category drop: no mutation, no refetch (this board has
-  //    no within-column reordering).
+  // 4. Same-category drop back into its own column: the placement
+  //    leaves the persisted order unchanged (the card is the only
+  //    item in the column), so it is a strict no-op — no mutation,
+  //    no refetch.
   // --------------------------------------------------------
 
   const cardBoxAgain = await movedCard.boundingBox()
@@ -1730,7 +1807,8 @@ test('My Work Kanban drag: cross-category drop mutates the canonical status from
   // Bounded quiet window: nothing should have happened at all.
   await page.waitForTimeout(300)
 
-  expect(transitionRequests).toHaveLength(1)
+  expect(myWorkReorderRequests).toHaveLength(1)
+  expect(transitionRequests).toEqual([])
   expect(statusPatchRequests).toEqual([])
   expect(reorderRequests).toEqual([])
   expect(myWorkRequestUrls.length).toBe(

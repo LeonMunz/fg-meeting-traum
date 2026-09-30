@@ -672,7 +672,12 @@ export function MeetingSeriesDetailPage() {
 
       <header className="mt-5 border-b border-border-subtle pb-6">
         <div className="flex flex-wrap items-center gap-3">
-          <h1 className="text-3xl font-semibold tracking-tight text-text">
+          {/* Deliberate compact treatment below 480px: at 390px
+              the fixed 240px sidebar leaves only a ~102px content
+              column, so the title steps down to text-xl (both words
+              fit on one line) and min-w-0/break-words guarantee it
+              can never force document-level horizontal overflow. */}
+          <h1 className="min-w-0 break-words text-3xl font-semibold tracking-tight text-text max-[479px]:text-xl">
             Template Structure
           </h1>
 
@@ -791,10 +796,16 @@ export function MeetingSeriesDetailPage() {
         </div>
       )}
 
-      <div className="mt-8 grid gap-8 xl:grid-cols-[minmax(0,1fr)_360px]">
+      {/* min-w-0: in the compact column the grid and its items
+          must not be inflated to their children's min-content (the
+          form inputs' intrinsic width) — that would push the page
+          past the actual content box. */}
+      <div className="mt-8 grid min-w-0 gap-8 xl:grid-cols-[minmax(0,1fr)_360px]">
         {/* Sections */}
-        <section>
-          <div className="flex items-end justify-between gap-6">
+        <section className="min-w-0">
+          {/* flex-wrap: in the compact column the count wraps under
+              the heading instead of the row overflowing. */}
+          <div className="flex flex-wrap items-end justify-between gap-3 gap-x-6">
             <div>
               <h2 className="text-lg font-semibold text-text">
                 Sections
@@ -819,8 +830,12 @@ export function MeetingSeriesDetailPage() {
             onSubmit={handleCreateSection}
             className="mt-5 rounded-xl border border-border-subtle bg-surface-quiet p-5"
           >
-            <div className="grid gap-4">
-              <label>
+            {/* grid-cols-1 (minmax(0,1fr)) + min-w-0 labels: the
+                inputs' intrinsic width must not inflate the track —
+                in the compact column the fields fill the available
+                width (w-full) and their label text wraps. */}
+            <div className="grid grid-cols-1 gap-4">
+              <label className="min-w-0">
                 <span className="mb-1.5 block text-sm font-medium text-text">
                   Section name
                 </span>
@@ -838,7 +853,7 @@ export function MeetingSeriesDetailPage() {
                 />
               </label>
 
-              <label>
+              <label className="min-w-0">
                 <span className="mb-1.5 block text-sm font-medium text-text">
                   Description
                 </span>
@@ -861,15 +876,21 @@ export function MeetingSeriesDetailPage() {
               <button
                 type="submit"
                 disabled={creatingSection}
-                className="inline-flex h-9 items-center gap-2 rounded-lg bg-action px-4 text-sm font-semibold text-text-inverse transition hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-45"
+                aria-label={creatingSection ? 'Adding…' : 'Add section'}
+                className="inline-flex h-9 items-center gap-2 rounded-lg bg-action px-4 text-sm font-semibold text-text-inverse transition hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-45 max-[479px]:w-9 max-[479px]:justify-center max-[479px]:px-0"
               >
                 <span aria-hidden="true" className="material-symbols-outlined text-[18px]">
                   add
                 </span>
 
-                {creatingSection
-                  ? 'Adding…'
-                  : 'Add section'}
+                {/* Full-text label at 480px and up; icon-only in the
+                    compact column (accessible name preserved by the
+                    aria-label). */}
+                <span className="max-[479px]:hidden">
+                  {creatingSection
+                    ? 'Adding…'
+                    : 'Add section'}
+                </span>
               </button>
             </div>
           </form>
@@ -919,8 +940,8 @@ export function MeetingSeriesDetailPage() {
                   section.id ? (
                     /* Editing mode */
                     <div>
-                      <div className="grid gap-3">
-                        <label>
+                      <div className="grid grid-cols-1 gap-3">
+                        <label className="min-w-0">
                           <span className="mb-1 block text-xs font-medium text-text-muted">
                             Name
                           </span>
@@ -940,7 +961,7 @@ export function MeetingSeriesDetailPage() {
                           />
                         </label>
 
-                        <label>
+                        <label className="min-w-0">
                           <span className="mb-1 block text-xs font-medium text-text-muted">
                             Description
                           </span>
@@ -963,7 +984,10 @@ export function MeetingSeriesDetailPage() {
                         </label>
                       </div>
 
-                      <div className="mt-3 flex justify-end gap-2">
+                      {/* flex-wrap: in the compact column the
+                          buttons wrap to separate lines instead of
+                          overflowing. */}
+                      <div className="mt-3 flex flex-wrap justify-end gap-2">
                         <button
                           type="button"
                           onClick={() =>
@@ -994,8 +1018,10 @@ export function MeetingSeriesDetailPage() {
                       </div>
                     </div>
                   ) : (
-                    /* View mode */
-                    <div className="flex items-center gap-3">
+                    /* View mode. flex-wrap: in the compact
+                        column the row actions wrap under the title
+                        instead of inflating the card's min-content. */
+                    <div className="flex flex-wrap items-center gap-3">
                       <span className="material-symbols-outlined cursor-grab text-[18px] text-text-muted">
                         drag_indicator
                       </span>
@@ -1068,7 +1094,9 @@ export function MeetingSeriesDetailPage() {
           )}
         </section>
 
-        <aside>
+        {/* min-w-0: the preview panel must not widen the
+            compact grid track through its min-content. */}
+        <aside className="min-w-0">
           {/* Active sections preview */}
           <div className="overflow-hidden rounded-xl border border-border-subtle bg-surface">
             <div className="border-b border-border-subtle bg-surface-header px-5 py-4">

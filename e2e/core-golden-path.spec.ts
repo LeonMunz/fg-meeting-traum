@@ -291,19 +291,21 @@ test(
     // --------------------------------------------------------
     // Chris changes the status via the current canonical My
     // Work interaction: a Kanban drag into the In progress
-    // column. The drop resolves the concrete target solely
-    // from the item's own statusTargets and mutates through
-    // POST /api/work-items/{id}/transition-status/.
+    // column. One atomic My Work board move — the drop resolves
+    // the concrete project-local target from the item's own
+    // statusTargets on the server and applies the canonical
+    // status transition together with the personal position
+    // through POST /api/me/work-items/{id}/reorder/.
     // --------------------------------------------------------
 
     // Await the successful server request BEFORE the drag
     // gesture.
-    const transitionResponse =
+    const reorderResponse =
       page.waitForResponse(
         (response) =>
           response.request().method() ===
             'POST' &&
-          /\/api\/work-items\/\d+\/transition-status\/$/.test(
+          /\/api\/me\/work-items\/\d+\/reorder\/$/.test(
             new URL(response.url()).pathname,
           ),
       )
@@ -335,9 +337,10 @@ test(
     )
     await page.mouse.up()
 
-    // The server accepted the canonical status-only transition.
+    // The server accepted the canonical My Work board move
+    // (status transition applied atomically with the position).
     expect(
-      (await transitionResponse).ok(),
+      (await reorderResponse).ok(),
     ).toBe(true)
 
     // The authoritative refetched payload moved the card: it

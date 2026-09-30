@@ -62,7 +62,11 @@ async function createWorkItem(page: Page, title: string) {
 
   const dialog = page.getByRole('dialog', { name: 'New work item' })
 
-  await dialog.getByLabel('Title').fill(title)
+  // Scope to the Title textbox by role + exact accessible name: the
+  // drawer's Parent select is wrapped in a <label> whose accessible
+  // content includes the parent candidates' titles, so a plain
+  // label match can resolve to two elements.
+  await dialog.getByRole('textbox', { name: 'Title', exact: true }).fill(title)
 
   await dialog
     .getByRole('button', { name: /Create work item/ })

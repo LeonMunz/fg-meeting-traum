@@ -8,6 +8,7 @@ import {
   datePartPlusDays,
   login,
   openProjects,
+  replaceControlValue,
 } from './helpers'
 
 
@@ -255,9 +256,18 @@ test(
       .getByLabel('Title')
       .fill(meetingTitle)
 
-    await page
-      .getByLabel('Date and time')
-      .fill(`${datePartPlusDays(8)}T10:00`)
+    // The Meeting create dialog uses the separate prefilled Date
+    // (textbox) + Time (combobox) schedule controls; the canonical
+    // replacement helper commits the focused editing state first.
+    await replaceControlValue(
+      page.getByRole('textbox', { name: 'Date', exact: true }),
+      datePartPlusDays(8),
+    )
+
+    await replaceControlValue(
+      page.getByRole('combobox', { name: 'Time', exact: true }),
+      '10:00',
+    )
 
     await page
       .locator('form')

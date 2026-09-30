@@ -268,14 +268,19 @@ test(
 
     // Set the viewport and await the real condition before any
     // capture: the setViewportSize call itself is awaited (the
-    // browser confirms the resize) and the resulting viewport
-    // size is asserted, so each artifact reliably represents
-    // the named width.
+    // browser confirms the resize), the committed viewport size
+    // is read back, and the page's actual layout-viewport width
+    // is asserted behaviorally (polling until the resize is
+    // observable, never a fixed sleep), so each artifact
+    // reliably represents the named width.
     const setViewport = async (
       size: { width: number; height: number },
     ) => {
       await page.setViewportSize(size)
-      await expect(page).toHaveViewportSize(size)
+      expect(page.viewportSize()).toEqual(size)
+      await expect
+        .poll(() => page.evaluate(() => window.innerWidth))
+        .toBe(size.width)
     }
 
     // --------------------------------------------------------
@@ -437,10 +442,16 @@ test(
       width: 390,
       height: 844,
     })
-    await expect(page).toHaveViewportSize({
+    // Behavioral confirmation that the 390px acceptance width
+    // is actually applied to the page's layout viewport before
+    // the overflow geometry is measured (polling, never a sleep).
+    expect(page.viewportSize()).toEqual({
       width: 390,
       height: 844,
     })
+    await expect
+      .poll(() => page.evaluate(() => window.innerWidth))
+      .toBe(390)
 
     const actionGroup = page
       .locator('div.ml-auto')
