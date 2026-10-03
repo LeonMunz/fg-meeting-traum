@@ -4,11 +4,22 @@ Centralizes domain rules so they are not duplicated across views.
 Every operation receives the authenticated actor explicitly.
 """
 
+from datetime import datetime, timezone as dt_timezone
 from typing import Optional
 
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import (
+    Case,
+    DateTimeField,
+    F,
+    IntegerField,
+    OuterRef,
+    Q,
+    Subquery,
+    Value,
+    When,
+)
 from django.utils import timezone
 
 from audit_history.services import record_audit_event
@@ -17,12 +28,15 @@ from authorization.service import (
     AuthorizationDenied,
     has_group_capability,
     require_project_capability,
+    resolve_group_scope,
+    resolve_project_scope,
 )
 from research_groups.models import ResearchGroup, ResearchGroupMembership
 
 from .models import (
     Project,
     ProjectMembership,
+    ProjectNavigationRecency,
     WorkItemLabelDefinition,
     WorkItemStatusDefinition,
     WorkItemTypeDefinition,
@@ -675,6 +689,144 @@ def get_accessible_project_qs(user):
         memberships__user=user,
     ).distinct()
 
+
+# ── Personal Project navigation recency (Quick Access) ──
+
+
+PERSONAL_PROJECT_QUICK_ACCESS_LIMIT = 5
+
+# Constant sort anchor: for PERSONALLY OPENED Projects the
+# never-opened fallback key (created_at) must be a constant so the
+# primary key DESC decides between equal recency timestamps.
+_OPENED_SORT_ANCHOR = datetime.min.replace(tzinfo=dt_timezone.utc)
+
+
+def record_project_open(*, actor, project) -> ProjectNavigationRecency:
+    """Record that ``actor`` explicitly opened (navigated to) the Project.
+
+    The V1 personal relevance signal for Project Quick Access.
+    Requires the actor's CURRENT canonical Project read access
+    (re-resolved inside the write transaction — default deny; a
+    recency row is never created for a Project the actor cannot
+    currently read).
+
+    - resolves the caller's current ProjectMembership;
+    - creates the personal recency row on the first open;
+    - updates ``last_opened_at`` with SERVER time on every open
+      (the client never supplies the timestamp);
+    - never creates a second row (the OneToOne to the membership is
+      the only uniqueness system; the membership row is locked so
+      concurrent first-opens serialize instead of racing);
+    - does NOT mutate the Project (no ``updated_at`` churn), the
+      ProjectMembership, any WorkspaceNavigationPreferences, or any
+      Activity event.
+    """
+    with transaction.atomic():
+        scope = resolve_project_scope(actor, project.pk)
+        if scope is None or not scope.has(Capability.PROJECT_READ):
+            raise ProjectDomainError("Project not found.")
+
+        try:
+            membership = (
+                ProjectMembership.objects
+                .select_for_update()
+                .get(project=project, user=actor)
+            )
+        except ProjectMembership.DoesNotExist:
+            # Lost the canonical access between the scope resolution
+            # and the membership lock — fail closed, persist nothing.
+            raise ProjectDomainError("Project not found.")
+
+        recency, _created = ProjectNavigationRecency.objects.update_or_create(
+            project_membership=membership,
+            defaults={"last_opened_at": timezone.now()},
+        )
+
+    return recency
+
+
+def get_personal_project_quick_access(*, actor, research_group) -> list:
+    """Personal Project Quick Access candidates for one Research Group.
+
+    Read model for the Sidebar's future Project children (bounded to
+    ``PERSONAL_PROJECT_QUICK_ACCESS_LIMIT`` candidates):
+
+    - requires the actor's CURRENT Research Group read access;
+    - includes only Projects the actor can CURRENTLY read
+      (current ProjectMembership — the group-membership condition is
+      enforced structurally by the composite FK, see
+      ``get_accessible_project_qs``) that are NOT archived;
+    - ordering: Projects with personal ``last_opened_at`` first,
+      newest first (equal timestamps by primary key DESC), then
+      never-opened Projects (``created_at`` DESC, primary key DESC);
+    - recency rows are never read as authorization and no other
+      user's recency is ever consulted.
+
+    Returns a list of compact candidate dicts:
+    ``{"id", "researchGroupId", "name", "lastOpenedAt"}``
+    (``lastOpenedAt`` is ``None`` for never-opened Projects).
+    """
+    group_scope = resolve_group_scope(actor, research_group.pk)
+    if group_scope is None or not group_scope.has(Capability.GROUP_READ):
+        raise ProjectDomainError("Research group not found.")
+
+    projects = (
+        get_accessible_project_qs(actor)
+        .filter(
+            research_group_id=research_group.pk,
+            archived_at__isnull=True,
+        )
+        .annotate(
+            personal_last_opened_at=Subquery(
+                ProjectNavigationRecency.objects
+                .filter(
+                    project_membership__user=actor,
+                    project_membership__project=OuterRef("pk"),
+                )
+                .values("last_opened_at"),
+                output_field=DateTimeField(),
+            ),
+        )
+        .order_by(
+            # 1. personally opened Projects first, then never-opened
+            Case(
+                When(personal_last_opened_at__isnull=False, then=0),
+                default=1,
+                output_field=IntegerField(),
+            ),
+            # 2. newest personal open first (never-opened rows all
+            #    tie here and fall through to the fallback keys)
+            F("personal_last_opened_at").desc(nulls_last=True),
+            # 3. never-opened fallback: created_at DESC — a constant
+            #    anchor for opened rows so their equal-timestamp
+            #    tie is decided by the primary key below
+            Case(
+                When(personal_last_opened_at__isnull=True, then=F("created_at")),
+                default=Value(
+                    _OPENED_SORT_ANCHOR,
+                    output_field=DateTimeField(),
+                ),
+                output_field=DateTimeField(),
+            ).desc(),
+            # 4. primary key DESC as the final deterministic tie-breaker
+            "-id",
+        )[:PERSONAL_PROJECT_QUICK_ACCESS_LIMIT]
+        .select_related("research_group")
+    )
+
+    return [
+        {
+            "id": project.pk,
+            "researchGroupId": project.research_group_id,
+            "name": project.name,
+            "lastOpenedAt": (
+                project.personal_last_opened_at.isoformat()
+                if project.personal_last_opened_at is not None
+                else None
+            ),
+        }
+        for project in projects
+    ]
 
 # ── Helper functions for final-owner invariant ──
 

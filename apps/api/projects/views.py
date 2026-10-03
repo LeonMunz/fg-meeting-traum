@@ -27,7 +27,9 @@ from .services import (
     create_project,
     delete_empty_project,
     get_accessible_project_qs,
+    get_personal_project_quick_access,
     remove_membership,
+    record_project_open,
     restore_project,
     update_project,
 )
@@ -1103,3 +1105,87 @@ class ProjectWorkItemLabelDetailView(APIView):
 
         defn.refresh_from_db()
         return Response(_serialize_label_definition(defn))
+
+
+# ── Personal Project navigation (Quick Access recency) ──
+
+
+class PersonalProjectOpenView(APIView):
+    """POST /api/me/projects/{project_id}/open/
+
+    Records that the current user EXPLICITLY opened (navigated to)
+    the Project — the V1 personal relevance signal for Project
+    Quick Access.
+
+    - Requires CURRENT canonical Project read access; inaccessible
+      Projects answer 404 (non-leaking) and persist nothing.
+    - The request body is ignored entirely: no client timestamp is
+      ever accepted, the server owns ``lastOpenedAt``.
+    - Idempotent: first open creates the personal recency row,
+      subsequent opens update it.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, project_id):
+        result = _require_project_access(request, project_id)
+        if result is None:
+            return Response(
+                {"error": "Project not found"},
+                status=404,
+            )
+        project, _scope = result
+
+        try:
+            recency = record_project_open(
+                actor=request.user,
+                project=project,
+            )
+        except ProjectDomainError:
+            # Access lost between the view check and the locked
+            # write — answer as if the Project is not readable.
+            return Response(
+                {"error": "Project not found"},
+                status=404,
+            )
+
+        return Response(
+            {
+                "projectId": project.pk,
+                "lastOpenedAt": recency.last_opened_at.isoformat(),
+            }
+        )
+
+
+class ResearchGroupProjectQuickAccessView(APIView):
+    """GET /api/research-groups/{group_id}/project-quick-access/
+
+    Personal Project Quick Access read model for one Research Group:
+    at most 5 Project candidates for the CURRENT user, ordered by
+    the user's personal last-opened recency (newest first), with
+    never-opened Projects after (``created_at`` DESC, primary key
+    DESC).
+
+    Recency is never authorization: every returned Project requires
+    the caller's CURRENT canonical Project read access; archived
+    Projects are excluded; another user's recency is never read.
+    Inaccessible Research Groups answer with an empty list (no
+    existence leak), matching the sibling Project list contract.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, group_id):
+        group = _require_research_group_membership(request, group_id)
+        if group is None:
+            return Response([])
+
+        try:
+            data = get_personal_project_quick_access(
+                actor=request.user,
+                research_group=group,
+            )
+        except ProjectDomainError:
+            return Response([])
+
+        return Response(data)

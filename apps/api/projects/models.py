@@ -132,6 +132,40 @@ class ProjectMembership(models.Model):
         return f"{self.user.username} → {self.project.name} ({self.role})"
 
 
+class ProjectNavigationRecency(models.Model):
+    """Personal Project navigation recency, scoped to one membership.
+
+    One row per current ``ProjectMembership`` (OneToOne, CASCADE):
+    deleting the membership deletes its recency state, and a
+    later-recreated membership starts with no historical recency.
+
+    ``last_opened_at`` records when the user LAST explicitly opened
+    (navigated to) the Project — the V1 personal relevance signal
+    for Project Quick Access. The timestamp is server-owned (the
+    client never supplies it). Recency is never authorization: this
+    row grants no access to any Project or Research Group, and every
+    read/write of it resolves current canonical access first.
+    """
+
+    project_membership = models.OneToOneField(
+        ProjectMembership,
+        on_delete=models.CASCADE,
+        related_name="navigation_recency",
+    )
+    last_opened_at = models.DateTimeField()
+
+    class Meta:
+        db_table = "projects_navigation_recency"
+        verbose_name = "project navigation recency"
+        verbose_name_plural = "project navigation recencies"
+
+    def __str__(self):
+        return (
+            f"{self.project_membership.user.username} → "
+            f"{self.project_membership.project.name}"
+        )
+
+
 # ── Work Item Configuration ──
 
 

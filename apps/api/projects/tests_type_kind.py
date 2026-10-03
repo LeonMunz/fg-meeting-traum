@@ -303,6 +303,23 @@ class TypeKindMigrationProvenanceTest(TransactionTestCase):
 
         MigrationExecutor(connections["default"]).migrate([target])
 
+    @classmethod
+    def tearDownClass(cls):
+        # The back/forward stepping around 0006 must not strand any
+        # migration later than 0006 unapplied on the live test
+        # connection: migrate the whole graph to its leaf nodes
+        # (exactly what ``manage.py migrate`` does) so every
+        # subsequent test sees the complete current schema.
+        from django.db import connections
+        from django.db.migrations.executor import MigrationExecutor
+        from django.db.migrations.loader import MigrationLoader
+
+        loader = MigrationLoader(connections["default"])
+        MigrationExecutor(connections["default"]).migrate(
+            loader.graph.leaf_nodes(),
+        )
+        super().tearDownClass()
+
     def _create_project(self, name):
         user = User.objects.create(username=f"prov_{name}")
         group = ResearchGroup.objects.create(

@@ -561,6 +561,99 @@ Legacy fixed-string `type` / `status` values are **not** part of the
 canonical contract. New logic must not branch on legacy strings; it must use
 the definition IDs.
 
+### 3b. Project Quick Access recency (personal navigation recency, implemented)
+
+Project Quick Access is the personal list of up to five Projects that a
+user's Sidebar can show below each Research Group's `Projects` node.
+Its V1 relevance signal is the user's OWN explicit Project
+navigation/opening — recorded as personal navigation recency.
+
+Persisted per user per Project, scoped to the membership:
+
+```text
+ProjectNavigationRecency
+
+project_membership_id   (OneToOne to ProjectMembership; CASCADE)
+last_opened_at          (DateTime; server-owned)
+```
+
+**Personal, per ProjectMembership.** Recency belongs to the user's
+`ProjectMembership`, not to the Project and not to a separate
+user/project relation:
+
+- one current `ProjectMembership` has at most one recency row (the
+  OneToOne is the only uniqueness system; the membership's existing
+  `UNIQUE(project_id, user_id)` therefore also bounds recency to one
+  row per (user, project));
+- deleting the `ProjectMembership` (removal or Research Group
+  offboarding) deletes its recency row; a later-recreated
+  membership starts with no historical recency;
+- because the membership's composite FKs already pin it to the
+  Project's Research Group and the user's CURRENT
+  `ResearchGroupMembership`, the recency row can never outlive its
+  access relationship and never survives as an independent
+  authorization-bearing relation.
+
+**V1 relevance signal: explicit Project open/navigation.** Only the
+explicit personal open operation records recency. Background data
+fetches (ordinary Project reads / list fetches), generic
+`Project.updated_at`, Work Item activity, Meeting activity, and any
+other user's actions are NEVER a relevance signal and never move
+another user's recency. Each user's ordering depends only on that
+user's own recorded opens; activity by other Research Group or
+Project members has no effect on it.
+
+**Server-owned timestamps.** `last_opened_at` is set by the server at
+open time; the client never supplies (and cannot influence) the
+timestamp.
+
+**Recency is never authorization.** A recency row grants no Research
+Group membership, no `ProjectMembership`, no visibility of an
+inaccessible Project, and never bypasses the archived/access filters.
+Every read and write resolves CURRENT canonical access first
+(default deny): the open operation requires the caller's CURRENT
+canonical Project read access; the Quick Access read model includes
+only Projects the caller can currently read.
+
+API (authenticated):
+
+```text
+POST /api/me/projects/{projectId}/open/
+     → { "projectId": 123, "lastOpenedAt": "..." }
+       (no request body is accepted; 404 for inaccessible
+        Projects, nothing persisted)
+
+GET  /api/research-groups/{groupId}/project-quick-access/
+     → [ { "id", "researchGroupId", "name", "lastOpenedAt" }, ... ]
+       (at most 5 candidates; `lastOpenedAt` is null for
+        Projects the user never opened)
+```
+
+**Quick Access read model** (per Research Group, personal, bounded
+to **five** candidates):
+
+- requires the caller's CURRENT Research Group read access
+  (inaccessible groups answer with an empty list — no existence
+  leak);
+- includes only Projects for which the caller has CURRENT canonical
+  Project read access (current `ProjectMembership`);
+- excludes archived Projects;
+- ordering: Projects with personal `last_opened_at` first, newest
+  first (equal timestamps resolved by primary key DESC); Projects
+  never opened by this user afterwards, deterministically by
+  `Project.created_at` DESC then primary key DESC;
+- never infers access from recency rows and never includes another
+  user's recency.
+
+The ordinary Project list
+(`GET /api/research-groups/{groupId}/projects/`) keeps its canonical
+semantics and ordering: it is never re-ordered by personal recency,
+and ordinary Project GET requests never record recency.
+
+NOT IMPLEMENTED by this slice: the Sidebar Project children UI,
+frontend DTOs / API clients, current-Project-kept-visible behavior,
+Project chevron behavior, and Research Group drag/drop.
+
 
 ## 4. Project Membership
 

@@ -29,6 +29,7 @@ from config.health import HealthCheckView
 from home.views import HomeAggregateView
 from projects.views import (
     ProjectArchiveView,
+    PersonalProjectOpenView,
     ProjectDetailView,
     ProjectMembershipDetailView,
     ProjectMembershipListView,
@@ -40,6 +41,7 @@ from projects.views import (
     ProjectWorkItemStatusesView,
     ProjectWorkItemTypeDetailView,
     ProjectWorkItemTypesView,
+    ResearchGroupProjectQuickAccessView,
     ResearchGroupMembersView,
     ResearchGroupProjectListView,
 )
@@ -158,6 +160,7 @@ urlpatterns = [
     path('api/research-groups/<int:group_id>/memberships/<int:membership_id>/', ResearchGroupMembershipDetailView.as_view(), name='research-group-membership-detail'),
     path('api/research-groups/<int:group_id>/memberships/<int:membership_id>/offboarding/', ResearchGroupMembershipOffboardingView.as_view(), name='research-group-membership-offboarding'),
     path('api/research-groups/<int:group_id>/projects/', ResearchGroupProjectListView.as_view(), name='research-group-projects-list'),
+    path('api/research-groups/<int:group_id>/project-quick-access/', ResearchGroupProjectQuickAccessView.as_view(), name='research-group-project-quick-access'),
     path('api/projects/<int:project_id>/', ProjectDetailView.as_view(), name='project-detail'),
     path('api/projects/<int:project_id>/archive/', ProjectArchiveView.as_view(), name='project-archive'),
     path('api/projects/<int:project_id>/restore/', ProjectRestoreView.as_view(), name='project-restore'),
@@ -179,6 +182,9 @@ urlpatterns = [
     path('api/me/work-items/<int:work_item_id>/reorder/', csrf_protect_view(PersonalMyWorkReorderView), name='personal-my-work-reorder'),
     # My Work preferences — persisted personal view state (never authorization)
     path('api/me/preferences/my-work/', MyWorkPreferencesView.as_view(), name='my-work-preferences'),
+    # Personal Project navigation — explicit open records personal
+    # Quick Access recency (never authorization, never read as access)
+    path('api/me/projects/<int:project_id>/open/', PersonalProjectOpenView.as_view(), name='personal-project-open'),
     # Workspace navigation preferences — persisted personal view
     # state (never authorization)
     path('api/me/preferences/workspace-navigation/', WorkspaceNavigationPreferencesView.as_view(), name='workspace-navigation-preferences'),
