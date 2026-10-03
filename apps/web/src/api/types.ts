@@ -863,6 +863,31 @@ export interface ApiAddResearchGroupMembershipInput {
   role: 'admin' | 'member'
 }
 
+/**
+ * The user's persisted personal workspace navigation view state
+ * (GET/PATCH /api/me/preferences/workspace-navigation/).
+ *
+ * Personal sidebar view state only — never authorization: every
+ * read/write is re-sanitized against the user's CURRENT Research
+ * Group membership server-side, so the returned normalized snapshot
+ * is authoritative (inaccessible/stale IDs are dropped and the
+ * cleaned state persisted — never assumed to echo back unchanged).
+ *
+ * The client contract is a COMPLETE current snapshot, not
+ * incremental toggle actions: a PATCH persists the complete
+ * normalized state atomically and returns it.
+ *
+ * `researchGroupOrder` is the user's Research Group ordering;
+ * `expandedResearchGroups` are the manually expanded Research
+ * Groups; `expandedProjectSections` holds Research Group IDs whose
+ * Projects child node the user left expanded (never Project IDs).
+ */
+export interface ApiWorkspaceNavigationPreferences {
+  researchGroupOrder: number[]
+  expandedResearchGroups: number[]
+  expandedProjectSections: number[]
+}
+
 
 /* ── Research Group Offboarding ───────────────────────────────── */
 
