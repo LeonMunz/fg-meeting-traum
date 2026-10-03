@@ -1162,3 +1162,35 @@ export interface ApiUpdatePersonalNoteInput {
   title?: string
   content?: string
 }
+
+/* ── Project Quick Access ──────────────────────────────────────── */
+
+/**
+ * Response of `POST /api/me/projects/{projectId}/open/`:
+ * confirmation that the authenticated user's explicit Project open
+ * was recorded. `lastOpenedAt` is the server-owned timestamp —
+ * the client never supplies or infers it.
+ */
+export interface ApiProjectNavigationOpen {
+  projectId: number
+  lastOpenedAt: string
+}
+
+/**
+ * One entry of the personal Project Quick Access read model
+ * returned by
+ * `GET /api/research-groups/{researchGroupId}/project-quick-access/`.
+ *
+ * This is a deliberately SMALLER read model than `ApiProject`:
+ * the backend already applied current Project read access, the
+ * archived-Project filter, personal recency ranking, and the
+ * max-five bound, and exposes only the fields the Sidebar
+ * needs. `lastOpenedAt` is null for Projects the user never
+ * opened. Do NOT reuse `ApiProject` for this payload.
+ */
+export interface ApiProjectQuickAccessItem {
+  id: number
+  researchGroupId: number
+  name: string
+  lastOpenedAt: string | null
+}

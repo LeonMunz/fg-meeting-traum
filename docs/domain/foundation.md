@@ -629,6 +629,24 @@ GET  /api/research-groups/{groupId}/project-quick-access/
         Projects the user never opened)
 ```
 
+**Implemented frontend client adapter (transport only).** The
+frontend mirrors these two contracts as typed wire DTOs —
+`ApiProjectNavigationOpen` (`{projectId, lastOpenedAt}`) and
+`ApiProjectQuickAccessItem` (`{id, researchGroupId, name,
+lastOpenedAt}`, a deliberately smaller read model than `ApiProject`,
+never reused from it) — plus one thin API module
+(`apps/web/src/api/project-quick-access.ts`) on the canonical
+`apiGet` / `apiPost` convention: `recordProjectOpen(projectId)`
+sends exactly an empty body `{}` to the explicit-open endpoint (the
+server owns the timestamp), and
+`fetchProjectQuickAccess(researchGroupId)` fetches the Quick Access
+read model; both return the server response unchanged and let
+`ApiError` propagate unchanged. The client performs no ranking,
+access or archive filtering, sorting, or current-Project composition
+— all of it stays backend-owned — and no UI consumes these
+functions yet; direct API contract tests pin the endpoints, the
+empty open body, unchanged server values, and error propagation.
+
 **Quick Access read model** (per Research Group, personal, bounded
 to **five** candidates):
 
@@ -650,9 +668,17 @@ The ordinary Project list
 semantics and ordering: it is never re-ordered by personal recency,
 and ordinary Project GET requests never record recency.
 
-NOT IMPLEMENTED by this slice: the Sidebar Project children UI,
-frontend DTOs / API clients, current-Project-kept-visible behavior,
-Project chevron behavior, and Research Group drag/drop.
+NOT IMPLEMENTED (the feature is NOT in the Sidebar yet — the client
+adapter above is transport-level plumbing only):
+
+- the Sidebar Project children UI
+- the Projects disclosure/chevron behavior
+- `expandedProjectSections` UI integration
+- current-Project injection/replacement logic (kept-visible rule)
+- automatic recording of Project opens from UI navigation
+- Project Quick Access caching/loading/error UI
+- Research Group drag/drop
+- final visual polish
 
 
 ## 4. Project Membership
