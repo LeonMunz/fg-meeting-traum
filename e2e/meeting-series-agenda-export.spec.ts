@@ -6,7 +6,7 @@ import {
   type Page,
 } from '@playwright/test'
 
-import { login } from './helpers'
+import { login, openGroupMeetings } from './helpers'
 
 const TEMPLATE_TITLE =
   'E2E Export Template'
@@ -19,11 +19,7 @@ async function createExportTemplate(
   page: Page,
   sectionNames: string[],
 ) {
-  await page
-    .getByRole('link', {
-      name: /Meetings/,
-    })
-    .click()
+  await openGroupMeetings(page, 'FG Example')
 
   await expect(page).toHaveURL(
     /\/meetings\?group=\d+$/,

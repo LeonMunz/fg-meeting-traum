@@ -185,7 +185,29 @@ export async function logout(
 export async function openProjects(
   page: Page,
 ) {
-  await page
+  // The workspace tree keeps the active group's child destinations
+  // behind its disclosure control: reveal the active group first,
+  // then take the Projects child. The link is scoped to the active
+  // group's node so other expanded groups can never make it
+  // ambiguous.
+  const activeRow = page
+    .locator(
+      'nav[aria-label="Research groups"] button[aria-current="true"]',
+    )
+    .locator('..')
+    .locator('..')
+
+  await expect(activeRow).toBeVisible()
+
+  const chevron = activeRow.getByRole('button', {
+    name: /^Expand /,
+  })
+
+  if (await chevron.isVisible()) {
+    await chevron.click()
+  }
+
+  await activeRow
     .getByRole('link', {
       name: /Projects/,
     })
@@ -196,6 +218,90 @@ export async function openProjects(
   )
 }
 
+/**
+ * The workspace tree renders Research Group rows collapsed by
+ * default: the manual expansion state is a persisted personal
+ * preference, and the E2E reset starts without one. Expands the
+ * named group's row when its manual state is still collapsed so
+ * the spec can reach the group's child destinations (Projects /
+ * Meetings). Idempotent: a group that is already manually
+ * expanded (or only contextually revealed by the route) is left
+ * untouched.
+ */
+export async function expandResearchGroup(
+  page: Page,
+  groupName: string,
+) {
+  // The tree hydrates asynchronously (group + preference GET);
+  // wait until the group node actually renders.
+  await expect(
+    page.getByRole('group', {
+      name: groupName,
+    }),
+  ).toBeVisible()
+
+  const chevron = page.getByRole('button', {
+    name: `Expand ${groupName}`,
+  })
+
+  if (await chevron.isVisible()) {
+    await chevron.click()
+
+    await expect(
+      page.getByRole('button', {
+        name: `Collapse ${groupName}`,
+      }),
+    ).toHaveAttribute('aria-expanded', 'true')
+  }
+}
+
+/**
+ * Navigates to a Research Group's Meetings child destination via
+ * the workspace tree (expanding the group first when needed).
+ * The link is scoped to the group's node so other expanded
+ * groups can never make it ambiguous.
+ */
+export async function openGroupMeetings(
+  page: Page,
+  groupName: string,
+) {
+  await expandResearchGroup(page, groupName)
+
+  await page
+    .getByRole('group', {
+      name: groupName,
+    })
+    .getByRole('link', {
+      name: /Meetings/,
+    })
+    .click()
+}
+
+/**
+ * Navigates to a Research Group's Projects child destination via
+ * the workspace tree (expanding the group first when needed).
+ * The link is scoped to the group's node so other expanded
+ * groups can never make it ambiguous.
+ */
+export async function openGroupProjects(
+  page: Page,
+  groupName: string,
+) {
+  await expandResearchGroup(page, groupName)
+
+  await page
+    .getByRole('group', {
+      name: groupName,
+    })
+    .getByRole('link', {
+      name: /Projects/,
+    })
+    .click()
+
+  await expect(page).toHaveURL(
+    /\/projects\?group=\d+$/,
+  )
+}
 export async function openProject(
   page: Page,
   projectName: string,

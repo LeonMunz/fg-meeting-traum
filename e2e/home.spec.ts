@@ -7,6 +7,7 @@ import {
 import {
   datePartPlusDays,
   login,
+  openGroupMeetings,
   replaceControlValue,
 } from './helpers'
 
@@ -24,9 +25,7 @@ async function expectNoHorizontalOverflow(page: Page) {
 }
 
 async function createMeetingToday(page: Page) {
-  await page
-    .getByRole('link', { name: /Meetings/ })
-    .click()
+  await openGroupMeetings(page, 'FG Example')
 
   await page
     .locator('header')

@@ -7,6 +7,7 @@ import {
 import {
   datePartPlusDays,
   login,
+  openGroupMeetings,
   replaceControlValue,
 } from './helpers'
 
@@ -33,9 +34,7 @@ async function createOneTimeMeetingFromTemplate(
   daysAhead: number,
   time: string,
 ): Promise<string> {
-  await page
-    .getByRole('link', { name: /Meetings/ })
-    .click()
+  await openGroupMeetings(page, 'FG Example')
 
   // The Meetings page header CTA. Scoped to the page
   // <header> because the empty Upcoming state renders its
@@ -113,11 +112,7 @@ test(
     // Create a Meeting Template with two Sections.
     // --------------------------------------------------------
 
-    await page
-      .getByRole('link', {
-        name: /Meetings/,
-      })
-      .click()
+    await openGroupMeetings(page, 'FG Example')
 
     await expect(page).toHaveURL(
       /\/meetings\?group=\d+$/,

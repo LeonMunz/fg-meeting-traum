@@ -33,47 +33,43 @@ async function selectResearchGroup(
   page: Page,
   name: string,
 ) {
-  const switcher =
-    page.getByRole('button', {
-      name: /^Research group:/,
+  // The workspace tree row label is the canonical group
+  // selection control (the former selector dropdown was
+  // replaced by the hierarchical tree). It is addressed through
+  // the group container with the exact accessible name so the
+  // row's sibling controls (chevron "Expand <name>", overflow
+  // "More options for <name>") can never match.
+  const label = page
+    .getByRole('group', { name })
+    .getByRole('button', {
+      name,
+      exact: true,
     })
 
-  await expect(switcher).toBeVisible()
-  await switcher.click()
+  await expect(label).toBeVisible()
+  await label.click()
 
-  const menu = page.getByRole('menu')
-
-  await expect(menu).toBeVisible()
-
-  const option = menu
-    .getByRole('menuitem')
-    .filter({
-      hasText: name,
-    })
-
-  await expect(option).toBeVisible()
-  await option.click()
-
-  await expect(
-    page.getByRole('button', {
-      name: `Research group: ${name}`,
-    }),
-  ).toBeVisible()
+  await expect(label).toHaveAttribute(
+    'aria-current',
+    'true',
+  )
 }
 
 async function openResearchGroupSettings(
   page: Page,
+  name: string,
 ) {
-  const switcher =
-    page.getByRole('button', {
-      name: /^Research group:/,
+  // The group's admin-only overflow destination (the former
+  // selector dropdown's "Research group settings" entry).
+  await page
+    .getByRole('button', {
+      name: `More options for ${name}`,
     })
-
-  await switcher.click()
+    .click()
 
   await page
     .getByRole('menuitem', {
-      name: /Research group settings/,
+      name: 'Settings',
     })
     .click()
 
@@ -84,8 +80,9 @@ async function openResearchGroupSettings(
 
 async function openResearchGroupMembers(
   page: Page,
+  name: string,
 ) {
-  await openResearchGroupSettings(page)
+  await openResearchGroupSettings(page, name)
 
   await page
     .getByRole('button', {
@@ -429,6 +426,7 @@ test(
 
     await openResearchGroupMembers(
       page,
+      'Robotics Lab',
     )
 
     await ensureLauraIsResearchGroupMember(
@@ -532,6 +530,7 @@ test(
 
     await openResearchGroupMembers(
       page,
+      'Robotics Lab',
     )
 
     await ensureLauraIsResearchGroupMember(
@@ -579,6 +578,7 @@ test(
 
     await openResearchGroupMembers(
       page,
+      'Robotics Lab',
     )
 
     const lauraRow =
@@ -777,6 +777,7 @@ test(
 
     await openResearchGroupMembers(
       page,
+      'Robotics Lab',
     )
 
     await ensureLauraIsResearchGroupMember(
@@ -822,6 +823,7 @@ test(
 
     await openResearchGroupMembers(
       page,
+      'Robotics Lab',
     )
 
     const lauraRow =

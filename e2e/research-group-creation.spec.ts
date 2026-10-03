@@ -18,23 +18,16 @@ test(
     const groupName = `E2E Created Group ${Date.now()}`
 
     // --------------------------------------------------------
-    // Open creation from the existing Research Group selector.
+    // Open creation from the sidebar's Create research group
+    // entry (the workspace tree replaced the former selector
+    // dropdown).
     // --------------------------------------------------------
 
-    const switcher = page.getByRole('button', {
-      name: /^Research group:/,
+    const createEntry = page.getByRole('button', {
+      name: 'Create research group',
     })
-    await expect(switcher).toBeVisible()
-    await switcher.click()
-
-    const menu = page.getByRole('menu')
-    await expect(menu).toBeVisible()
-
-    await menu
-      .getByRole('menuitem', {
-        name: 'Create research group',
-      })
-      .click()
+    await expect(createEntry).toBeVisible()
+    await createEntry.click()
 
     const dialog = page.getByRole('dialog', {
       name: 'Create research group',
@@ -71,37 +64,40 @@ test(
 
     await expect(dialog).toBeHidden()
 
-    // The new group is immediately the active Research Group in the
-    // canonical selector, with no page reload.
+    // The new group is immediately the active Research Group in
+    // the workspace tree, with no page reload.
+    const createdRowLabel = page
+      .getByRole('group', { name: groupName })
+      .getByRole('button', {
+        name: groupName,
+        exact: true,
+      })
+    await expect(createdRowLabel).toBeVisible()
+    await expect(createdRowLabel).toHaveAttribute(
+      'aria-current',
+      'true',
+    )
+
+    // --------------------------------------------------------
+    // The new group is a workspace tree row: its own disclosure
+    // control plus the admin-only overflow destination (the
+    // creator is the group's Owner / admin).
+    // --------------------------------------------------------
+
     await expect(
       page.getByRole('button', {
-        name: `Research group: ${groupName}`,
+        name: `Expand ${groupName}`,
       }),
     ).toBeVisible()
 
-    // --------------------------------------------------------
-    // The new group appears in the same selector list, with the
-    // creator's Owner (admin) role as the stable visible signal.
-    // --------------------------------------------------------
-
     await page
       .getByRole('button', {
-        name: `Research group: ${groupName}`,
+        name: `More options for ${groupName}`,
       })
       .click()
 
     await expect(
-      page.getByRole('menu'),
-    ).toBeVisible()
-
-    const createdOption = page
-      .getByRole('menu')
-      .getByRole('menuitem')
-      .filter({ hasText: groupName })
-
-    await expect(createdOption).toBeVisible()
-    await expect(
-      createdOption.getByText('admin', { exact: true }),
+      page.getByRole('menuitem', { name: 'Settings' }),
     ).toBeVisible()
 
     await page.keyboard.press('Escape')
@@ -109,6 +105,12 @@ test(
     // --------------------------------------------------------
     // Navigate within the new group.
     // --------------------------------------------------------
+
+    await page
+      .getByRole('button', {
+        name: `Expand ${groupName}`,
+      })
+      .click()
 
     await page.getByRole('link', { name: /Projects/ }).click()
 
@@ -136,25 +138,22 @@ test(
     await page.reload()
 
     await expect(
-      page.getByRole('button', {
-        name: `Research group: ${groupName}`,
-      }),
+      createdRowLabel,
     ).toBeVisible()
+    await expect(createdRowLabel).toHaveAttribute(
+      'aria-current',
+      'true',
+    )
 
+    // The admin-only overflow destination survives the reload.
     await page
       .getByRole('button', {
-        name: `Research group: ${groupName}`,
+        name: `More options for ${groupName}`,
       })
       .click()
 
-    const reloadedOption = page
-      .getByRole('menu')
-      .getByRole('menuitem')
-      .filter({ hasText: groupName })
-
-    await expect(reloadedOption).toBeVisible()
     await expect(
-      reloadedOption.getByText('admin', { exact: true }),
+      page.getByRole('menuitem', { name: 'Settings' }),
     ).toBeVisible()
   },
 )
@@ -248,7 +247,7 @@ test(
 
     // --------------------------------------------------------
     // The server response proves the creator's Owner membership;
-    // the zero-state entry is replaced by the normal selector.
+    // the zero-state entry is replaced by the workspace tree.
     // --------------------------------------------------------
 
     const response = await createResponse
@@ -260,10 +259,17 @@ test(
     await expect(dialog).toBeHidden()
     await expect(zeroStateEntry).toBeHidden()
 
-    const switcher = page.getByRole('button', {
-      name: `Research group: ${groupName}`,
-    })
-    await expect(switcher).toBeVisible()
+    const groupLabel = page
+      .getByRole('group', { name: groupName })
+      .getByRole('button', {
+        name: groupName,
+        exact: true,
+      })
+    await expect(groupLabel).toBeVisible()
+    await expect(groupLabel).toHaveAttribute(
+      'aria-current',
+      'true',
+    )
 
     // --------------------------------------------------------
     // Group-scoped navigation is usable, without a page reload.
@@ -271,9 +277,15 @@ test(
 
     await expect(
       page.getByRole('navigation', {
-        name: 'Research group navigation',
+        name: 'Research groups',
       }),
     ).toBeVisible()
+
+    await page
+      .getByRole('button', {
+        name: `Expand ${groupName}`,
+      })
+      .click()
 
     await page.getByRole('link', { name: /Projects/ }).click()
 
@@ -283,22 +295,25 @@ test(
 
     // --------------------------------------------------------
     // Reload: membership is persisted server-side, so the first
-    // group remains active and selectable.
+    // group remains active and keeps its admin destination.
     // --------------------------------------------------------
 
     await page.reload()
 
-    await expect(switcher).toBeVisible()
-    await switcher.click()
+    await expect(groupLabel).toBeVisible()
+    await expect(groupLabel).toHaveAttribute(
+      'aria-current',
+      'true',
+    )
 
-    const option = page
-      .getByRole('menu')
-      .getByRole('menuitem')
-      .filter({ hasText: groupName })
+    await page
+      .getByRole('button', {
+        name: `More options for ${groupName}`,
+      })
+      .click()
 
-    await expect(option).toBeVisible()
     await expect(
-      option.getByText('admin', { exact: true }),
+      page.getByRole('menuitem', { name: 'Settings' }),
     ).toBeVisible()
   },
 )

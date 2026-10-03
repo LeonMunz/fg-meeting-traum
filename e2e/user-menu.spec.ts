@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 
-import { login, userMenuTrigger } from './helpers'
+import { login, openGroupProjects, userMenuTrigger } from './helpers'
 
 // Seeded E2E credentials (see settings_e2e reset seed); they must never
 // appear in the product UI itself.
@@ -113,7 +113,7 @@ test('Sign out ends the session and reaches the login state', async ({
   await login(page, 'alex')
 
   // Sign out from an authenticated page.
-  await page.getByRole('link', { name: /Projects/ }).click()
+  await openGroupProjects(page, 'FG Example')
   await expect(page).toHaveURL(/\/projects\?group=\d+$/)
 
   await userMenuTrigger(page, 'Alex').click()

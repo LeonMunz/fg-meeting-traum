@@ -10,37 +10,59 @@ async function selectResearchGroup(
   page: Page,
   name: string,
 ) {
-  const switcher = page.getByRole(
-    'button',
-    {
-      name: /^Research group:/,
-    },
-  )
-
-  await expect(switcher).toBeVisible()
-  await switcher.click()
-
-  const menu = page.getByRole('menu')
-
-  await expect(menu).toBeVisible()
-
-  const groupOption = menu
-    .getByRole('menuitem')
-    .filter({
-      hasText: name,
+  // The workspace tree row label is the canonical group
+  // selection control (the former selector dropdown was
+  // replaced by the hierarchical tree). It is addressed through
+  // the group container with the exact accessible name so the
+  // row's sibling controls (chevron "Expand <name>", overflow
+  // "More options for <name>") can never match.
+  const label = page
+    .getByRole('group', { name })
+    .getByRole('button', {
+      name,
+      exact: true,
     })
 
-  await expect(groupOption).toBeVisible()
-  await groupOption.click()
+  await expect(label).toBeVisible()
+  await label.click()
 
-  await expect(
-    page.getByRole(
-      'button',
-      {
-        name: `Research group: ${name}`,
-      },
-    ),
-  ).toBeVisible()
+  await expect(label).toHaveAttribute(
+    'aria-current',
+    'true',
+  )
+}
+
+async function expandResearchGroup(
+  page: Page,
+  name: string,
+) {
+  // Ensure the group's child rows (Projects / Meetings) are
+  // reachable. The group may already be visible - either
+  // manually expanded through persisted navigation
+  // preferences or contextually revealed by the current
+  // route - in which case there is nothing to do. The
+  // disclosure control is located inside the group
+  // container by its ARIA relation to the children region
+  // (aria-controls) and its current state is read from
+  // aria-expanded, so the helper works from both starting
+  // states and never toggles a group that is already open.
+  const group = page.getByRole('group', { name })
+
+  await expect(group).toBeVisible()
+
+  const chevron = group.locator('button[aria-controls]')
+
+  if (
+    (await chevron.getAttribute('aria-expanded')) !==
+    'true'
+  ) {
+    await chevron.click()
+
+    await expect(chevron).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    )
+  }
 }
 
 function getGroupIdFromUrl(
@@ -127,7 +149,15 @@ test(
     // Group navigation follows the selected Research Group.
     // --------------------------------------------------------
 
+    await expandResearchGroup(
+      page,
+      'Robotics Lab',
+    )
+
     await page
+      .getByRole('group', {
+        name: 'Robotics Lab',
+      })
       .getByRole('link', {
         name: /Projects/,
       })
@@ -185,7 +215,8 @@ test(
     ).toHaveCount(0)
 
     // --------------------------------------------------------
-    // Future group sections stay visible without exposing routes.
+    // The legacy flat group placeholders are gone from the
+    // workspace tree.
     // --------------------------------------------------------
 
     await selectResearchGroup(
@@ -193,9 +224,9 @@ test(
       'Robotics Lab',
     )
 
-    const groupNavigation = page.getByRole(
+    const researchGroups = page.getByRole(
       'navigation',
-      { name: 'Research group navigation' },
+      { name: 'Research groups' },
     )
 
     for (const label of [
@@ -206,27 +237,10 @@ test(
       'People',
     ]) {
       await expect(
-        groupNavigation
-          .getByRole('link')
-          .filter({ hasText: label }),
+        researchGroups
+          .getByText(label, { exact: true }),
       ).toHaveCount(0)
-
-      await expect(
-        groupNavigation
-          .getByText(label, { exact: true })
-          .locator('..'),
-      ).toHaveAttribute('aria-disabled', 'true')
     }
-
-    await groupNavigation
-      .getByText('People', { exact: true })
-      .click()
-
-    await expect(page).toHaveURL(
-      new RegExp(
-        `/projects\\?group=${roboticsGroupId}$`,
-      ),
-    )
 
     // --------------------------------------------------------
     // URLs remain authoritative across separate browser tabs.
@@ -308,14 +322,13 @@ test(
     await page.goto(robotProjectPath)
 
     await expect(
-      page.getByRole(
-        'button',
-        {
-          name:
-            'Research group: Robotics Lab',
-        },
-      ),
-    ).toBeVisible()
+      page
+        .getByRole('group', { name: 'Robotics Lab' })
+        .getByRole('button', {
+          name: 'Robotics Lab',
+          exact: true,
+        }),
+    ).toHaveAttribute('aria-current', 'true')
 
     // --------------------------------------------------------
     // Invalid explicit group context never leaks another group.
@@ -358,7 +371,15 @@ test(
       'Robotics Lab',
     )
 
+    await expandResearchGroup(
+      page,
+      'Robotics Lab',
+    )
+
     await page
+      .getByRole('group', {
+        name: 'Robotics Lab',
+      })
       .getByRole('link', {
         name: /Meetings/,
       })
@@ -421,14 +442,13 @@ test(
       new URL(page.url()).pathname
 
     await expect(
-      page.getByRole(
-        'button',
-        {
-          name:
-            'Research group: Robotics Lab',
-        },
-      ),
-    ).toBeVisible()
+      page
+        .getByRole('group', { name: 'Robotics Lab' })
+        .getByRole('button', {
+          name: 'Robotics Lab',
+          exact: true,
+        }),
+    ).toHaveAttribute('aria-current', 'true')
 
     // Switching groups on an Entity exits to the new group's list.
     await selectResearchGroup(
@@ -441,14 +461,13 @@ test(
     )
 
     await expect(
-      page.getByRole(
-        'button',
-        {
-          name:
-            'Research group: FG Example',
-        },
-      ),
-    ).toBeVisible()
+      page
+        .getByRole('group', { name: 'FG Example' })
+        .getByRole('button', {
+          name: 'FG Example',
+          exact: true,
+        }),
+    ).toHaveAttribute('aria-current', 'true')
 
     // Opening the Robotics meeting directly restores Robotics context.
     await page.goto(meetingPath)
@@ -462,13 +481,12 @@ test(
     ).toBeVisible()
 
     await expect(
-      page.getByRole(
-        'button',
-        {
-          name:
-            'Research group: Robotics Lab',
-        },
-      ),
-    ).toBeVisible()
+      page
+        .getByRole('group', { name: 'Robotics Lab' })
+        .getByRole('button', {
+          name: 'Robotics Lab',
+          exact: true,
+        }),
+    ).toHaveAttribute('aria-current', 'true')
   },
 )

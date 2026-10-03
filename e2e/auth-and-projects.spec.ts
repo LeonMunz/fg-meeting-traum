@@ -4,7 +4,7 @@ import {
   type Page,
 } from '@playwright/test'
 
-import { displayNameFor, userMenuTrigger } from './helpers'
+import { displayNameFor, openGroupProjects, userMenuTrigger } from './helpers'
 
 const PASSWORD = 'DevPass1!'
 
@@ -38,11 +38,7 @@ test(
   async ({ page }) => {
     await login(page, 'alex')
 
-    await page
-      .getByRole('link', {
-        name: /Projects/,
-      })
-      .click()
+    await openGroupProjects(page, 'FG Example')
 
     await expect(page).toHaveURL(
       /\/projects\?group=\d+$/,

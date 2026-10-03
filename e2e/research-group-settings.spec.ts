@@ -13,55 +13,43 @@ async function selectResearchGroup(
   page: Page,
   name: string,
 ) {
-  const switcher = page.getByRole(
-    'button',
-    {
-      name: /^Research group:/,
-    },
-  )
-
-  await expect(switcher).toBeVisible()
-  await switcher.click()
-
-  const menu =
-    page.getByRole('menu')
-
-  await expect(menu).toBeVisible()
-
-  const option = menu
-    .getByRole('menuitem')
-    .filter({
-      hasText: name,
+  // The workspace tree row label is the canonical group
+  // selection control (the former selector dropdown was
+  // replaced by the hierarchical tree). It is addressed through
+  // the group container with the exact accessible name so the
+  // row's sibling controls (chevron "Expand <name>", overflow
+  // "More options for <name>") can never match.
+  const label = page
+    .getByRole('group', { name })
+    .getByRole('button', {
+      name,
+      exact: true,
     })
 
-  await expect(option).toBeVisible()
-  await option.click()
+  await expect(label).toBeVisible()
+  await label.click()
 
-  await expect(
-    page.getByRole(
-      'button',
-      {
-        name: `Research group: ${name}`,
-      },
-    ),
-  ).toBeVisible()
+  await expect(label).toHaveAttribute(
+    'aria-current',
+    'true',
+  )
 }
 
 async function openResearchGroupSettings(
   page: Page,
+  name: string,
 ) {
-  const switcher = page.getByRole(
-    'button',
-    {
-      name: /^Research group:/,
-    },
-  )
-
-  await switcher.click()
+  // The group's admin-only overflow destination (the former
+  // selector dropdown's "Research group settings" entry).
+  await page
+    .getByRole('button', {
+      name: `More options for ${name}`,
+    })
+    .click()
 
   await page
     .getByRole('menuitem', {
-      name: /Research group settings/,
+      name: 'Settings',
     })
     .click()
 
@@ -82,6 +70,7 @@ test(
 
     await openResearchGroupSettings(
       page,
+      'Robotics Lab',
     )
 
     const settingsPath =
@@ -128,14 +117,13 @@ test(
     ).toBeVisible()
 
     await expect(
-      page.getByRole(
-        'button',
-        {
-          name:
-            'Research group: Robotics Lab E2E',
-        },
-      ),
-    ).toBeVisible()
+      page
+        .getByRole('group', { name: 'Robotics Lab E2E' })
+        .getByRole('button', {
+          name: 'Robotics Lab E2E',
+          exact: true,
+        }),
+    ).toHaveAttribute('aria-current', 'true')
 
     // Restore canonical E2E name.
     await nameInput.fill(
@@ -225,19 +213,11 @@ test(
       }),
     ).toHaveCount(0)
 
-    // Settings entry itself is also hidden from a normal member.
-    const switcher = page.getByRole(
-      'button',
-      {
-        name: /^Research group:/,
-      },
-    )
-
-    await switcher.click()
-
+    // The group's admin-only overflow entry is hidden from a
+    // normal member entirely (no row affordance at all).
     await expect(
-      page.getByRole('menuitem', {
-        name: /Research group settings/,
+      page.getByRole('button', {
+        name: 'More options for Robotics Lab',
       }),
     ).toHaveCount(0)
   },
@@ -256,6 +236,7 @@ test(
 
     await openResearchGroupSettings(
       page,
+      'Robotics Lab',
     )
 
     await page

@@ -8,6 +8,7 @@ import {
   datePartPlusDays,
   login,
   logout,
+  openGroupMeetings,
   openProject,
   openProjects,
   quickAddAgendaItem,
@@ -53,9 +54,7 @@ async function createMeetingFromTemplate(
   daysAhead = 30,
   time = '09:00',
 ): Promise<string> {
-  await page
-    .getByRole('link', { name: /Meetings/ })
-    .click()
+  await openGroupMeetings(page, 'FG Example')
 
   await clickHeaderNewMeeting(page)
 
@@ -111,11 +110,7 @@ test(
 
     await login(page, 'alex')
 
-    await page
-      .getByRole('link', {
-        name: /Meetings/,
-      })
-      .click()
+    await openGroupMeetings(page, 'FG Example')
 
     await expect(page).toHaveURL(
       /\/meetings\?group=\d+$/,
@@ -432,11 +427,7 @@ test(
     await logout(page, 'Alex')
     await login(page, 'chris')
 
-    await page
-      .getByRole('link', {
-        name: /Meetings/,
-      })
-      .click()
+    await openGroupMeetings(page, 'FG Example')
 
     // The sidebar link performs an SPA navigation: the URL switches
     // before React re-renders the Meetings list. Wait for the list
@@ -607,11 +598,7 @@ test(
     // Alex creates a Meeting and Agenda Item.
     // --------------------------------------------------------
 
-    await page
-      .getByRole('link', {
-        name: /Meetings/,
-      })
-      .click()
+    await openGroupMeetings(page, 'FG Example')
 
     await expect(page).toHaveURL(
       /\/meetings\?group=\d+$/,
@@ -821,11 +808,7 @@ test(
   async ({ page }) => {
     await login(page, 'alex')
 
-    await page
-      .getByRole('link', {
-        name: /Meetings/,
-      })
-      .click()
+    await openGroupMeetings(page, 'FG Example')
 
     await clickHeaderNewMeeting(page)
 
@@ -945,11 +928,7 @@ test(
   async ({ page }) => {
     await login(page, 'alex')
 
-    await page
-      .getByRole('link', {
-        name: /Meetings/,
-      })
-      .click()
+    await openGroupMeetings(page, 'FG Example')
 
     await clickHeaderNewMeeting(page)
 
@@ -1081,11 +1060,7 @@ test(
     // Create a Meeting Series.
     // --------------------------------------------------------
 
-    await page
-      .getByRole('link', {
-        name: /Meetings/,
-      })
-      .click()
+    await openGroupMeetings(page, 'FG Example')
 
     await expect(page).toHaveURL(
       /\/meetings\?group=\d+$/,
@@ -1260,11 +1235,7 @@ test(
   async ({ page }) => {
     await login(page, 'alex')
 
-    await page
-      .getByRole('link', {
-        name: /Meetings/,
-      })
-      .click()
+    await openGroupMeetings(page, 'FG Example')
 
     await expect(page).toHaveURL(
       /\/meetings\?group=\d+$/,
@@ -1317,11 +1288,7 @@ test(
     // 2. Open the create-Meeting dialog.
     // --------------------------------------------------------
 
-    await page
-      .getByRole('link', {
-        name: /Meetings/,
-      })
-      .click()
+    await openGroupMeetings(page, 'FG Example')
 
     await clickHeaderNewMeeting(page)
 
@@ -1394,11 +1361,7 @@ test(
   async ({ page }) => {
     await login(page, 'alex')
 
-    await page
-      .getByRole('link', {
-        name: /Meetings/,
-      })
-      .click()
+    await openGroupMeetings(page, 'FG Example')
 
     await expect(page).toHaveURL(
       /\/meetings\?group=\d+$/,
@@ -1551,11 +1514,7 @@ test(
     // 1. Open meeting-template management.
     // --------------------------------------------------------
 
-    await page
-      .getByRole('link', {
-        name: /Meetings/,
-      })
-      .click()
+    await openGroupMeetings(page, 'FG Example')
 
     await expect(page).toHaveURL(
       /\/meetings\?group=\d+$/,
@@ -1766,11 +1725,7 @@ test(
     //    survives.
     // --------------------------------------------------------
 
-    await page
-      .getByRole('link', {
-        name: /Meetings/,
-      })
-      .click()
+    await openGroupMeetings(page, 'FG Example')
 
     await expect(page).toHaveURL(
       /\/meetings\?group=\d+$/,
@@ -1805,11 +1760,7 @@ test(
     // 1. Create a Meeting.
     // --------------------------------------------------------
 
-    await page
-      .getByRole('link', {
-        name: /Meetings/,
-      })
-      .click()
+    await openGroupMeetings(page, 'FG Example')
 
     await clickHeaderNewMeeting(page)
 
@@ -2751,11 +2702,7 @@ test(
   async ({ page }) => {
     await login(page, 'alex')
 
-    await page
-      .getByRole('link', {
-        name: /Meetings/,
-      })
-      .click()
+    await openGroupMeetings(page, 'FG Example')
 
     await clickHeaderNewMeeting(page)
 
@@ -2900,7 +2847,7 @@ test(
   'Live Meeting schedules a follow-up into a concrete future Meeting',
   async ({ page }) => {
     await login(page, 'alex')
-    await page.getByRole('link', { name: /Meetings/ }).click()
+    await openGroupMeetings(page, 'FG Example')
 
     const meetingsUrl = new URL(page.url())
     const groupId = meetingsUrl.searchParams.get('group') ?? '1'
@@ -2935,7 +2882,7 @@ test(
     )
 
     // Add a second, unrelated candidate to exercise explicit selection.
-    await page.getByRole('link', { name: /Meetings/ }).click()
+    await openGroupMeetings(page, 'FG Example')
     await clickHeaderNewMeeting(page)
     await page.getByLabel('Title').fill('E2E Explicit Follow-up Target')
     await replaceControlValue(
@@ -3039,11 +2986,7 @@ test(
 
     await login(page, 'alex')
 
-    await page
-      .getByRole('link', {
-        name: /Meetings/,
-      })
-      .click()
+    await openGroupMeetings(page, 'FG Example')
 
     // Create an explicit future destination before the Live source.
     await clickHeaderNewMeeting(page)
@@ -3540,7 +3483,7 @@ test(
     // --------------------------------------------------------
 
     await login(page, 'alex')
-    await page.getByRole('link', { name: /Meetings/ }).click()
+    await openGroupMeetings(page, 'FG Example')
 
     const meetingsUrl = new URL(page.url())
     const groupId = meetingsUrl.searchParams.get('group') ?? '1'
@@ -3754,7 +3697,7 @@ test(
     // --------------------------------------------------------
 
     await login(page, 'alex')
-    await page.getByRole('link', { name: /Meetings/ }).click()
+    await openGroupMeetings(page, 'FG Example')
 
     const meetingsUrl = new URL(page.url())
     const groupId = meetingsUrl.searchParams.get('group') ?? '1'

@@ -7,6 +7,7 @@ import {
 import {
   datePartPlusDays,
   login,
+  openGroupMeetings,
   quickAddAgendaItem,
 } from './helpers'
 const TEMPLATE_NAME = 'E2E Occurrence Template'
@@ -76,11 +77,7 @@ function trackMaterializeRequests(page: Page) {
  * expecting content an empty Template cannot provide.
  */
 async function createTemplate(page: Page) {
-  await page
-    .getByRole('link', {
-      name: /Meetings/,
-    })
-    .click()
+  await openGroupMeetings(page, 'FG Example')
 
   await page
     .getByRole('button', {
@@ -137,11 +134,7 @@ async function createTemplate(page: Page) {
  * virtual until explicitly opened.
  */
 async function createWeeklySeries(page: Page) {
-  await page
-    .getByRole('link', {
-      name: /Meetings/,
-    })
-    .click()
+  await openGroupMeetings(page, 'FG Example')
 
   const header = page
     .locator('header')
@@ -318,11 +311,7 @@ test(
         name: /Home/,
       })
       .click()
-    await page
-      .getByRole('link', {
-        name: /Meetings/,
-      })
-    .click()
+    await openGroupMeetings(page, 'FG Example')
 
     await expect(upcoming).toBeVisible()
     // Still exactly one materialization request: seeing the
@@ -354,11 +343,7 @@ test(
     // the first Meeting's content stays unchanged.
     // --------------------------------------------------------
 
-    await page
-      .getByRole('link', {
-        name: /Meetings/,
-      })
-      .click()
+    await openGroupMeetings(page, 'FG Example')
 
     // The next weekly occurrence (first + 7 days) is still
     // virtual; its row is selected by its own accessible
@@ -406,11 +391,7 @@ test(
     ).toHaveCount(0)
 
     // The first Meeting's content remains unchanged.
-    await page
-      .getByRole('link', {
-        name: /Meetings/,
-      })
-      .click()
+    await openGroupMeetings(page, 'FG Example')
     await upcoming
       .getByRole('button', {
         name: seriesOccurrenceRowName(1),
