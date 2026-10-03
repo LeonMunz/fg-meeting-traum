@@ -84,6 +84,82 @@ UNIQUE(research_group_id, user_id)
 
 A Research Group admin does **not** automatically gain access to private Projects.
 
+### Workspace navigation preferences (personal sidebar view state, implemented)
+
+Workspace navigation preferences are personal view state over the
+canonical Research Groups, persisted server-side per user (NOT
+localStorage), so they survive navigation, reload, logout/login, and
+device changes. They describe the user's OWN sidebar: the preferred
+Research Group ordering plus which Research Groups — and whose
+Projects child node — the user manually left expanded.
+
+Persisted per user (one row per user):
+
+```text
+WorkspaceNavigationPreferences
+
+user_id                   (one-to-one with the User; CASCADE)
+research_group_order      (ordered Research Group IDs; JSON array)
+expanded_research_groups  (manually expanded Research Groups;
+                           JSON array)
+expanded_project_sections (Research Groups whose Projects child
+                           node is manually expanded; JSON array)
+created_at / updated_at
+```
+
+- **Personal, never shared.** The ordering and expansion state are
+  per-user: one user's preferences never affect another user's
+  sidebar and never mutate Research Group domain data. There is no
+  shared / domain-level Research Group ordering.
+- **View state, never authorization.** Preferences grant no
+  membership and never grant access to any Research Group. Every
+  read and write is constrained by the user's CURRENT
+  ResearchGroupMembership (the same current-membership boundary
+  `GET /api/research-groups/` lists).
+- **Deterministic default order.** A user without a preference row —
+  and every currently accessible Research Group missing from a
+  stored order — is ordered by `ResearchGroup.created_at` ASC, then
+  primary key ASC. The default order is stable and reproducible for
+  groups not yet personalized.
+- **Stored ordering normalization.** The user's stored order is
+  preserved for still-accessible Research Groups; stale /
+  inaccessible IDs are discarded; currently accessible Research
+  Groups missing from the stored order are appended in the
+  deterministic default order. The result contains each accessible
+  Research Group exactly once.
+- **Expanded-state normalization.** Stale / inaccessible Research
+  Group IDs are discarded from both expansion collections; only
+  currently accessible Research Groups survive; no duplicates.
+- **Stale selections are sanitized on the next load, and the
+  cleaned state is persisted** (never returned as a temporary
+  projection only).
+- **Projects expansion is keyed by Research Group, not by
+  Project.** `expanded_project_sections` stores Research Group IDs
+  (whose Projects child node the user left expanded); concrete
+  Project IDs are never persisted here.
+- **Route-driven / contextual expansion is NOT represented.** The
+  persisted state records only the user's manual expansion choice;
+  navigating into a Research Group or Project never mutates it.
+
+API (authenticated; the client contract is a COMPLETE current
+snapshot, not incremental toggle actions — a PATCH persists the
+complete normalized state atomically and returns it):
+
+```text
+GET   /api/me/preferences/workspace-navigation/
+PATCH /api/me/preferences/workspace-navigation/
+
+{
+  "researchGroupOrder": [...],
+  "expandedResearchGroups": [...],
+  "expandedProjectSections": [...]
+}
+```
+
+A first GET for a user with no preference row returns the default
+snapshot (all currently accessible Research Groups in the
+deterministic default order, nothing expanded) and creates no row.
+
 ## 3. Project
 
 A Project is a protected work space inside exactly one Research Group.
@@ -1263,6 +1339,7 @@ These are the non-negotiable contract of the Core phase:
 25. Permission-filtered list endpoints do not leak private resources.
 26. A WorkItemTypeDefinition's semantic kind is system-assigned only at canonical default creation, is never editable through the configuration API, and is never inferred from the display name — not at runtime and not during data migration; legacy definitions without provable machine-readable semantic provenance have `kind = null`.
 27. My Work preferences are server-side personal view state, never authorization: every read/write is re-sanitized against the user's CURRENT Research Group / Project access and the canonical semantic type kinds, stale inaccessible selections are removed and persisted as removed on the next load, and preferences never grant access to or mutate any Research Group, Project, Work Item, assignment, or Membership (Section 14a).
+28. Workspace navigation preferences are server-side personal view state, never authorization: the persisted Research Group order and manual expansion state are per-user, every read/write is re-sanitized against the user's CURRENT ResearchGroupMembership, stale inaccessible Research Group IDs are removed and persisted as removed on the next load, Projects expansion is keyed by Research Group (never by Project), and preferences never grant access to or mutate any Research Group or Membership (Section 2).
 
 ## 20. Core acceptance flow
 

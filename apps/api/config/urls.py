@@ -50,6 +50,7 @@ from research_groups.views import (
     ResearchGroupMembershipDetailView,
     ResearchGroupMembershipOffboardingView,
     ResearchGroupMembershipListView,
+    WorkspaceNavigationPreferencesView,
 )
 
 
@@ -178,6 +179,9 @@ urlpatterns = [
     path('api/me/work-items/<int:work_item_id>/reorder/', csrf_protect_view(PersonalMyWorkReorderView), name='personal-my-work-reorder'),
     # My Work preferences — persisted personal view state (never authorization)
     path('api/me/preferences/my-work/', MyWorkPreferencesView.as_view(), name='my-work-preferences'),
+    # Workspace navigation preferences — persisted personal view
+    # state (never authorization)
+    path('api/me/preferences/workspace-navigation/', WorkspaceNavigationPreferencesView.as_view(), name='workspace-navigation-preferences'),
     path('api/research-groups/<int:group_id>/my-work/', MyWorkView.as_view(), name='research-group-my-work'),
 
     # Personal Notes — private, owner-only capture space (no search,

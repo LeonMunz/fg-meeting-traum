@@ -20,6 +20,11 @@ from .services import (
     remove_research_group_membership,
     update_research_group,
 )
+from .workspace_navigation_preferences import (
+    WorkspaceNavigationPreferencesError,
+    get_workspace_navigation_preferences,
+    update_workspace_navigation_preferences,
+)
 
 User = get_user_model()
 
@@ -984,3 +989,39 @@ class ResearchGroupMembershipOffboardingView(
             replacement_user,
             None,
         )
+
+
+class WorkspaceNavigationPreferencesView(APIView):
+    """GET/PATCH /api/me/preferences/workspace-navigation/
+
+    The user's persisted personal workspace navigation
+    preferences: the preferred Research Group ordering plus the
+    Research Groups (and whose Projects child node) the user
+    manually left expanded.
+
+    The client contract is a COMPLETE current snapshot, not
+    incremental toggle actions: a PATCH persists the complete
+    normalized state atomically and returns it.
+
+    Preferences are personal view state, never authorization:
+    every read and write is constrained by the user's CURRENT
+    ResearchGroupMembership (inaccessible / stale group IDs are
+    dropped — and persisted as dropped), and preferences never
+    grant access to or mutate any Research Group or Membership.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        return Response(
+            get_workspace_navigation_preferences(request.user)
+        )
+
+    def patch(self, request):
+        try:
+            snapshot = update_workspace_navigation_preferences(
+                request.user, request.data
+            )
+        except WorkspaceNavigationPreferencesError as exc:
+            return Response({"error": str(exc)}, status=400)
+        return Response(snapshot)
