@@ -27,6 +27,7 @@ from .services import (
     create_project,
     delete_empty_project,
     get_accessible_project_qs,
+    get_global_personal_project_quick_access,
     get_personal_project_quick_access,
     remove_membership,
     record_project_open,
@@ -1154,6 +1155,35 @@ class PersonalProjectOpenView(APIView):
                 "projectId": project.pk,
                 "lastOpenedAt": recency.last_opened_at.isoformat(),
             }
+        )
+
+
+class PersonalProjectQuickAccessView(APIView):
+    """GET /api/me/project-quick-access/
+
+    GLOBAL personal Project Quick Access read model: at most 5
+    Project candidates for the CURRENT user, drawn across ALL of the
+    user's accessible Research Groups (server-owned bound — never
+    five per Research Group), ordered by the user's personal
+    last-opened recency (newest first), with never-opened Projects
+    after (``created_at`` DESC, primary key DESC).
+
+    Research Group membership and order never partition or influence
+    the ranking. Recency is never authorization: every returned
+    Project requires the caller's CURRENT canonical Project read
+    access; archived Projects are excluded; another user's recency is
+    never read. Empty eligible set answers ``[]``.
+
+    Pure read: the request never mutates recency, Projects,
+    ``WorkspaceNavigationPreferences``, Activity, or any other domain
+    state.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        return Response(
+            get_global_personal_project_quick_access(actor=request.user)
         )
 
 

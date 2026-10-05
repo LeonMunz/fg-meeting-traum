@@ -12,6 +12,12 @@ Domain behavior (canonical service operations) + API contract:
   opened; archived and inaccessible Projects excluded; recency
   never grants access, other users' activity never affects the
   order.
+- ``get_global_personal_project_quick_access``: bounded (5)
+  personal read model across ALL accessible Research Groups
+  (GLOBAL ordering — Research Group membership/order never
+  partitions or influences the ranking); identical access / archive
+  / recency rules; pure read (never mutates recency, Projects,
+  preferences, or Activity).
 - Membership lifecycle: removing a ProjectMembership deletes its
   recency row; a later-recreated membership starts without
   historical recency.
@@ -687,3 +693,424 @@ class ProjectQuickAccessApiTest(APITestCase):
         self.assertEqual(after, before)
         for item in after:
             self.assertNotIn("lastOpenedAt", item)
+
+
+# ── API: GET /api/me/project-quick-access/ (GLOBAL read model) ─────
+
+
+class GlobalProjectQuickAccessApiTest(APITestCase):
+    """The GLOBAL personal Quick Access read model contract.
+
+    Two Research Groups, three Projects each; alice, bob, and dave
+    hold current ProjectMembership on ALL six Projects (alice owns
+    the Alpha Projects, bob owns the Beta Projects). created_at is
+    controlled explicitly: Alpha 1 < Alpha 2 < Alpha 3 < Beta 1 <
+    Beta 2 < Beta 3 (hours 1..6 after BASE).
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.client = APIClient()
+        self.alice = _make_user("alice")
+        self.bob = _make_user("bob")
+        self.dave = _make_user("dave")
+
+        self.group_a = _make_group("Alpha Group", self.alice)
+        self.group_b = _make_group("Beta Group", self.bob)
+        _join(self.group_a, self.bob)
+        _join(self.group_b, self.alice)
+        _join(self.group_a, self.dave)
+        _join(self.group_b, self.dave)
+
+        (
+            self.pa1, self.pa2, self.pa3,
+        ) = [
+            create_project(
+                research_group=self.group_a,
+                creator=self.alice,
+                name=f"Alpha {idx}",
+            )
+            for idx in (1, 2, 3)
+        ]
+        (
+            self.pb1, self.pb2, self.pb3,
+        ) = [
+            create_project(
+                research_group=self.group_b,
+                creator=self.bob,
+                name=f"Beta {idx}",
+            )
+            for idx in (1, 2, 3)
+        ]
+        for project in (self.pa1, self.pa2, self.pa3):
+            add_project_membership(
+                project=project,
+                actor=self.alice,
+                target_user=self.bob,
+                role=ProjectMembership.Role.MEMBER,
+            )
+            add_project_membership(
+                project=project,
+                actor=self.alice,
+                target_user=self.dave,
+                role=ProjectMembership.Role.MEMBER,
+            )
+        for project in (self.pb1, self.pb2, self.pb3):
+            add_project_membership(
+                project=project,
+                actor=self.bob,
+                target_user=self.alice,
+                role=ProjectMembership.Role.MEMBER,
+            )
+            add_project_membership(
+                project=project,
+                actor=self.bob,
+                target_user=self.dave,
+                role=ProjectMembership.Role.MEMBER,
+            )
+        _set_created_at(self.pa1, BASE + timedelta(hours=1))
+        _set_created_at(self.pa2, BASE + timedelta(hours=2))
+        _set_created_at(self.pa3, BASE + timedelta(hours=3))
+        _set_created_at(self.pb1, BASE + timedelta(hours=4))
+        _set_created_at(self.pb2, BASE + timedelta(hours=5))
+        _set_created_at(self.pb3, BASE + timedelta(hours=6))
+
+        self.all_projects = (
+            self.pa1, self.pa2, self.pa3,
+            self.pb1, self.pb2, self.pb3,
+        )
+
+    def _login(self, user):
+        self.client.get("/api/auth/csrf/")
+        csrf_token = self.client.cookies.get("csrftoken").value
+        self.client.post(
+            "/api/auth/login/",
+            data={
+                "username": user.username,
+                "password": SEED_PASSWORD,
+            },
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=csrf_token,
+        )
+
+    def _global_quick_access(self):
+        response = self.client.get("/api/me/project-quick-access/")
+        self.assertEqual(response.status_code, 200)
+        return response.json()
+
+    def _names(self, data):
+        return [item["name"] for item in data]
+
+    def test_anonymous_is_rejected(self):
+        response = self.client.get("/api/me/project-quick-access/")
+        self.assertEqual(response.status_code, 401)
+
+    def test_cross_group_personal_recency_ordering(self):
+        # Alice opened Projects in BOTH groups; the global list must
+        # interleave them by her personal recency — group identity
+        # must not partition the ranking.
+        _set_opened(self.alice, self.pa1, BASE + timedelta(days=1))
+        _set_opened(self.alice, self.pa3, BASE + timedelta(days=2))
+        _set_opened(self.alice, self.pb2, BASE + timedelta(days=3))
+
+        self._login(self.alice)
+        data = self._global_quick_access()
+
+        self.assertEqual(
+            self._names(data),
+            [
+                # personally opened, newest personal open first —
+                # across Research Groups:
+                "Beta 2", "Alpha 3", "Alpha 1",
+                # never-opened fallback (created_at DESC):
+                "Beta 3", "Beta 1",
+            ],
+        )
+        # The leading row belongs to the OTHER Research Group's
+        # Project — a per-group partition would never surface it.
+        self.assertEqual(data[0]["id"], self.pb2.pk)
+        self.assertEqual(data[0]["researchGroupId"], self.group_b.pk)
+        self.assertEqual(
+            data[0]["lastOpenedAt"],
+            (BASE + timedelta(days=3)).isoformat(),
+        )
+
+    def test_opened_projects_precede_never_opened_globally(self):
+        # One opened Project in group A must lead over every
+        # never-opened Project of BOTH groups, regardless of
+        # created_at.
+        _set_opened(self.alice, self.pa1, BASE + timedelta(days=1))
+
+        self._login(self.alice)
+        data = self._global_quick_access()
+
+        self.assertEqual(
+            self._names(data),
+            [
+                "Alpha 1",
+                # never-opened after, GLOBALLY by created_at DESC:
+                "Beta 3", "Beta 2", "Beta 1", "Alpha 3",
+            ],
+        )
+        self.assertEqual(
+            data[0]["lastOpenedAt"],
+            (BASE + timedelta(days=1)).isoformat(),
+        )
+
+    def test_never_opened_fallback_is_global_created_at_desc(self):
+        self._login(self.alice)
+        data = self._global_quick_access()
+
+        # Six accessible Projects across two groups, bounded to five:
+        # newest created_at first, interleaving both Research Groups.
+        self.assertEqual(
+            self._names(data),
+            ["Beta 3", "Beta 2", "Beta 1", "Alpha 3", "Alpha 2"],
+        )
+        # Never-opened Projects carry no personal timestamp.
+        for item in data:
+            self.assertIsNone(item["lastOpenedAt"])
+
+    def test_equal_recency_timestamps_resolve_by_pk_desc(self):
+        # Same personal timestamp on an Alpha and a Beta Project; the
+        # higher primary key (Beta 1, created later) must win.
+        self.assertGreater(self.pb1.pk, self.pa1.pk)
+        same_ts = BASE + timedelta(days=5)
+        _set_opened(self.alice, self.pa1, same_ts)
+        _set_opened(self.alice, self.pb1, same_ts)
+
+        self._login(self.alice)
+        self.assertEqual(
+            self._names(self._global_quick_access())[:2],
+            ["Beta 1", "Alpha 1"],
+        )
+
+    def test_equal_created_at_tie_breaks_by_pk_desc(self):
+        for project in (self.pa3, self.pb1, self.pb2):
+            _set_created_at(project, BASE + timedelta(days=30))
+
+        self._login(self.alice)
+        self.assertEqual(
+            self._names(self._global_quick_access()),
+            # Alpha 3 / Beta 1 / Beta 2 share the newest created_at:
+            # PK DESC (Beta 2 > Beta 1 > Alpha 3); then the remaining
+            # by created_at DESC (Beta 3, Alpha 2), bounded to five.
+            ["Beta 2", "Beta 1", "Alpha 3", "Beta 3", "Alpha 2"],
+        )
+
+    def test_bound_is_global_not_per_research_group(self):
+        # Three more group A Projects (newest of all) — a per-Research
+        # Group bound would return well more than five items total.
+        for idx in (4, 5, 6):
+            project = create_project(
+                research_group=self.group_a,
+                creator=self.alice,
+                name=f"Alpha {idx}",
+            )
+            _set_created_at(
+                project, BASE + timedelta(hours=10 + idx),
+            )
+
+        self._login(self.alice)
+        data = self._global_quick_access()
+
+        self.assertEqual(len(data), 5)
+        # Group A claims three of the FIVE global slots; group B gets
+        # the remaining two — and exactly one of group A's six is cut.
+        self.assertEqual(
+            self._names(data),
+            ["Alpha 6", "Alpha 5", "Alpha 4", "Beta 3", "Beta 2"],
+        )
+
+    def test_archived_projects_are_excluded(self):
+        # The archived Project is freshly OPENED by alice: its
+        # recency must neither include it nor occupy a slot.
+        _set_opened(self.alice, self.pb3, BASE + timedelta(days=9))
+        archive_project(project=self.pb3, actor=self.bob)
+
+        self._login(self.alice)
+        data = self._global_quick_access()
+
+        self.assertNotIn("Beta 3", self._names(data))
+        self.assertEqual(
+            self._names(data),
+            ["Beta 2", "Beta 1", "Alpha 3", "Alpha 2", "Alpha 1"],
+        )
+
+    def test_projects_without_current_membership_are_excluded(self):
+        # Newest-created Project in group A readable by alice and
+        # dave, but NOT by bob (no ProjectMembership).
+        foreign = create_project(
+            research_group=self.group_a,
+            creator=self.alice,
+            name="Alpha 9",
+        )
+        _set_created_at(foreign, BASE + timedelta(days=100))
+        add_project_membership(
+            project=foreign,
+            actor=self.alice,
+            target_user=self.dave,
+            role=ProjectMembership.Role.MEMBER,
+        )
+
+        self._login(self.bob)
+        self.assertNotIn(
+            foreign.pk, [item["id"] for item in self._global_quick_access()],
+        )
+
+        self._login(self.dave)
+        # For dave it IS the newest never-opened candidate — a broken
+        # access filter would hide exactly that.
+        self.assertEqual(
+            self._names(self._global_quick_access()),
+            ["Alpha 9", "Beta 3", "Beta 2", "Beta 1", "Alpha 3"],
+        )
+
+    def test_revoked_membership_removes_project_from_global_list(self):
+        # Bob's fresh personal open must not keep the Project eligible
+        # once his membership is removed (recency is never
+        # authorization; the CASCADE deletes his recency row).
+        _set_opened(self.bob, self.pa1, BASE + timedelta(days=50))
+        membership = ProjectMembership.objects.get(
+            project=self.pa1, user=self.bob,
+        )
+        remove_membership(membership=membership, actor=self.alice)
+
+        self.assertFalse(
+            ProjectNavigationRecency.objects.filter(
+                project_membership__user=self.bob,
+                project_membership__project=self.pa1,
+            ).exists()
+        )
+
+        self._login(self.bob)
+        self.assertEqual(
+            self._names(self._global_quick_access()),
+            ["Beta 3", "Beta 2", "Beta 1", "Alpha 3", "Alpha 2"],
+        )
+
+    def test_other_users_recency_never_affects_order(self):
+        # Bob's fresh open of Alpha 2 (inside alice's five-candidate
+        # window) must neither promote it nor carry his timestamp.
+        _set_opened(self.bob, self.pa2, BASE + timedelta(days=50))
+
+        self._login(self.alice)
+        data = self._global_quick_access()
+        self.assertEqual(
+            self._names(data),
+            ["Beta 3", "Beta 2", "Beta 1", "Alpha 3", "Alpha 2"],
+        )
+        alpha_2 = next(
+            item for item in data if item["id"] == self.pa2.pk
+        )
+        self.assertIsNone(alpha_2["lastOpenedAt"])
+
+    def test_same_project_set_ranks_differently_per_user(self):
+        # Both users read the SAME six Projects; each personal open
+        # leads its own list.
+        _set_opened(self.alice, self.pa1, BASE + timedelta(days=1))
+        _set_opened(self.bob, self.pb3, BASE + timedelta(days=1))
+
+        self._login(self.alice)
+        alice_data = self._global_quick_access()
+        self.assertEqual(alice_data[0]["name"], "Alpha 1")
+
+        self._login(self.bob)
+        bob_data = self._global_quick_access()
+        self.assertEqual(bob_data[0]["name"], "Beta 3")
+        self.assertNotEqual(
+            self._names(alice_data), self._names(bob_data),
+        )
+
+    def test_empty_eligible_set_returns_empty_list(self):
+        # No Research Group memberships at all.
+        erin = _make_user("erin")
+        self._login(erin)
+        self.assertEqual(self._global_quick_access(), [])
+
+        # In a Research Group but without any ProjectMembership.
+        frank = _make_user("frank")
+        _join(self.group_a, frank)
+        self._login(frank)
+        self.assertEqual(self._global_quick_access(), [])
+
+    def test_each_item_shape_and_group_ownership(self):
+        self._login(self.alice)
+        data = self._global_quick_access()
+
+        expected_group = {
+            self.pa1.pk: self.group_a.pk,
+            self.pa2.pk: self.group_a.pk,
+            self.pa3.pk: self.group_a.pk,
+            self.pb1.pk: self.group_b.pk,
+            self.pb2.pk: self.group_b.pk,
+            self.pb3.pk: self.group_b.pk,
+        }
+        for item in data:
+            # V1 shape: no researchGroupName, no extra fields.
+            self.assertEqual(
+                set(item.keys()),
+                {"id", "researchGroupId", "name", "lastOpenedAt"},
+            )
+            self.assertEqual(
+                item["researchGroupId"],
+                expected_group[item["id"]],
+            )
+        # The snapshot spans BOTH Research Groups.
+        self.assertEqual(
+            {item["researchGroupId"] for item in data},
+            {self.group_a.pk, self.group_b.pk},
+        )
+
+    def test_get_is_pure_no_domain_mutation(self):
+        self._login(self.alice)
+
+        for project in self.all_projects:
+            project.refresh_from_db()
+        updated_before = {
+            p.pk: p.updated_at for p in self.all_projects
+        }
+        memberships_before = sorted(
+            (
+                m.pk, m.project_id, m.user_id, m.role,
+                m.added_at, m.added_by_id,
+            )
+            for m in ProjectMembership.objects.all()
+        )
+        recency_before = ProjectNavigationRecency.objects.count()
+        audit_before = AuditEvent.objects.count()
+        prefs_before = WorkspaceNavigationPreferences.objects.filter(
+            user=self.alice,
+        ).count()
+        self.assertEqual(prefs_before, 0)
+
+        data = self._global_quick_access()
+        self.assertEqual(len(data), 5)
+        # A second read is equally pure.
+        self._global_quick_access()
+
+        self.assertEqual(
+            ProjectNavigationRecency.objects.count(), recency_before,
+        )
+        self.assertEqual(AuditEvent.objects.count(), audit_before)
+        self.assertEqual(
+            WorkspaceNavigationPreferences.objects.filter(
+                user=self.alice,
+            ).count(),
+            prefs_before,
+        )
+        for project in self.all_projects:
+            project.refresh_from_db()
+            self.assertEqual(
+                project.updated_at, updated_before[project.pk],
+            )
+        self.assertEqual(
+            sorted(
+                (
+                    m.pk, m.project_id, m.user_id, m.role,
+                    m.added_at, m.added_by_id,
+                )
+                for m in ProjectMembership.objects.all()
+            ),
+            memberships_before,
+        )

@@ -30,6 +30,7 @@ from home.views import HomeAggregateView
 from projects.views import (
     ProjectArchiveView,
     PersonalProjectOpenView,
+    PersonalProjectQuickAccessView,
     ProjectDetailView,
     ProjectMembershipDetailView,
     ProjectMembershipListView,
@@ -185,6 +186,10 @@ urlpatterns = [
     # Personal Project navigation — explicit open records personal
     # Quick Access recency (never authorization, never read as access)
     path('api/me/projects/<int:project_id>/open/', PersonalProjectOpenView.as_view(), name='personal-project-open'),
+    # Personal Project navigation — global Quick Access read
+    # model across ALL accessible Research Groups (server-ranked,
+    # max 5 globally; never per Research Group)
+    path('api/me/project-quick-access/', PersonalProjectQuickAccessView.as_view(), name='personal-project-quick-access'),
     # Workspace navigation preferences — persisted personal view
     # state (never authorization)
     path('api/me/preferences/workspace-navigation/', WorkspaceNavigationPreferencesView.as_view(), name='workspace-navigation-preferences'),

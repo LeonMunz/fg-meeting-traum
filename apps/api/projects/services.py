@@ -745,37 +745,31 @@ def record_project_open(*, actor, project) -> ProjectNavigationRecency:
     return recency
 
 
-def get_personal_project_quick_access(*, actor, research_group) -> list:
-    """Personal Project Quick Access candidates for one Research Group.
+def _personal_quick_access_candidates(projects, *, actor) -> list:
+    """Rank and serialize the personal Project Quick Access candidates.
 
-    Read model for the Sidebar's future Project children (bounded to
-    ``PERSONAL_PROJECT_QUICK_ACCESS_LIMIT`` candidates):
+    Shared core of the per-Research-Group and the GLOBAL personal
+    Quick Access read models. ``projects`` must already be the
+    caller's CURRENT accessible, non-archived Project set (see
+    ``get_accessible_project_qs``); this function only applies the
+    canonical personal ranking, the server-owned
+    ``PERSONAL_PROJECT_QUICK_ACCESS_LIMIT`` bound, and the compact
+    serialization:
 
-    - requires the actor's CURRENT Research Group read access;
-    - includes only Projects the actor can CURRENTLY read
-      (current ProjectMembership — the group-membership condition is
-      enforced structurally by the composite FK, see
-      ``get_accessible_project_qs``) that are NOT archived;
-    - ordering: Projects with personal ``last_opened_at`` first,
-      newest first (equal timestamps by primary key DESC), then
-      never-opened Projects (``created_at`` DESC, primary key DESC);
-    - recency rows are never read as authorization and no other
-      user's recency is ever consulted.
+    - Projects with a personal ``last_opened_at`` first, newest first
+      (equal timestamps by primary key DESC);
+    - never-opened Projects afterwards, by ``created_at`` DESC,
+      primary key DESC;
+    - one compact item per Project:
+      ``{"id", "researchGroupId", "name", "lastOpenedAt"}``
+      (``lastOpenedAt`` is ``None`` for never-opened Projects).
 
-    Returns a list of compact candidate dicts:
-    ``{"id", "researchGroupId", "name", "lastOpenedAt"}``
-    (``lastOpenedAt`` is ``None`` for never-opened Projects).
+    Only the CALLER's own recency rows are read
+    (``project_membership__user = actor``) and recency is never read
+    as authorization.
     """
-    group_scope = resolve_group_scope(actor, research_group.pk)
-    if group_scope is None or not group_scope.has(Capability.GROUP_READ):
-        raise ProjectDomainError("Research group not found.")
-
     projects = (
-        get_accessible_project_qs(actor)
-        .filter(
-            research_group_id=research_group.pk,
-            archived_at__isnull=True,
-        )
+        projects
         .annotate(
             personal_last_opened_at=Subquery(
                 ProjectNavigationRecency.objects
@@ -827,6 +821,75 @@ def get_personal_project_quick_access(*, actor, research_group) -> list:
         }
         for project in projects
     ]
+
+
+def get_personal_project_quick_access(*, actor, research_group) -> list:
+    """Personal Project Quick Access candidates for one Research Group.
+
+    Read model for the Sidebar's future Project children (bounded to
+    ``PERSONAL_PROJECT_QUICK_ACCESS_LIMIT`` candidates):
+
+    - requires the actor's CURRENT Research Group read access;
+    - includes only Projects the actor can CURRENTLY read
+      (current ProjectMembership — the group-membership condition is
+      enforced structurally by the composite FK, see
+      ``get_accessible_project_qs``) that are NOT archived;
+    - ordering: Projects with personal ``last_opened_at`` first,
+      newest first (equal timestamps by primary key DESC), then
+      never-opened Projects (``created_at`` DESC, primary key DESC);
+    - recency rows are never read as authorization and no other
+      user's recency is ever consulted.
+
+    Returns a list of compact candidate dicts:
+    ``{"id", "researchGroupId", "name", "lastOpenedAt"}``
+    (``lastOpenedAt`` is ``None`` for never-opened Projects).
+    """
+    group_scope = resolve_group_scope(actor, research_group.pk)
+    if group_scope is None or not group_scope.has(Capability.GROUP_READ):
+        raise ProjectDomainError("Research group not found.")
+
+    return _personal_quick_access_candidates(
+        get_accessible_project_qs(actor).filter(
+            research_group_id=research_group.pk,
+            archived_at__isnull=True,
+        ),
+        actor=actor,
+    )
+
+
+def get_global_personal_project_quick_access(*, actor) -> list:
+    """Personal Project Quick Access candidates across ALL Research Groups.
+
+    GLOBAL read model for the Sidebar's Quick Access section (bounded
+    to ``PERSONAL_PROJECT_QUICK_ACCESS_LIMIT`` candidates in TOTAL —
+    never per Research Group):
+
+    - requires only the caller's authentication; Research Group
+      membership and order do NOT partition or influence the ranking —
+      the eligible set is the actor's ENTIRE current accessible
+      Project set (each membership's group-membership condition is
+      enforced structurally by the composite FK, see
+      ``get_accessible_project_qs``);
+    - includes only Projects the actor can CURRENTLY read that are NOT
+      archived;
+    - ordering: identical to the per-Research-Group read model but
+      computed GLOBALLY — Projects with personal ``last_opened_at``
+      first, newest first (equal timestamps by primary key DESC), then
+      never-opened Projects (``created_at`` DESC, primary key DESC);
+    - recency rows are never read as authorization and no other
+      user's recency is ever consulted;
+    - empty eligible set → ``[]``.
+
+    Returns a list of compact candidate dicts:
+    ``{"id", "researchGroupId", "name", "lastOpenedAt"}``
+    (``lastOpenedAt`` is ``None`` for never-opened Projects).
+    """
+    return _personal_quick_access_candidates(
+        get_accessible_project_qs(actor).filter(
+            archived_at__isnull=True,
+        ),
+        actor=actor,
+    )
 
 # ── Helper functions for final-owner invariant ──
 

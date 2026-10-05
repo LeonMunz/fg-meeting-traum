@@ -627,6 +627,12 @@ GET  /api/research-groups/{groupId}/project-quick-access/
      → [ { "id", "researchGroupId", "name", "lastOpenedAt" }, ... ]
        (at most 5 candidates; `lastOpenedAt` is null for
         Projects the user never opened)
+
+GET  /api/me/project-quick-access/
+     → [ { "id", "name", "researchGroupId", "lastOpenedAt" }, ... ]
+       (GLOBAL personal snapshot: at most 5 candidates across
+        ALL accessible Research Groups; `lastOpenedAt` is null
+        for Projects the user never opened)
 ```
 
 **Implemented frontend client adapter (transport only).** The
@@ -662,6 +668,39 @@ to **five** candidates):
   `Project.created_at` DESC then primary key DESC;
 - never infers access from recency rows and never includes another
   user's recency.
+
+**Global Quick Access read model** (personal, across ALL
+accessible Research Groups, bounded to **five** candidates
+GLOBALLY — never five per Research Group):
+
+- `GET /api/me/project-quick-access/` — one personal snapshot
+  over the caller's ENTIRE current accessible Project set;
+  Research Group membership and order NEVER partition or
+  influence the ranking;
+- the same eligibility rules as the per-Research-Group read
+  model: only Projects with CURRENT canonical Project read access
+  (current `ProjectMembership`), archived Projects excluded,
+  recency never read as authorization, no other user's recency
+  consulted, and a deleted/revoked membership can never keep a
+  Project eligible;
+- ordering computed GLOBALLY: personally opened Projects first by
+  `last_opened_at` DESC (equal timestamps resolved by primary key
+  DESC), then never-opened Projects by `Project.created_at` DESC,
+  primary key DESC;
+- item shape `{id, name, researchGroupId, lastOpenedAt}` — V1
+  carries no `researchGroupName`; `lastOpenedAt` is null for
+  never-opened Projects;
+- the bound is server-owned: at most five items in total; an
+  empty eligible set answers `[]`;
+- the read is pure: it never mutates `ProjectNavigationRecency`,
+  `Project.updated_at`, `WorkspaceNavigationPreferences`,
+  Activity, memberships, or any other domain state.
+
+The per-Research-Group endpoint
+(`GET /api/research-groups/{groupId}/project-quick-access/`)
+remains valid and unchanged; the frozen Sidebar contract
+(`docs/design/workspace-sidebar/IMPLEMENTATION_CONTRACT.md`) makes
+the global endpoint the Sidebar's sole Quick Access data source.
 
 The ordinary Project list
 (`GET /api/research-groups/{groupId}/projects/`) keeps its canonical
