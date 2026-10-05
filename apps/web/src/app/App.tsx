@@ -19,6 +19,7 @@ import { MeetingSeriesDetailPage } from '../features/meetings/MeetingSeriesDetai
 import { ProjectDetailPage } from '../features/projects/ProjectDetailPage'
 import { ProjectListPage } from '../features/projects/ProjectListPage'
 import { ResearchGroupProvider } from '../features/research-group/ResearchGroupProvider'
+import { ResearchGroupOverviewPage } from '../features/research-group/ResearchGroupOverviewPage'
 import { ResearchGroupSettingsPage } from '../features/research-group/ResearchGroupSettingsPage'
 import { useResearchGroupListScope } from '../features/research-group/useResearchGroupListScope'
 
@@ -126,6 +127,11 @@ function AppRoutes() {
                 <Route
                   path="/notes"
                   element={<NotesPage />}
+                />
+
+                <Route
+                  path="/groups/:groupId"
+                  element={<ResearchGroupOverviewPage />}
                 />
 
                 <Route
