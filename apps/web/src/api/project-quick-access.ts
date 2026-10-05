@@ -1,7 +1,8 @@
 /**
  * Personal Project Quick Access API
  * (POST /api/me/projects/{projectId}/open/,
- * GET /api/research-groups/{researchGroupId}/project-quick-access/).
+ * GET /api/research-groups/{researchGroupId}/project-quick-access/,
+ * GET /api/me/project-quick-access/).
  *
  * Thin client contract: the backend owns ALL ranking, access
  * filtering, archived-Project filtering, server-owned timestamps,
@@ -45,4 +46,18 @@ export async function fetchProjectQuickAccess(
   return apiGet<ApiProjectQuickAccessItem[]>(
     `/api/research-groups/${researchGroupId}/project-quick-access/`,
   )
+}
+
+/**
+ * Fetch the GLOBAL personal Project Quick Access snapshot (max
+ * five candidates across ALL accessible Research Groups) in the
+ * exact server order (global personal recency ranking, access and
+ * archived filtering are backend-owned). Returns the server array
+ * unchanged — no Research Group fan-out, no client-side sorting or
+ * truncation.
+ */
+export async function fetchGlobalProjectQuickAccess(): Promise<
+  ApiProjectQuickAccessItem[]
+> {
+  return apiGet<ApiProjectQuickAccessItem[]>('/api/me/project-quick-access/')
 }
