@@ -332,7 +332,7 @@ function rowFor(name: string) {
     .parentElement?.parentElement as HTMLElement
 }
 
-/** The group label (navigation) button. */
+/** The group name (disclosure) button. */
 function labelFor(name: string) {
   return screen.getByRole('button', { name })
 }
@@ -424,7 +424,7 @@ describe('Sidebar structure (frozen IA)', () => {
   })
 
   it('never renders Project shortcuts below any Research Group', async () => {
-    renderSidebar(contextValue())
+    renderSidebar(contextValue(), '/my-work')
     await waitForTree()
     await waitForQuickAccess()
 
@@ -467,7 +467,7 @@ describe('Sidebar structure (frozen IA)', () => {
   })
 
   it('has no Projects disclosure and no third hierarchy level', async () => {
-    renderSidebar(contextValue())
+    renderSidebar(contextValue(), '/my-work')
     await waitForTree()
     await waitForQuickAccess()
 
@@ -642,12 +642,12 @@ describe('Sidebar research group tree', () => {
   })
 
   it('expands a group via its chevron, revealing Projects and Meetings without navigating', async () => {
-    renderSidebar(contextValue(), '/meetings?group=11')
+    renderSidebar(contextValue(), '/meetings')
     await waitForTree()
 
     expect(
       screen.getByRole('status', { name: 'Current location' }),
-    ).toHaveTextContent('/meetings?group=11')
+    ).toHaveTextContent('/meetings')
 
     fireEvent.click(chevronFor('Bravo Group'))
 
@@ -669,7 +669,7 @@ describe('Sidebar research group tree', () => {
     // Expansion is a local disclosure only: no navigation.
     expect(
       screen.getByRole('status', { name: 'Current location' }),
-    ).toHaveTextContent('/meetings?group=11')
+    ).toHaveTextContent('/meetings')
   })
 
   it('collapses the group again on the second chevron click', async () => {
@@ -694,53 +694,82 @@ describe('Sidebar research group tree', () => {
     ).not.toBeInTheDocument()
   })
 
-  it('navigates the group name to the Research Group Overview without side effects (QA-11)', async () => {
-    const setActiveResearchGroupId = vi.fn()
+  it('toggles a collapsed group via its name without navigating', async () => {
+    renderSidebar(contextValue(), '/my-work')
+    await waitForTree()
 
-    renderSidebar(
-      contextValue({ setActiveResearchGroupId }),
-      '/meetings?group=11',
+    const initialLocation = screen.getByRole('status', {
+      name: 'Current location',
+    })
+    const label = labelFor('Alpha Group')
+    const chevron = chevronFor('Alpha Group')
+
+    expect(label).toHaveAttribute('aria-expanded', 'false')
+    expect(label).toHaveAttribute(
+      'aria-controls',
+      chevron.getAttribute('aria-controls'),
     )
-    await waitForTree()
 
     fireEvent.click(labelFor('Alpha Group'))
 
-    // Pure navigation to the approved Overview route — no
-    // contextual list switching, no select-in-place.
+    expect(label).toHaveAttribute('aria-expanded', 'true')
+    expect(chevron).toHaveAttribute('aria-expanded', 'true')
     expect(
-      screen.getByRole('status', { name: 'Current location' }),
-    ).toHaveTextContent('/groups/22')
-    expect(setActiveResearchGroupId).not.toHaveBeenCalled()
-
-    // The label must not toggle the manual expansion state —
-    // even though the route now contextually reveals the group.
-    expect(
-      screen.getByRole('button', { name: 'Expand Alpha Group' }),
-    ).toBeInTheDocument()
-  })
-
-  it('navigates the group name to the Overview from a personal page (no select-in-place)', async () => {
-    const setActiveResearchGroupId = vi.fn()
-    renderSidebar(contextValue({ setActiveResearchGroupId }), '/')
-    await waitForTree()
+      within(rowFor('Alpha Group')).getByRole('link', {
+        name: 'Projects',
+      }),
+    ).toBeVisible()
+    expect(initialLocation).toHaveTextContent('/my-work')
 
     fireEvent.click(labelFor('Alpha Group'))
 
+    expect(label).toHaveAttribute('aria-expanded', 'false')
+    expect(chevron).toHaveAttribute('aria-expanded', 'false')
     expect(
-      screen.getByRole('status', { name: 'Current location' }),
-    ).toHaveTextContent('/groups/22')
-    expect(setActiveResearchGroupId).not.toHaveBeenCalled()
+      within(rowFor('Alpha Group')).queryByRole('link', {
+        name: 'Projects',
+      }),
+    ).not.toBeInTheDocument()
+    expect(initialLocation).toHaveTextContent('/my-work')
   })
 
-  it('navigates the group name to the Overview from a Project detail route', async () => {
-    renderSidebar(contextValue(), '/projects/303/work-items')
+  it('lets the name and chevron immediately reverse the same contextual disclosure state', async () => {
+    renderSidebar(contextValue(), '/groups/22')
     await waitForTree()
 
-    fireEvent.click(labelFor('Bravo Group'))
+    const location = screen.getByRole('status', {
+      name: 'Current location',
+    })
 
-    expect(
-      screen.getByRole('status', { name: 'Current location' }),
-    ).toHaveTextContent('/groups/11')
+    expect(labelFor('Alpha Group')).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    )
+
+    fireEvent.click(labelFor('Alpha Group'))
+    expect(chevronFor('Alpha Group')).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    )
+
+    fireEvent.click(labelFor('Alpha Group'))
+    expect(chevronFor('Alpha Group')).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    )
+
+    fireEvent.click(chevronFor('Alpha Group'))
+    expect(labelFor('Alpha Group')).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    )
+
+    fireEvent.click(chevronFor('Alpha Group'))
+    expect(labelFor('Alpha Group')).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    )
+    expect(location).toHaveTextContent('/groups/22')
   })
 
   it('emphasizes the group name on its Overview route only (QA-14/QA-15)', async () => {
@@ -761,7 +790,7 @@ describe('Sidebar research group tree', () => {
       'true',
     ) // contextual reveal by the Overview route
     expect(
-      screen.getByRole('button', { name: 'Expand Alpha Group' }),
+      screen.getByRole('button', { name: 'Collapse Alpha Group' }),
     ).toBeInTheDocument() // manual state still collapsed
   })
 
@@ -833,7 +862,7 @@ describe('Sidebar research group tree', () => {
   })
 
   it('persists a manual expansion change as the COMPLETE preference snapshot', async () => {
-    renderSidebar(contextValue())
+    renderSidebar(contextValue(), '/my-work')
     await waitForTree()
 
     vi.useFakeTimers()
@@ -883,7 +912,7 @@ describe('Sidebar research group tree', () => {
       )
       .mockImplementation(async (snapshot) => snapshot)
 
-    renderSidebar(contextValue())
+    renderSidebar(contextValue(), '/my-work')
     await waitForTree()
 
     vi.useFakeTimers()
@@ -896,7 +925,7 @@ describe('Sidebar research group tree', () => {
       })
 
       // Toggle 2 (supersedes the in-flight save): expand Alpha.
-      fireEvent.click(chevronFor('Alpha Group'))
+      fireEvent.click(labelFor('Alpha Group'))
       await act(async () => {
         vi.advanceTimersByTime(300)
       })
@@ -953,10 +982,10 @@ describe('Sidebar research group tree', () => {
       }),
     ).toBeInTheDocument()
 
-    // …yet the MANUAL state is still "collapsed" (the chevron's
-    // accessible name reflects what a click would do).
+    // …yet the MANUAL state is still "collapsed". The chevron's
+    // accessible name reflects the visible disclosure action.
     expect(
-      screen.getByRole('button', { name: 'Expand Alpha Group' }),
+      screen.getByRole('button', { name: 'Collapse Alpha Group' }),
     ).toBeInTheDocument()
 
     vi.useFakeTimers()
@@ -985,7 +1014,7 @@ describe('Sidebar research group tree', () => {
       'true',
     )
     expect(
-      screen.getByRole('button', { name: 'Expand Alpha Group' }),
+      screen.getByRole('button', { name: 'Collapse Alpha Group' }),
     ).toBeInTheDocument()
 
     vi.useFakeTimers()
@@ -1018,7 +1047,7 @@ describe('Sidebar research group tree', () => {
       )
     })
     expect(
-      screen.getByRole('button', { name: 'Expand Alpha Group' }),
+      screen.getByRole('button', { name: 'Collapse Alpha Group' }),
     ).toBeInTheDocument()
 
     vi.useFakeTimers()
@@ -1036,8 +1065,165 @@ describe('Sidebar research group tree', () => {
     ).not.toHaveBeenCalled()
   })
 
+  it.each([
+    {
+      label: 'Research Group Overview',
+      route: '/groups/22',
+      activeRow: 'group',
+    },
+    {
+      label: 'scoped Projects',
+      route: '/projects?group=22',
+      activeRow: 'projects',
+    },
+    {
+      label: 'scoped Meetings',
+      route: '/meetings?group=22',
+      activeRow: 'meetings',
+    },
+    {
+      label: 'concrete Project',
+      route: '/projects/102/work-items',
+      activeRow: 'project',
+    },
+  ])(
+    'lets the active $label context stay manually collapsed without navigating',
+    async ({ route, activeRow }) => {
+      renderSidebar(contextValue(), route)
+      await waitForTree()
+      await waitForQuickAccess()
+
+      await waitFor(() => {
+        expect(chevronFor('Alpha Group')).toHaveAttribute(
+          'aria-expanded',
+          'true',
+        )
+      })
+
+      fireEvent.click(labelFor('Alpha Group'))
+
+      expect(chevronFor('Alpha Group')).toHaveAttribute(
+        'aria-expanded',
+        'false',
+      )
+      expect(
+        screen.getByRole('status', { name: 'Current location' }),
+      ).toHaveTextContent(route)
+
+      await act(async () => {
+        await Promise.resolve()
+      })
+
+      expect(chevronFor('Alpha Group')).toHaveAttribute(
+        'aria-expanded',
+        'false',
+      )
+
+      if (activeRow === 'group') {
+        expect(labelFor('Alpha Group')).toHaveAttribute(
+          'aria-current',
+          'true',
+        )
+      } else if (activeRow === 'projects') {
+        expect(
+          within(rowFor('Alpha Group')).getByRole('link', {
+            name: 'Projects',
+            hidden: true,
+          }),
+        ).toHaveClass('font-medium', 'text-text')
+      } else if (activeRow === 'meetings') {
+        expect(
+          within(rowFor('Alpha Group')).getByRole('link', {
+            name: 'Meetings',
+            hidden: true,
+          }),
+        ).toHaveClass('font-medium', 'text-text')
+      } else {
+        expect(quickAccessRow('Paper Two')).toHaveAttribute(
+          'aria-current',
+          'true',
+        )
+      }
+    },
+  )
+
+  it('keeps a manual collapse through same-group navigation and reveals a different group context', async () => {
+    renderSidebar(contextValue(), '/groups/22')
+    await waitForTree()
+
+    fireEvent.click(labelFor('Alpha Group'))
+    expect(chevronFor('Alpha Group')).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    )
+
+    navigateTo('/projects?group=22')
+    expect(chevronFor('Alpha Group')).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    )
+
+    navigateTo('/meetings?group=22')
+    expect(chevronFor('Alpha Group')).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    )
+
+    navigateTo('/projects/102/work-items')
+    await waitFor(() => {
+      expect(getProject).toHaveBeenCalledWith(PAPER_TWO.id)
+    })
+    expect(chevronFor('Alpha Group')).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    )
+
+    navigateTo('/projects?group=11')
+    expect(chevronFor('Bravo Group')).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    )
+  })
+
+  it('persists collapsing a manually expanded active Research Group without contextual reopening', async () => {
+    vi.mocked(fetchWorkspaceNavigationPreferences).mockResolvedValue(
+      preferences({
+        expandedResearchGroups: [GROUP_B.id],
+      }),
+    )
+
+    renderSidebar(contextValue(), '/groups/22')
+    await waitForTree()
+
+    vi.useFakeTimers()
+
+    try {
+      fireEvent.click(chevronFor('Alpha Group'))
+      expect(chevronFor('Alpha Group')).toHaveAttribute(
+        'aria-expanded',
+        'false',
+      )
+
+      await act(async () => {
+        vi.advanceTimersByTime(300)
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+
+    expect(
+      updateWorkspaceNavigationPreferences,
+    ).toHaveBeenCalledWith(
+      preferences({ expandedResearchGroups: [] }),
+    )
+    expect(chevronFor('Alpha Group')).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    )
+  })
+
   it('navigates to the existing Projects destination from a Projects child', async () => {
-    renderSidebar(contextValue(), '/meetings?group=11')
+    renderSidebar(contextValue(), '/meetings')
     await waitForTree()
 
     fireEvent.click(chevronFor('Bravo Group'))
@@ -1790,7 +1976,7 @@ describe('Sidebar workspace-navigation preferences (retained contract)', () => {
       }),
     )
 
-    renderSidebar(contextValue())
+    renderSidebar(contextValue(), '/my-work')
     await waitForTree()
 
     for (const name of [
@@ -1823,7 +2009,7 @@ describe('Sidebar workspace-navigation preferences (retained contract)', () => {
       }),
     )
 
-    renderSidebar(contextValue())
+    renderSidebar(contextValue(), '/my-work')
     await waitForTree()
 
     vi.useFakeTimers()

@@ -577,6 +577,35 @@ export function Sidebar() {
   }, [groups, location, currentProjectMeta])
 
   /*
+   * A route may reveal its Research Group initially, but that
+   * presentation-only reveal must yield to an explicit collapse.
+   * The override survives navigation within the same group context,
+   * including the brief unresolved metadata state while entering a
+   * concrete Project. It is cleared when the settled context changes
+   * to another group or ends, so a later context receives the normal
+   * initial reveal.
+   */
+  const [contextuallyCollapsedGroupId, setContextuallyCollapsedGroupId] =
+    useState<number | null>(null)
+  const settledContextGroupIdRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    if (contextGroupId !== null) {
+      if (settledContextGroupIdRef.current !== contextGroupId) {
+        setContextuallyCollapsedGroupId(null)
+      }
+
+      settledContextGroupIdRef.current = contextGroupId
+      return
+    }
+
+    if (currentProjectId === null) {
+      settledContextGroupIdRef.current = null
+      setContextuallyCollapsedGroupId(null)
+    }
+  }, [contextGroupId, currentProjectId])
+
+  /*
    * Debounced persistence of the preference snapshot. Fires only
    * when the local snapshot differs from the last known-persisted
    * one (so the initial load is never "saved back"), coalescing
@@ -635,11 +664,22 @@ export function Sidebar() {
     return () => clearTimeout(timer)
   }, [navPreferences, savedNavPreferences])
 
-  // Chevron activation: toggles ONLY this group's manual expanded
-  // state (persisted via the effect above). It never navigates and
-  // is a sibling control of the label, so it cannot trigger the
-  // group navigation (QA-10).
-  const toggleGroupExpansion = (groupId: number) => {
+  // Name or chevron activation toggles ONLY this group's rendered
+  // disclosure state (persisted via the effect above). Neither
+  // control navigates; route-derived active presentation remains
+  // independent from expansion.
+  const toggleGroupExpansion = (
+    groupId: number,
+    visible: boolean,
+  ) => {
+    if (visible && contextGroupId === groupId) {
+      setContextuallyCollapsedGroupId(groupId)
+    } else if (!visible) {
+      setContextuallyCollapsedGroupId((current) =>
+        current === groupId ? null : current,
+      )
+    }
+
     setNavPreferences((current) => {
       const base =
         current ??
@@ -651,11 +691,14 @@ export function Sidebar() {
           expandedProjectSections: [],
         } satisfies ApiWorkspaceNavigationPreferences)
 
-      const expanded =
+      const manuallyExpanded =
         base.expandedResearchGroups.includes(groupId)
-          ? base.expandedResearchGroups.filter(
-              (id) => id !== groupId,
-            )
+      const expanded = visible
+        ? base.expandedResearchGroups.filter(
+            (id) => id !== groupId,
+          )
+        : manuallyExpanded
+          ? base.expandedResearchGroups
           : [
               ...base.expandedResearchGroups,
               groupId,
@@ -666,17 +709,6 @@ export function Sidebar() {
         expandedResearchGroups: expanded,
       }
     })
-  }
-
-  /*
-   * The Research Group name is a PURE navigation control to the
-   * group's Overview (QA-11): no select-in-place, no contextual
-   * group-switch routing, no active-group side effect. The
-   * Overview page syncs the provider's route-derived group
-   * context itself.
-   */
-  const openGroupOverview = (group: ApiResearchGroup) => {
-    navigate(`/groups/${group.id}`)
   }
 
   const handleCreatedResearchGroup = (
@@ -891,7 +923,8 @@ export function Sidebar() {
                       ) ?? false
                     const visible =
                       manualExpanded ||
-                      contextGroupId === group.id
+                      (contextGroupId === group.id &&
+                        contextuallyCollapsedGroupId !== group.id)
                     const groupActive =
                       groupRouteActive(group.id)
                     const childrenId = `research-group-children-${group.id}`
@@ -907,11 +940,11 @@ export function Sidebar() {
                           <button
                             type="button"
                             onClick={() =>
-                              toggleGroupExpansion(group.id)
+                              toggleGroupExpansion(group.id, visible)
                             }
                             aria-expanded={visible}
                             aria-controls={childrenId}
-                            aria-label={`${manualExpanded ? 'Collapse' : 'Expand'} ${group.name}`}
+                            aria-label={`${visible ? 'Collapse' : 'Expand'} ${group.name}`}
                             className="relative flex h-7 w-3 shrink-0 items-center justify-center rounded text-text-muted transition-colors before:absolute before:inset-y-0 before:-inset-x-1 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
                           >
                             <SidebarIcon
@@ -923,8 +956,10 @@ export function Sidebar() {
                           <button
                             type="button"
                             onClick={() =>
-                              openGroupOverview(group)
+                              toggleGroupExpansion(group.id, visible)
                             }
+                            aria-expanded={visible}
+                            aria-controls={childrenId}
                             aria-current={
                               groupActive
                                 ? 'true'

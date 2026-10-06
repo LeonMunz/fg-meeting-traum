@@ -5,6 +5,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from '@testing-library/react'
 import {
   afterEach,
@@ -102,7 +103,7 @@ afterEach(() => {
 })
 
 describe('Sidebar Research Group area (parent render boundary)', () => {
-  it('does not show the zero-group entry while groups are still loading', () => {
+  it('shows the loading state without a Research Group tree', () => {
     renderSidebar(
       contextValue({
         groups: [],
@@ -114,10 +115,10 @@ describe('Sidebar Research Group area (parent render boundary)', () => {
 
     // The area stays mounted with the zone's own loading state…
     expect(screen.getByText('Loading…')).toBeVisible()
-    // …and never presents a false zero-group creation entry.
+    // …and never presents a false Research Group tree.
     expect(
-      screen.queryByRole('button', {
-        name: 'New research group',
+      screen.queryByRole('navigation', {
+        name: 'Research groups',
       }),
     ).toBeNull()
   })
@@ -138,7 +139,7 @@ describe('Sidebar Research Group area (parent render boundary)', () => {
     await waitFor(() => {
       expect(
         screen.getByRole('button', {
-          name: 'New research group',
+          name: 'Create research group',
         }),
       ).toBeVisible()
     })
@@ -147,11 +148,6 @@ describe('Sidebar Research Group area (parent render boundary)', () => {
     expect(
       screen.queryByRole('navigation', {
         name: 'Research groups',
-      }),
-    ).toBeNull()
-    expect(
-      screen.queryByRole('button', {
-        name: 'Create research group',
       }),
     ).toBeNull()
   })
@@ -171,8 +167,13 @@ describe('Sidebar Research Group area (parent render boundary)', () => {
     })
 
     expect(
+      screen.queryByRole('navigation', {
+        name: 'Research groups',
+      }),
+    ).toBeNull()
+    expect(
       screen.queryByRole('button', {
-        name: 'New research group',
+        name: 'Create research group',
       }),
     ).toBeNull()
   })
@@ -194,7 +195,7 @@ describe('Sidebar Research Group area (parent render boundary)', () => {
 
     fireEvent.click(
       await screen.findByRole('button', {
-        name: 'New research group',
+        name: 'Create research group',
       }),
     )
 
@@ -224,7 +225,7 @@ describe('Sidebar Research Group area (parent render boundary)', () => {
 
     fireEvent.click(
       await screen.findByRole('button', {
-        name: 'New research group',
+        name: 'Create research group',
       }),
     )
 
@@ -232,7 +233,11 @@ describe('Sidebar Research Group area (parent render boundary)', () => {
       target: { value: 'Brand New' },
     })
     fireEvent.click(
-      screen.getByRole('button', {
+      within(
+        screen.getByRole('dialog', {
+          name: 'Create research group',
+        }),
+      ).getByRole('button', {
         name: 'Create research group',
       }),
     )
@@ -262,13 +267,13 @@ describe('Sidebar Research Group area (parent render boundary)', () => {
     )
 
     expect(
-      screen.queryByRole('button', {
-        name: 'New research group',
+      screen.getByRole('button', {
+        name: 'Create research group',
       }),
-    ).toBeNull()
+    ).toBeVisible()
 
     // The created group is a tree row with its own disclosure
-    // control…
+    // control and is contextually revealed by its Overview route…
     expect(
       screen.getByRole('button', {
         name: 'Brand New',
@@ -276,17 +281,12 @@ describe('Sidebar Research Group area (parent render boundary)', () => {
     ).toBeVisible()
     expect(
       screen.getByRole('button', {
-        name: 'Expand Brand New',
+        name: 'Collapse Brand New',
       }),
     ).toBeVisible()
 
-    // …and group-scoped navigation is available once the row is
-    // expanded (the new hierarchy contract).
-    fireEvent.click(
-      screen.getByRole('button', {
-        name: 'Expand Brand New',
-      }),
-    )
+    // …so group-scoped navigation is immediately available (the
+    // new hierarchy contract).
     expect(
       screen.getByRole('link', { name: 'Projects' }),
     ).toHaveAttribute('href', '/projects?group=42')
