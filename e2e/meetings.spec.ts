@@ -777,8 +777,20 @@ test(
       ),
     ).toBeVisible()
 
+    // Prove the Project name ON the Work Item record for
+    // taskTitle, not against the whole page: the global Quick
+    // Access Sidebar legitimately carries the same Project name
+    // as a shortcut.
+    const chrisWorkRecord = page.getByRole(
+      'button',
+      {
+        name: `Open ${taskTitle}`,
+        exact: true,
+      },
+    )
+
     await expect(
-      page.getByText(
+      chrisWorkRecord.getByText(
         projectName,
         { exact: true },
       ),
@@ -795,7 +807,7 @@ test(
     ).toBeVisible()
 
     await expect(
-      page.getByText(
+      chrisWorkRecord.getByText(
         projectName,
         { exact: true },
       ),

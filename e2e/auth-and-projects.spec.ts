@@ -51,18 +51,22 @@ test(
       }),
     ).toBeVisible()
 
+    // Scoped to the Projects content surface (the record-title
+    // heading of each list row): the global Quick Access Sidebar
+    // may carry a legitimate shortcut for the same projects,
+    // independently of this authorization surface.
     await expect(
-      page.getByText(
-        'Paper XYZ',
-        { exact: true },
-      ),
+      page.getByRole('heading', {
+        name: 'Paper XYZ',
+        exact: true,
+      }),
     ).toBeVisible()
 
     await expect(
-      page.getByText(
-        'Maria Private Project',
-        { exact: true },
-      ),
+      page.getByRole('heading', {
+        name: 'Maria Private Project',
+        exact: true,
+      }),
     ).toHaveCount(0)
   },
 )

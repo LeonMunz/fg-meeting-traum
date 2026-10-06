@@ -723,6 +723,7 @@ test(
     await page
       .getByRole('button', {
         name: 'List',
+        exact: true,
       })
       .click()
 
