@@ -130,6 +130,14 @@ Avoid generic abstractions before at least two concrete use cases justify them.
 - **Restrained, safe motion.** The transition is one 150 ms opacity-only crossfade with standard easing. The document root snapshots are frozen and the opaque root snapshot always resolves to the canonical themed canvas, so no chrome blink and no blank or default-white frame can appear, in Light or Dark. With `prefers-reduced-motion: reduce` the crossfade is removed entirely and navigation stays immediate. Browsers without View Transition support never create the transition pseudo-elements; React Router falls back to the ordinary state-update path, with no JS animation substitute.
 - **Stable destination loading.** Entering a workspace (e.g. a Project) renders a stable destination loading shell: the destination geometry and its canonical header surface are present from the first destination frame and the data resolves in place — never a blank replacement, a full-surface flash, or a page-level spinner.
 
+### Workspace content width
+
+- **Constrained ordinary content.** Ordinary (non-canvas) workspace content is rendered inside the shared `WorkspaceContent` frame (`apps/web/src/components/layout/WorkspaceContent.tsx`): fluid below the cap, centered in the available main-content area, capped at the single canonical width `--workspace-content-max-width` (80rem / 1280px, defined once in `apps/web/src/index.css`). Pages keep their own responsive horizontal/vertical padding around the frame; the frame owns width/centering only — no fixed pixel width, no new horizontal overflow.
+- **Full-width canvas exemption.** Canvas-like workspaces (the Project Work Items Kanban board, future canvas-style views) remain full-width through the frame's explicit `variant="full"` — the exemption is an explicit per-page choice, never an accident of the shell.
+- **AppShell is not globally constrained.** The AppShell `<main>` carries no max-width, so full-width boards never depend on a global shell change and constrained pages never force one on each other.
+- **Stable contract handle.** `data-fg-workspace-content` (`constrained` | `full`) is the semantic marker that tests and tooling key off — never the Tailwind class string.
+- **Incremental migration.** The Projects list and the Meetings list are the first migrated pages; the remaining pages adopt the shared frame in later slices. Implementation checkpoint: `docs/CURRENT_STATE.md` (Workspace content width contract).
+
 ## Frontend ↔ Backend boundary
 
 ```text

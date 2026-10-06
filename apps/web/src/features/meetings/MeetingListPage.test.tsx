@@ -444,6 +444,54 @@ describe('MeetingListPage — shell (header + tabs)', () => {
       meetingsApi.listMeetingRecurrences,
     ).not.toHaveBeenCalled()
   })
+
+  it('renders the complete page inside one shared constrained workspace frame', async () => {
+    const { container } = renderPage()
+
+    const frames = container.querySelectorAll(
+      '[data-fg-workspace-content="constrained"]',
+    )
+    expect(frames).toHaveLength(1)
+
+    const frame = frames[0] as HTMLElement
+
+    // Heading, tabs and the Upcoming content (here the empty
+    // state) all share the same frame.
+    const heading = await screen.findByRole(
+      'heading',
+      { name: 'Meetings' },
+    )
+    expect(frame.contains(heading)).toBe(true)
+    expect(
+      frame.contains(
+        screen.getByRole('tablist', {
+          name: 'Meetings',
+        }),
+      ),
+    ).toBe(true)
+    expect(
+      frame.contains(
+        await screen.findByText('No upcoming meetings'),
+      ),
+    ).toBe(true)
+  })
+
+  it('keeps the meeting rows inside the same constrained frame', async () => {
+    vi.mocked(meetingsApi.listMeetings).mockResolvedValue(
+      richFixtures().meetings,
+    )
+    const { container } = renderPage()
+
+    const frame = container.querySelector(
+      '[data-fg-workspace-content="constrained"]',
+    ) as HTMLElement
+    expect(frame).not.toBeNull()
+
+    const row = await screen.findByRole('button', {
+      name: /^Open Team Sync /,
+    })
+    expect(frame.contains(row)).toBe(true)
+  })
 })
 
 describe('MeetingListPage — Upcoming data', () => {

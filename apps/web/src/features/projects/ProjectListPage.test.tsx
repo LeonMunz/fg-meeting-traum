@@ -86,3 +86,46 @@ describe('ProjectListPage project entry', () => {
     },
   )
 })
+
+describe('ProjectListPage workspace content frame', () => {
+  it('renders the complete page inside one shared constrained workspace frame', async () => {
+    const { container } = render(<ProjectListPage />)
+
+    const frames = container.querySelectorAll(
+      '[data-fg-workspace-content="constrained"]',
+    )
+    expect(frames).toHaveLength(1)
+
+    const frame = frames[0] as HTMLElement
+
+    // Heading + action, filter/search toolbar and the project
+    // list all share the same frame (no independently narrowed
+    // table).
+    const heading = await screen.findByRole(
+      'heading',
+      { name: 'Projects' },
+    )
+    expect(frame.contains(heading)).toBe(true)
+    expect(
+      frame.contains(
+        screen.getByRole('button', {
+          name: /New project/,
+        }),
+      ),
+    ).toBe(true)
+    expect(
+      frame.contains(
+        screen.getByRole('searchbox', {
+          name: /search projects/i,
+        }),
+      ),
+    ).toBe(true)
+    expect(
+      frame.contains(
+        await screen.findByRole('link', {
+          name: /Paper One/,
+        }),
+      ),
+    ).toBe(true)
+  })
+})

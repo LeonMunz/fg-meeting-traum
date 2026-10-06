@@ -23,6 +23,7 @@ import type {
   ApiMeetingRecurrenceOccurrence,
   ApiMeetingRecurrenceOverview,
 } from '../../api/types'
+import { WorkspaceContent } from '../../components/layout/WorkspaceContent'
 import { useResearchGroupListScope } from '../research-group/useResearchGroupListScope'
 import {
   CreateMeetingDialog,
@@ -619,6 +620,7 @@ export function MeetingListPage() {
 
   return (
     <div className="w-full px-6 py-8 lg:px-8">
+      <WorkspaceContent>
       <header className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
         <div className="min-w-0">
           <h1 className="text-3xl font-semibold tracking-tight text-text">
@@ -866,6 +868,8 @@ export function MeetingListPage() {
           />
         )}
       </div>
+
+      </WorkspaceContent>
 
       <CreateMeetingDialog
         open={createDialogOpen}

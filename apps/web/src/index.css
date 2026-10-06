@@ -501,6 +501,16 @@ html[data-theme='light'] {
   background: var(--color-canvas);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
+
+  /* Workspace content width contract (see
+   * `src/components/layout/WorkspaceContent.tsx`): ordinary
+   * (non-canvas) application content is centered at a fluid width
+   * and capped at this value on wide desktops. Canvas-like boards
+   * (e.g. the Project Work Items Kanban) opt out via
+   * `<WorkspaceContent variant="full">` and stay unconstrained.
+   * Single source of truth for the constrained frame — 1280px at the
+   * 16px root font size. */
+  --workspace-content-max-width: 80rem;
 }
 
 * {
