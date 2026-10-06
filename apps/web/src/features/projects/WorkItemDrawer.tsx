@@ -4,6 +4,7 @@ import {
   useRef,
   useState,
 } from 'react'
+import { createPortal } from 'react-dom'
 import type {
   FormEvent,
   MouseEvent as ReactMouseEvent,
@@ -1339,7 +1340,13 @@ function CreateWorkItemPanel({
     }
   }
 
-  return (
+  // LAYER CONTRACT (same root cause as the edit inspector below):
+  // the create modal is an application overlay surface, so it is
+  // portaled to document.body — otherwise its fixed z-50 scrim would
+  // be trapped in the route-content stacking context forced by
+  // `.fg-route-content`'s `view-transition-name` (see
+  // WorkItemInspector) and paint under the TopBar.
+  return createPortal(
     <div
       className="fixed inset-0 z-50 bg-overlay-soft-scrim"
       onMouseDown={(event) => {
@@ -1910,7 +1917,8 @@ function CreateWorkItemPanel({
           </footer>
         </form>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 
@@ -3110,7 +3118,33 @@ export function WorkItemInspector({
     })
   }
 
-  return (
+  // LAYER CONTRACT: the inspector is an application overlay surface,
+  // not route content — so it is portaled to document.body (the
+  // application overlay root; the same pattern the modal dialogs use)
+  // instead of rendering inside the mounting route.
+  //
+  // Why: `.fg-route-content` (the AppShell <main>, the ONE named View
+  // Transition surface) carries `view-transition-name`, which per CSS
+  // View Transitions §2.1.1 (Rendering Consolidation) makes it form a
+  // STACKING CONTEXT at all times — not only while a transition runs.
+  // Rendered inside that <main>, this rail's z-40 would only compete
+  // within the route-content context (that whole context is effective
+  // z=0 at the root level), so the shell chrome — the sticky TopBar
+  // (z-20) — paints over the inspector's top-right corner. From
+  // document.body the rail competes in the ROOT stacking context,
+  // where its z-40 is above the TopBar (z-20) and the Sidebar (z-30,
+  // left edge, never overlapping the right rail). The fix is layer
+  // ownership, not a z-index escalation.
+  //
+  // Placement, geometry, and interactions are unchanged: the rail
+  // stays viewport-fixed (inset-y-0 right-0), and the page-level
+  // outside-click close keeps working because it resolves clicks
+  // through this element's `data-work-item-inspector-boundary` marker
+  // on document — which follows the element to its new position.
+  // The board's 520px rail reservation (ProjectDetailPage's
+  // `inspectorOpen` → `xl:mr-[520px]`) is independent of DOM
+  // placement and stays exactly as before.
+  return createPortal(
     <div
       // Marks the entire inspector panel as an "inside the inspector"
       // interaction region for ProjectDetailPage's outside-click close
@@ -4473,6 +4507,7 @@ export function WorkItemInspector({
           onConfirm={() => void confirmDelete()}
         />
       )}
-    </div>
+    </div>,
+    document.body,
   )
 }
