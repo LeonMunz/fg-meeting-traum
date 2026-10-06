@@ -3292,16 +3292,40 @@ describe('My Work Kanban — canonical drawer mutations', () => {
       )
     })
 
+    // The shared confirmation overlay is an application overlay
+    // surface portaled to document.body (the layer ownership
+    // contract), so it is resolved on the document — matched by its
+    // own labelled title — rather than in the page container.
+    const deleteDialog = () =>
+      Array.from(
+        document.querySelectorAll(
+          '[role="dialog"]',
+        ),
+      ).find(
+        (dialog) => {
+          const labelId = dialog.getAttribute(
+            'aria-labelledby',
+          )
+          return (
+            labelId != null &&
+            document
+              .getElementById(labelId)
+              ?.textContent ===
+              'Delete work item?'
+          )
+        },
+      ) as HTMLElement | null
+
     const confirm = () =>
-      container.querySelector(
-        '[role="dialog"] button',
-      ) as HTMLElement
+      (deleteDialog()?.querySelector(
+        'button',
+      ) ?? null) as HTMLElement | null
 
     const deleteConfirm = () =>
       Array.from(
-        container.querySelectorAll(
-          '[role="dialog"] button',
-        ),
+        deleteDialog()?.querySelectorAll(
+          'button',
+        ) ?? [],
       ).find(
         (button) =>
           button.textContent ===

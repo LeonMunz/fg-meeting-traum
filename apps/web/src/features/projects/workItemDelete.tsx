@@ -3,6 +3,7 @@ import {
   useRef,
   useState,
 } from 'react'
+import { createPortal } from 'react-dom'
 
 // Shared Work Item deletion UI, used by the Board card, the List row, and
 // the Work Item drawer. Keeping the three-dot "Work item actions" trigger
@@ -199,12 +200,35 @@ export function WorkItemDeleteDialog({
     return null
   }
 
-  return (
+  // LAYER CONTRACT: this confirmation overlay is an application
+  // overlay surface, so it portals to document.body (the application
+  // overlay root; the same pattern the Work Item inspector, the
+  // create modal, and the Meeting import dialog use) instead of
+  // rendering wherever its trigger lives.
+  //
+  // Why: rendered in place, the overlay is trapped in the stacking
+  // context of its host. The page-level dialog (Project / My Work
+  // pages) renders inside `.fg-route-content` (the AppShell <main>,
+  // the ONE named View Transition surface), whose
+  // `view-transition-name` makes it form a stacking context at ALL
+  // times (CSS View Transitions S2.1.1) - there, its `z-50`
+  // competes only WITHIN that context (effective z=0 at the root
+  // level), so the portaled z-40 Work Item inspector paints over it
+  // wherever they overlap and its rail intercepts the dialog's
+  // pointer input. The drawer's standalone fallback renders inside
+  // the inspector's own z-40 boundary element, where the overlay is
+  // owned by the inspector layer. From document.body the z-50
+  // competes in the ROOT stacking context (above the inspector's
+  // z-40, the Sidebar's z-30, and the TopBar's z-20). The fix is
+  // layer ownership, not a z-index escalation: geometry, scrim, and
+  // interactions are unchanged.
+  return createPortal(
     <div
-      // The overlay sits outside the Work Item inspector boundary, so
-      // without this marker a click inside the dialog (e.g. Cancel)
-      // would be treated as an "outside click" and close the open
-      // inspector. Keep the inspector open while confirming deletion.
+      // The overlay lives on the root overlay layer, OUTSIDE the
+      // Work Item inspector boundary, so without this marker a click
+      // inside the dialog (e.g. Cancel) would be treated as an
+      // "outside click" and close the open inspector. Keep the
+      // inspector open while confirming deletion.
       data-work-item-inspector-keep-open="true"
       className="fixed inset-0 z-50 flex items-center justify-center bg-overlay-scrim px-4 py-8 backdrop-blur-[2px]"
       onMouseDown={(event) => {
@@ -271,6 +295,7 @@ export function WorkItemDeleteDialog({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }

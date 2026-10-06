@@ -30,7 +30,12 @@
 //     open (and releases it when the inspector closes),
 //   - the page-level outside-click close still works across the portal,
 //   - the create modal's scrim lives on the same overlay root and its
-//     outside-click dismissal still works.
+//     outside-click dismissal still works,
+//   - the delete confirmation overlay (the shared page-level dialog
+//     and the drawer's standalone fallback) lives on the same overlay
+//     root, outside the route content surface AND outside the
+//     inspector's boundary / stacking owner, and Cancel still closes
+//     only the dialog (inspector / drawer stay open, no delete call).
 //
 // SCOPE: happy-dom has no layout engine, so this spec proves the
 // DOM-level layer ownership/placement contract, not paint order or
@@ -43,6 +48,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from '@testing-library/react'
 import {
   afterEach,
@@ -63,7 +69,10 @@ import {
   listProjectMemberships,
   listResearchGroupMembers,
 } from '../../api/projects'
-import { listProjectWorkItems } from '../../api/work-items'
+import {
+  deleteWorkItem,
+  listProjectWorkItems,
+} from '../../api/work-items'
 import type {
   ApiProject,
   ApiProjectWorkItemConfiguration,
@@ -71,6 +80,7 @@ import type {
 } from '../../api/types'
 
 import { ProjectDetailPage } from './ProjectDetailPage'
+import { WorkItemDrawer } from './WorkItemDrawer'
 
 vi.mock('../../api/projects', () => ({
   getProject: vi.fn(),
@@ -431,5 +441,201 @@ describe('Work Item overlay layer ownership', () => {
     await waitFor(() =>
       expect(screen.queryByRole('dialog')).toBeNull(),
     )
+  })
+
+  it('renders the delete confirmation overlay on the overlay root, outside the route content and the inspector boundary, and keeps the inspector open on Cancel', async () => {
+    vi.mocked(getProject).mockResolvedValue(PROJECT)
+    vi.mocked(listProjectMemberships).mockResolvedValue([])
+    vi.mocked(listResearchGroupMembers).mockResolvedValue([])
+    vi.mocked(listProjectWorkItems).mockResolvedValue([
+      WORK_ITEM,
+    ])
+    vi.mocked(
+      getProjectWorkItemConfiguration,
+    ).mockResolvedValue(CONFIGURATION)
+    vi.mocked(deleteWorkItem).mockResolvedValue(undefined)
+
+    renderPage()
+
+    const inspectorRoot = await openEditInspector()
+    const region = screen.getByRole('region', {
+      name: 'Work item',
+    })
+
+    // The drawer's own header trigger (the Board card carries a
+    // second, distinct trigger — scope to the inspector region).
+    fireEvent.click(
+      within(region).getByRole('button', {
+        name: 'Work item actions',
+      }),
+    )
+
+    await screen.findByRole('menuitem', {
+      name: 'Delete work item',
+    })
+    fireEvent.click(
+      screen.getByRole('menuitem', {
+        name: 'Delete work item',
+      }),
+    )
+
+    // The dialog panel; its direct parent is the overlay scrim.
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Delete work item?',
+    })
+    const scrim = dialog.parentElement!
+
+    // LAYER CONTRACT: the overlay root is a direct child of
+    // document.body — the application overlay root — NOT a
+    // descendant of the route content surface whose
+    // `view-transition-name` traps stacking, and NOT inside the
+    // inspector's boundary / stacking owner either. Rendered in
+    // place, the portaled z-40 inspector painted over this
+    // "z-50" overlay wherever the two overlapped and its rail
+    // intercepted the dialog's pointer input (the CI failure).
+    expect(scrim.parentElement).toBe(document.body)
+    expect(routeContent().contains(scrim)).toBe(false)
+    expect(inspectorRoot.contains(scrim)).toBe(false)
+
+    // The viewport-centered geometry and scrim are unchanged —
+    // the fix moves DOM ownership, not placement.
+    expect(scrim).toHaveClass('fixed', 'inset-0', 'z-50')
+
+    // The keep-open marker still shields the open inspector from
+    // the page-level outside-click boundary.
+    expect(scrim).toHaveAttribute(
+      'data-work-item-inspector-keep-open',
+      'true',
+    )
+
+    // The accessibility contract is unchanged: the labelled modal
+    // dialog (getByRole already resolves the labelled title).
+    expect(dialog).toHaveAttribute('aria-modal', 'true')
+    const labelledBy = dialog.getAttribute(
+      'aria-labelledby',
+    )
+    expect(labelledBy).toBeTruthy()
+    expect(
+      document.getElementById(labelledBy!),
+    ).toHaveTextContent('Delete work item?')
+
+    // The Project route remains mounted BEHIND the overlay.
+    expect(
+      routeContent().contains(workItemsSection()),
+    ).toBe(true)
+
+    // Cancel closes ONLY the dialog: the inspector stays open
+    // and no delete request is made.
+    fireEvent.click(
+      within(dialog).getByRole('button', {
+        name: /Cancel/,
+      }),
+    )
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('dialog', {
+          name: 'Delete work item?',
+        }),
+      ).not.toBeInTheDocument(),
+    )
+    expect(
+      document.body.contains(inspectorRoot),
+    ).toBe(true)
+    expect(
+      screen.getByRole('region', {
+        name: 'Work item',
+      }),
+    ).toBeVisible()
+    expect(deleteWorkItem).not.toHaveBeenCalled()
+  })
+
+  it('renders the standalone drawer delete overlay outside the inspector boundary and keeps the drawer open on Cancel', async () => {
+    // The drawer's self-contained fallback (no page-level
+    // onRequestDelete wiring): pre-fix, this overlay rendered
+    // INSIDE the inspector's own z-40 boundary element, so the
+    // dialog was owned by the inspector layer.
+    const onDelete = vi
+      .fn()
+      .mockResolvedValue(undefined)
+    const onClose = vi.fn()
+
+    render(
+      <WorkItemDrawer
+        open={true}
+        mode="edit"
+        projectName={PROJECT.name}
+        item={WORK_ITEM}
+        readOnly={false}
+        currentUserId={1}
+        workItemConfiguration={CONFIGURATION}
+        assignees={[]}
+        parentItems={[]}
+        onClose={onClose}
+        onCreate={vi.fn()}
+        onPatch={vi.fn()}
+        onDelete={onDelete}
+      />,
+    )
+
+    const region = await screen.findByRole('region', {
+      name: 'Work item',
+    })
+    const inspectorRoot = region.parentElement!
+
+    expect(inspectorRoot).toHaveAttribute(
+      'data-work-item-inspector-boundary',
+      'true',
+    )
+    expect(inspectorRoot.parentElement).toBe(
+      document.body,
+    )
+
+    fireEvent.click(
+      within(region).getByRole('button', {
+        name: 'Work item actions',
+      }),
+    )
+    await screen.findByRole('menuitem', {
+      name: 'Delete work item',
+    })
+    fireEvent.click(
+      screen.getByRole('menuitem', {
+        name: 'Delete work item',
+      }),
+    )
+
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Delete work item?',
+    })
+    const scrim = dialog.parentElement!
+
+    // LAYER CONTRACT: the overlay root is a direct child of
+    // document.body and NOT a descendant of the inspector's
+    // boundary / stacking owner.
+    expect(scrim.parentElement).toBe(document.body)
+    expect(inspectorRoot.contains(scrim)).toBe(false)
+    expect(scrim).toHaveClass('fixed', 'inset-0', 'z-50')
+
+    // Cancel closes ONLY the dialog: the drawer stays open and
+    // no delete request is made.
+    fireEvent.click(
+      within(dialog).getByRole('button', {
+        name: /Cancel/,
+      }),
+    )
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('dialog', {
+          name: 'Delete work item?',
+        }),
+      ).not.toBeInTheDocument(),
+    )
+    expect(
+      document.body.contains(inspectorRoot),
+    ).toBe(true)
+    expect(onClose).not.toHaveBeenCalled()
+    expect(onDelete).not.toHaveBeenCalled()
   })
 })
