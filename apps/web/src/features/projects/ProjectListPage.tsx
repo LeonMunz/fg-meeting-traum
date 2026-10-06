@@ -489,6 +489,7 @@ export function ProjectListPage() {
                     onClick={() =>
                       navigate(
                         `/projects/${project.id}/work-items`,
+                        { viewTransition: true },
                       )
                     }
                     onKeyDown={(event) => {
@@ -499,6 +500,7 @@ export function ProjectListPage() {
                         event.preventDefault()
                         navigate(
                           `/projects/${project.id}/work-items`,
+                          { viewTransition: true },
                         )
                       }
                     }}

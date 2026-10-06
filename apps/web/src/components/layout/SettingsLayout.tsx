@@ -45,6 +45,7 @@ export function SettingsLayout() {
           <NavLink
             key={section.path}
             to={section.path}
+            viewTransition
             className={settingsSectionClasses}
           >
             {section.label}

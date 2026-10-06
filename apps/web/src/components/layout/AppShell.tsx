@@ -15,7 +15,7 @@ export function AppShell({ children }: AppShellProps) {
       <div className="ml-[240px] min-h-screen">
         <TopBar />
 
-        <main className="min-h-[calc(100vh-64px)]">
+        <main className="fg-route-content min-h-[calc(100vh-64px)]">
           {children}
         </main>
       </div>

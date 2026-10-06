@@ -144,7 +144,9 @@ export function UserMenu() {
             label="Profile"
             onClick={() => {
               setOpen(false)
-              navigate('/profile')
+              navigate('/profile', {
+                viewTransition: true,
+              })
             }}
           />
 
@@ -162,7 +164,9 @@ export function UserMenu() {
             label="Settings"
             onClick={() => {
               setOpen(false)
-              navigate('/settings/appearance')
+              navigate('/settings/appearance', {
+                viewTransition: true,
+              })
             }}
           />
 

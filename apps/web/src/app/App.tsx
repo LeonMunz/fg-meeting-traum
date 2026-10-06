@@ -1,288 +1,63 @@
-import { Navigate, Route, Routes } from 'react-router'
-
+import type { ComponentProps, ReactNode } from 'react'
+import { RouterProvider } from 'react-router/dom'
 import { SessionProvider } from '../api/SessionProvider'
-import { useSession } from '../api/useSession'
-import { AppShell } from '../components/layout/AppShell'
-import { SettingsLayout } from '../components/layout/SettingsLayout'
-import { InvitationsSettingsPage } from '../features/account-invitations/InvitationsSettingsPage'
 import { AppearanceProvider } from '../features/appearance/AppearanceProvider'
-import { AppearanceSettingsPage } from '../features/appearance/AppearanceSettingsPage'
-import { LoginPage } from '../features/auth/LoginPage'
-import { RegistrationPage } from '../features/auth/RegistrationPage'
-import { HomePage } from '../features/home/HomePage'
-import { MyWorkPage } from '../features/my-work/MyWorkPage'
-import { NotesPage } from '../features/personal-notes/NotesPage'
-import { MeetingListPage } from '../features/meetings/MeetingListPage'
-import { MeetingDetailPage } from '../features/meetings/MeetingDetailPage'
-import { MeetingSeriesListPage } from '../features/meetings/MeetingSeriesListPage'
-import { MeetingSeriesDetailPage } from '../features/meetings/MeetingSeriesDetailPage'
-import { ProjectDetailPage } from '../features/projects/ProjectDetailPage'
-import { ProjectListPage } from '../features/projects/ProjectListPage'
-import { ResearchGroupProvider } from '../features/research-group/ResearchGroupProvider'
-import { ResearchGroupOverviewPage } from '../features/research-group/ResearchGroupOverviewPage'
-import { ResearchGroupSettingsPage } from '../features/research-group/ResearchGroupSettingsPage'
-import { useResearchGroupListScope } from '../features/research-group/useResearchGroupListScope'
 
-function ResearchGroupPlaceholderPage({
-  title,
-  description,
-}: {
-  title: string
-  description?: string
-}) {
-  const {
-    activeResearchGroup,
-    loading,
-    error,
-  } = useResearchGroupListScope()
+import { useRoutes } from 'react-router'
 
-  if (loading) {
-    return (
-      <div className="mx-auto max-w-[1440px] p-10">
-        <p className="text-sm text-on-surface-variant">
-          Loading…
-        </p>
-      </div>
-    )
-  }
+import { appRoutes } from './routes'
 
+/*
+ * Declarative application entry.
+ *
+ * The canonical route configuration (app/routes.tsx) is rendered
+ * here with `useRoutes` for declarative embeddings — notably the
+ * MemoryRouter-based test harnesses, which drive the full
+ * authenticated route tree (shell, auth gate, placeholders) exactly
+ * as production does: `useRoutes` matches the SAME `appRoutes` array
+ * the production data router mounts, so both strategies render one
+ * and the same route tree.
+ *
+ * The browser entry (main.tsx) does NOT use this component: it
+ * mounts the SAME route array through the data router
+ * (`createBrowserRouter` + `RouterProvider` from `react-router/dom`),
+ * which is the strategy that enables React Router's native View
+ * Transition integration for opted-in global navigations.
+ */
+export function AppRoutes() {
+  const element = useRoutes(appRoutes)
+
+  return <>{element}</>
+}
+
+export function AppProviders({ children }: { children: ReactNode }) {
   return (
-    <div className="mx-auto max-w-[1440px] p-10">
-      <h1 className="text-3xl font-semibold tracking-tight">
-        {title}
-      </h1>
-
-      <p className="mt-1.5 text-sm text-on-surface-variant">
-        {activeResearchGroup
-          ? `${title} in ${activeResearchGroup.name}.`
-          : error ?? 'No research group available.'}
-      </p>
-
-      <div className="mt-6 rounded-xl border border-outline-variant bg-surface-container-lowest p-8 shadow-sm">
-        <p className="text-on-surface-variant">
-          {description ??
-            'This area will be implemented next.'}
-        </p>
-      </div>
-    </div>
+    <AppearanceProvider>
+      <SessionProvider>
+        {children}
+      </SessionProvider>
+    </AppearanceProvider>
   )
 }
 
-function PlaceholderPage({ title }: { title: string }) {
+type DataRouterAppProps = Pick<
+  ComponentProps<typeof RouterProvider>,
+  'router'
+>
+
+/** Production data-router composition, kept shared with its regression test. */
+export function DataRouterApp({ router }: DataRouterAppProps) {
   return (
-    <div className="mx-auto max-w-[1440px] p-10">
-      <h1 className="text-3xl font-semibold tracking-tight">
-        {title}
-      </h1>
-
-      <div className="mt-6 rounded-xl border border-outline-variant bg-surface-container-lowest p-8 shadow-sm">
-        <p className="text-on-surface-variant">
-          This area will be implemented next.
-        </p>
-      </div>
-    </div>
-  )
-}
-
-function RequireAuth({ children }: { children: React.ReactNode }) {
-  const { user, loading } = useSession()
-
-  if (loading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center">
-        <span className="material-symbols-outlined text-[24px] animate-spin text-on-surface-variant">
-          refresh
-        </span>
-      </div>
-    )
-  }
-
-  if (!user) {
-    return <Navigate to="/login" replace />
-  }
-
-  return <>{children}</>
-}
-
-function AppRoutes() {
-  return (
-    <Routes>
-      <Route path="/login" element={<LoginPage />} />
-      <Route path="/register" element={<RegistrationPage />} />
-
-      <Route
-        path="/*"
-        element={
-          <RequireAuth>
-            <ResearchGroupProvider>
-              <AppShell>
-                <Routes>
-                <Route path="/" element={<HomePage />} />
-
-                <Route
-                  path="/my-work"
-                  element={<MyWorkPage />}
-                />
-
-                <Route
-                  path="/notes"
-                  element={<NotesPage />}
-                />
-
-                <Route
-                  path="/groups/:groupId"
-                  element={<ResearchGroupOverviewPage />}
-                />
-
-                <Route
-                  path="/groups/:groupId/settings"
-                  element={<ResearchGroupSettingsPage />}
-                />
-
-                <Route
-                  path="/projects"
-                  element={<ProjectListPage />}
-                />
-
-                <Route path="/projects/:projectId">
-                  <Route
-                    index
-                    element={
-                      <Navigate
-                        to="work-items"
-                        replace
-                      />
-                    }
-                  />
-
-                  <Route
-                    path="work-items"
-                    element={<ProjectDetailPage />}
-                  />
-
-                  <Route
-                    path="overview"
-                    element={<ProjectDetailPage />}
-                  />
-
-                  <Route
-                    path="members"
-                    element={<ProjectDetailPage />}
-                  />
-
-                  <Route
-                    path="settings"
-                    element={<ProjectDetailPage />}
-                  />
-                </Route>
-
-                <Route
-                  path="/goals"
-                  element={<ResearchGroupPlaceholderPage title="Goals" />}
-                />
-
-                <Route
-                  path="/meetings"
-                  element={<MeetingListPage />}
-                />
-
-                <Route
-                  path="/meetings/series"
-                  element={<MeetingSeriesListPage />}
-                />
-
-                <Route
-                  path="/meetings/series/:seriesId"
-                  element={<MeetingSeriesDetailPage />}
-                />
-
-                <Route
-                  path="/meetings/:meetingId"
-                  element={<MeetingDetailPage />}
-                />
-
-
-                <Route
-                  path="/kvp"
-                  element={<ResearchGroupPlaceholderPage title="KVP" />}
-                />
-
-                <Route
-                  path="/knowledge"
-                  element={<ResearchGroupPlaceholderPage title="Knowledge" />}
-                />
-
-                <Route
-                  path="/data"
-                  element={
-                    <ResearchGroupPlaceholderPage
-                      title="Data"
-                      description="Research data sources will be connected here later, for example OneDrive or Sciebo."
-                    />
-                  }
-                />
-
-                <Route
-                  path="/calendar"
-                  element={<ResearchGroupPlaceholderPage title="Calendar" />}
-                />
-
-                <Route
-                  path="/people"
-                  element={<ResearchGroupPlaceholderPage title="People" />}
-                />
-
-                <Route
-                  path="/notifications"
-                  element={<PlaceholderPage title="Notifications" />}
-                />
-
-                <Route
-                  path="/settings"
-                  element={<SettingsLayout />}
-                >
-                  <Route
-                    index
-                    element={
-                      <Navigate to="appearance" replace />
-                    }
-                  />
-
-                  <Route
-                    path="appearance"
-                    element={<AppearanceSettingsPage />}
-                  />
-
-                  <Route
-                    path="invitations"
-                    element={<InvitationsSettingsPage />}
-                  />
-                </Route>
-
-                <Route
-                  path="/profile"
-                  element={<PlaceholderPage title="Profile" />}
-                />
-
-                <Route path="*" element={<Navigate to="/" replace />} />
-                </Routes>
-              </AppShell>
-            </ResearchGroupProvider>
-          </RequireAuth>
-        }
-      />
-
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+    <AppProviders>
+      <RouterProvider router={router} />
+    </AppProviders>
   )
 }
 
 export function App() {
   return (
-    <AppearanceProvider>
-      <SessionProvider>
-        <AppRoutes />
-      </SessionProvider>
-    </AppearanceProvider>
+    <AppProviders>
+      <AppRoutes />
+    </AppProviders>
   )
 }

@@ -531,6 +531,81 @@ button {
   cursor: pointer;
 }
 
+/* ── Route content view transition ───────────────────────────────
+ * Premium navigation continuity: opted-in global navigations commit
+ * through React Router's native View Transition integration (the
+ * react-router/dom data router wraps the route-content state update
+ * in `document.startViewTransition`).
+ *
+ * Scope contract:
+ * - `.fg-route-content` (the AppShell <main>) is the ONE named
+ *   transition surface: only the routed application content
+ *   crossfades.
+ * - The document root snapshots are frozen (no root-level
+ *   animation), so the Sidebar / TopBar chrome stays visually
+ *   stationary — the new opaque root snapshot covers the old one
+ *   and no chrome element fades, slides, scales, or blinks.
+ * - The opaque root snapshot always resolves to the canonical FG
+ *   canvas (themed tokens on html/body and the shell), so no
+ *   blank / default-white frame can be exposed between the old and
+ *   the new route content, in Light or Dark.
+ *
+ * Motion: one short, restrained content crossfade — 150 ms total,
+ * standard easing, opacity only. No translation, scale, blur,
+ * bounce, or delayed decoration. Browsers without View Transition
+ * support never create these pseudo-elements; react-router takes
+ * its ordinary state-update path instead (no JS animation
+ * fallback).
+ */
+.fg-route-content {
+  view-transition-name: fg-route-content;
+}
+
+::view-transition-old(root) {
+  animation: none;
+}
+
+::view-transition-new(root) {
+  animation: none;
+}
+
+@keyframes fg-route-fade-out {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes fg-route-fade-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+::view-transition-old(fg-route-content) {
+  animation: fg-route-fade-out 150ms cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
+::view-transition-new(fg-route-content) {
+  animation: fg-route-fade-in 150ms cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
+/* Reduced motion: navigation remains immediate and correct; only
+ * the non-essential crossfade is removed (no animation at all). */
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(fg-route-content),
+  ::view-transition-new(fg-route-content) {
+    animation: none;
+  }
+}
+
 /* ── Material Symbols icon box ─────────────────────────────────────
  * Material Symbols is a ligature-based icon font loaded from the
  * Google Fonts CDN without an explicit `display=` parameter, i.e.

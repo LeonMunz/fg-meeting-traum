@@ -281,6 +281,7 @@ const tabs: Array<{
   { id: 'settings', label: 'Settings' },
 ]
 
+
 function getPersonName(
   firstName: string,
   lastName: string,
@@ -2541,49 +2542,35 @@ export function ProjectDetailPage() {
           </div>
         )}
 
-      {activeTab === 'work-items' &&
-        workItemsLoading && (
-          <div className="mt-6 flex min-h-40 items-center justify-center rounded-xl border border-outline-variant bg-surface-container-lowest text-sm text-on-surface-variant">
-            <span className="material-symbols-outlined mr-2 animate-spin text-[18px]">
-              refresh
-            </span>
-            Loading work items…
-          </div>
-        )}
-
-      {activeTab === 'work-items' &&
-        !workItemsLoading && (
-          <ProjectWorkItemsPanel
-            items={projectWorkItems}
-            eligibleAssignees={sortedMembers.filter(
-              (member) => member.role !== 'viewer',
-            )}
-            readOnly={isReadOnly}
-            onCreate={() =>
-              setWorkItemDrawerState({
-                mode: 'create',
-              })
-            }
-            onOpen={handleOpenWorkItem}
-            onRequestDelete={requestWorkItemDelete}
-            selectedWorkItemId={
-              selectedWorkItemId
-            }
-            onStatusDrop={handleWorkItemStatusDrop}
-            statusDropError={boardStatusDropError}
-            onDismissStatusDropError={() =>
-              setBoardStatusDropError(null)
-            }
-            preferencesKey={
-              user
-                ? `fg-workspace:project-work-items:v1:${user.id}:${project.id}`
-                : null
-            }
-            inspectorOpen={
-              workItemDrawerState?.mode === 'edit'
-            }
-          />
-        )}
+      {activeTab === 'work-items' && (
+        <ProjectWorkItemsPanel
+          loading={workItemsLoading}
+          items={projectWorkItems}
+          eligibleAssignees={sortedMembers.filter(
+            (member) => member.role !== 'viewer',
+          )}
+          readOnly={isReadOnly}
+          onCreate={() =>
+            setWorkItemDrawerState({
+              mode: 'create',
+            })
+          }
+          onOpen={handleOpenWorkItem}
+          onRequestDelete={requestWorkItemDelete}
+          selectedWorkItemId={selectedWorkItemId}
+          onStatusDrop={handleWorkItemStatusDrop}
+          statusDropError={boardStatusDropError}
+          onDismissStatusDropError={() =>
+            setBoardStatusDropError(null)
+          }
+          preferencesKey={
+            user
+              ? `fg-workspace:project-work-items:v1:${user.id}:${project.id}`
+              : null
+          }
+          inspectorOpen={workItemDrawerState?.mode === 'edit'}
+        />
+      )}
 
       {activeTab === 'members' && (
         <div className="mt-7 w-full max-w-[1120px]">
@@ -3315,6 +3302,7 @@ function ProjectWorkItemsPanel({
   onDismissStatusDropError,
   preferencesKey,
   inspectorOpen,
+  loading = false,
 }: {
   items: DemoWorkItem[]
   eligibleAssignees: ProjectMember[]
@@ -3337,6 +3325,12 @@ function ProjectWorkItemsPanel({
   // target (Board column, List row, toolbar control) ever renders
   // underneath the opaque drawer and loses its pointer events.
   inspectorOpen: boolean
+  // Work Items data still in flight: render the panel's own
+  // frame (real header band + toolbar surfaces) with
+  // placeholder content, so the workspace header is one
+  // continuous surface from first mount — never a temporary
+  // foreign (e.g. legacy white) surface in the header region.
+  loading?: boolean
 }) {
   const [view, setView] = useState<WorkItemsView>('board')
   const [draggedItemId, setDraggedItemId] =
@@ -3563,6 +3557,85 @@ function ProjectWorkItemsPanel({
       label: type.label,
     })),
   ]
+
+  if (loading) {
+    return (
+      <section
+        aria-label="Loading project work items"
+        className="mt-6 overflow-hidden rounded-xl border border-border-structural bg-surface-quiet shadow-sm"
+      >
+        <div className="flex flex-wrap items-start justify-between gap-8 border-b border-border-structural bg-work-items-header px-6 py-5">
+          <div>
+            <div className="flex items-center gap-3">
+              <h2 className="text-lg font-semibold tracking-tight text-work-content-text">
+                Work Items
+              </h2>
+
+              <div className="h-4 w-12 animate-pulse rounded-full bg-surface-hover" />
+            </div>
+
+            <p className="mt-1 text-sm text-work-content-muted">
+              Plan and track the work that belongs to this project.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <div className="h-9 w-36 animate-pulse rounded-lg bg-surface-hover" />
+
+            <div className="inline-flex animate-pulse rounded-lg border border-border-structural bg-segmented-bg p-1">
+              <div className="h-8 w-16 rounded-md bg-surface-hover" />
+              <div className="ml-1 h-8 w-12 rounded-md bg-surface-hover" />
+            </div>
+          </div>
+        </div>
+
+        <div className="border-b border-border-structural bg-work-surface-toolbar px-6 py-3">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <div className="h-9 w-56 animate-pulse rounded-lg bg-surface-hover" />
+            <div className="h-9 w-32 animate-pulse rounded-lg bg-surface-hover" />
+            <div className="h-9 w-28 animate-pulse rounded-lg bg-surface-hover" />
+            <div className="h-9 w-24 animate-pulse rounded-lg bg-surface-hover" />
+            <div className="ml-auto h-4 w-16 animate-pulse rounded bg-surface-hover" />
+          </div>
+        </div>
+
+        <div className="overflow-x-auto bg-workspace">
+          <div
+            className="grid gap-3 p-4"
+            style={{
+              gridTemplateColumns:
+                'repeat(4, minmax(260px, 1fr))',
+            }}
+          >
+            {[2, 1, 2, 1].map((cardCount, column) => (
+              <div
+                key={column}
+                role="group"
+                aria-label={`Loading column ${column + 1} work items`}
+                className="flex min-h-[26rem] min-w-0 flex-col rounded-lg bg-board-column"
+              >
+                <div className="flex items-center justify-between px-3 py-2.5">
+                  <div className="h-4 w-24 animate-pulse rounded bg-surface-hover" />
+                  <div className="h-4 w-5 animate-pulse rounded bg-surface-hover" />
+                </div>
+
+                <div className="flex flex-1 flex-col gap-2 px-2 pb-3">
+                  {Array.from({ length: cardCount }).map(
+                    (_, card) => (
+                      <div
+                        key={card}
+                        className="h-14 animate-pulse rounded-lg border border-border-subtle bg-surface-hover"
+                      />
+                    ),
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+    )
+  }
 
   if (items.length === 0) {
     return (
@@ -4467,99 +4540,92 @@ function WorkItemsList({
 
 
 function ProjectDetailSkeleton() {
+  // Loading shell for the Project workspace entry.
+  //
+  // Treatment contract (loading continuity):
+  // - renders the DESTINATION geometry from the first destination
+  //   frame: page chrome placeholders plus the real Work Items
+  //   panel frame (panel loading mode), so the Work Items header
+  //   band (bg-work-items-header), toolbar boundary
+  //   (bg-work-surface-toolbar) and board area (bg-workspace) are
+  //   the same approved surfaces in the loading and the loaded
+  //   state - no blank band, no foreign/legacy-white surface, no
+  //   late header swap, in Light and Dark;
+  // - data resolves in place: title, members, tabs, count,
+  //   controls and board columns replace their placeholders
+  //   without moving the header;
+  // - semantic structure (status / navigation / region / group)
+  //   so the shell is a real loading state, not a blank page;
+  // - no spinner and no progressbar.
   return (
     <div
-      aria-busy="true"
+      role="status"
       aria-label="Loading project"
-      className="mx-auto w-full max-w-[1440px] px-6 py-8 lg:px-10 lg:py-10"
+      className="w-full px-6 py-8 lg:px-8 lg:py-10 xl:px-10"
     >
       <div className="h-4 w-20 animate-pulse rounded bg-surface-hover" />
 
-      <div className="mt-7 flex items-start justify-between">
-        <div>
-          <div className="h-3 w-28 animate-pulse rounded bg-surface-hover" />
-          <div className="mt-3 h-9 w-96 animate-pulse rounded bg-surface-hover" />
-        </div>
+      <header>
+        <div className="mt-6 flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <div className="h-2 w-2 animate-pulse rounded-full bg-surface-hover" />
+              <div className="h-3 w-16 animate-pulse rounded bg-surface-hover" />
+            </div>
 
-        <div className="flex items-center gap-4">
-          <div className="flex -space-x-2">
-            {Array.from({ length: 4 }).map((_, index) => (
-              <div
-                key={index}
-                className="h-9 w-9 animate-pulse rounded-full border-2 border-canvas bg-surface-hover"
-              />
-            ))}
+            <div className="mt-2 h-9 w-80 max-w-full animate-pulse rounded bg-surface-hover" />
           </div>
 
-          <div className="h-6 w-px bg-border-structural" />
+          <div className="flex shrink-0 items-center">
+            <div className="flex -space-x-2">
+              {Array.from({ length: 4 }).map((_, index) => (
+                <div
+                  key={index}
+                  className="h-9 w-9 animate-pulse rounded-full border-2 border-canvas bg-surface-hover"
+                />
+              ))}
+            </div>
 
-          <div className="h-7 w-20 animate-pulse rounded-full bg-surface-hover" />
-        </div>
-      </div>
+            <div className="ml-3 h-6 w-px bg-border-structural" />
 
-      <div className="mt-9 flex gap-7 border-b border-border-structural pb-3">
-        <div className="h-4 w-16 animate-pulse rounded bg-surface-hover" />
-        <div className="h-4 w-20 animate-pulse rounded bg-surface-hover" />
-        <div className="h-4 w-16 animate-pulse rounded bg-surface-hover" />
-        <div className="h-4 w-16 animate-pulse rounded bg-surface-hover" />
-      </div>
-
-      <div className="mt-6 grid grid-cols-12 gap-6">
-        <div className="col-span-8 overflow-hidden rounded-xl border border-border-structural bg-surface-quiet">
-          <div className="border-b border-border-structural px-6 py-4">
-            <div className="h-4 w-32 animate-pulse rounded bg-surface-hover" />
-            <div className="mt-2 h-3 w-44 animate-pulse rounded bg-surface-hover" />
-          </div>
-
-          <div className="px-6 py-6">
-            <div className="h-3 w-20 animate-pulse rounded bg-surface-hover" />
-            <div className="mt-4 h-3 w-full max-w-2xl animate-pulse rounded bg-surface-hover" />
-            <div className="mt-2 h-3 w-4/5 max-w-xl animate-pulse rounded bg-surface-hover" />
+            <div className="ml-3 h-7 w-20 animate-pulse rounded-full bg-surface-hover" />
           </div>
         </div>
 
-        <div className="col-span-4 overflow-hidden rounded-xl border border-border-structural bg-surface-quiet">
-          <div className="border-b border-border-structural px-5 py-4">
-            <div className="h-4 w-28 animate-pulse rounded bg-surface-hover" />
-            <div className="mt-2 h-3 w-36 animate-pulse rounded bg-surface-hover" />
-          </div>
+        <nav
+          aria-label="Loading project sections"
+          className="mt-8 flex h-[38px] items-stretch gap-7 overflow-x-auto border-b border-border-subtle"
+        >
+          {['w-20', 'w-16', 'w-14', 'w-14'].map((width, index) => (
+            <div
+              key={index}
+              className={`relative flex items-center ${width}`}
+            >
+              <div className="h-4 w-full animate-pulse rounded bg-surface-hover" />
 
-          <div className="space-y-4 px-5 py-5">
-            {Array.from({ length: 3 }).map((_, index) => (
-              <div key={index} className="flex gap-3">
-                <div className="h-8 w-8 animate-pulse rounded-full bg-surface-hover" />
-                <div className="flex-1">
-                  <div className="h-3 w-36 animate-pulse rounded bg-surface-hover" />
-                  <div className="mt-2 h-3 w-24 animate-pulse rounded bg-surface-hover" />
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
+              {index === 0 && (
+                <div className="absolute inset-x-0 bottom-0 h-0.5 bg-surface-hover" />
+              )}
+            </div>
+          ))}
+        </nav>
+      </header>
 
-      <div className="mt-6 overflow-hidden rounded-xl border border-border-structural bg-surface-quiet">
-        <div className="border-b border-border-structural px-6 py-4">
-          <div className="h-4 w-24 animate-pulse rounded bg-surface-hover" />
-          <div className="mt-2 h-3 w-72 animate-pulse rounded bg-surface-hover" />
-        </div>
-
-        <div className="border-b border-border-structural px-6 py-3">
-          <div className="h-9 w-52 animate-pulse rounded-lg bg-surface-hover" />
-        </div>
-
-        {Array.from({ length: 3 }).map((_, index) => (
-          <div
-            key={index}
-            className="grid grid-cols-[minmax(0,1fr)_130px_150px_110px] items-center gap-3 border-b border-border-structural px-6 py-4 last:border-b-0"
-          >
-            <div className="h-4 w-3/4 animate-pulse rounded bg-surface-hover" />
-            <div className="h-4 w-16 animate-pulse rounded bg-surface-hover" />
-            <div className="h-4 w-20 animate-pulse rounded bg-surface-hover" />
-            <div className="h-4 w-16 animate-pulse rounded bg-surface-hover" />
-          </div>
-        ))}
-      </div>
+      <ProjectWorkItemsPanel
+        loading
+        items={[]}
+        eligibleAssignees={[]}
+        readOnly
+        onCreate={() => {}}
+        onOpen={() => {}}
+        onRequestDelete={() => {}}
+        selectedWorkItemId={null}
+        onStatusDrop={() => {}}
+        statusDropError={null}
+        onDismissStatusDropError={() => {}}
+        preferencesKey={null}
+        inspectorOpen={false}
+      />
     </div>
   )
 }

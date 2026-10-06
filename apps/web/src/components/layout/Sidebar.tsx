@@ -722,7 +722,9 @@ export function Sidebar() {
      */
     addResearchGroup(group)
     setCreateDialogOpen(false)
-    navigate(`/groups/${group.id}`)
+    navigate(`/groups/${group.id}`, {
+      viewTransition: true,
+    })
   }
 
   /*
@@ -805,6 +807,7 @@ export function Sidebar() {
             key={item.path}
             to={item.path}
             end={item.path === '/'}
+            viewTransition
             className={({ isActive }) =>
               navClasses(isActive)
             }
@@ -872,6 +875,7 @@ export function Sidebar() {
                 onClick={() =>
                   navigate(
                     `/projects/${row.id}/work-items`,
+                    { viewTransition: true },
                   )
                 }
                 aria-current={
@@ -994,6 +998,7 @@ export function Sidebar() {
                                */}
                               <NavLink
                                 to={`/projects?group=${group.id}`}
+                                viewTransition
                                 className={childNavClasses(
                                   scopedChildActive(
                                     group.id,
@@ -1008,6 +1013,7 @@ export function Sidebar() {
 
                               <NavLink
                                 to={`/meetings?group=${group.id}`}
+                                viewTransition
                                 className={childNavClasses(
                                   scopedChildActive(
                                     group.id,
@@ -1058,6 +1064,7 @@ export function Sidebar() {
           <NavLink
             key={item.path}
             to={item.path}
+            viewTransition
             className={({ isActive }) =>
               [
                 'flex h-7 items-center gap-2 rounded px-2 text-xs transition-colors',

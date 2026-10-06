@@ -6,6 +6,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from '@testing-library/react'
 import {
   MemoryRouter,
@@ -250,6 +251,112 @@ afterEach(() => {
 })
 
 describe('Project Overview page', () => {
+  it('uses a semantic loading shell shaped like the Project workspace', () => {
+    mockProjectData()
+
+    render(
+      <MemoryRouter
+        initialEntries={['/projects/7/work-items?preview=loading']}
+      >
+        <Routes>
+          <Route
+            path="/projects/:projectId/:tab"
+            element={<ProjectDetailPage />}
+          />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    const loadingShell = screen.getByRole('status', {
+      name: 'Loading project',
+    })
+
+    expect(
+      within(loadingShell).getByRole('navigation', {
+        name: 'Loading project sections',
+      }),
+    ).toBeInTheDocument()
+
+    expect(
+      within(loadingShell).getByRole('region', {
+        name: 'Loading project work items',
+      }),
+    ).toBeInTheDocument()
+
+    expect(
+      within(loadingShell).getAllByRole('group', {
+        name: /Loading .* work items/,
+      }),
+    ).toHaveLength(4)
+
+    expect(
+      within(loadingShell).queryByRole('progressbar'),
+    ).not.toBeInTheDocument()
+  })
+
+  it('shows the Work Items workspace frame with the stable header surface from the first destination frame', async () => {
+    mockProjectData()
+
+    let resolveProject!: (project: ApiProject) => void
+    vi.mocked(getProject).mockImplementation(
+      () =>
+        new Promise<ApiProject>((resolve) => {
+          resolveProject = resolve
+        }),
+    )
+
+    render(
+      <MemoryRouter
+        initialEntries={['/projects/7/work-items']}
+      >
+        <Routes>
+          <Route
+            path="/projects/:projectId/:tab"
+            element={<ProjectDetailPage />}
+          />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    // First destination frame: the loading shell already carries
+    // the real Work Items header band, so the header region is
+    // never blank or a foreign (e.g. legacy white) surface while
+    // the Project loads.
+    const loadingShell = screen.getByRole('status', {
+      name: 'Loading project',
+    })
+    const region = within(loadingShell).getByRole('region', {
+      name: 'Loading project work items',
+    })
+    const heading = within(region).getByRole('heading', {
+      name: 'Work Items',
+    })
+
+    // Surface invariant of the header band: no behavioral proxy
+    // for the resolved background exists in this environment, so
+    // the approved token class is the contract.
+    expect(
+      heading.closest('.bg-work-items-header'),
+    ).not.toBeNull()
+
+    // Data resolves in place: the shell goes away and the loaded
+    // workspace keeps the same Work Items heading - one stable
+    // header, no swap to a differently-surfaced band.
+    resolveProject(makeProject())
+    await screen.findByText('No work items yet.')
+
+    expect(
+      screen.queryByRole('status', {
+        name: 'Loading project',
+      }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getAllByRole('heading', {
+        name: 'Work Items',
+      }),
+    ).toHaveLength(1)
+  })
+
   it('renders the About, Milestones and Needs Attention sections', async () => {
     mockProjectData()
 

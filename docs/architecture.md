@@ -121,6 +121,15 @@ Cross-feature reuse should happen through a clear public feature interface once 
 
 Avoid generic abstractions before at least two concrete use cases justify them.
 
+### Navigation & route transitions
+
+- **Data router in production.** The production entry (`main.tsx`) uses the React Router data-router composition — `createBrowserRouter` + `RouterProvider` (from `react-router/dom`) — mounted through one shared composition (`DataRouterApp`) in which the global providers wrap `RouterProvider`. This is the rendering strategy that enables React Router's native View Transition integration for opted-in navigations.
+- **One canonical route tree.** `appRoutes` (`app/routes.tsx`) is the single route configuration: the production data router and the declarative embedding (`useRoutes(appRoutes)`, used by the MemoryRouter-based test harnesses) render the same array, so routing behavior has exactly one source of truth.
+- **Stable shell, transitioning content.** The AppShell chrome (Sidebar + TopBar) stays mounted across navigations and remains visually stationary. Only the routed application content — the AppShell `<main>` (`.fg-route-content`) — is the single named View Transition surface, and only that surface crossfades on an opted-in navigation.
+- **Explicit opt-in.** A navigation participates in a View Transition only when opted in: declarative `Link`/`NavLink` use the `viewTransition` prop, and programmatic `navigate` calls pass `{ viewTransition: true }`. Non-opted-in navigation takes the ordinary path unchanged.
+- **Restrained, safe motion.** The transition is one 150 ms opacity-only crossfade with standard easing. The document root snapshots are frozen and the opaque root snapshot always resolves to the canonical themed canvas, so no chrome blink and no blank or default-white frame can appear, in Light or Dark. With `prefers-reduced-motion: reduce` the crossfade is removed entirely and navigation stays immediate. Browsers without View Transition support never create the transition pseudo-elements; React Router falls back to the ordinary state-update path, with no JS animation substitute.
+- **Stable destination loading.** Entering a workspace (e.g. a Project) renders a stable destination loading shell: the destination geometry and its canonical header surface are present from the first destination frame and the data resolves in place — never a blank replacement, a full-surface flash, or a page-level spinner.
+
 ## Frontend ↔ Backend boundary
 
 ```text
