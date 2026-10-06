@@ -2,11 +2,11 @@
 
 **Status:** Canonical contract for semantic typography; the density
 section (§2) is **provisional** by explicit status, with the Projects
-reference values (36px normal page control, 68px min two-line record
-row) accepted for that pattern by manual host-browser visual acceptance
-on 2026-10-06 (see §2). Documentation only — no production source,
-test, token, Tailwind, radius, border, or spacing change is introduced
-by this document.
+and Meetings reference values (36px normal page control, 68px min
+two-line record row) accepted for their respective reference patterns
+by manual host-browser visual acceptance on 2026-10-06 (see §2).
+Documentation only — no production source, test, token, Tailwind,
+radius, border, or spacing change is introduced by this document.
 
 **Revision:** v2 (2026-10-06) — v1 was the one-off audit report
 (recovered from Git history if needed); v2 is the durable contract.
@@ -79,25 +79,40 @@ invariants.** They become global invariants only after browser
 validation and explicit acceptance. Until that acceptance exists, do
 not cite 32px / 36px / 40px / 68px as frozen or universally canonical.
 
-**Partial acceptance record (2026-10-06).** The Projects reference
-migration (contract slice A, §3.1) passed manual host-browser visual
-acceptance: the user inspected the Projects page and accepted the
-typography/density result (24px page-title hierarchy, 13px controls,
-14px primary record text, 12px metadata, 36px page controls, 68px
-two-line records). The **36px normal page control** and the **68px min
-two-line record row** are accepted **for the Projects reference pattern
-only** — a pattern-scoped acceptance, NOT a universal FG component
-invariant: it does not authorize citing 32px / 36px / 40px / 68px as
-frozen for other surfaces (e.g. the Meetings reference) or generic
-components, and every value not explicitly accepted below stays
-provisional until independently validated and explicitly accepted.
+**Reference-pattern acceptance record (2026-10-06).** The Projects
+reference migration (contract slice A, §3.1) passed manual host-browser
+visual acceptance: the user inspected the Projects page and accepted
+the typography/density result (24px page-title hierarchy, 13px
+controls, 14px primary record text, 12px metadata, 36px page controls,
+68px two-line records). The **36px normal page control** and the
+**68px min two-line record row** are accepted **for the Projects
+reference pattern only** — a pattern-scoped acceptance, NOT a universal
+FG component invariant: it does not authorize citing 32px / 36px /
+40px / 68px as frozen for other surfaces or generic components, and
+every value not explicitly accepted below stays provisional until
+independently validated and explicitly accepted.
+
+The Meetings reference migration (contract slice B, §3.2) passed
+manual host-browser visual acceptance in both Light and Dark: the user
+inspected the Meetings page and accepted the same typography/density
+result (24px page-title hierarchy, 13px controls, 14px primary record
+text, 12px metadata / People, 36px page controls, 68px two-line
+records). The **36px normal page control** and the **68px min two-line
+record row** are accepted **for the Meetings reference pattern** as
+well — again pattern-scoped, NOT a universal FG component invariant:
+the two pattern acceptances (Projects, Meetings) jointly authorize
+citing these values for exactly those two reference patterns, and
+every §2 value not explicitly accepted below (incl. 32px compact
+control, 40px structural band, list header bands, icon steps) stays
+provisional for other surfaces and generic components until
+independently validated and explicitly accepted.
 
 | Density role | Value | Status / note |
 |---|---|---|
 | Compact control (inline banner actions) | 32px | provisional target (matches current banner Retry) |
-| Normal page control (buttons, chips, search, row overflow, empty CTAs) | 36px | **accepted for the Projects reference pattern** (manual host-browser visual acceptance, 2026-10-06; also the de-facto page control of Meetings) — NOT a universal invariant; still provisional for other surfaces |
+| Normal page control (buttons, chips, search, row overflow, empty CTAs) | 36px | **accepted for the Projects and Meetings reference patterns** (manual host-browser visual acceptance, 2026-10-06; the page control of both reference pages) — NOT a universal invariant; still provisional for other surfaces |
 | Structural 40px band | 40px | provisional, only where justified (Meetings tab strip; dialogs reserved) — never a general button height |
-| Two-line record row (Projects + Meetings) | 68px min | **accepted for the Projects reference pattern** (manual host-browser visual acceptance, 2026-10-06); matches both accepted pages (`min-h-[68px]`); rows may grow (tablet meta wrap); the Meetings reference remains a separate pending acceptance — NOT a universal invariant |
+| Two-line record row (Projects + Meetings) | 68px min | **accepted for the Projects and Meetings reference patterns** (manual host-browser visual acceptance, 2026-10-06); both reference pages at `min-h-[68px]`; rows may grow (tablet meta wrap) — NOT a universal invariant |
 | Single-line data row | 40px | reserved — no single-line rows on scope pages today |
 | List header bands | column header 36px · section header 32px | provisional; roles stay distinct (scannable columns vs in-list group anchor) |
 | Icon steps | 14 / 16 / 18 / 24px | provisional target: nav-structural / meta-inline / control / empty-state display |
@@ -260,6 +275,16 @@ values (still provisional until that acceptance).
   migration passed manual host-browser visual acceptance; the 36px
   normal page control and the 68px min two-line record row are accepted
   for the Projects reference pattern only (not universal invariants).
-  The settled §1 roles are unchanged by this record. The Meetings
-  reference (slice B) has no acceptance yet. Future surface / radius /
-  border / search-chrome work remains separate from this contract.
+  The settled §1 roles are unchanged by this record. Future surface /
+  radius / border / search-chrome work remains separate from this
+  contract.
+- Meetings reference acceptance (2026-10-06): the slice B Meetings
+  migration passed manual host-browser visual acceptance in both Light
+  and Dark; the 36px normal page control and the 68px min two-line
+  record row are accepted for the Meetings reference pattern (pattern-
+  scoped, not universal invariants — the Projects and Meetings pattern
+  acceptances jointly cover exactly those two patterns). The settled
+  §1 roles are unchanged by this record; every other §2 value (32px
+  compact control, 40px structural band, list header bands, icon
+  steps) stays provisional. Future surface / radius / border /
+  search-chrome work remains separate from this contract.

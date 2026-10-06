@@ -747,7 +747,7 @@ describe('MeetingListPage — Upcoming data', () => {
     const titles = [
       ...tomorrowGroup
         .getAllByText(/./, {
-          selector: 'div.truncate.text-sm',
+          selector: 'div.truncate.fg-type-record-title',
         }),
     ].map((el) => el.textContent)
 

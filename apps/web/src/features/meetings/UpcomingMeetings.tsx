@@ -179,7 +179,7 @@ function rowStatusBadge(item: UpcomingMeeting): {
     return {
       label: 'In progress',
       className:
-        'inline-flex items-center rounded-full bg-status-active-bg px-2 py-0.5 text-[11px] font-medium text-status-active-text',
+        'inline-flex items-center rounded-full bg-status-active-bg px-2 py-0.5 fg-type-micro text-status-active-text',
     }
   }
 
@@ -187,7 +187,7 @@ function rowStatusBadge(item: UpcomingMeeting): {
     return {
       label: 'Rescheduled',
       className:
-        'inline-flex items-center rounded-full bg-warning-bg px-2 py-0.5 text-[11px] font-medium text-warning',
+        'inline-flex items-center rounded-full bg-warning-bg px-2 py-0.5 fg-type-micro text-warning',
     }
   }
 
@@ -295,17 +295,17 @@ function UpcomingMeetingRow({
         'min-[1100px]:grid-cols-[104px_minmax(0,1fr)_96px_48px]',
       ].join(' ')}
     >
-      <div className="text-sm font-semibold tabular-nums text-text">
+      <div className="fg-type-record-title tabular-nums text-text">
         {timeLabel}
       </div>
 
       <div className="min-w-0">
-        <div className="truncate text-sm font-semibold text-text">
+        <div className="truncate fg-type-record-title text-text">
           {item.title}
         </div>
 
         {hasSecondary && (
-          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-muted min-[1100px]:flex-nowrap min-[1100px]:overflow-hidden">
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 fg-type-meta text-text-muted min-[1100px]:flex-nowrap min-[1100px]:overflow-hidden">
             {item.recurring && (
               <span className="inline-flex shrink-0 items-center gap-1">
                 <span
@@ -341,7 +341,7 @@ function UpcomingMeetingRow({
         )}
       </div>
 
-      <div className="hidden whitespace-nowrap text-left text-sm tabular-nums text-text-muted min-[1100px]:block">
+      <div className="hidden whitespace-nowrap text-left fg-type-meta tabular-nums text-text-muted min-[1100px]:block">
         {people ?? ''}
       </div>
 
@@ -429,22 +429,22 @@ function UpcomingEmptyState({
 }) {
   return (
     <div className="flex min-h-64 flex-col items-center justify-center rounded-[10px] border border-dashed border-border-default bg-surface-quiet px-6 py-12 text-center">
-      <span className="material-symbols-outlined text-[30px] text-text-muted">
+      <span className="material-symbols-outlined text-[24px] text-text-muted">
         event
       </span>
 
-      <h2 className="mt-3 text-base font-semibold text-text">
+      <h2 className="mt-3 fg-type-section-heading text-text">
         No upcoming meetings
       </h2>
 
-      <p className="mt-1 text-sm text-text-muted">
+      <p className="mt-1 fg-type-primary-content text-text-muted">
         Schedule a meeting or create a recurring series.
       </p>
 
       <button
         type="button"
         onClick={onNewMeeting}
-        className="mt-5 inline-flex h-9 items-center gap-2 rounded-lg bg-accent px-4 text-sm font-semibold text-text-inverse transition hover:bg-accent-hover"
+        className="mt-5 inline-flex h-9 items-center gap-2 rounded-lg bg-accent px-4 fg-type-control text-text-inverse transition hover:bg-accent-hover"
       >
         <span
           aria-hidden="true"
@@ -537,7 +537,7 @@ export function UpcomingMeetingsList({
       ))}
 
       {recurrenceLoading && (
-        <div className="flex items-center gap-2 border-t border-border-subtle px-4 py-3.5 text-xs text-text-muted">
+        <div className="flex items-center gap-2 border-t border-border-subtle px-4 py-3.5 fg-type-meta text-text-muted">
           <span className="material-symbols-outlined animate-spin text-[16px]">
             refresh
           </span>

@@ -91,15 +91,15 @@ function ComingSoonPanel({
 }) {
   return (
     <div className="flex min-h-64 flex-col items-center justify-center rounded-[10px] border border-dashed border-border-default bg-surface-quiet px-6 py-12 text-center">
-      <span className="material-symbols-outlined text-[28px] text-text-muted">
+      <span className="material-symbols-outlined text-[24px] text-text-muted">
         {icon}
       </span>
 
-      <h2 className="mt-3 text-base font-semibold text-text">
+      <h2 className="mt-3 fg-type-section-heading text-text">
         {title}
       </h2>
 
-      <p className="mt-1 max-w-md text-sm text-text-muted">
+      <p className="mt-1 max-w-md fg-type-primary-content text-text-muted">
         {description}
       </p>
     </div>
@@ -623,11 +623,11 @@ export function MeetingListPage() {
       <WorkspaceContent>
       <header className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
         <div className="min-w-0">
-          <h1 className="text-3xl font-semibold tracking-tight text-text">
+          <h1 className="fg-type-page-title text-text">
             Meetings
           </h1>
 
-          <p className="mt-1 text-sm leading-6 text-text-muted">
+          <p className="mt-1 fg-type-primary-content text-text-muted">
             {activeResearchGroup
               ? `Your meetings in ${activeResearchGroup.name}.`
               : 'Research Group Meetings and follow-up work.'}
@@ -638,7 +638,7 @@ export function MeetingListPage() {
           <button
             type="button"
             onClick={() => navigate('/meetings/series')}
-            className="inline-flex h-9 items-center gap-2 rounded-lg border border-border-subtle bg-surface px-3.5 text-sm font-semibold text-text transition hover:bg-surface-hover"
+            className="inline-flex h-9 items-center gap-2 rounded-lg border border-border-subtle bg-surface px-3.5 fg-type-control text-text transition hover:bg-surface-hover"
           >
             <span className="material-symbols-outlined text-[18px]">
               event_repeat
@@ -650,7 +650,7 @@ export function MeetingListPage() {
             type="button"
             disabled={groupUnavailable || listLoading}
             onClick={openCreateDialog}
-            className="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg bg-accent px-3.5 text-sm font-semibold text-text-inverse shadow-sm transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-45"
+            className="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg bg-accent px-3.5 fg-type-control text-text-inverse shadow-sm transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-45"
           >
             <span
               aria-hidden="true"
@@ -690,7 +690,7 @@ export function MeetingListPage() {
                 handleTabKeyDown(event, tab.id)
               }
               className={[
-                '-mb-px border-b-2 px-0.5 text-sm font-medium outline-none transition focus-visible:ring-2 focus-visible:ring-focus',
+                '-mb-px border-b-2 px-0.5 fg-type-control outline-none transition focus-visible:ring-2 focus-visible:ring-focus',
                 selected
                   ? 'border-tab-active text-text'
                   : 'border-transparent text-text-muted hover:text-text',
@@ -714,15 +714,15 @@ export function MeetingListPage() {
               role="alert"
               className="flex min-h-64 flex-col items-center justify-center rounded-[10px] border border-border-subtle bg-surface-quiet px-6 py-10 text-center"
             >
-              <span className="material-symbols-outlined text-[28px] text-danger">
+              <span className="material-symbols-outlined text-[24px] text-danger">
                 cloud_off
               </span>
 
-              <h2 className="mt-3 text-base font-semibold text-text">
+              <h2 className="mt-3 fg-type-section-heading text-text">
                 Meetings couldn't be loaded
               </h2>
 
-              <p className="mt-1 max-w-md text-sm text-text-muted">
+              <p className="mt-1 max-w-md fg-type-primary-content text-text-muted">
                 {pageError}
               </p>
 
@@ -732,7 +732,7 @@ export function MeetingListPage() {
                   void loadMeetings()
                   void loadOccurrences()
                 }}
-                className="mt-4 inline-flex h-9 items-center gap-2 rounded-lg border border-border-subtle px-4 text-sm font-semibold text-text transition hover:bg-surface-hover"
+                className="mt-4 inline-flex h-9 items-center gap-2 rounded-lg border border-border-subtle px-4 fg-type-control text-text transition hover:bg-surface-hover"
               >
                 <span className="material-symbols-outlined text-[18px]">
                   refresh
@@ -742,7 +742,7 @@ export function MeetingListPage() {
             </div>
           ) : groupUnavailable ? (
             <div className="rounded-[10px] border border-dashed border-border-default bg-surface-quiet px-6 py-12 text-center">
-              <p className="text-sm text-text-muted">
+              <p className="fg-type-primary-content text-text-muted">
                 No research group is currently available.
               </p>
             </div>
@@ -753,7 +753,7 @@ export function MeetingListPage() {
                   role="alert"
                   className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-[10px] border border-border-subtle bg-warning-bg px-4 py-3"
                 >
-                  <span className="flex min-w-0 items-center gap-2 text-sm text-text">
+                  <span className="flex min-w-0 items-center gap-2 fg-type-primary-content text-text">
                     <span
                       aria-hidden="true"
                       className="material-symbols-outlined shrink-0 text-[18px] text-warning"
@@ -774,7 +774,7 @@ export function MeetingListPage() {
                     onClick={() =>
                       void loadOccurrences()
                     }
-                    className="ml-auto inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-border-subtle bg-surface px-3 text-xs font-semibold text-text transition hover:bg-surface-hover"
+                    className="ml-auto inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-border-subtle bg-surface px-3 fg-type-control text-text transition hover:bg-surface-hover"
                   >
                     <span
                       aria-hidden="true"
@@ -792,7 +792,7 @@ export function MeetingListPage() {
                   role="alert"
                   className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-[10px] border border-border-subtle bg-warning-bg px-4 py-3"
                 >
-                  <span className="flex min-w-0 items-center gap-2 text-sm text-text">
+                  <span className="flex min-w-0 items-center gap-2 fg-type-primary-content text-text">
                     <span
                       aria-hidden="true"
                       className="material-symbols-outlined shrink-0 text-[18px] text-warning"
@@ -815,7 +815,7 @@ export function MeetingListPage() {
                     onClick={() =>
                       void handleOpenRow(openError.item)
                     }
-                    className="ml-auto inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-border-subtle bg-surface px-3 text-xs font-semibold text-text transition hover:bg-surface-hover"
+                    className="ml-auto inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-border-subtle bg-surface px-3 fg-type-control text-text transition hover:bg-surface-hover"
                   >
                     <span
                       aria-hidden="true"
@@ -844,7 +844,7 @@ export function MeetingListPage() {
         {activeTab === 'series' && (
           groupUnavailable ? (
             <div className="rounded-[10px] border border-dashed border-border-default bg-surface-quiet px-6 py-12 text-center">
-              <p className="text-sm text-text-muted">
+              <p className="fg-type-primary-content text-text-muted">
                 No research group is currently available.
               </p>
             </div>
