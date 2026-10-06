@@ -447,8 +447,8 @@ describe('Sidebar structure (frozen IA)', () => {
       const links = within(row).getAllByRole('link')
 
       expect(links.map((link) => link.textContent?.trim())).toEqual([
-        'folder_openProjects',
-        'groupsMeetings',
+        'Projects',
+        'Meetings',
       ])
 
       for (const project of GLOBAL_SNAPSHOT) {
@@ -525,9 +525,9 @@ describe('Sidebar personal navigation', () => {
     const entries = Array.from(personalNav.children)
 
     expect(entries.map((entry) => entry.textContent)).toEqual([
-      'homeHome',
-      'assignmentMy Work',
-      'sticky_note_2Notes',
+      'Home',
+      'My Work',
+      'Notes',
     ])
   })
 
@@ -1085,7 +1085,7 @@ describe('Sidebar research group tree', () => {
 
     // Alpha is scoped and revealed by the route: its Projects row
     // is active…
-    expect(alphaProjects.className).toContain('font-semibold')
+    expect(alphaProjects.className).toContain('font-medium')
 
     // …while Bravo (collapsed, different scope) renders nothing.
     expect(bravoProjects).toBeNull()
@@ -1810,8 +1810,8 @@ describe('Sidebar workspace-navigation preferences (retained contract)', () => {
 
       // EXACTLY two child rows, nothing else.
       expect(links.map((link) => link.textContent?.trim())).toEqual([
-        'folder_openProjects',
-        'groupsMeetings',
+        'Projects',
+        'Meetings',
       ])
     }
   })
@@ -1877,5 +1877,175 @@ describe('Sidebar group creation (parent render boundary)', () => {
     expect(
       screen.getByRole('button', { name: 'Bravo Group' }),
     ).toBeVisible()
+  })
+
+  it('keeps the bottom Create research group entry when no groups exist', async () => {
+    renderSidebar(
+      contextValue({
+        groups: [],
+        activeResearchGroupId: null,
+        activeResearchGroup: null,
+      }),
+      '/my-work',
+    )
+
+    expect(
+      await screen.findByRole('button', {
+        name: 'Create research group',
+      }),
+    ).toBeVisible()
+    expect(
+      screen.queryByRole('button', {
+        name: 'New research group',
+      }),
+    ).not.toBeInTheDocument()
+  })
+})
+
+describe('Sidebar compact visual contract', () => {
+  it('uses the approved density and text-only active treatment', async () => {
+    renderSidebar(
+      contextValue(),
+      '/projects/303/work-items',
+    )
+    await waitForTree()
+    await waitForQuickAccess()
+
+    const title = screen.getByText('FG Workspace')
+    const sidebar = title.closest('aside')
+    const header = title.parentElement?.parentElement
+    const mark = screen.getByText('FG')
+    const home = screen.getByRole('link', { name: 'Home' })
+    const homeIcon = home.querySelector('svg')
+
+    expect(sidebar).toHaveClass(
+      'w-[240px]',
+      'font-sans',
+      'text-[13px]',
+    )
+    expect(
+      sidebar?.querySelectorAll('.material-symbols-outlined'),
+    ).toHaveLength(0)
+    expect(header).toHaveClass('h-16', 'px-3.5')
+    expect(mark).toHaveClass('h-6', 'w-6', 'text-[11px]')
+    expect(title).toHaveClass('text-sm', 'font-semibold')
+    expect(screen.getByText('Research OS')).toHaveClass(
+      'text-[11px]',
+      'font-normal',
+    )
+    expect(home).toHaveClass(
+      'h-7',
+      'gap-2.5',
+      'px-2',
+      'text-[13px]',
+    )
+    expect(homeIcon).toHaveClass(
+      'h-3.5',
+      'w-3.5',
+    )
+    expect(homeIcon).toHaveAttribute('stroke-width', '2')
+    expect(homeIcon).toHaveAttribute('aria-hidden', 'true')
+
+    const activeProject = quickAccessRow('Paper Three')
+    expect(activeProject).toHaveClass(
+      'h-7',
+      'gap-2',
+      'px-2',
+      'text-[13px]',
+      'font-medium',
+      'text-text',
+    )
+    expect(activeProject).not.toHaveClass('bg-surface-muted')
+
+    await waitFor(() => {
+      expect(chevronFor('Bravo Group')).toHaveAttribute(
+        'aria-expanded',
+        'true',
+      )
+    })
+
+    navigateTo('/projects?group=11')
+
+    const activeProjectsRow = within(
+      rowFor('Bravo Group'),
+    ).getByRole('link', { name: /Projects/ })
+    expect(activeProjectsRow).toHaveClass(
+      'h-[26px]',
+      'gap-2',
+      'px-2',
+      'text-xs',
+      'font-medium',
+      'text-text',
+    )
+    expect(activeProjectsRow).not.toHaveClass(
+      'bg-surface-muted',
+    )
+    expect(activeProjectsRow.querySelector('svg')).toHaveClass(
+      'h-3.5',
+      'w-3.5',
+    )
+    expect(activeProjectsRow.parentElement).toHaveClass(
+      'ml-4',
+      'mt-0.5',
+      'gap-0.5',
+      'pl-1',
+    )
+
+    const groupLabel = labelFor('Bravo Group')
+    const groupChevron = chevronFor('Bravo Group')
+    expect(groupLabel).toHaveClass('h-7', 'text-xs')
+    expect(groupChevron.querySelector('svg')).toHaveClass(
+      'h-3',
+      'w-3',
+    )
+
+    const createGroup = screen.getByRole('button', {
+      name: 'Create research group',
+    })
+    expect(createGroup).toHaveClass(
+      'h-7',
+      'whitespace-nowrap',
+      'text-xs',
+    )
+    expect(createGroup.querySelector('svg')).toHaveClass(
+      'h-3.5',
+      'w-3.5',
+    )
+
+    const createSlot = createGroup.parentElement
+    const mainRegion = createSlot?.parentElement
+    const scrollingNavigation = mainRegion?.firstElementChild
+
+    expect(createSlot).toHaveClass('shrink-0')
+    expect(mainRegion).toHaveClass(
+      'min-h-0',
+      'flex-1',
+      'flex-col',
+    )
+    expect(scrollingNavigation).toHaveClass(
+      'min-h-0',
+      'flex-1',
+      'gap-4',
+      'overflow-y-auto',
+      'px-2',
+      'py-3',
+    )
+
+    const notifications = screen.getByRole('link', {
+      name: 'Notifications',
+    })
+    expect(notifications).toHaveClass(
+      'h-7',
+      'text-xs',
+    )
+    expect(
+      notifications.querySelector('svg'),
+    ).toHaveClass('h-3.5', 'w-3.5')
+
+    const notificationsFooter = notifications.closest('nav')
+    expect(notificationsFooter).toBe(sidebar?.lastElementChild)
+    expect(mainRegion?.nextElementSibling).toBe(
+      notificationsFooter,
+    )
   })
 })

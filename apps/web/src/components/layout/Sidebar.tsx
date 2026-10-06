@@ -35,7 +35,110 @@ import {
   type CurrentProjectShortcut,
 } from './projectQuickAccess'
 
-const personalNavigation = [
+type SidebarIconName =
+  | 'home'
+  | 'my-work'
+  | 'notes'
+  | 'projects'
+  | 'meetings'
+  | 'plus'
+  | 'notifications'
+  | 'chevron-right'
+  | 'loading'
+
+function SidebarIcon({
+  name,
+  className = 'h-3.5 w-3.5',
+}: {
+  name: SidebarIconName
+  className?: string
+}) {
+  const paths = (() => {
+    switch (name) {
+      case 'home':
+        return (
+          <>
+            <path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+            <polyline points="9 22 9 12 15 12 15 22" />
+          </>
+        )
+      case 'my-work':
+        return (
+          <>
+            <rect height="18" rx="2" width="18" x="3" y="3" />
+            <path d="m9 12 2 2 4-4" />
+          </>
+        )
+      case 'notes':
+        return (
+          <>
+            <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
+            <polyline points="14 2 14 8 20 8" />
+            <line x1="16" x2="8" y1="13" y2="13" />
+            <line x1="16" x2="8" y1="17" y2="17" />
+            <line x1="10" x2="8" y1="9" y2="9" />
+          </>
+        )
+      case 'projects':
+        return (
+          <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />
+        )
+      case 'meetings':
+        return (
+          <>
+            <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+            <circle cx="9" cy="7" r="4" />
+            <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+            <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+          </>
+        )
+      case 'plus':
+        return (
+          <>
+            <path d="M5 12h14" />
+            <path d="M12 5v14" />
+          </>
+        )
+      case 'notifications':
+        return (
+          <>
+            <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
+            <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+          </>
+        )
+      case 'chevron-right':
+        return <path d="m9 18 6-6-6-6" />
+      case 'loading':
+        return (
+          <>
+            <circle cx="12" cy="12" r="9" opacity="0.25" />
+            <path d="M21 12a9 9 0 0 0-9-9" />
+          </>
+        )
+    }
+  })()
+
+  return (
+    <svg
+      aria-hidden="true"
+      className={`shrink-0 ${className}`}
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="2"
+      viewBox="0 0 24 24"
+    >
+      {paths}
+    </svg>
+  )
+}
+
+const personalNavigation: Array<{
+  label: string
+  path: string
+  icon: SidebarIconName
+}> = [
   {
     label: 'Home',
     path: '/',
@@ -44,12 +147,12 @@ const personalNavigation = [
   {
     label: 'My Work',
     path: '/my-work',
-    icon: 'assignment',
+    icon: 'my-work',
   },
   {
     label: 'Notes',
     path: '/notes',
-    icon: 'sticky_note_2',
+    icon: 'notes',
   },
 ]
 
@@ -85,7 +188,11 @@ function sameWorkspaceNavPreferences(
  * Bottom workspace zone. Personal account destinations (Settings,
  * Profile) live exclusively in the topbar user menu, not here.
  */
-const secondaryNavigation = [
+const secondaryNavigation: Array<{
+  label: string
+  path: string
+  icon: SidebarIconName
+}> = [
   {
     label: 'Notifications',
     path: '/notifications',
@@ -95,20 +202,20 @@ const secondaryNavigation = [
 
 function navClasses(isActive: boolean) {
   return [
-    'flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors',
+    'flex h-7 items-center gap-2.5 rounded px-2 text-[13px] transition-colors',
     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface-subtle',
     isActive
-      ? 'bg-surface-muted font-semibold text-text'
-      : 'text-text-muted hover:bg-surface-muted hover:text-text',
+      ? 'font-medium text-text'
+      : 'text-text-muted hover:bg-surface-hover hover:text-text',
   ].join(' ')
 }
 
 function childNavClasses(isActive: boolean) {
   return [
-    'flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors',
+    'flex h-[26px] items-center gap-2 rounded px-2 text-xs transition-colors',
     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
     isActive
-      ? 'bg-surface-muted font-semibold text-text'
+      ? 'font-medium text-text'
       : 'text-text-muted hover:bg-surface-hover hover:text-text',
   ].join(' ')
 }
@@ -121,10 +228,10 @@ function childNavClasses(isActive: boolean) {
  */
 function projectShortcutClasses(isActive: boolean) {
   return [
-    'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors',
+    'flex h-7 w-full items-center gap-2 rounded px-2 text-[13px] transition-colors',
     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
     isActive
-      ? 'bg-surface-muted font-semibold text-text'
+      ? 'font-medium text-text'
       : 'text-text-muted hover:bg-surface-hover hover:text-text',
   ].join(' ')
 }
@@ -137,7 +244,7 @@ function projectShortcutClasses(isActive: boolean) {
  */
 function sectionLabel(text: string) {
   return (
-    <div className="px-3 pt-1 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+    <div className="mb-1 px-2 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
       {text}
     </div>
   )
@@ -641,24 +748,26 @@ export function Sidebar() {
   )
 
   return (
-    <aside className="fixed inset-y-0 left-0 z-30 flex w-[240px] flex-col border-r border-border-subtle bg-surface-subtle px-4 pb-4 pt-8">
-      <div className="mb-8 flex items-center gap-3 px-2">
-        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-accent font-bold text-text-inverse">
+    <aside className="fixed inset-y-0 left-0 z-30 flex w-[240px] select-none flex-col border-r border-border-subtle bg-surface-subtle font-sans text-[13px]">
+      <div className="flex h-16 shrink-0 items-center gap-2.5 border-b border-border-subtle px-3.5">
+        <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded border border-border-subtle bg-surface-muted text-[11px] font-semibold tracking-tight text-text">
           FG
         </div>
 
-        <div>
-          <div className="font-semibold text-text">
+        <div className="min-w-0 leading-tight">
+          <div className="truncate text-sm font-semibold tracking-tight text-text">
             FG Workspace
           </div>
 
-          <div className="text-xs text-text-muted">
+          <div className="truncate text-[11px] font-normal text-text-muted">
             Research OS
           </div>
         </div>
       </div>
 
-      <nav className="flex flex-col gap-1">
+      <div className="flex min-h-0 flex-1 flex-col">
+      <div className="min-h-0 flex flex-1 flex-col gap-4 overflow-y-auto px-2 py-3">
+      <nav className="flex flex-col gap-0.5">
         {personalNavigation.map((item) => (
           <NavLink
             key={item.path}
@@ -668,11 +777,9 @@ export function Sidebar() {
               navClasses(isActive)
             }
           >
-            <span className="material-symbols-outlined text-[20px]">
-              {item.icon}
-            </span>
+            <SidebarIcon name={item.icon} />
 
-            <span>{item.label}</span>
+            <span className="truncate">{item.label}</span>
           </NavLink>
         ))}
       </nav>
@@ -683,15 +790,15 @@ export function Sidebar() {
        * QA-16). The section stays present in every state
        * (loading / error / empty).
        */}
-      <div className="mt-5">
+      <div className="flex flex-col gap-0.5">
         {sectionLabel('Quick Access')}
 
         <nav
           aria-label="Quick access"
-          className="mt-1 flex flex-col gap-0.5 px-1"
+          className="flex flex-col gap-0.5"
         >
           {quickAccessError !== null ? (
-            <div className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-text-muted">
+            <div className="flex min-h-7 items-center gap-2 rounded px-2 text-xs text-text-muted">
               <span className="min-w-0 flex-1 truncate">
                 {quickAccessError}
               </span>
@@ -710,21 +817,19 @@ export function Sidebar() {
             <div
               role="status"
               aria-label="Loading quick access"
-              className="flex h-8 items-center gap-2 px-2 text-sm text-text-muted"
+              className="flex h-7 items-center gap-2 px-2 text-xs text-text-muted"
             >
-              <span
-                aria-hidden="true"
-                className="material-symbols-outlined animate-spin text-[18px]"
-              >
-                refresh
-              </span>
+              <SidebarIcon
+                name="loading"
+                className="h-3.5 w-3.5 animate-spin"
+              />
 
               <span className="sr-only">
                 Loading quick access…
               </span>
             </div>
           ) : quickAccessRows.length === 0 ? (
-            <div className="px-2 py-1.5 text-sm text-text-muted">
+            <div className="flex min-h-7 items-center px-2 text-xs text-text-muted">
               No quick access projects.
             </div>
           ) : (
@@ -748,7 +853,7 @@ export function Sidebar() {
               >
                 <span
                   aria-hidden="true"
-                  className="h-1.5 w-1.5 shrink-0 rounded-full bg-text-muted"
+                  className={`h-1.5 w-1.5 shrink-0 rounded-full ${row.id === currentProjectId ? 'bg-accent' : 'bg-text-muted'}`}
                 />
 
                 <span className="min-w-0 flex-1 truncate text-left">
@@ -761,39 +866,20 @@ export function Sidebar() {
       </div>
 
       {showResearchGroupSection && (
-        <div className="mt-5 border-t border-border-subtle pt-4">
+        <div className="flex flex-col gap-0.5">
           {sectionLabel('Research Groups')}
 
-          <div className="mt-1">
+          <div>
             {treeLoading ? (
-              <div className="flex h-11 items-center gap-2 px-2 text-sm text-text-muted">
-                <span className="material-symbols-outlined animate-spin text-[18px]">
-                  refresh
-                </span>
+              <div className="flex h-7 items-center gap-2 px-2 text-xs text-text-muted">
+                <SidebarIcon
+                  name="loading"
+                  className="h-3.5 w-3.5 animate-spin"
+                />
 
                 Loading…
               </div>
-            ) : groups.length === 0 ? (
-              <>
-                <button
-                  type="button"
-                  onClick={() => setCreateDialogOpen(true)}
-                  className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left transition hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface-subtle"
-                >
-                  <span
-                    aria-hidden="true"
-                    className="material-symbols-outlined text-[18px] text-text-muted"
-                  >
-                    add
-                  </span>
-
-                  <span className="min-w-0 flex-1 truncate text-sm text-text">
-                    New research group
-                  </span>
-                </button>
-              </>
-            ) : (
-              <>
+            ) : groups.length > 0 ? (
                 <nav
                   aria-label="Research groups"
                   className="flex flex-col gap-0.5"
@@ -815,8 +901,9 @@ export function Sidebar() {
                         key={group.id}
                         role="group"
                         aria-label={group.name}
+                        className="flex flex-col"
                       >
-                        <div className="flex items-center gap-1 rounded-lg px-1">
+                        <div className="group flex h-7 items-center gap-1.5 rounded px-2 transition-colors hover:bg-surface-hover">
                           <button
                             type="button"
                             onClick={() =>
@@ -825,14 +912,12 @@ export function Sidebar() {
                             aria-expanded={visible}
                             aria-controls={childrenId}
                             aria-label={`${manualExpanded ? 'Collapse' : 'Expand'} ${group.name}`}
-                            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-surface-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+                            className="relative flex h-7 w-3 shrink-0 items-center justify-center rounded text-text-muted transition-colors before:absolute before:inset-y-0 before:-inset-x-1 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
                           >
-                            <span
-                              aria-hidden="true"
-                              className={`material-symbols-outlined text-[18px] transition-transform duration-200 motion-reduce:transition-none ${visible ? 'rotate-90' : ''}`}
-                            >
-                              chevron_right
-                            </span>
+                            <SidebarIcon
+                              name="chevron-right"
+                              className={`h-3 w-3 transition-transform duration-200 motion-reduce:transition-none ${visible ? 'rotate-90' : ''}`}
+                            />
                           </button>
 
                           <button
@@ -845,7 +930,7 @@ export function Sidebar() {
                                 ? 'true'
                                 : undefined
                             }
-                            className={`min-w-0 flex-1 truncate rounded-md px-2 py-1.5 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus ${groupActive ? 'font-semibold text-text' : 'text-text-muted hover:bg-surface-hover hover:text-text'}`}
+                            className={`flex h-7 min-w-0 flex-1 items-center truncate rounded text-left text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus ${groupActive ? 'font-medium text-text' : 'text-text-muted hover:text-text'}`}
                           >
                             {group.name}
                           </button>
@@ -865,7 +950,7 @@ export function Sidebar() {
                           className={`grid transition-[grid-template-rows] duration-200 motion-reduce:transition-none ${visible ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}
                         >
                           <div className="overflow-hidden">
-                            <div className="flex flex-col gap-0.5 pb-1 pl-8 pr-1 pt-0.5">
+                            <div className="ml-4 mt-0.5 flex flex-col gap-0.5 border-l border-border-subtle pl-1">
                               {/*
                                * EXACTLY two child rows, nothing
                                * else — plain navigation, no
@@ -881,12 +966,7 @@ export function Sidebar() {
                                   ),
                                 )}
                               >
-                                <span
-                                  aria-hidden="true"
-                                  className="material-symbols-outlined text-[18px]"
-                                >
-                                  folder_open
-                                </span>
+                                <SidebarIcon name="projects" />
 
                                 Projects
                               </NavLink>
@@ -900,12 +980,7 @@ export function Sidebar() {
                                   ),
                                 )}
                               >
-                                <span
-                                  aria-hidden="true"
-                                  className="material-symbols-outlined text-[18px]"
-                                >
-                                  groups
-                                </span>
+                                <SidebarIcon name="meetings" />
 
                                 Meetings
                               </NavLink>
@@ -916,25 +991,7 @@ export function Sidebar() {
                     )
                   })}
                 </nav>
-
-                <div className="mt-2">
-                  <button
-                    type="button"
-                    onClick={() => setCreateDialogOpen(true)}
-                    className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm text-text-muted transition-colors hover:bg-surface-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface-subtle"
-                  >
-                    <span
-                      aria-hidden="true"
-                      className="material-symbols-outlined text-[18px]"
-                    >
-                      add
-                    </span>
-
-                    Create research group
-                  </button>
-                </div>
-              </>
-            )}
+            ) : null}
           </div>
 
           <CreateResearchGroupDialog
@@ -944,19 +1001,39 @@ export function Sidebar() {
           />
         </div>
       )}
+      </div>
 
-      <nav className="mt-auto flex flex-col gap-1 border-t border-border-subtle pt-4">
+      {showResearchGroupSection && (
+        <div className="shrink-0 px-2 pb-2 pt-1">
+          <button
+            type="button"
+            onClick={() => setCreateDialogOpen(true)}
+            className="flex h-7 w-full items-center gap-2 whitespace-nowrap rounded px-2 text-left text-xs font-normal text-text-muted transition-colors hover:bg-surface-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface-subtle"
+          >
+            <SidebarIcon name="plus" />
+
+            Create research group
+          </button>
+        </div>
+      )}
+      </div>
+
+      <nav className="flex shrink-0 flex-col gap-0.5 border-t border-border-subtle p-2">
         {secondaryNavigation.map((item) => (
           <NavLink
             key={item.path}
             to={item.path}
             className={({ isActive }) =>
-              navClasses(isActive)
+              [
+                'flex h-7 items-center gap-2 rounded px-2 text-xs transition-colors',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface-subtle',
+                isActive
+                  ? 'font-medium text-text'
+                  : 'text-text-muted hover:bg-surface-hover hover:text-text',
+              ].join(' ')
             }
           >
-            <span className="material-symbols-outlined text-[20px]">
-              {item.icon}
-            </span>
+            <SidebarIcon name={item.icon} />
 
             <span>{item.label}</span>
           </NavLink>
