@@ -4,31 +4,27 @@ import {
   type Page,
 } from './diagnostics/failure-diagnostics'
 
-import { datePartPlusDays, login, replaceControlValue } from './helpers'
+import {
+  datePartPlusDays,
+  login,
+  openResearchGroupOverview,
+  replaceControlValue,
+} from './helpers'
 
 async function selectResearchGroup(
   page: Page,
   name: string,
 ) {
-  // The workspace tree row label is a pure navigation control
-  // to the group's Overview (approved global IA: no
-  // select-in-place, no contextual group-switch routing). It
-  // is addressed through the group container with the exact
-  // accessible name so the row's sibling chevron
-  // ("Expand <name>") can never match. Landing on the Overview
-  // syncs the provider's active Research Group, and the label
-  // is route-active there.
-  const label = page
-    .getByRole('group', { name })
-    .getByRole('button', {
-      name,
-      exact: true,
-    })
+  await openResearchGroupOverview(page, name)
 
-  await expect(label).toBeVisible()
-  await label.click()
-
-  await expect(label).toHaveAttribute(
+  await expect(
+    page
+      .getByRole('group', { name })
+      .getByRole('button', {
+        name,
+        exact: true,
+      }),
+  ).toHaveAttribute(
     'aria-current',
     'true',
   )
@@ -52,7 +48,9 @@ async function expandResearchGroup(
 
   await expect(group).toBeVisible()
 
-  const chevron = group.locator('button[aria-controls]')
+  const chevron = group.locator(
+    'button[aria-controls][aria-label]',
+  )
 
   if (
     (await chevron.getAttribute('aria-expanded')) !==
@@ -124,9 +122,8 @@ test(
     ).toBeVisible()
 
     // Changing the active Research Group must not scope My
-    // Work: the name row is pure navigation to the group's
-    // Overview, and My Work stays personal and unscoped when
-    // it is returned to.
+    // Work: enter the canonical Overview directly, then verify
+    // My Work stays personal and unscoped when it is returned to.
     await selectResearchGroup(
       page,
       'Robotics Lab',
@@ -185,23 +182,26 @@ test(
     const roboticsGroupId =
       getGroupIdFromUrl(page)
 
+    // The scoped list renders each Project name as a heading;
+    // the heading role keeps these assertions off the Sidebar's
+    // global Quick Access rows (buttons) for the same Projects.
     await expect(
-      page.getByText(
-        'E2E Robot Study',
-        { exact: true },
-      ),
+      page.getByRole('heading', {
+        name: 'E2E Robot Study',
+        exact: true,
+      }),
     ).toBeVisible()
 
     await expect(
-      page.getByText(
-        'Paper XYZ',
-        { exact: true },
-      ),
+      page.getByRole('heading', {
+        name: 'Paper XYZ',
+        exact: true,
+      }),
     ).toHaveCount(0)
 
-    // The name row is pure Overview navigation (the former
-    // in-place group switch is gone): the new group's scoped
-    // list is reached from the Overview context.
+    // Enter the canonical Overview directly (the Sidebar name
+    // controls disclosure), then reach the new group's scoped
+    // list from that context.
     await selectResearchGroup(
       page,
       'FG Example',
@@ -232,17 +232,17 @@ test(
     )
 
     await expect(
-      page.getByText(
-        'Paper XYZ',
-        { exact: true },
-      ),
+      page.getByRole('heading', {
+        name: 'Paper XYZ',
+        exact: true,
+      }),
     ).toBeVisible()
 
     await expect(
-      page.getByText(
-        'E2E Robot Study',
-        { exact: true },
-      ),
+      page.getByRole('heading', {
+        name: 'E2E Robot Study',
+        exact: true,
+      }),
     ).toHaveCount(0)
 
     // --------------------------------------------------------
@@ -285,17 +285,17 @@ test(
     )
 
     await expect(
-      otherPage.getByText(
-        'Paper XYZ',
-        { exact: true },
-      ),
+      otherPage.getByRole('heading', {
+        name: 'Paper XYZ',
+        exact: true,
+      }),
     ).toBeVisible()
 
     await expect(
-      otherPage.getByText(
-        'E2E Robot Study',
-        { exact: true },
-      ),
+      otherPage.getByRole('heading', {
+        name: 'E2E Robot Study',
+        exact: true,
+      }),
     ).toHaveCount(0)
 
     await page.goto(
@@ -303,17 +303,17 @@ test(
     )
 
     await expect(
-      page.getByText(
-        'E2E Robot Study',
-        { exact: true },
-      ),
+      page.getByRole('heading', {
+        name: 'E2E Robot Study',
+        exact: true,
+      }),
     ).toBeVisible()
 
     await expect(
-      page.getByText(
-        'Paper XYZ',
-        { exact: true },
-      ),
+      page.getByRole('heading', {
+        name: 'Paper XYZ',
+        exact: true,
+      }),
     ).toHaveCount(0)
 
     await otherPage.close()
@@ -339,9 +339,9 @@ test(
     const robotProjectPath =
       new URL(page.url()).pathname
 
-    // From the Entity deep link the name row is still pure
-    // Overview navigation; the new group's scoped list is the
-    // canonical next step.
+    // From the Entity deep link, enter the other group's
+    // canonical Overview directly; its scoped list is the next
+    // step.
     await selectResearchGroup(
       page,
       'FG Example',
@@ -377,7 +377,9 @@ test(
       })
 
     await expect(
-      roboticsGroup.locator('button[aria-controls]'),
+      roboticsGroup.locator(
+        'button[aria-controls][aria-label]',
+      ),
     ).toHaveAttribute('aria-expanded', 'true')
     await expect(
       roboticsGroup
@@ -402,18 +404,21 @@ test(
       ),
     ).toBeVisible()
 
+    // Heading role again: the list is empty here, while the
+    // Sidebar's global Quick Access may still show these
+    // Projects as personal rows.
     await expect(
-      page.getByText(
-        'Paper XYZ',
-        { exact: true },
-      ),
+      page.getByRole('heading', {
+        name: 'Paper XYZ',
+        exact: true,
+      }),
     ).toHaveCount(0)
 
     await expect(
-      page.getByText(
-        'E2E Robot Study',
-        { exact: true },
-      ),
+      page.getByRole('heading', {
+        name: 'E2E Robot Study',
+        exact: true,
+      }),
     ).toHaveCount(0)
   },
 )

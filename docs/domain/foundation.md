@@ -755,11 +755,13 @@ adapter remain valid but are NOT consumed by the Sidebar:
   StrictMode effect replay is a no-op, and a write failure never
   blocks navigation or rendering; an open never triggers a
   Quick Access refetch, invalidation, or reorder;
-- Research Group rows: the chevron is disclosure-only (toggles
-  that group's persisted manual expansion, never navigates); the
-  group name is a PURE navigation control to the canonical
-  Research Group Overview route `/groups/:groupId` (no
-  select-in-place, no contextual group-switch routing); the
+- Research Group rows: the chevron and group name toggle the SAME
+  disclosure state (persisted manual expansion, never navigation or
+  query-parameter changes); either control can immediately reverse
+  the other, including after manually collapsing a contextually
+  revealed group; the canonical Research Group Overview route
+  `/groups/:groupId` remains valid but is independent from the row's
+  disclosure controls; the
   overflow / three-dot menu is removed — the admin Settings
   destination lives on the group's Overview page;
 - an expanded Research Group renders EXACTLY two child rows —
@@ -769,7 +771,8 @@ adapter remain valid but are NOT consumed by the Sidebar:
 - selection and expansion are independent: route-active
   emphasis (active Project row, active Overview name, active
   scoped-list child) follows the ROUTE only; expansion alone
-  never creates selected styling; no persistent active
+  never creates selected styling, and a route-active Research Group
+  may remain collapsed; no persistent active
   background card/pill in this slice;
 - workspace-navigation preferences keep the complete-snapshot
   contract: `researchGroupOrder` and `expandedResearchGroups`

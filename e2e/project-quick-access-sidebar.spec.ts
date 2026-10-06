@@ -261,7 +261,7 @@ async function ensureGroupExpanded(
   await expect(group).toBeVisible()
 
   const chevron = group.locator(
-    'button[aria-controls]',
+    'button[aria-controls][aria-label]',
   )
 
   if (
@@ -455,7 +455,7 @@ test(
       await roboticsGroup
         .locator('button[aria-expanded]')
         .count(),
-    ).toBe(1)
+    ).toBe(2)
     expect(
       await roboticsGroup.getByRole('group').count(),
     ).toBe(0)
@@ -476,7 +476,7 @@ test(
 
     const homeUrl = page.url()
     const roboticsChevron = roboticsGroup.locator(
-      'button[aria-controls]',
+      'button[aria-controls][aria-label]',
     )
 
     await roboticsChevron.click()
@@ -494,29 +494,41 @@ test(
     expect(page.url()).toBe(homeUrl)
 
     // --------------------------------------------------------
-    // The name row is pure navigation to the group's
-    // Overview (no select-in-place), and route-active there.
+    // The name row controls the SAME disclosure state and
+    // never changes the current route.
     // --------------------------------------------------------
 
-    await roboticsGroup
-      .getByRole('button', {
-        name: 'Robotics Lab',
-        exact: true,
-      })
-      .click()
+    const roboticsName = roboticsGroup.getByRole('button', {
+      name: 'Robotics Lab',
+      exact: true,
+    })
 
-    await expect(page).toHaveURL(/\/groups\/\d+$/)
-    await expect(
-      roboticsGroup
-        .getByRole('button', {
-          name: 'Robotics Lab',
-          exact: true,
-        }),
-    ).toHaveAttribute('aria-current', 'true')
+    await roboticsName.click()
 
-    // The Overview is not a concrete Project route: the
-    // snapshot is untouched and no further Quick Access
-    // request fired.
+    await expect(roboticsName).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    )
+    await expect(roboticsChevron).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    )
+    expect(page.url()).toBe(homeUrl)
+
+    await roboticsName.click()
+
+    await expect(roboticsName).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    )
+    await expect(roboticsChevron).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    )
+    expect(page.url()).toBe(homeUrl)
+
+    // Disclosure is not a concrete Project route: the snapshot
+    // is untouched and no further Quick Access request fired.
     expect(
       await quickAccessRowNames(page),
     ).toEqual(snapshotOrder)

@@ -273,6 +273,46 @@ export async function expandResearchGroup(
 }
 
 /**
+ * Opens the canonical Research Group Overview directly. The Sidebar
+ * name is a disclosure control, so setup flows that need the Overview
+ * resolve the accessible group id through the authenticated API instead
+ * of assigning navigation behavior to that control.
+ */
+export async function openResearchGroupOverview(
+  page: Page,
+  groupName: string,
+) {
+  const groups = await page.evaluate(async () => {
+    const response = await fetch(
+      '/api/research-groups/',
+      { credentials: 'same-origin' },
+    )
+
+    if (!response.ok) {
+      throw new Error(
+        `Research Groups request failed: ${response.status}`,
+      )
+    }
+
+    return response.json()
+  }) as Array<{
+    id: number
+    name: string
+  }>
+
+  const group = groups.find(
+    (candidate) => candidate.name === groupName,
+  )
+
+  expect(group).toBeDefined()
+
+  await page.goto(`/groups/${group!.id}`)
+  await expect(page).toHaveURL(
+    new RegExp(`/groups/${group!.id}$`),
+  )
+}
+
+/**
  * Navigates to a Research Group's Meetings child destination via
  * the workspace tree (expanding the group first when needed).
  * The link is scoped to the group's node so other expanded

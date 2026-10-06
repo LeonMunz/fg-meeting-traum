@@ -7,31 +7,23 @@ import {
 import {
   login,
   logout,
+  openResearchGroupOverview,
 } from './helpers'
 
 async function selectResearchGroup(
   page: Page,
   name: string,
 ) {
-  // The workspace tree row label is a pure navigation control
-  // to the group's Overview (approved global IA: no
-  // select-in-place, no contextual group-switch routing). It
-  // is addressed through the group container with the exact
-  // accessible name so the row's sibling chevron
-  // ("Expand <name>") can never match. Landing on the Overview
-  // syncs the provider's active Research Group, and the label
-  // is route-active there.
-  const label = page
-    .getByRole('group', { name })
-    .getByRole('button', {
-      name,
-      exact: true,
-    })
+  await openResearchGroupOverview(page, name)
 
-  await expect(label).toBeVisible()
-  await label.click()
-
-  await expect(label).toHaveAttribute(
+  await expect(
+    page
+      .getByRole('group', { name })
+      .getByRole('button', {
+        name,
+        exact: true,
+      }),
+  ).toHaveAttribute(
     'aria-current',
     'true',
   )
@@ -41,22 +33,9 @@ async function openResearchGroupSettings(
   page: Page,
   name: string,
 ) {
-  // The admin-only Settings destination is the group
-  // Overview's destination row (the Sidebar overflow menu no
-  // longer exists): take the pure Overview navigation name
-  // row first, then the Overview's admin Settings link.
-  const label = page
-    .getByRole('group', { name })
-    .getByRole('button', {
-      name,
-      exact: true,
-    })
-
-  await label.click()
-
-  await expect(page).toHaveURL(
-    /\/groups\/\d+$/,
-  )
+  // The Sidebar name controls disclosure. Open the still-canonical
+  // Overview directly, then use its admin-only Settings link.
+  await openResearchGroupOverview(page, name)
 
   await page
     .getByRole('link', {

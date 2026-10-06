@@ -79,15 +79,15 @@ test(
     )
 
     // --------------------------------------------------------
-    // The new group is a workspace tree row: its own disclosure
-    // control and the pure navigation name row. There is no
+    // The new group is a workspace tree row: its name and chevron
+    // share disclosure state. There is no
     // overflow / three-dot menu — the admin-only Settings
     // destination lives on the group's Overview.
     // --------------------------------------------------------
 
     await expect(
       page.getByRole('button', {
-        name: `Expand ${groupName}`,
+        name: `Collapse ${groupName}`,
       }),
     ).toBeVisible()
 
@@ -108,22 +108,13 @@ test(
       new RegExp(`/groups/${newGroupId}/settings$`),
     )
 
-    // The name row is the pure Overview navigation control.
-    await createdRowLabel.click()
-
-    await expect(page).toHaveURL(
-      new RegExp(`/groups/${newGroupId}$`),
-    )
+    // The Overview route remains canonical even though the name
+    // controls disclosure rather than navigation.
+    await page.goto(`/groups/${newGroupId}`)
 
     // --------------------------------------------------------
     // Navigate within the new group.
     // --------------------------------------------------------
-
-    await page
-      .getByRole('button', {
-        name: `Expand ${groupName}`,
-      })
-      .click()
 
     await page
       .getByRole('group', { name: groupName })
@@ -155,14 +146,13 @@ test(
 
     // The reload lands on the scoped Projects list, where the
     // row is not route-active (the Overview owns the active
-    // presentation): the name row navigates back to the
-    // Overview, and the admin Settings destination survives
-    // the reload there.
+    // presentation): open the canonical Overview directly; the
+    // admin Settings destination survives the reload there.
     await expect(
       createdRowLabel,
     ).toBeVisible()
 
-    await createdRowLabel.click()
+    await page.goto(`/groups/${newGroupId}`)
 
     await expect(page).toHaveURL(
       new RegExp(`/groups/${newGroupId}$`),
@@ -237,17 +227,17 @@ test(
     expect(groups).toEqual([])
 
     // --------------------------------------------------------
-    // The sidebar exposes the first-group entry in the normal
-    // Research Group slot.
+    // The permanent, bottom-anchored Create research group
+    // action is visible even with zero Research Groups.
     // --------------------------------------------------------
 
-    const zeroStateEntry = page.getByRole('button', {
-      name: 'New research group',
+    const createEntry = page.getByRole('button', {
+      name: 'Create research group',
     })
-    await expect(zeroStateEntry).toBeVisible()
+    await expect(createEntry).toBeVisible()
 
     // Clicking opens the existing creation dialog.
-    await zeroStateEntry.click()
+    await createEntry.click()
 
     const dialog = page.getByRole('dialog', {
       name: 'Create research group',
@@ -274,7 +264,8 @@ test(
 
     // --------------------------------------------------------
     // The server response proves the creator's Owner membership;
-    // the zero-state entry is replaced by the workspace tree.
+    // the dialog closes, the new group appears in the workspace
+    // tree, and the permanent Create action remains available.
     // --------------------------------------------------------
 
     const response = await createResponse
@@ -284,7 +275,7 @@ test(
     const newGroupId = String(created.id)
 
     await expect(dialog).toBeHidden()
-    await expect(zeroStateEntry).toBeHidden()
+    await expect(createEntry).toBeVisible()
 
     const groupLabel = page
       .getByRole('group', { name: groupName })
@@ -309,12 +300,6 @@ test(
     ).toBeVisible()
 
     await page
-      .getByRole('button', {
-        name: `Expand ${groupName}`,
-      })
-      .click()
-
-    await page
       .getByRole('group', { name: groupName })
       .getByRole('link', { name: /Projects/ })
       .click()
@@ -331,12 +316,12 @@ test(
     await page.reload()
 
     // The reload lands on the scoped Projects list (the
-    // active presentation belongs to the Overview): the name
-    // row navigates back, and the admin Settings destination
+    // active presentation belongs to the Overview): open that
+    // canonical route directly; the admin Settings destination
     // survives the reload there.
     await expect(groupLabel).toBeVisible()
 
-    await groupLabel.click()
+    await page.goto(`/groups/${newGroupId}`)
 
     await expect(page).toHaveURL(
       new RegExp(`/groups/${newGroupId}$`),
