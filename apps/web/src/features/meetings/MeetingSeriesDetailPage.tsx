@@ -9,6 +9,7 @@ import {
   useNavigate,
   useParams,
 } from 'react-router'
+import { createPortal } from 'react-dom'
 
 import { ApiError } from '../../api/client'
 import {
@@ -1219,84 +1220,104 @@ export function MeetingSeriesDetailPage() {
         />
       )}
 
-      {importDialogOpen && series && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/25 px-4 py-8 backdrop-blur-[2px]"
-          onMouseDown={(event) => {
-            if (
-              event.target === event.currentTarget &&
-              !importingAgenda
-            ) {
-              handleImportCancel()
-            }
-          }}
-        >
+      {/* LAYER CONTRACT: the confirmation overlay is an
+          application overlay surface, not route content, so it
+          portals to document.body (the application overlay root;
+          the same pattern the Work Item inspector and modal
+          dialogs use) instead of rendering inside the mounting
+          route. `.fg-route-content` (the AppShell <main>, the ONE
+          named View Transition surface) carries
+          `view-transition-name`, which per CSS View Transitions
+          S2.1.1 makes it form a stacking context at ALL times;
+          rendered inside that <main>, the z-50 overlay would only
+          compete WITHIN the route-content context (effective z=0
+          at the root level), so the fixed Sidebar (z-30, a sibling
+          of the <main> in the root stacking context) paints over
+          it wherever they overlap - at mobile widths the centered
+          dialog spans the viewport, so the Sidebar subtree
+          intercepts pointer input aimed at the dialog. The fix is
+          layer ownership, not a z-index escalation; geometry,
+          scrim, and interactions are unchanged. */}
+      {importDialogOpen && series &&
+        createPortal(
           <div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="series-import-title"
-            className="w-full max-w-md overflow-hidden rounded-2xl border border-border-subtle bg-surface shadow-xl"
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/25 px-4 py-8 backdrop-blur-[2px]"
+            onMouseDown={(event) => {
+              if (
+                event.target === event.currentTarget &&
+                !importingAgenda
+              ) {
+                handleImportCancel()
+              }
+            }}
           >
-            <div className="px-6 py-5">
-              <h2
-                id="series-import-title"
-                className="text-lg font-semibold tracking-tight text-text"
-              >
-                Replace agenda?
-              </h2>
-
-              <p className="mt-2 text-sm text-text-muted">
-                This replaces the complete existing
-                agenda of the meeting template
-                "{series.title}". The sections in the
-                selected file become the template's full
-                agenda.
-              </p>
-
-              {actionError && (
-                <p
-                  role="alert"
-                  className="mt-3 rounded-lg bg-danger-bg px-3 py-2 text-sm text-danger"
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="series-import-title"
+              className="w-full max-w-md overflow-hidden rounded-2xl border border-border-subtle bg-surface shadow-xl"
+            >
+              <div className="px-6 py-5">
+                <h2
+                  id="series-import-title"
+                  className="text-lg font-semibold tracking-tight text-text"
                 >
-                  {actionError}
+                  Replace agenda?
+                </h2>
+
+                <p className="mt-2 text-sm text-text-muted">
+                  This replaces the complete existing
+                  agenda of the meeting template
+                  "{series.title}". The sections in the
+                  selected file become the template's full
+                  agenda.
                 </p>
-              )}
-            </div>
 
-            <div className="flex justify-end gap-2 border-t border-border-subtle px-6 py-4">
-              <button
-                type="button"
-                disabled={importingAgenda}
-                onClick={handleImportCancel}
-                className="inline-flex h-9 items-center rounded-lg px-3.5 text-sm font-medium text-text-muted outline-none transition hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus/40 disabled:opacity-60"
-              >
-                Cancel
-              </button>
-
-              <button
-                type="button"
-                disabled={importingAgenda}
-                onClick={() =>
-                  void handleImportConfirm()
-                }
-                className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-action px-3.5 text-sm font-semibold text-text-inverse outline-none transition hover:bg-action-hover focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 disabled:opacity-60"
-              >
-                {importingAgenda && (
-                  <span
-                    aria-hidden="true"
-                    className="material-symbols-outlined animate-spin text-[18px]"
+                {actionError && (
+                  <p
+                    role="alert"
+                    className="mt-3 rounded-lg bg-danger-bg px-3 py-2 text-sm text-danger"
                   >
-                    refresh
-                  </span>
+                    {actionError}
+                  </p>
                 )}
-                {importingAgenda
-                  ? 'Importing…'
-                  : 'Replace agenda'}
-              </button>
+              </div>
+
+              <div className="flex justify-end gap-2 border-t border-border-subtle px-6 py-4">
+                <button
+                  type="button"
+                  disabled={importingAgenda}
+                  onClick={handleImportCancel}
+                  className="inline-flex h-9 items-center rounded-lg px-3.5 text-sm font-medium text-text-muted outline-none transition hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus/40 disabled:opacity-60"
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="button"
+                  disabled={importingAgenda}
+                  onClick={() =>
+                    void handleImportConfirm()
+                  }
+                  className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-action px-3.5 text-sm font-semibold text-text-inverse outline-none transition hover:bg-action-hover focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 disabled:opacity-60"
+                >
+                  {importingAgenda && (
+                    <span
+                      aria-hidden="true"
+                      className="material-symbols-outlined animate-spin text-[18px]"
+                    >
+                      refresh
+                    </span>
+                  )}
+                  {importingAgenda
+                    ? 'Importing…'
+                    : 'Replace agenda'}
+                </button>
+              </div>
             </div>
-          </div>
-        </div>
-      )}
+          </div>,
+          document.body,
+        )}
     </div>
   )
 }
