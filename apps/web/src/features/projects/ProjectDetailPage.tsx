@@ -4,6 +4,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react'
 import {
@@ -32,6 +33,7 @@ import {
   WorkItemActionMenuTrigger,
   WorkItemDeleteDialog,
 } from './workItemDelete'
+import { applyWorkItemBoardMove } from './workItemBoardMove'
 import { ApiError } from '../../api/client'
 import {
   addProjectMembership,
@@ -690,8 +692,25 @@ export function ProjectDetailPage() {
   // list without requiring a hard reload.
   const [workItemsRefreshKey, setWorkItemsRefreshKey] =
     useState(0)
+  // Initial load only: no canonical Work Items are rendered for the
+  // current Project yet and the fetch is in flight. This is the one
+  // state that may show the destination loading shell.
   const [workItemsLoading, setWorkItemsLoading] =
     useState(false)
+  // Background revalidation of an already-rendered collection (e.g.
+  // after a successful Board drag). Silent: it never clears the list
+  // and never switches the Board into the loading shell.
+  const [workItemsRefreshing, setWorkItemsRefreshing] =
+    useState(false)
+  // The Project id whose canonical Work Items are currently held in
+  // `apiWorkItems` (set when that Project's fetch succeeds). Lets the
+  // fetch effect tell a first load for a Project apart from a
+  // background revalidation of data that is already on screen.
+  const workItemsLoadedProjectIdRef = useRef<number | null>(null)
+  // Monotonic Board-drop sequence: only the newest in-flight drop may
+  // roll the Board back, so a late failure of a superseded drop can
+  // never clobber a newer drop's optimistic state.
+  const workItemDropSequenceRef = useRef(0)
   const [workItemsError, setWorkItemsError] =
     useState<string | null>(null)
   const [
@@ -1017,8 +1036,10 @@ export function ProjectDetailPage() {
 
   useEffect(() => {
     if (!project) {
+      workItemsLoadedProjectIdRef.current = null
       setApiWorkItems([])
       setWorkItemsLoading(false)
+      setWorkItemsRefreshing(false)
       setWorkItemsError(null)
       return
     }
@@ -1026,30 +1047,58 @@ export function ProjectDetailPage() {
     const numericProjectId = Number(project.id)
     let cancelled = false
 
-    setApiWorkItems([])
-    setWorkItemsLoading(true)
+    // First load for this Project: no canonical data is on screen
+    // yet, so the destination loading shell is allowed. A background
+    // revalidation of an already-rendered Project must keep the
+    // existing data visible (a user mutation of an already-rendered
+    // board never removes the board while revalidating).
+    const isInitialLoad =
+      workItemsLoadedProjectIdRef.current !== numericProjectId
+
     setWorkItemsError(null)
+
+    if (isInitialLoad) {
+      setApiWorkItems([])
+      setWorkItemsLoading(true)
+    } else {
+      setWorkItemsRefreshing(true)
+    }
 
     listProjectWorkItems(numericProjectId)
       .then((items) => {
-        if (!cancelled) {
-          setApiWorkItems(items)
-        }
+        if (cancelled) return
+
+        workItemsLoadedProjectIdRef.current = numericProjectId
+        setApiWorkItems(items)
       })
       .catch((error) => {
         if (cancelled) return
 
-        setApiWorkItems([])
-        setWorkItemsError(
-          getWorkItemErrorMessage(
-            error,
-            'Work items could not be loaded.',
-          ),
-        )
+        if (isInitialLoad) {
+          // First load failed: existing behavior — empty list +
+          // error, the loading shell resolves into the error state.
+          setApiWorkItems([])
+          setWorkItemsError(
+            getWorkItemErrorMessage(
+              error,
+              'Work items could not be loaded.',
+            ),
+          )
+        } else {
+          // Revalidation failed: the rendered Board stays exactly as
+          // it is; the existing error surface reports the failure.
+          setWorkItemsError(
+            getWorkItemErrorMessage(
+              error,
+              'Work items could not be refreshed.',
+            ),
+          )
+        }
       })
       .finally(() => {
         if (!cancelled) {
           setWorkItemsLoading(false)
+          setWorkItemsRefreshing(false)
         }
       })
 
@@ -1324,6 +1373,7 @@ export function ProjectDetailPage() {
   const canDeleteProject =
     canManageProjectLifecycle &&
     !workItemsLoading &&
+    !workItemsRefreshing &&
     !workItemsError &&
     !projectHasWork
 
@@ -1658,7 +1708,7 @@ export function ProjectDetailPage() {
     setMembersError(null)
 
     if (role === 'viewer') {
-      if (workItemsLoading) {
+      if (workItemsLoading || workItemsRefreshing) {
         setMembersError(
           'Work items are still loading. Try again in a moment.',
         )
@@ -1720,7 +1770,7 @@ export function ProjectDetailPage() {
 
     setMembersError(null)
 
-    if (workItemsLoading) {
+    if (workItemsLoading || workItemsRefreshing) {
       setMembersError(
         'Work items are still loading. Try again in a moment.',
       )
@@ -2094,7 +2144,7 @@ export function ProjectDetailPage() {
     }
   }
 
-  const handleWorkItemStatusDrop = async (
+  const handleWorkItemStatusDrop = (
     workItemId: number,
     newStatus: DemoWorkItemStatus,
     beforeWorkItemId: number | null,
@@ -2130,25 +2180,65 @@ export function ProjectDetailPage() {
       return
     }
 
+    // Optimistic Board move: the card must land at the dropped
+    // position immediately, before the server mutation resolves. The
+    // transform operates on the FULL collection (active Board filters
+    // never corrupt the canonical state) and mirrors the server's
+    // atomic reposition + target-column normalization. A move the
+    // client already knows the server would reject resolves to the
+    // SAME array, so no state update is needed.
+    const snapshot = apiWorkItems
+    const optimisticItems = applyWorkItemBoardMove(
+      snapshot,
+      workItemId,
+      statusDefinitionId,
+      beforeWorkItemId,
+    )
+    const dropSequence =
+      ++workItemDropSequenceRef.current
+
     setBoardStatusDropError(null)
 
-    try {
-      await reorderWorkItem(workItemId, {
-        statusDefinitionId,
-        beforeWorkItemId,
-      })
-
-      // The server renumbers the whole target column, so refresh the
-      // list to render every card in its canonical position.
-      requestWorkItemsRefresh()
-    } catch (error) {
-      setBoardStatusDropError(
-        getWorkItemErrorMessage(
-          error,
-          'Work item could not be moved.',
-        ),
-      )
+    if (optimisticItems !== snapshot) {
+      setApiWorkItems(optimisticItems)
     }
+
+    void (async () => {
+      try {
+        await reorderWorkItem(workItemId, {
+          statusDefinitionId,
+          beforeWorkItemId,
+        })
+
+        // The server renumbers the whole target column: reconcile
+        // the full collection against the canonical list. This is a
+        // SILENT background revalidation — the rendered Board is
+        // never cleared or re-shelled while it is in flight.
+        requestWorkItemsRefresh()
+      } catch (error) {
+        // A newer drop may have started after this one; it already
+        // owns the Board state, and its reconciliation will settle
+        // the collection on canonical data. Only the newest drop may
+        // roll the Board back.
+        if (
+          workItemDropSequenceRef.current !==
+          dropSequence
+        ) {
+          return
+        }
+
+        // Restore the exact pre-drop collection; the Board stays
+        // mounted throughout, so the card simply returns to its
+        // original location.
+        setApiWorkItems(snapshot)
+        setBoardStatusDropError(
+          getWorkItemErrorMessage(
+            error,
+            'Work item could not be moved.',
+          ),
+        )
+      }
+    })()
   }
 
   const projectWorkItems = forceEmptyWorkItems
