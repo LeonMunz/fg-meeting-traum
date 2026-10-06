@@ -10,12 +10,14 @@ async function selectResearchGroup(
   page: Page,
   name: string,
 ) {
-  // The workspace tree row label is the canonical group
-  // selection control (the former selector dropdown was
-  // replaced by the hierarchical tree). It is addressed through
-  // the group container with the exact accessible name so the
-  // row's sibling controls (chevron "Expand <name>", overflow
-  // "More options for <name>") can never match.
+  // The workspace tree row label is a pure navigation control
+  // to the group's Overview (approved global IA: no
+  // select-in-place, no contextual group-switch routing). It
+  // is addressed through the group container with the exact
+  // accessible name so the row's sibling chevron
+  // ("Expand <name>") can never match. Landing on the Overview
+  // syncs the provider's active Research Group, and the label
+  // is route-active there.
   const label = page
     .getByRole('group', { name })
     .getByRole('button', {
@@ -121,11 +123,24 @@ test(
       ),
     ).toBeVisible()
 
-    // Changing the active Research Group must not scope My Work.
+    // Changing the active Research Group must not scope My
+    // Work: the name row is pure navigation to the group's
+    // Overview, and My Work stays personal and unscoped when
+    // it is returned to.
     await selectResearchGroup(
       page,
       'Robotics Lab',
     )
+
+    await expect(page).toHaveURL(
+      /\/groups\/\d+$/,
+    )
+
+    await page
+      .getByRole('link', {
+        name: /My Work/,
+      })
+      .click()
 
     await expect(page).toHaveURL(
       /\/my-work$/,
@@ -184,10 +199,26 @@ test(
       ),
     ).toHaveCount(0)
 
+    // The name row is pure Overview navigation (the former
+    // in-place group switch is gone): the new group's scoped
+    // list is reached from the Overview context.
     await selectResearchGroup(
       page,
       'FG Example',
     )
+
+    await expect(page).toHaveURL(
+      /\/groups\/\d+$/,
+    )
+
+    await page
+      .getByRole('group', {
+        name: 'FG Example',
+      })
+      .getByRole('link', {
+        name: /Projects/,
+      })
+      .click()
 
     await expect(page).toHaveURL(
       /\/projects\?group=\d+$/,
@@ -308,10 +339,26 @@ test(
     const robotProjectPath =
       new URL(page.url()).pathname
 
+    // From the Entity deep link the name row is still pure
+    // Overview navigation; the new group's scoped list is the
+    // canonical next step.
     await selectResearchGroup(
       page,
       'FG Example',
     )
+
+    await expect(page).toHaveURL(
+      /\/groups\/\d+$/,
+    )
+
+    await page
+      .getByRole('group', {
+        name: 'FG Example',
+      })
+      .getByRole('link', {
+        name: /Projects/,
+      })
+      .click()
 
     await expect(page).toHaveURL(
       new RegExp(
@@ -321,14 +368,24 @@ test(
 
     await page.goto(robotProjectPath)
 
+    // The Entity deep link contextually REVEALS the owning
+    // group (expansion only — expansion never creates
+    // selected styling).
+    const roboticsGroup = page
+      .getByRole('group', {
+        name: 'Robotics Lab',
+      })
+
     await expect(
-      page
-        .getByRole('group', { name: 'Robotics Lab' })
+      roboticsGroup.locator('button[aria-controls]'),
+    ).toHaveAttribute('aria-expanded', 'true')
+    await expect(
+      roboticsGroup
         .getByRole('button', {
           name: 'Robotics Lab',
           exact: true,
         }),
-    ).toHaveAttribute('aria-current', 'true')
+    ).not.toHaveAttribute('aria-current')
 
     // --------------------------------------------------------
     // Invalid explicit group context never leaks another group.
@@ -371,6 +428,10 @@ test(
       'Robotics Lab',
     )
 
+    const roboticsGroupId =
+      new URL(page.url())
+        .pathname.match(/^\/groups\/(\d+)$/)![1]
+
     await expandResearchGroup(
       page,
       'Robotics Lab',
@@ -386,7 +447,9 @@ test(
       .click()
 
     await expect(page).toHaveURL(
-      /\/meetings\?group=\d+$/,
+      new RegExp(
+        `/meetings\\?group=${roboticsGroupId}$`,
+      ),
     )
 
     await page
@@ -441,35 +504,54 @@ test(
     const meetingPath =
       new URL(page.url()).pathname
 
-    await expect(
-      page
-        .getByRole('group', { name: 'Robotics Lab' })
-        .getByRole('button', {
-          name: 'Robotics Lab',
-          exact: true,
-        }),
-    ).toHaveAttribute('aria-current', 'true')
+    // The Entity deep link restores the provider's Research
+    // Group context; the unscoped Meetings list resolves to
+    // that group's scope (route-active presentation belongs
+    // to the Overview only).
+    await page.goto('/meetings')
 
-    // Switching groups on an Entity exits to the new group's list.
+    await expect(page).toHaveURL(
+      new RegExp(
+        `/meetings\\?group=${roboticsGroupId}$`,
+      ),
+    )
+
+    // Switching groups on an Entity exits to the new group's
+    // list: the name row takes the Overview first, then the
+    // scoped child destination.
     await selectResearchGroup(
       page,
       'FG Example',
     )
 
     await expect(page).toHaveURL(
+      /\/groups\/\d+$/,
+    )
+
+    await page
+      .getByRole('group', {
+        name: 'FG Example',
+      })
+      .getByRole('link', {
+        name: /Meetings/,
+      })
+      .click()
+
+    await expect(page).toHaveURL(
       /\/meetings\?group=\d+$/,
     )
 
+    // No Robotics meeting leaks into the FG Example scope.
     await expect(
-      page
-        .getByRole('group', { name: 'FG Example' })
-        .getByRole('button', {
-          name: 'FG Example',
-          exact: true,
-        }),
-    ).toHaveAttribute('aria-current', 'true')
+      page.getByText(
+        'E2E Robotics Scope Meeting',
+        { exact: true },
+      ),
+    ).toHaveCount(0)
 
-    // Opening the Robotics meeting directly restores Robotics context.
+    // Opening the Robotics meeting directly restores Robotics
+    // context (the provider's active group drives the
+    // unscoped list scope).
     await page.goto(meetingPath)
 
     await expect(
@@ -480,13 +562,12 @@ test(
       }),
     ).toBeVisible()
 
-    await expect(
-      page
-        .getByRole('group', { name: 'Robotics Lab' })
-        .getByRole('button', {
-          name: 'Robotics Lab',
-          exact: true,
-        }),
-    ).toHaveAttribute('aria-current', 'true')
+    await page.goto('/meetings')
+
+    await expect(page).toHaveURL(
+      new RegExp(
+        `/meetings\\?group=${roboticsGroupId}$`,
+      ),
+    )
   },
 )

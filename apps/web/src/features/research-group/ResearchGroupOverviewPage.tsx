@@ -178,6 +178,29 @@ export function ResearchGroupOverviewPage() {
 
             Meetings
           </Link>
+
+          {/*
+           * The admin Research Group settings destination,
+           * reachable from the group's Overview after the
+           * Sidebar overflow menu was removed (frozen contract
+           * R-4). Admin-only: the settings page enforces the
+           * canonical admin rule itself.
+           */}
+          {group.role === 'admin' && (
+            <Link
+              to={`/groups/${groupId}/settings`}
+              className="inline-flex h-9 items-center gap-2 rounded-lg border border-outline-variant bg-surface-container-lowest px-3.5 text-sm font-medium text-on-surface transition hover:bg-surface-container"
+            >
+              <span
+                aria-hidden="true"
+                className="material-symbols-outlined text-[18px]"
+              >
+                settings
+              </span>
+
+              Settings
+            </Link>
+          )}
         </nav>
       </section>
     </div>

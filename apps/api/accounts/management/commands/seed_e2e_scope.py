@@ -83,6 +83,26 @@ class Command(BaseCommand):
                 name="E2E Robot Study",
             )
 
+        # The Sidebar's global Quick Access E2E needs more than
+        # one Project per Research Group (and more than one
+        # Research Group overall) to prove the flat global
+        # section deterministically.
+        for extra_name in (
+            "E2E Robot Calibration",
+            "E2E Robot Assembly",
+        ):
+            extra_project = Project.objects.filter(
+                research_group=group,
+                name=extra_name,
+            ).first()
+
+            if extra_project is None:
+                create_project(
+                    research_group=group,
+                    creator=alex,
+                    name=extra_name,
+                )
+
         work_item = WorkItem.objects.filter(
             project=project,
             title="E2E Analyze robot data",

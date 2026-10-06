@@ -313,6 +313,68 @@ describe('ResearchGroupOverviewPage', () => {
     ).not.toHaveBeenCalled()
   })
 
+  it('offers the admin-only Settings destination on the Overview for admins', async () => {
+    const router =
+      createRouter('/groups/12')
+
+    render(
+      <RouterProvider
+        router={router}
+      />,
+    )
+
+    await screen.findByRole(
+      'heading',
+      { name: 'Beacon Lab' },
+    )
+
+    const settings =
+      screen.getByRole(
+        'link',
+        { name: 'Settings' },
+      )
+
+    expect(settings).toHaveAttribute(
+      'href',
+      '/groups/12/settings',
+    )
+
+    // The group-scoped destinations remain.
+    expect(
+      screen.getByRole('link', {
+        name: 'Projects',
+      }),
+    ).toHaveAttribute('href', '/projects?group=12')
+    expect(
+      screen.getByRole('link', {
+        name: 'Meetings',
+      }),
+    ).toHaveAttribute('href', '/meetings?group=12')
+  })
+
+  it('does not offer the Settings destination on the Overview for non-admins', async () => {
+    const router =
+      createRouter('/groups/11')
+
+    render(
+      <RouterProvider
+        router={router}
+      />,
+    )
+
+    await screen.findByRole(
+      'heading',
+      { name: 'Aurora Research' },
+    )
+
+    expect(
+      screen.queryByRole(
+        'link',
+        { name: 'Settings' },
+      ),
+    ).not.toBeInTheDocument()
+  })
+
   it('keeps /groups/:groupId/settings rendering the existing settings page', async () => {
     const router =
       createRouter(

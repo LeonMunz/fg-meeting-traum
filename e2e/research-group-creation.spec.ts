@@ -80,8 +80,9 @@ test(
 
     // --------------------------------------------------------
     // The new group is a workspace tree row: its own disclosure
-    // control plus the admin-only overflow destination (the
-    // creator is the group's Owner / admin).
+    // control and the pure navigation name row. There is no
+    // overflow / three-dot menu — the admin-only Settings
+    // destination lives on the group's Overview.
     // --------------------------------------------------------
 
     await expect(
@@ -90,17 +91,29 @@ test(
       }),
     ).toBeVisible()
 
-    await page
-      .getByRole('button', {
+    await expect(
+      page.getByRole('button', {
         name: `More options for ${groupName}`,
+      }),
+    ).toHaveCount(0)
+
+    await page
+      .getByRole('link', {
+        name: 'Settings',
+        exact: true,
       })
       .click()
 
-    await expect(
-      page.getByRole('menuitem', { name: 'Settings' }),
-    ).toBeVisible()
+    await expect(page).toHaveURL(
+      new RegExp(`/groups/${newGroupId}/settings$`),
+    )
 
-    await page.keyboard.press('Escape')
+    // The name row is the pure Overview navigation control.
+    await createdRowLabel.click()
+
+    await expect(page).toHaveURL(
+      new RegExp(`/groups/${newGroupId}$`),
+    )
 
     // --------------------------------------------------------
     // Navigate within the new group.
@@ -112,7 +125,10 @@ test(
       })
       .click()
 
-    await page.getByRole('link', { name: /Projects/ }).click()
+    await page
+      .getByRole('group', { name: groupName })
+      .getByRole('link', { name: /Projects/ })
+      .click()
 
     await expect(page).toHaveURL(
       new RegExp(`/projects\\?group=${newGroupId}$`),
@@ -137,24 +153,35 @@ test(
 
     await page.reload()
 
+    // The reload lands on the scoped Projects list, where the
+    // row is not route-active (the Overview owns the active
+    // presentation): the name row navigates back to the
+    // Overview, and the admin Settings destination survives
+    // the reload there.
     await expect(
       createdRowLabel,
     ).toBeVisible()
+
+    await createdRowLabel.click()
+
+    await expect(page).toHaveURL(
+      new RegExp(`/groups/${newGroupId}$`),
+    )
     await expect(createdRowLabel).toHaveAttribute(
       'aria-current',
       'true',
     )
 
-    // The admin-only overflow destination survives the reload.
     await page
-      .getByRole('button', {
-        name: `More options for ${groupName}`,
+      .getByRole('link', {
+        name: 'Settings',
+        exact: true,
       })
       .click()
 
-    await expect(
-      page.getByRole('menuitem', { name: 'Settings' }),
-    ).toBeVisible()
+    await expect(page).toHaveURL(
+      new RegExp(`/groups/${newGroupId}/settings$`),
+    )
   },
 )
 
@@ -287,7 +314,10 @@ test(
       })
       .click()
 
-    await page.getByRole('link', { name: /Projects/ }).click()
+    await page
+      .getByRole('group', { name: groupName })
+      .getByRole('link', { name: /Projects/ })
+      .click()
 
     await expect(page).toHaveURL(
       new RegExp(`/projects\\?group=${newGroupId}$`),
@@ -300,20 +330,31 @@ test(
 
     await page.reload()
 
+    // The reload lands on the scoped Projects list (the
+    // active presentation belongs to the Overview): the name
+    // row navigates back, and the admin Settings destination
+    // survives the reload there.
     await expect(groupLabel).toBeVisible()
+
+    await groupLabel.click()
+
+    await expect(page).toHaveURL(
+      new RegExp(`/groups/${newGroupId}$`),
+    )
     await expect(groupLabel).toHaveAttribute(
       'aria-current',
       'true',
     )
 
     await page
-      .getByRole('button', {
-        name: `More options for ${groupName}`,
+      .getByRole('link', {
+        name: 'Settings',
+        exact: true,
       })
       .click()
 
-    await expect(
-      page.getByRole('menuitem', { name: 'Settings' }),
-    ).toBeVisible()
+    await expect(page).toHaveURL(
+      new RegExp(`/groups/${newGroupId}/settings$`),
+    )
   },
 )

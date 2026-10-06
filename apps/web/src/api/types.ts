@@ -1179,7 +1179,11 @@ export interface ApiProjectNavigationOpen {
 /**
  * One entry of the personal Project Quick Access read model
  * returned by
- * `GET /api/research-groups/{researchGroupId}/project-quick-access/`.
+ * `GET /api/me/project-quick-access/` (GLOBAL snapshot — the
+ * Sidebar's sole Quick Access data source) or
+ * `GET /api/research-groups/{researchGroupId}/project-quick-access/`
+ * (per-Research-Group read model, retained but not consumed by
+ * the Sidebar).
  *
  * This is a deliberately SMALLER read model than `ApiProject`:
  * the backend already applied current Project read access, the

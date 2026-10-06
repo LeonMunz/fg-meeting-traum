@@ -185,36 +185,53 @@ export async function logout(
 export async function openProjects(
   page: Page,
 ) {
-  // The workspace tree keeps the active group's child destinations
-  // behind its disclosure control: reveal the active group first,
-  // then take the Projects child. The link is scoped to the active
-  // group's node so other expanded groups can never make it
-  // ambiguous.
-  const activeRow = page
-    .locator(
-      'nav[aria-label="Research groups"] button[aria-current="true"]',
+  // The workspace tree no longer marks the active group's
+  // row (route-active presentation belongs to the group's
+  // Overview only): resolve the provider's active Research
+  // Group from its canonical local UI state, then open THAT
+  // group's Projects child destination through the tree.
+  const activeGroupId = await page.evaluate(
+    () => {
+      const raw = window.localStorage.getItem(
+        'fg-workspace.active-research-group-id',
+      )
+
+      return raw ? Number(raw) : null
+    },
+  )
+
+  expect(
+    Number.isInteger(activeGroupId) &&
+      activeGroupId > 0,
+  ).toBe(true)
+
+  const groups = await page.evaluate(async () => {
+    const response = await fetch(
+      '/api/research-groups/',
+      { credentials: 'same-origin' },
     )
-    .locator('..')
-    .locator('..')
 
-  await expect(activeRow).toBeVisible()
+    if (!response.ok) {
+      throw new Error(
+        `Research Groups request failed: ${response.status}`,
+      )
+    }
 
-  const chevron = activeRow.getByRole('button', {
-    name: /^Expand /,
-  })
+    return response.json()
+  }) as Array<{
+    id: number
+    name: string
+  }>
 
-  if (await chevron.isVisible()) {
-    await chevron.click()
-  }
+  const activeGroup = groups.find(
+    (group) => group.id === activeGroupId,
+  )
 
-  await activeRow
-    .getByRole('link', {
-      name: /Projects/,
-    })
-    .click()
+  expect(activeGroup).toBeDefined()
 
-  await expect(page).toHaveURL(
-    /\/projects\?group=\d+$/,
+  await openGroupProjects(
+    page,
+    activeGroup!.name,
   )
 }
 

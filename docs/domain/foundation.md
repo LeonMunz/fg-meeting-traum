@@ -564,7 +564,8 @@ the definition IDs.
 ### 3b. Project Quick Access recency (personal navigation recency, implemented)
 
 Project Quick Access is the personal list of up to five Projects that a
-user's Sidebar can show below each Research Group's `Projects` node.
+user's Sidebar shows in ONE flat, global Quick Access section
+(above the Research Groups, never nested below a Research Group).
 Its V1 relevance signal is the user's OWN explicit Project
 navigation/opening — recorded as personal navigation recency.
 
@@ -649,9 +650,13 @@ server owns the timestamp), and
 read model; both return the server response unchanged and let
 `ApiError` propagate unchanged. The client performs no ranking,
 access or archive filtering, sorting, or current-Project composition
-— all of it stays backend-owned — and no UI consumes these
-functions yet; direct API contract tests pin the endpoints, the
-empty open body, unchanged server values, and error propagation.
+— all of it stays backend-owned. The Sidebar consumes
+`fetchGlobalProjectQuickAccess()` (the global snapshot) and
+`recordProjectOpen(projectId)` (the central open recording); the
+per-Research-Group `fetchProjectQuickAccess(researchGroupId)`
+adapter remains valid but is not consumed by any UI. Direct API
+contract tests pin the endpoints, the empty open body, unchanged
+server values, and error propagation.
 
 **Quick Access read model** (per Research Group, personal, bounded
 to **five** candidates):
@@ -707,17 +712,83 @@ The ordinary Project list
 semantics and ordering: it is never re-ordered by personal recency,
 and ordinary Project GET requests never record recency.
 
-NOT IMPLEMENTED (the feature is NOT in the Sidebar yet — the client
-adapter above is transport-level plumbing only):
+**Sidebar IA (implemented, slice 2 of the frozen contract).** The
+Sidebar renders the approved GLOBAL Quick Access information
+architecture; the per-Research-Group endpoint and its client
+adapter remain valid but are NOT consumed by the Sidebar:
 
-- the Sidebar Project children UI
-- the Projects disclosure/chevron behavior
-- `expandedProjectSections` UI integration
-- current-Project injection/replacement logic (kept-visible rule)
-- automatic recording of Project opens from UI navigation
-- Project Quick Access caching/loading/error UI
-- Research Group drag/drop
-- final visual polish
+- ONE flat, personal, global Quick Access section — never nested
+  below a Research Group, never collapsible, always present
+  (compact loading / error-with-Retry / empty states); at most
+  five visible Project rows; rows are pure navigation controls
+  to the Project's Work Items surface (no per-row Research
+  Group label in V1);
+- exactly ONE `fetchGlobalProjectQuickAccess()` request per cold
+  load: the first successful server response defines the STABLE
+  session snapshot order (no client-side sorting, no
+  per-Research-Group fan-out); a monotonic sequence guard drops
+  stale in-flight responses; the error state's Retry performs
+  one new global request;
+- spatial stability: ordinary navigation never refetches or
+  reorders the snapshot. A current Project inside the snapshot
+  keeps its exact slot (active emphasis only); a current
+  Project outside the snapshot is appended contextually while
+  fewer than five candidates are visible, or replaces ONLY the
+  fifth visible slot when the snapshot is full — never
+  persisted, restored when the context is left;
+- Research Group identity NEVER invalidates the snapshot
+  (Project A → Project B across groups causes no refetch);
+- authoritative eligibility reconciliation: when the current
+  concrete Project's own `getProject` fails (deleted / access
+  loss), the Sidebar drops any in-flight snapshot response and
+  refetches the authoritative list; the next cold load is the
+  authoritative backstop. Documented gap: an archive/restore
+  performed OUTSIDE the concrete Project route has no clean
+  frontend lifecycle signal and reconciles at the next cold
+  load;
+- central Project-open recording: every logical entry into a
+  concrete Project (direct/deep link, Quick Access row, Projects
+  list row, any other navigation) records exactly ONE
+  non-blocking `recordProjectOpen(projectId)` per logical entry
+  — tab changes inside the same Project do not re-record,
+  leaving ends the span, re-entering records a new open, the
+  StrictMode effect replay is a no-op, and a write failure never
+  blocks navigation or rendering; an open never triggers a
+  Quick Access refetch, invalidation, or reorder;
+- Research Group rows: the chevron is disclosure-only (toggles
+  that group's persisted manual expansion, never navigates); the
+  group name is a PURE navigation control to the canonical
+  Research Group Overview route `/groups/:groupId` (no
+  select-in-place, no contextual group-switch routing); the
+  overflow / three-dot menu is removed — the admin Settings
+  destination lives on the group's Overview page;
+- an expanded Research Group renders EXACTLY two child rows —
+  `Projects` → `/projects?group=<id>` and `Meetings` →
+  `/meetings?group=<id>` — plain navigation (no disclosure, no
+  chevron, no Project children; no third hierarchy level);
+- selection and expansion are independent: route-active
+  emphasis (active Project row, active Overview name, active
+  scoped-list child) follows the ROUTE only; expansion alone
+  never creates selected styling; no persistent active
+  background card/pill in this slice;
+- workspace-navigation preferences keep the complete-snapshot
+  contract: `researchGroupOrder` and `expandedResearchGroups`
+  are hydrated and persisted as before (manual RG expansion
+  stays personal/persisted); contextual route reveal is
+  presentation-only and never persisted; `expandedProjectSections`
+  is round-tripped unchanged (compared and re-sent verbatim) but
+  is NOT consumed for Sidebar presentation.
+
+Still NOT implemented: Research Group drag/drop and the exact
+Stitch visual matching (visual slice 3).
+
+Pinned by `apps/web/src/components/layout/Sidebar.test.tsx`,
+`apps/web/src/components/layout/projectQuickAccess.test.ts`
+(pure snapshot / contextual composition helper), and the browser
+acceptance `e2e/project-quick-access-sidebar.spec.ts`.
+Canonical reference:
+`docs/design/workspace-sidebar/IMPLEMENTATION_CONTRACT.md`
+(QA-1…QA-18).
 
 
 ## 4. Project Membership

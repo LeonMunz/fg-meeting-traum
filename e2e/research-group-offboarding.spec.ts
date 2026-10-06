@@ -33,12 +33,14 @@ async function selectResearchGroup(
   page: Page,
   name: string,
 ) {
-  // The workspace tree row label is the canonical group
-  // selection control (the former selector dropdown was
-  // replaced by the hierarchical tree). It is addressed through
-  // the group container with the exact accessible name so the
-  // row's sibling controls (chevron "Expand <name>", overflow
-  // "More options for <name>") can never match.
+  // The workspace tree row label is a pure navigation control
+  // to the group's Overview (approved global IA: no
+  // select-in-place, no contextual group-switch routing). It
+  // is addressed through the group container with the exact
+  // accessible name so the row's sibling chevron
+  // ("Expand <name>") can never match. Landing on the Overview
+  // syncs the provider's active Research Group, and the label
+  // is route-active there.
   const label = page
     .getByRole('group', { name })
     .getByRole('button', {
@@ -59,17 +61,27 @@ async function openResearchGroupSettings(
   page: Page,
   name: string,
 ) {
-  // The group's admin-only overflow destination (the former
-  // selector dropdown's "Research group settings" entry).
-  await page
+  // The admin-only Settings destination is the group
+  // Overview's destination row (the Sidebar overflow menu no
+  // longer exists): take the pure Overview navigation name
+  // row first, then the Overview's admin Settings link.
+  const label = page
+    .getByRole('group', { name })
     .getByRole('button', {
-      name: `More options for ${name}`,
+      name,
+      exact: true,
     })
-    .click()
+
+  await label.click()
+
+  await expect(page).toHaveURL(
+    /\/groups\/\d+$/,
+  )
 
   await page
-    .getByRole('menuitem', {
+    .getByRole('link', {
       name: 'Settings',
+      exact: true,
     })
     .click()
 
