@@ -541,6 +541,49 @@ button {
   cursor: pointer;
 }
 
+/* ── Workspace typography roles ─────────────────────────────────
+ * Semantic typography roles for FG Workspace content pages — the
+ * SETTLED roles of docs/design/workspace-typography-density.md §1.
+ * Size / line-height / weight expressions only: color, radius, and
+ * spacing stay per-element Tailwind utilities, and no @theme token is
+ * introduced (tokenization is a separate architecture decision).
+ * Allowed weights are 400 / 500 / 600. The frozen Sidebar keeps its
+ * own scale (workspace-sidebar/IMPLEMENTATION_CONTRACT.md §3.4) and
+ * does not use these classes. Where one usage deviates from the role
+ * weight (e.g. search input text at 400 inside the 500-weight
+ * control role), a per-element utility overrides this class
+ * (utilities layer beats components layer).
+ */
+@layer components {
+  .fg-type-page-title {
+    @apply text-[24px] leading-7 font-semibold tracking-tight;
+  }
+
+  .fg-type-section-heading {
+    @apply text-base leading-[22px] font-semibold;
+  }
+
+  .fg-type-record-title {
+    @apply text-sm leading-5 font-semibold;
+  }
+
+  .fg-type-primary-content {
+    @apply text-sm leading-5;
+  }
+
+  .fg-type-control {
+    @apply text-[13px] leading-[18px] font-medium;
+  }
+
+  .fg-type-meta {
+    @apply text-xs leading-4 font-normal;
+  }
+
+  .fg-type-micro {
+    @apply text-[11px] leading-4 font-medium;
+  }
+}
+
 /* ── Route content view transition ───────────────────────────────
  * Premium navigation continuity: opted-in global navigations commit
  * through React Router's native View Transition integration (the

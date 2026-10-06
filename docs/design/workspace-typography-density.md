@@ -1,9 +1,12 @@
 # FG Workspace — Workspace Typography & Density Contract
 
 **Status:** Canonical contract for semantic typography; the density
-section (§2) is **provisional** by explicit status. Documentation only —
-no production source, test, token, Tailwind, radius, border, or spacing
-change is introduced by this document.
+section (§2) is **provisional** by explicit status, with the Projects
+reference values (36px normal page control, 68px min two-line record
+row) accepted for that pattern by manual host-browser visual acceptance
+on 2026-10-06 (see §2). Documentation only — no production source,
+test, token, Tailwind, radius, border, or spacing change is introduced
+by this document.
 
 **Revision:** v2 (2026-10-06) — v1 was the one-off audit report
 (recovered from Git history if needed); v2 is the durable contract.
@@ -76,12 +79,25 @@ invariants.** They become global invariants only after browser
 validation and explicit acceptance. Until that acceptance exists, do
 not cite 32px / 36px / 40px / 68px as frozen or universally canonical.
 
+**Partial acceptance record (2026-10-06).** The Projects reference
+migration (contract slice A, §3.1) passed manual host-browser visual
+acceptance: the user inspected the Projects page and accepted the
+typography/density result (24px page-title hierarchy, 13px controls,
+14px primary record text, 12px metadata, 36px page controls, 68px
+two-line records). The **36px normal page control** and the **68px min
+two-line record row** are accepted **for the Projects reference pattern
+only** — a pattern-scoped acceptance, NOT a universal FG component
+invariant: it does not authorize citing 32px / 36px / 40px / 68px as
+frozen for other surfaces (e.g. the Meetings reference) or generic
+components, and every value not explicitly accepted below stays
+provisional until independently validated and explicitly accepted.
+
 | Density role | Value | Status / note |
 |---|---|---|
 | Compact control (inline banner actions) | 32px | provisional target (matches current banner Retry) |
-| Normal page control (buttons, chips, search, row overflow, empty CTAs) | 36px | provisional target (the de-facto page control of Meetings) |
+| Normal page control (buttons, chips, search, row overflow, empty CTAs) | 36px | **accepted for the Projects reference pattern** (manual host-browser visual acceptance, 2026-10-06; also the de-facto page control of Meetings) — NOT a universal invariant; still provisional for other surfaces |
 | Structural 40px band | 40px | provisional, only where justified (Meetings tab strip; dialogs reserved) — never a general button height |
-| Two-line record row (Projects + Meetings) | 68px min | provisional target; matches both accepted pages (`min-h-[68px]`); rows may grow (tablet meta wrap) |
+| Two-line record row (Projects + Meetings) | 68px min | **accepted for the Projects reference pattern** (manual host-browser visual acceptance, 2026-10-06); matches both accepted pages (`min-h-[68px]`); rows may grow (tablet meta wrap); the Meetings reference remains a separate pending acceptance — NOT a universal invariant |
 | Single-line data row | 40px | reserved — no single-line rows on scope pages today |
 | List header bands | column header 36px · section header 32px | provisional; roles stay distinct (scannable columns vs in-list group anchor) |
 | Icon steps | 14 / 16 / 18 / 24px | provisional target: nav-structural / meta-inline / control / empty-state display |
@@ -240,3 +256,10 @@ values (still provisional until that acceptance).
 - Measurements quoted from the files named in the scope at `4453f5e`;
   where the frozen Sidebar contract and code could drift, code at HEAD
   is the measured source.
+- Projects reference acceptance (2026-10-06): the slice A Projects
+  migration passed manual host-browser visual acceptance; the 36px
+  normal page control and the 68px min two-line record row are accepted
+  for the Projects reference pattern only (not universal invariants).
+  The settled §1 roles are unchanged by this record. The Meetings
+  reference (slice B) has no acceptance yet. Future surface / radius /
+  border / search-chrome work remains separate from this contract.

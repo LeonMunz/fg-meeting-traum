@@ -303,11 +303,11 @@ export function ProjectListPage() {
       <WorkspaceContent>
       <header className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h1 className="text-3xl font-semibold tracking-tight text-text">
+          <h1 className="fg-type-page-title text-text">
             Projects
           </h1>
 
-          <p className="mt-1.5 max-w-2xl text-sm leading-6 text-text-muted">
+          <p className="mt-1.5 max-w-2xl fg-type-primary-content text-text-muted">
             {activeResearchGroup
               ? `Projects you can access in ${activeResearchGroup.name}.`
               : 'Organize research work in separate project spaces.'}
@@ -318,9 +318,9 @@ export function ProjectListPage() {
           type="button"
           disabled={!hasResearchGroup || isLoading}
           onClick={() => setCreateDialogOpen(true)}
-          className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-lg bg-action px-4 text-sm font-semibold text-text-inverse shadow-sm transition hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-45"
+          className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-lg bg-action px-4 fg-type-control text-text-inverse shadow-sm transition hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-45"
         >
-          <span className="material-symbols-outlined text-[19px]">
+          <span className="material-symbols-outlined text-[18px]">
             add
           </span>
           New project
@@ -344,7 +344,7 @@ export function ProjectListPage() {
                     setStatusFilter(filter.value)
                   }}
                   className={[
-                    'rounded-lg px-3 py-2 text-sm font-medium transition',
+                    'inline-flex h-9 items-center rounded-lg px-3 fg-type-control transition',
                     isActive
                       ? 'bg-selected-neutral-bg text-selected-neutral-text'
                       : 'text-text-muted hover:bg-surface-hover hover:text-text',
@@ -368,7 +368,7 @@ export function ProjectListPage() {
                   : showArchivedProjects
               }
               className={[
-                'inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition',
+                'inline-flex h-9 items-center gap-1.5 rounded-lg px-3 fg-type-control transition',
                 showArchived
                   ? 'bg-selected-neutral-bg text-selected-neutral-text'
                   : 'text-text-muted hover:bg-surface-hover hover:text-text',
@@ -376,7 +376,7 @@ export function ProjectListPage() {
             >
               <span
                 aria-hidden="true"
-                className="material-symbols-outlined text-[17px]"
+                className="material-symbols-outlined text-[16px]"
               >
                 archive
               </span>
@@ -384,7 +384,7 @@ export function ProjectListPage() {
               Archived
 
               {archivedProjectCount > 0 && (
-                <span className="ml-0.5 text-[11px] opacity-70">
+                <span className="ml-0.5 fg-type-micro font-normal opacity-70">
                   {archivedProjectCount}
                 </span>
               )}
@@ -407,7 +407,7 @@ export function ProjectListPage() {
                 setSearchQuery(event.target.value)
               }
               placeholder="Search projects..."
-              className="h-10 w-full rounded-lg border border-border-field bg-surface pl-10 pr-4 text-sm text-text outline-none transition placeholder:text-text-muted/70 focus:border-focus focus:ring-2 focus:ring-focus/15"
+              className="h-9 w-full rounded-lg border border-border-field bg-surface pl-10 pr-4 fg-type-control font-normal text-text outline-none transition placeholder:text-text-muted/70 focus:border-focus focus:ring-2 focus:ring-focus/15"
             />
           </label>
         </div>
@@ -420,23 +420,23 @@ export function ProjectListPage() {
             className="mt-8 flex min-h-72 flex-col items-center justify-center rounded-xl border border-border-structural bg-surface-quiet px-6 py-12 text-center"
           >
             <div className="flex h-12 w-12 items-center justify-center rounded-full bg-danger-bg text-danger">
-              <span className="material-symbols-outlined text-[23px]">
+              <span className="material-symbols-outlined text-[24px]">
                 cloud_off
               </span>
             </div>
 
-            <h2 className="mt-4 text-base font-semibold text-text">
+            <h2 className="mt-4 fg-type-section-heading text-text">
               Projects couldn't be loaded
             </h2>
 
-            <p className="mt-1 max-w-md text-sm leading-6 text-text-muted">
+            <p className="mt-1 max-w-md fg-type-primary-content text-text-muted">
               {error}
             </p>
 
             <button
               type="button"
               onClick={() => void loadProjects()}
-              className="mt-5 inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-border-standalone px-4 text-sm font-semibold text-text transition hover:bg-surface-hover"
+              className="mt-5 inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-border-standalone px-4 fg-type-control text-text transition hover:bg-surface-hover"
             >
               <span className="material-symbols-outlined text-[18px]">
                 refresh
@@ -447,16 +447,16 @@ export function ProjectListPage() {
         ) : !hasResearchGroup ? (
           <div className="mt-8 flex min-h-72 flex-col items-center justify-center rounded-xl border border-dashed border-border-standalone bg-surface-quiet px-6 py-12 text-center">
             <div className="flex h-12 w-12 items-center justify-center rounded-full bg-surface-muted text-text-muted">
-              <span className="material-symbols-outlined text-[23px]">
+              <span className="material-symbols-outlined text-[24px]">
                 groups
               </span>
             </div>
 
-            <h2 className="mt-4 text-base font-semibold text-text">
+            <h2 className="mt-4 fg-type-section-heading text-text">
               No research group available
             </h2>
 
-            <p className="mt-1 max-w-md text-sm leading-6 text-text-muted">
+            <p className="mt-1 max-w-md fg-type-primary-content text-text-muted">
               You need access to a research group before
               projects can be created or opened.
             </p>
@@ -464,19 +464,19 @@ export function ProjectListPage() {
         ) : visibleProjects.length > 0 ? (
           <div className="mt-4 overflow-hidden rounded-xl border border-border-structural bg-surface-quiet">
             <div className="hidden h-9 grid-cols-[minmax(360px,1fr)_120px_120px_120px] items-center bg-surface-header px-6 lg:grid">
-              <div className="text-[11px] font-normal text-on-surface-variant/75">
+              <div className="fg-type-micro text-on-surface-variant/75">
                 Project
               </div>
 
-              <div className="text-[11px] font-normal text-on-surface-variant/75">
+              <div className="fg-type-micro text-on-surface-variant/75">
                 Status
               </div>
 
-              <div className="text-[11px] font-normal text-on-surface-variant/75">
+              <div className="fg-type-micro text-on-surface-variant/75">
                 Role
               </div>
 
-              <div className="text-[11px] font-normal text-on-surface-variant/75">
+              <div className="fg-type-micro text-on-surface-variant/75">
                 Updated
               </div>
             </div>
@@ -507,7 +507,7 @@ export function ProjectListPage() {
                       }
                     }}
                     className={[
-                      'group grid cursor-pointer gap-4 px-5 py-3.5 transition-colors hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus sm:px-6',
+                      'group grid cursor-pointer gap-4 px-5 py-3 transition-colors hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus sm:px-6',
                       'lg:min-h-[68px] lg:grid-cols-[minmax(360px,1fr)_120px_120px_120px] lg:items-center lg:gap-0',
                       index > 0
                         ? 'border-t border-border-structural/25'
@@ -516,7 +516,7 @@ export function ProjectListPage() {
                   >
                     <div className="min-w-0 pr-8">
                       <div className="flex min-w-0 items-center gap-2">
-                        <h2 className="truncate text-sm font-semibold text-text">
+                        <h2 className="truncate fg-type-record-title text-text">
                           {project.name}
                         </h2>
 
@@ -530,18 +530,18 @@ export function ProjectListPage() {
                         )}
                       </div>
 
-                      <p className="mt-1 truncate text-xs font-normal text-text-muted">
+                      <p className="mt-1 truncate fg-type-meta text-text-muted">
                         {project.description ||
                           'No description'}
                       </p>
                     </div>
 
                     <div>
-                      <div className="mb-1 text-[10px] text-text-muted lg:hidden">
+                      <div className="mb-1 fg-type-micro text-text-muted lg:hidden">
                         Status
                       </div>
 
-                      <div className="flex items-center gap-2 text-xs font-normal text-text-muted">
+                      <div className="flex items-center gap-2 fg-type-meta text-text-muted">
                         <span
                           className={[
                             'h-1.5 w-1.5 shrink-0 rounded-full',
@@ -562,12 +562,12 @@ export function ProjectListPage() {
                     </div>
 
                     <div>
-                      <div className="mb-1 text-[10px] text-text-muted lg:hidden">
+                      <div className="mb-1 fg-type-micro text-text-muted lg:hidden">
                         Role
                       </div>
 
-                      <div className="flex items-center gap-1.5 text-xs font-normal text-text-muted">
-                        <span className="material-symbols-outlined text-[15px]">
+                      <div className="flex items-center gap-1.5 fg-type-meta text-text-muted">
+                        <span className="material-symbols-outlined text-[16px]">
                           {
                             roleIcons[
                               project.currentUserRole
@@ -586,13 +586,13 @@ export function ProjectListPage() {
                     </div>
 
                     <div className="flex items-center justify-between gap-3">
-                      <span className="text-xs font-normal text-text-muted">
+                      <span className="fg-type-meta text-text-muted">
                         {formatUpdatedAt(
                           project.updatedAt,
                         )}
                       </span>
 
-                      <span className="material-symbols-outlined translate-x-[-2px] text-[17px] text-text-muted/40 opacity-0 transition group-hover:translate-x-0 group-hover:text-accent-text group-hover:opacity-100">
+                      <span className="material-symbols-outlined translate-x-[-2px] text-[18px] text-text-muted/40 opacity-0 transition group-hover:translate-x-0 group-hover:text-accent-text group-hover:opacity-100">
                         arrow_forward
                       </span>
                     </div>
@@ -606,18 +606,18 @@ export function ProjectListPage() {
           !hasActiveFilters ? (
           <div className="mt-8 flex min-h-72 flex-col items-center justify-center rounded-xl border border-dashed border-border-standalone bg-surface-quiet px-6 py-12 text-center">
             <div className="flex h-12 w-12 items-center justify-center rounded-full bg-surface-muted text-accent-text">
-              <span className="material-symbols-outlined text-[23px]">
+              <span className="material-symbols-outlined text-[24px]">
                 create_new_folder
               </span>
             </div>
 
-            <h2 className="mt-4 text-base font-semibold text-text">
+            <h2 className="mt-4 fg-type-section-heading text-text">
               {archivedProjectCount > 0
                 ? 'No current projects'
                 : 'No projects yet'}
             </h2>
 
-            <p className="mt-1 max-w-md text-sm leading-6 text-text-muted">
+            <p className="mt-1 max-w-md fg-type-primary-content text-text-muted">
               {archivedProjectCount > 0
                 ? 'Your archived projects are kept separately so the active workspace stays focused.'
                 : 'Create your first project to organize work, members and project access in a separate workspace.'}
@@ -628,7 +628,7 @@ export function ProjectListPage() {
                 <button
                   type="button"
                   onClick={showArchivedProjects}
-                  className="inline-flex h-9 items-center justify-center gap-2 rounded-lg px-3 text-sm font-medium text-text-muted transition hover:bg-surface-hover hover:text-text"
+                  className="inline-flex h-9 items-center justify-center gap-2 rounded-lg px-3 fg-type-control text-text-muted transition hover:bg-surface-hover hover:text-text"
                 >
                   <span className="material-symbols-outlined text-[18px]">
                     archive
@@ -642,7 +642,7 @@ export function ProjectListPage() {
                 onClick={() =>
                   setCreateDialogOpen(true)
                 }
-                className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-action px-4 text-sm font-semibold text-text-inverse shadow-sm transition hover:bg-action-hover"
+                className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-action px-4 fg-type-control text-text-inverse shadow-sm transition hover:bg-action-hover"
               >
                 <span className="material-symbols-outlined text-[18px]">
                   add
@@ -653,17 +653,17 @@ export function ProjectListPage() {
           </div>
         ) : (
           <div className="mt-8 flex min-h-64 flex-col items-center justify-center rounded-xl border border-dashed border-border-standalone bg-surface-quiet px-6 py-12 text-center">
-            <div className="flex h-11 w-11 items-center justify-center rounded-full bg-surface-muted text-text-muted">
-              <span className="material-symbols-outlined text-[22px]">
+            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-surface-muted text-text-muted">
+              <span className="material-symbols-outlined text-[24px]">
                 search_off
               </span>
             </div>
 
-            <h2 className="mt-4 text-sm font-semibold text-text">
+            <h2 className="mt-4 fg-type-section-heading text-text">
               No matching projects
             </h2>
 
-            <p className="mt-1 max-w-sm text-sm leading-6 text-text-muted">
+            <p className="mt-1 max-w-sm fg-type-primary-content text-text-muted">
               No projects match your current search and
               status filters.
             </p>
@@ -671,7 +671,7 @@ export function ProjectListPage() {
             <button
               type="button"
               onClick={clearFilters}
-              className="mt-4 inline-flex h-9 items-center justify-center gap-2 rounded-lg px-3 text-sm font-semibold text-accent-text transition hover:bg-action-hover-subtle"
+              className="mt-4 inline-flex h-9 items-center justify-center gap-2 rounded-lg px-3 fg-type-control text-accent-text transition hover:bg-action-hover-subtle"
             >
               <span className="material-symbols-outlined text-[18px]">
                 filter_alt_off
@@ -712,7 +712,7 @@ function ProjectListSkeleton() {
             <div
               key={index}
               className={[
-                'grid animate-pulse gap-4 px-6 py-3.5',
+                'grid animate-pulse gap-4 px-6 py-3',
                 'lg:min-h-[68px] lg:grid-cols-[minmax(360px,1fr)_120px_120px_120px] lg:items-center lg:gap-0',
                 index > 0
                   ? 'border-t border-border-structural/25'
