@@ -40,6 +40,9 @@ import type {
 } from '../../api/types'
 
 import { ProjectDetailPage } from './ProjectDetailPage'
+import {
+  invalidateProjectQuickAccess,
+} from '../../components/layout/projectQuickAccessInvalidation'
 
 vi.mock('../../api/projects', () => ({
   getProject: vi.fn(),
@@ -82,6 +85,16 @@ vi.mock('../research-group/useSyncResearchGroupContext', () => ({
 vi.mock('./WorkItemDrawer', () => ({
   WorkItemDrawer: () => null,
 }))
+
+// The successful permanent delete dispatches the global Quick
+// Access lifecycle invalidation (QA-9); mock the signal so the
+// Settings tests can assert it in isolation.
+vi.mock(
+  '../../components/layout/projectQuickAccessInvalidation',
+  () => ({
+    invalidateProjectQuickAccess: vi.fn(),
+  }),
+)
 
 const NOW = '2026-09-01T00:00:00Z'
 
@@ -707,5 +720,64 @@ describe('Project Settings page', () => {
     await waitFor(() => {
       expect(deleteProject).toHaveBeenCalledWith(7)
     })
+
+    // The successful permanent deletion explicitly invalidates
+    // the global Quick Access snapshot (QA-9 lifecycle
+    // evidence) — exactly once.
+    expect(
+      invalidateProjectQuickAccess,
+    ).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not invalidate Quick Access when the deletion fails', async () => {
+    const project = makeProject()
+
+    vi.mocked(deleteProject).mockRejectedValue(
+      new Error('delete unavailable'),
+    )
+
+    mockProjectData({ project })
+
+    await renderSettingsPage(project)
+
+    const deleteButton = await screen.findByRole(
+      'button',
+      {
+        name: 'Delete',
+      },
+    )
+
+    // Deletion is only enabled once the work-item list has
+    // settled as empty; wait for that state.
+    await waitFor(() => {
+      expect(deleteButton).toBeEnabled()
+    })
+
+    fireEvent.click(deleteButton)
+
+    const dialog = await screen.findByRole(
+      'alertdialog',
+      { name: 'Delete project permanently?' },
+    )
+
+    fireEvent.click(within(dialog).getByRole('button', {
+      name: 'Delete project',
+    }))
+
+    // The failure is surfaced on the settings page…
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          'Project could not be deleted.',
+          { exact: false },
+        ),
+      ).toBeVisible()
+    })
+
+    // …and no lifecycle invalidation is dispatched: a failed
+    // delete leaves the Quick Access snapshot untouched.
+    expect(
+      invalidateProjectQuickAccess,
+    ).not.toHaveBeenCalled()
   })
 })

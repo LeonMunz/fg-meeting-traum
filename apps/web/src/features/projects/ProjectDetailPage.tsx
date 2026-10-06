@@ -49,6 +49,9 @@ import {
   updateProjectMembership,
 } from '../../api/projects'
 import {
+  invalidateProjectQuickAccess,
+} from '../../components/layout/projectQuickAccessInvalidation'
+import {
   buildCreateWorkItemInput,
   resolveStatusDefinitionIdByCategory,
   resolveWorkItemDisplay,
@@ -1555,6 +1558,20 @@ export function ProjectDetailPage() {
       await deleteProject(
         numericProjectId,
       )
+
+      /*
+       * Explicit lifecycle invalidation (QA-9): the successful
+       * permanent delete makes the Sidebar's global Quick
+       * Access candidate set stale, and the navigation below
+       * removes the concrete Project route before the
+       * route-driven evidence path (authoritative `getProject`
+       * failure) could observe the deletion. One bounded
+       * signal; the Sidebar reconciles with exactly one
+       * authoritative global refetch. A failed delete never
+       * reaches this line (the catch handles it) and therefore
+       * never invalidates Quick Access.
+       */
+      invalidateProjectQuickAccess()
 
       navigate(
         `/projects?group=${project.researchGroupId}`,

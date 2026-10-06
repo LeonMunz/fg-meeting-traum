@@ -17,6 +17,9 @@ import {
   recordProjectOpen,
 } from '../../api/project-quick-access'
 import {
+  PROJECT_QUICK_ACCESS_INVALIDATED_EVENT,
+} from './projectQuickAccessInvalidation'
+import {
   fetchWorkspaceNavigationPreferences,
   updateWorkspaceNavigationPreferences,
 } from '../../api/workspace-navigation-preferences'
@@ -377,6 +380,38 @@ export function Sidebar() {
 
     quickAccessColdLoadRef.current = true
     loadGlobalQuickAccess()
+  }, [loadGlobalQuickAccess])
+
+  /*
+   * Explicit lifecycle invalidation (QA-9): a successful
+   * permanent Project delete makes the candidate set itself
+   * stale, and the route-driven evidence path (the
+   * authoritative `getProject` failure) cannot observe it — the
+   * app leaves the concrete Project route right after the
+   * delete succeeds, so `currentProjectId` is already `null`.
+   * The delete path dispatches ONE bounded window event; the
+   * response is exactly ONE authoritative global refetch
+   * through the same race-guarded path as every other
+   * reconciliation (an older in-flight response is dropped, a
+   * later one is the latest state). Ordinary navigation never
+   * reaches this handler.
+   */
+  useEffect(() => {
+    const handleQuickAccessInvalidated = () => {
+      loadGlobalQuickAccess()
+    }
+
+    window.addEventListener(
+      PROJECT_QUICK_ACCESS_INVALIDATED_EVENT,
+      handleQuickAccessInvalidated,
+    )
+
+    return () => {
+      window.removeEventListener(
+        PROJECT_QUICK_ACCESS_INVALIDATED_EVENT,
+        handleQuickAccessInvalidated,
+      )
+    }
   }, [loadGlobalQuickAccess])
 
   /*

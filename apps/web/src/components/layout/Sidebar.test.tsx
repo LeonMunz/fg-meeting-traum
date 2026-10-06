@@ -38,6 +38,9 @@ import type {
 import { useResearchGroup } from '../../features/research-group/useResearchGroup'
 
 import { Sidebar } from './Sidebar'
+import {
+  PROJECT_QUICK_ACCESS_INVALIDATED_EVENT,
+} from './projectQuickAccessInvalidation'
 
 vi.mock(
   '../../api/workspace-navigation-preferences',
@@ -1805,6 +1808,187 @@ describe('Sidebar Quick Access spatial stability (QA-2..QA-6, QA-9)', () => {
       'Paper Four',
       'Paper Five',
     ])
+  })
+})
+
+describe('Sidebar Quick Access lifecycle invalidation (QA-9)', () => {
+  it('reconciles exactly once on a lifecycle invalidation and the deleted Project disappears (QA-9)', async () => {
+    renderSidebar(contextValue(), '/projects?group=11')
+    await waitForTree()
+    await waitForQuickAccess()
+
+    // The cold load is the only fetch so far.
+    expect(
+      fetchGlobalProjectQuickAccess,
+    ).toHaveBeenCalledTimes(1)
+
+    // Authoritative backend state after the permanent delete:
+    // the deleted Project is no longer an eligible candidate.
+    vi.mocked(fetchGlobalProjectQuickAccess)
+      .mockResolvedValueOnce(
+        GLOBAL_SNAPSHOT.filter(
+          (item) => item.id !== PAPER_ONE.id,
+        ),
+      )
+
+    // ONE explicit lifecycle signal from the successful delete
+    // path — no navigation, no reload involved.
+    window.dispatchEvent(
+      new CustomEvent(
+        PROJECT_QUICK_ACCESS_INVALIDATED_EVENT,
+      ),
+    )
+
+    // Exactly ONE reconciliation refetch on top of the cold
+    // load…
+    await waitFor(() => {
+      expect(
+        fetchGlobalProjectQuickAccess,
+      ).toHaveBeenCalledTimes(2)
+    })
+
+    // …and the deleted Project disappears from the rendered
+    // section immediately, the remaining rows in the exact
+    // backend order.
+    await waitFor(() => {
+      expect(quickAccessRowNames()).toEqual([
+        'Paper Two',
+        'Paper Three',
+        'Paper Four',
+        'Paper Five',
+      ])
+    })
+  })
+
+  it('a stale in-flight response cannot overwrite a newer lifecycle reconciliation (QA-9 race guard)', async () => {
+    // Drop any queued once-values from other tests so the
+    // controlled implementation below owns every call.
+    vi.mocked(fetchGlobalProjectQuickAccess).mockReset()
+
+    let resolveSecond:
+      | ((items: ApiProjectQuickAccessItem[]) => void)
+      | undefined
+    let resolveThird:
+      | ((items: ApiProjectQuickAccessItem[]) => void)
+      | undefined
+    let call = 0
+
+    vi.mocked(fetchGlobalProjectQuickAccess)
+      .mockImplementation(() => {
+        call += 1
+
+        if (call === 1) {
+          return Promise.resolve(GLOBAL_SNAPSHOT)
+        }
+
+        if (call === 2) {
+          return new Promise<
+            ApiProjectQuickAccessItem[]
+          >((resolve) => {
+            resolveSecond = resolve
+          })
+        }
+
+        return new Promise<
+          ApiProjectQuickAccessItem[]
+        >((resolve) => {
+          resolveThird = resolve
+        })
+      })
+
+    renderSidebar(contextValue(), '/projects?group=11')
+    await waitForTree()
+    await waitForQuickAccess()
+
+    // First invalidation starts fetch #2 (stays in flight).
+    window.dispatchEvent(
+      new CustomEvent(
+        PROJECT_QUICK_ACCESS_INVALIDATED_EVENT,
+      ),
+    )
+
+    await waitFor(() => {
+      expect(
+        fetchGlobalProjectQuickAccess,
+      ).toHaveBeenCalledTimes(2)
+    })
+
+    // Second invalidation while #2 is in flight: fetch #3 is
+    // the latest authoritative request.
+    window.dispatchEvent(
+      new CustomEvent(
+        PROJECT_QUICK_ACCESS_INVALIDATED_EVENT,
+      ),
+    )
+
+    await waitFor(() => {
+      expect(
+        fetchGlobalProjectQuickAccess,
+      ).toHaveBeenCalledTimes(3)
+    })
+
+    // The stale in-flight response #2 resolves with the
+    // PRE-deletion snapshot — it must be dropped and never
+    // resurrect a reconciled row.
+    await act(async () => {
+      resolveSecond?.(GLOBAL_SNAPSHOT)
+    })
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(
+      screen.queryByRole('button', {
+        name: 'Paper One',
+      }),
+    ).not.toBeInTheDocument()
+
+    // The latest authoritative response #3 (post-deletion)
+    // renders.
+    await act(async () => {
+      resolveThird?.(
+        GLOBAL_SNAPSHOT.filter(
+          (item) => item.id !== PAPER_ONE.id,
+        ),
+      )
+    })
+
+    await waitFor(() => {
+      expect(quickAccessRowNames()).toEqual([
+        'Paper Two',
+        'Paper Three',
+        'Paper Four',
+        'Paper Five',
+      ])
+    })
+  })
+
+  it('stops reacting to invalidations after unmount', async () => {
+    const { unmount } = renderSidebar(
+      contextValue(),
+      '/projects?group=11',
+    )
+    await waitForTree()
+    await waitForQuickAccess()
+
+    unmount()
+
+    window.dispatchEvent(
+      new CustomEvent(
+        PROJECT_QUICK_ACCESS_INVALIDATED_EVENT,
+      ),
+    )
+
+    // Let a would-be (incorrect) refetch happen.
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    // The cold load remains the only fetch.
+    expect(
+      fetchGlobalProjectQuickAccess,
+    ).toHaveBeenCalledTimes(1)
   })
 })
 
