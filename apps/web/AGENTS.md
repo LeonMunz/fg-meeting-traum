@@ -63,6 +63,16 @@ Verify in this order, widening only as far as the task requires:
 - For UI/UX tasks, report exactly which screens and states require manual visual
   verification.
 
+## Design contracts
+
+For user-facing UI work:
+- Read `docs/design/README.md` (design source-of-truth map).
+- Read only the relevant scoped design contract (e.g.
+  `docs/design/workspace-typography-density.md`).
+- Do not invent new visual values for an existing semantic role without
+  updating the canonical contract first.
+- Visual review remains required.
+
 ## Debugging
 
 The root file's bug discipline applies verbatim: reproduce first, label FACT /

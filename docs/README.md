@@ -27,6 +27,7 @@ The documentation is intentionally split by concern so humans and coding agents 
 | Canonical agent-harness architecture & portability specification (harness contracts, observability, multi-repo transfer) | `agent/HARNESS_ARCHITECTURE.md` |
 | UI appearance | relevant file under `stitch_examples/` |
 | Color tokens, palette, design tokens | `design/tokens.md` |
+| Global UI / visual design contracts (typography, density, design authority map) | `design/README.md` |
 
 Do not read all documents by default.
 
@@ -48,6 +49,7 @@ Each kind of truth has one canonical owner:
 - **Agent runtime contract (canonical harness, runtime layers, per-run eval metadata, secret boundaries)** → `agent/RUNTIME.md`
 - **Local agent observability (native Codex OTel capture, privacy model, trace contract)** → `agent/OBSERVABILITY.md`
 - **Agent-harness architecture & portability (harness contracts, observability specification, multi-repository transfer)** → `agent/HARNESS_ARCHITECTURE.md`
+- **Visual design documentation (authority map, semantic typography roles, density metrics, design contracts)** → `design/README.md`
 - **Implemented persistence** → Django models + migrations
 - **Implemented API contract** → DRF serializers/endpoints
 - **Frontend contract representation** → TypeScript API/domain types
@@ -91,3 +93,6 @@ They are not:
 - the application architecture.
 
 For a UI task, inspect only the specific Stitch screen relevant to that task.
+
+Their role in the design authority model (which references are evidence
+for which surface) is defined in `design/README.md`.
