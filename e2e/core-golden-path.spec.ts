@@ -55,20 +55,20 @@ test(
       .click()
 
     await expect(
-      page.getByText(
-        PROJECT_NAME,
-        { exact: true },
-      ),
+      page.getByRole('heading', {
+        name: PROJECT_NAME,
+        exact: true,
+      }),
     ).toBeVisible()
 
     // Reload proves Project persistence.
     await page.reload()
 
     await expect(
-      page.getByText(
-        PROJECT_NAME,
-        { exact: true },
-      ),
+      page.getByRole('heading', {
+        name: PROJECT_NAME,
+        exact: true,
+      }),
     ).toBeVisible()
 
     await openProject(
