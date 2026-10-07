@@ -66,6 +66,32 @@ afterEach(() => {
 })
 
 describe('ResearchGroupProvider', () => {
+  it('persists the resolved active-group preference during the initial load', async () => {
+    // Readiness contract for post-login workspace navigation
+    // (the E2E openProjects() helper waits for the sidebar's
+    // Research groups navigation, which only mounts after this
+    // load settles): once the initial list load resolves, the
+    // resolved active group must already be persisted to the
+    // local UI preference — no user action in between.
+    render(
+      <ResearchGroupProvider>
+        <Probe />
+      </ResearchGroupProvider>,
+    )
+
+    await waitFor(() => {
+      expect(
+        screen.getByLabelText('Active group id'),
+      ).toHaveTextContent('11')
+    })
+
+    expect(
+      window.localStorage.getItem(
+        'fg-workspace.active-research-group-id',
+      ),
+    ).toBe('11')
+  })
+
   it('registers a server-created group in canonical state and activates it', async () => {
     render(
       <ResearchGroupProvider>

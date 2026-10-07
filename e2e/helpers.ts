@@ -185,6 +185,26 @@ export async function logout(
 export async function openProjects(
   page: Page,
 ) {
+  // Research Group hydration contract: this helper resolves the
+  // provider's active Research Group from its canonical local UI
+  // state (the persisted active-group preference), which
+  // ResearchGroupProvider writes only after the asynchronous
+  // initial group load settles. The Sidebar's Research groups
+  // navigation mounts only after that load (and the
+  // navigation-preference load) have settled, and the provider
+  // writes the preference before clearing its loading state — so
+  // this observable product state is exactly the point at which
+  // the canonical active-group state is guaranteed to exist.
+  // Wait for it before reading the preference; a user without any
+  // Research Group never gets this navigation, and a spec that
+  // requires one then surfaces as a clear readiness timeout here
+  // rather than a stale-preference assertion below.
+  await expect(
+    page.getByRole('navigation', {
+      name: 'Research groups',
+    }),
+  ).toBeVisible()
+
   // The workspace tree no longer marks the active group's
   // row (route-active presentation belongs to the group's
   // Overview only): resolve the provider's active Research
