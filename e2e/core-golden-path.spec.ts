@@ -288,6 +288,17 @@ test(
       ),
     ).toHaveCount(0)
 
+    // Canonical drag harness contract (same convention as the My
+    // Work Kanban drag spec and the Project Board drag spec): wide
+    // enough that all four columns are simultaneously visible, so
+    // the drag source and drop target are both on-screen. At the
+    // default viewport the 4x minmax(260px,1fr) board overflows its
+    // horizontal scroller and the native drag does not land.
+    await page.setViewportSize({
+      width: 1920,
+      height: 1000,
+    })
+
     // --------------------------------------------------------
     // Chris changes the status via the current canonical My
     // Work interaction: a Kanban drag into the In progress
