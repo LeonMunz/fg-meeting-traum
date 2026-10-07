@@ -60,10 +60,9 @@ async function openVisibleProject(
   name: string,
 ) {
   await page
-    .getByText(
+    .getByRole('link', {
       name,
-      { exact: true },
-    )
+    })
     .click()
 
   await expect(page).toHaveURL(
