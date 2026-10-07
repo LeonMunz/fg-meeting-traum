@@ -468,20 +468,23 @@ is the shape, not a real reference.)
 
 Contract:
 
-- **Trigger + gate** — publication runs only when a COMPLETED and
-  SUCCESSFUL run of the canonical Core verification workflow (its
-  exact top-level `name:` value, `Core verification`) for a `push` to
-  `main` finishes — a `workflow_run` dependency by workflow name
-  (renaming that `name:` requires updating the publication workflow's
-  `workflows:` list). The
-  publication workflow re-runs no test suite and verifies nothing by
-  itself; a failed, cancelled, pull-request, dispatch, or non-main core
-  run publishes nothing (both jobs skip).
+- **Trigger + gate** — the workflow runs ONLY for a `push` to `main`,
+  and each push starts ONE release DAG for that commit X: the canonical
+  Core verification job, the canonical E2E job, and the two publication
+  jobs. Both publication jobs declare `needs: [core, e2e]`, so
+  publication happens only when BOTH Core(X) AND E2E(X) succeeded inside
+  that same run — native dependency semantics, in any completion order;
+  a failed, cancelled, or skipped gate publishes nothing. The
+  publication jobs re-run no test suite and verify nothing by
+  themselves. The standalone `core.yml` / `e2e.yml` workflows run the
+  same canonical gates only for pull requests to `main` and manual
+  `workflow_dispatch` — they never publish.
 - **Immutability** — the exact 40-character Git commit SHA is the ONLY
   tag. No `latest`, branch, short-SHA, or timestamp tag is ever
-  published. The built revision is the core run's head SHA (for a push
-  to main: the pushed commit); each job checks out exactly that
-  revision and asserts `git rev-parse HEAD` equals it before any build.
+  published. The built revision is `github.sha` of the push-triggered
+  release run (the pushed commit); each publication job checks out
+  exactly that SHA and asserts `git rev-parse HEAD` equals it before
+  any build.
 - **Builds** — the existing production Dockerfiles unchanged:
   `apps/api/Dockerfile` (context `apps/api/`) and `apps/web/Dockerfile`
   (context = repository root), via Docker Buildx (official, SHA-pinned
@@ -520,8 +523,9 @@ packages only); no such credential exists in this repository, and this
 slice adds none.
 
 External acceptance (first real `main` run after integration): the
-publication run is green, both images were pushed, both carry the exact
-main commit SHA as their tag, and — where registry visibility permits —
+release run is green (Core verification + Playwright E2E + both
+publication jobs), both images were pushed, both carry the exact main
+commit SHA as their tag, and — where registry visibility permits —
 both full-SHA references pull cleanly (`docker pull` of each reference
 from a clean Docker client, or registry metadata).
 

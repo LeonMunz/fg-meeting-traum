@@ -11,8 +11,10 @@
 #
 # Coverage:
 #   * workflow file exists
-#   * triggers are exactly pull_request(main) + push(main) + workflow_dispatch
-#     (no pull_request_target, no schedule/workflow_run/release/...)
+#   * triggers are exactly pull_request(main) + workflow_dispatch (no
+#     push to main — main-push verification runs inside the release DAG,
+#     publish-images.yml; no pull_request_target, no
+#     schedule/workflow_run/release/...)
 #   * permissions are limited to contents: read (no id-token, no write)
 #   * exactly one job, on a pinned ubuntu generation (no ubuntu-latest)
 #   * a job timeout is set
@@ -77,14 +79,16 @@ expect_exists "t01 workflow file exists" "$WF"
 
 WF_TEXT="$(cat "$WF")"
 
-# Triggers: exactly the three expected, both against main.
+# Triggers: exactly the two expected, against main.
 expect_contains  "t02 trigger pull_request present" "$WF_TEXT" "pull_request:"
-expect_contains  "t03 trigger push present"         "$WF_TEXT" "push:"
+[ "$(count_matches '^  push:$')" -eq 0 ] \
+  && ok "t03 no push trigger (main-push verification lives in the release DAG)" \
+  || bad "t03 no push trigger (found a push trigger)"
 expect_contains  "t04 trigger workflow_dispatch present" "$WF_TEXT" "workflow_dispatch:"
-[ "$(count_matches '^[[:space:]]*branches: \[main\]$')" -eq 2 ] \
-  && ok "t05 exactly two branch filters, both [main]" \
-  || bad "t05 exactly two branch filters, both [main]"
-for trig in pull_request_target workflow_run schedule release repository_dispatch deployment push_tag; do
+[ "$(count_matches '^[[:space:]]*branches: \[main\]$')" -eq 1 ] \
+  && ok "t05 exactly one branch filter, [main] (pull_request only)" \
+  || bad "t05 exactly one branch filter, [main] (pull_request only)"
+for trig in push pull_request_target workflow_run schedule release repository_dispatch deployment push_tag; do
   expect_not_contains "t06 no trigger: $trig" "$WF_TEXT" "$trig:"
 done
 

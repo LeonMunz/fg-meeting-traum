@@ -105,18 +105,25 @@ PRECHECK
 ## CI gates (GitHub Actions)
 
 The repository carries three CI workflows in `.github/workflows/`.
-The two verification gates (`core.yml`, `e2e.yml`) both run on
-`pull_request` against `main`, on `push` to `main`, and on manual
-`workflow_dispatch`; each is a single job on a pinned Ubuntu runner that
-executes its canonical gate against an isolated, health-checked PostgreSQL 16
-service container (CI-only, non-secret credentials). The production image
-publication workflow (`publish-images.yml`) re-runs no test suite: it is a
-`workflow_run` dependency of the Core gate and publishes immutable GHCR
-images only for a successful core run of a `push` to `main`. The repository
-does not configure branch protection; these gates are advisory checks on the
-branch and pull requests.
+The two verification gate workflows (`core.yml`, `e2e.yml`) run on
+`pull_request` against `main` and on manual `workflow_dispatch`; each is a
+single job on a pinned Ubuntu runner that executes its canonical gate
+against an isolated, health-checked PostgreSQL 16 service container
+(CI-only, non-secret credentials). Pushes to `main` run BOTH canonical
+gates plus image publication in ONE release DAG: the production image
+publication workflow (`publish-images.yml`) is triggered only by `push` to
+`main` and embeds the Core verification job and the E2E job; both
+publication jobs declare `needs: [core, e2e]`, so a production image for
+SHA X is published only after Core(X) AND E2E(X) have both succeeded
+inside that same run (`github.sha` of the push-triggered run is the
+authoritative SHA). The repository does not configure branch protection;
+these gates are advisory checks on the branch and pull requests.
 
 ### Core verification gate (`core.yml`)
+
+The standalone workflow runs on pull requests to `main` and on manual
+`workflow_dispatch`; pushes to `main` run this same canonical job inside
+the release DAG (`publish-images.yml`).
 
 `Core verification` runs the canonical non-browser `core` profile (repo
 hygiene + complete frontend + complete backend; no Playwright browser). Its
@@ -143,6 +150,10 @@ Static contract tests for the workflow:
 `scripts/tests/core-workflow.test.sh`.
 
 ### E2E gate (`e2e.yml`)
+
+The standalone workflow runs on pull requests to `main` and on manual
+`workflow_dispatch`; pushes to `main` run this same canonical job inside
+the release DAG (`publish-images.yml`).
 
 `E2E` in `.github/workflows/e2e.yml` executes the canonical E2E gate against
 the same kind of isolated, health-checked PostgreSQL 16 service container
@@ -177,20 +188,28 @@ Static contract tests for the workflows:
 `Production image publication (GHCR)` publishes exactly two immutable
 production images — `ghcr.io/<owner>/<repo>-api` and
 `ghcr.io/<owner>/<repo>-web`, each tagged ONLY with the exact 40-character
-Git commit SHA of the verified commit — to GitHub Container Registry. It depends on the canonical Core workflow by its exact top-level
-`name:` value (`Core verification`) through a `workflow_run` trigger,
-and publishes only when a COMPLETED, SUCCESSFUL core run of a `push` to
-`main` finishes; it
-re-runs no test suite and verifies nothing by itself. Each job checks out
-the core run's head SHA (asserted against `git rev-parse HEAD`), builds the
-existing production Dockerfile (`apps/api/Dockerfile`, context `apps/api/`;
-`apps/web/Dockerfile`, repository-root context) with Docker Buildx for
-`linux/amd64` (the documented VServer target), and pushes with
-`GITHUB_TOKEN` under the minimum permissions `contents: read` +
-`packages: write`. No mutable tag is ever published, and publishing touches
-no server or Compose stack (the references are later consumed via
-`FG_API_IMAGE` / `FG_WEB_IMAGE` — see `docs/living-lab.md`, Production
-image publication). Static contract tests for the workflow:
+Git commit SHA of the verified commit — to GitHub Container Registry. It is
+triggered ONLY by `push` to `main` and runs ONE release DAG per pushed
+commit X: the canonical Core verification job, the canonical E2E job, and
+the two publication jobs. Both publication jobs declare
+`needs: [core, e2e]`, so publication is eligible only when BOTH Core(X) and
+E2E(X) succeeded inside that same run — native dependency semantics, in any
+completion order (a failed, cancelled, or skipped gate prevents
+publication; there is no cross-workflow correlation). The publication jobs
+themselves re-run no test suite and verify nothing by themselves. The
+publication SHA is `github.sha` of the push-triggered run (the pushed
+commit — the same revision both embedded gates checked out and verified);
+each publication job checks out exactly that SHA (asserted against
+`git rev-parse HEAD`), builds the existing production Dockerfile
+(`apps/api/Dockerfile`, context `apps/api/`; `apps/web/Dockerfile`,
+repository-root context) with Docker Buildx for `linux/amd64` (the
+documented VServer target), and pushes with `GITHUB_TOKEN` under the
+minimum permissions `contents: read` + `packages: write` (the embedded
+gate jobs narrow their job-level permissions to `contents: read`). No
+mutable tag is ever published, and publishing touches no server or Compose
+stack (the references are later consumed via `FG_API_IMAGE` /
+`FG_WEB_IMAGE` — see `docs/living-lab.md`, Production image publication).
+Static contract tests for the workflow:
 `scripts/tests/publish-workflow.test.sh`.
 
 ## Branch workflow
@@ -200,8 +219,9 @@ image publication). Static contract tests for the workflow:
 - Read-only audits may run on clean `main`.
 - A slice is verified locally and targeted, and committed, before it is
   integrated into `main`.
-- After integration into `main`, the core and E2E CI gates provide the
-  independent remote evidence.
+- After integration into `main`, the release DAG (Core + E2E + image
+  publication in one push-triggered run) provides the independent remote
+  evidence.
 - The slice branch is deleted only after that remote verification passed.
 - Branch protection is deliberately disabled in the current solo/early
   phase.
@@ -227,18 +247,23 @@ bash scripts/tests/publish-workflow.test.sh
 - `agent-verify.test.sh` — usage, plan mode, and the `--summary-json`
   contract (deterministic PATH shims; no real profile executes).
 - `core-workflow.test.sh` — the security- and contract-critical invariants
-  of `.github/workflows/core.yml` (triggers, permissions, pinned
-  references, PostgreSQL 16, single canonical `core` invocation).
-- `e2e-workflow.test.sh` — the same for `.github/workflows/e2e.yml`, plus:
-  `FG_ALLOW_E2E_RESET` appears exactly once, on the canonical gate line.
-- `publish-workflow.test.sh` — the publication contract of
-  `.github/workflows/publish-images.yml` (workflow_run trigger on the
-  exact Core workflow name only, success+push+main job conditions,
-  minimum permissions,
-  SHA-pinned actions, head-SHA checkout + revision assertion,
-  GITHUB_TOKEN-only authentication, existing Dockerfiles/contexts,
-  linux/amd64 platform, full-SHA-only tags, lowercase GHCR names, OCI
-  labels, Compose compatibility).
+  of `.github/workflows/core.yml` (triggers exactly pull_request(main) +
+  workflow_dispatch — no push to main; permissions, pinned references,
+  PostgreSQL 16, single canonical `core` invocation).
+- `e2e-workflow.test.sh` — the same for `.github/workflows/e2e.yml` (no
+  push trigger), plus: `FG_ALLOW_E2E_RESET` appears exactly once, on the
+  canonical gate line.
+- `publish-workflow.test.sh` — the release-DAG contract of
+  `.github/workflows/publish-images.yml` (push-to-main trigger only; one
+  run with the embedded core + e2e gate jobs and the two publication
+  jobs; both publication jobs `needs: [core, e2e]`; no
+  workflow_run/`github.event.*` coordination; embedded canonical core +
+  e2e invocations; `github.sha` publication SHA + checkout ref +
+  checked-out-HEAD assertion; minimum permissions incl. narrowed gate
+  jobs; SHA-pinned actions, GITHUB_TOKEN-only authentication, existing
+  Dockerfiles/contexts, linux/amd64 platform, full-SHA-only tags,
+  lowercase GHCR names, OCI labels, queued main concurrency, Compose
+  compatibility).
 
 They test the harness/workflow contract only: they are not executed by any
 `agent-verify` profile and are not invoked by the CI workflows. Run them

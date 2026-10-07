@@ -1,5 +1,10 @@
 # Canonical E2E gate for FG Workspace (single job, no matrix).
 #
+# Triggers: pull requests to main and manual workflow_dispatch. Pushes to
+# main run this same canonical job inside the release DAG
+# (.github/workflows/publish-images.yml); there is no standalone
+# push-to-main trigger in this workflow.
+#
 # Runs the `e2e` profile of scripts/agent-verify.sh (Playwright, chromium,
 # isolated fg_e2e schema) against an isolated, health-checked PostgreSQL 16
 # service container. Only the fg_e2e schema is ever reset.
@@ -15,15 +20,14 @@ name: E2E
 on:
   pull_request:
     branches: [main]
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
-# Cancel superseded runs of the same PR branch only. Pushes to main are
-# queued and never cancelled, so completed main evidence is preserved.
+# Cancel superseded runs of the same PR branch only; manual dispatch
+# runs are queued and never cancelled. Main-push verification runs in
+# the release DAG (publish-images.yml).
 concurrency:
   group: e2e-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}

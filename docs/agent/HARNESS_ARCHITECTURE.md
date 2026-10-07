@@ -130,8 +130,10 @@ owned artifacts (full map in §43):
   (install/status/uninstall/launch) + the ACP lifecycle relay.
 - Harness contract tests: `scripts/tests/*.test.sh` + fixtures.
 - CI gates and their static contract tests: `.github/workflows/core.yml`,
-  `.github/workflows/e2e.yml`, `scripts/tests/core-workflow.test.sh`,
-  `scripts/tests/e2e-workflow.test.sh`.
+  `.github/workflows/e2e.yml`, `.github/workflows/publish-images.yml`,
+  `scripts/tests/core-workflow.test.sh`,
+  `scripts/tests/e2e-workflow.test.sh`,
+  `scripts/tests/publish-workflow.test.sh`.
 - E2E deterministic-state infrastructure: `reset_e2e` / `seed_dev` /
   `seed_e2e_scope` management commands, `playwright.config.ts`, `e2e/`
   specs, `apps/api/config/settings_e2e.py`.
@@ -236,8 +238,11 @@ Verification surface:  ./scripts/agent-verify.sh <profile>
 REPORT: Evidence contract statuses + mandatory completion table
         |
         v
-CI gates (advisory): core.yml -> agent-verify core
-                     e2e.yml  -> FG_ALLOW_E2E_RESET=1 agent-verify e2e
+CI gates (advisory): PR/dispatch -> core.yml / e2e.yml (standalone gates)
+                     push main   -> publish-images.yml release DAG:
+                                     core + e2e (the same canonical gates)
+                                     -> publish-api / publish-web
+                                        (needs: [core, e2e]; github.sha)
 ```
 
 **(B) The observability system** — optional, automatic when installed,
@@ -596,8 +601,8 @@ own path).
 | `./scripts/agent-verify.sh quick` | fast static pass (sandbox-safe) | no | — | 0 pass; failing phase's own exit code; 2 usage | Node ≥ 24 + npm deps; uv env in sync; no DB needed | none (CI core includes it transitively) | CORE shape + CONFIG commands |
 | `./scripts/agent-verify.sh frontend` | complete non-browser frontend | build output only (`dist/`) | — | as above | Node ≥ 24 + npm deps | part of `core` in CI | CONFIG |
 | `./scripts/agent-verify.sh backend` | complete backend (uv env) | Django test DB only (created + dropped) | — | as above | uv env; PostgreSQL reachable | part of `core` in CI | CONFIG |
-| `./scripts/agent-verify.sh core` | all complete non-browser validation | as frontend+backend | — | as above | Node + uv + PostgreSQL | **CI core gate** (`.github/workflows/core.yml`) | CONFIG |
-| `./scripts/agent-verify.sh e2e [playwright args]` | browser E2E only | **DESTRUCTIVE**: resets `fg_e2e` schema; writes `playwright-report/`, `test-results/` | args pass through (`-- spec`, `-g`, `--headed`…) | 2 refusal without consent; failing phase's code otherwise | browser-capable env; PostgreSQL; **`FG_ALLOW_E2E_RESET=1`** | **CI E2E gate** (`.github/workflows/e2e.yml`) | CONFIG |
+| `./scripts/agent-verify.sh core` | all complete non-browser validation | as frontend+backend | — | as above | Node + uv + PostgreSQL | **CI core gate** (standalone `core.yml` for PR/dispatch; embedded `core` job of the push-`main` release DAG `publish-images.yml`) | CONFIG |
+| `./scripts/agent-verify.sh e2e [playwright args]` | browser E2E only | **DESTRUCTIVE**: resets `fg_e2e` schema; writes `playwright-report/`, `test-results/` | args pass through (`-- spec`, `-g`, `--headed`…) | 2 refusal without consent; failing phase's code otherwise | browser-capable env; PostgreSQL; **`FG_ALLOW_E2E_RESET=1`** | **CI E2E gate** (standalone `e2e.yml` for PR/dispatch; embedded `e2e` job of the push-`main` release DAG `publish-images.yml`) | CONFIG |
 | `./scripts/agent-verify.sh full` | `core` + `e2e`; never silently skips E2E | as core+e2e | — | as above | all of the above | intended release gate (not itself a CI job) | CONFIG |
 | `./scripts/agent-verify.sh plan <profile>` | non-mutating inspection of a profile: phases, exact commands, mutation class, prerequisites | no | `<profile>` | 0; 2 usage (also rejects `--summary-json`) | none | n/a | CORE |
 | `./scripts/agent-verify.sh --summary-json <path> <profile>` | run profile + write exactly one versioned JSON summary (schemaVersion 1) at the explicit existing path | summary file + phase artifacts | path must exist (dir pre-existing, writable) | as the profile; 2 for invalid target | target directory exists | CI uses it (summaries are artifacts) | CORE |
@@ -955,33 +960,53 @@ HEAD --check` — is generic harness).
 
 ## 11. CI architecture
 
-**CURRENT IMPLEMENTATION.** Two workflows, both in `.github/workflows/`,
-each a single job on a pinned `ubuntu-24.04` runner against an isolated,
-health-checked `postgres:16` service container (CI-only, non-secret
-credentials `fg_ci`/`fg-ci-only`, DB `fg_workspace`). Triggers:
-`pull_request` → `main`, `push` → `main`, `workflow_dispatch`.
-`permissions: contents: read`. Concurrency cancels superseded PR runs only
-(pushes to `main` are queued, never cancelled). All action references are
-pinned to full 40-char commit SHAs. The repository does **not** configure
-branch protection: these gates are advisory checks (a current documented
-fact, `docs/agent/WORKFLOW.md` "Branch workflow": "Branch protection is
+**CURRENT IMPLEMENTATION.** Three workflows in `.github/workflows/`: the
+two standalone verification gate workflows (`core.yml`, `e2e.yml`) and the
+push-`main` release DAG (`publish-images.yml`). Each gate job runs on a
+pinned `ubuntu-24.04` runner against an isolated, health-checked
+`postgres:16` service container (CI-only, non-secret credentials
+`fg_ci`/`fg-ci-only`, DB `fg_workspace`). The standalone workflows are
+triggered by `pull_request` → `main` and `workflow_dispatch` only — no
+push-`main` trigger (main-push verification moved into the release DAG).
+The release DAG is triggered ONLY by `push` → `main` and contains four
+jobs in ONE run for the pushed commit X: the embedded `Core verification`
+job (45 min) and `Playwright E2E (chromium)` job (20 min) — the same
+canonical gate jobs — plus `publish-api` / `publish-web`, both declaring
+`needs: [core, e2e]`; `github.sha == X` is the authoritative publication
+SHA (each publication job checks out exactly that SHA and asserts
+`git rev-parse HEAD` equals it). `permissions: contents: read` at the
+workflow level (plus `packages: write` for publication); the embedded gate
+jobs narrow their job-level permissions to `contents: read`.
+Concurrency: the standalone workflows cancel superseded PR runs only
+(manual dispatch runs are queued, never cancelled); the release DAG keeps
+the former effective main-run behavior (queued, never cancelled,
+`cancel-in-progress: false`). All action references are pinned to full
+40-char commit SHAs. The repository does **not** configure branch
+protection: these gates are advisory checks (a current documented fact,
+`docs/agent/WORKFLOW.md` "Branch workflow": "Branch protection is
 deliberately disabled in the current solo/early phase").
 
 ### 11.1 Mapping: CI job → canonical local command → prerequisites → evidence
 
 | CI job | Canonical local command (the only gate invocation) | Capability/state prerequisites | Evidence produced |
 |---|---|---|---|
-| `core.yml` → `Core verification` (30 min) | `./scripts/agent-verify.sh --summary-json "$RUNNER_TEMP/fg-core/core-summary.json" core` | Node 24 (`npm ci` from lockfile), uv 0.12.16 + Python 3.12 (`uv sync --frozen`), Postgres 16 reachable (health-checked); **no** Playwright browser installed | core run summary JSON (kept on success AND failure, never on cancellation; 14-day retention, repository-readers-only access) |
-| `e2e.yml` → `Playwright E2E (chromium)` (20 min) | `FG_ALLOW_E2E_RESET=1 ./scripts/agent-verify.sh --summary-json "$RUNNER_TEMP/fg-e2e/e2e-summary.json" e2e` | same setup **plus** `npx playwright install --with-deps chromium`; the destructive-reset consent is set in the workflow and **only there** (reset touches only the isolated `fg_e2e` schema) | e2e run summary JSON (same retention/cancellation rules) + on failure only: `playwright-report/` + `test-results/` as the `e2e-failure-…` artifact (never on cancellation) |
+| `core.yml` → `Core verification` (45 min; also the embedded `core` job of the push-`main` release DAG `publish-images.yml`) | `./scripts/agent-verify.sh --summary-json "$RUNNER_TEMP/fg-core/core-summary.json" core` | Node 24 (`npm ci` from lockfile), uv 0.12.16 + Python 3.12 (`uv sync --frozen`), Postgres 16 reachable (health-checked); **no** Playwright browser installed | core run summary JSON (kept on success AND failure, never on cancellation; 14-day retention, repository-readers-only access) |
+| `e2e.yml` → `Playwright E2E (chromium)` (20 min; also the embedded `e2e` job of the push-`main` release DAG `publish-images.yml`) | `FG_ALLOW_E2E_RESET=1 ./scripts/agent-verify.sh --summary-json "$RUNNER_TEMP/fg-e2e/e2e-summary.json" e2e` | same setup **plus** `npx playwright install --with-deps chromium`; the destructive-reset consent is set in the workflow and **only there** (reset touches only the isolated `fg_e2e` schema) | e2e run summary JSON (same retention/cancellation rules) + on failure only: `playwright-report/` + `test-results/` as the `e2e-failure-…` artifact (never on cancellation) |
 
 Rules pinned by the static contract tests (`core-workflow.test.sh`,
 `e2e-workflow.test.sh`): exactly one canonical invocation per workflow (no
 direct `npm run test:e2e` / `playwright test` gate call); `FG_ALLOW_E2E_RESET`
-appears exactly once, on the canonical gate line; no `pull_request_target`,
+appears exactly once, on the canonical gate line; no push-to-main trigger
+(main-push verification runs in the release DAG), no `pull_request_target`,
 no schedule/workflow_run/release triggers; reproducible setup (`npm ci`,
 `uv sync --frozen`, lockfile only); upload matrix exactly
 `!cancelled()` for summaries and `failure() && !cancelled()` for failure
-artifacts. An uploaded artifact is never gate success; a cancelled run is
+artifacts. The release DAG contract itself (`publish-workflow.test.sh`):
+push-to-main trigger only, one run with exactly four jobs, both
+publication jobs on `needs: [core, e2e]` (semantic, no `always()`), no
+`github.event.*` / cross-workflow coordination, embedded canonical core +
+e2e invocations, `github.sha` publication SHA with checkout ref +
+checked-out-HEAD assertion. An uploaded artifact is never gate success; a cancelled run is
 never presented as successful evidence; the JSON summary never confers
 RUNTIME_VERIFIED.
 
@@ -1892,8 +1917,9 @@ directly when touching the harness — `bash scripts/tests/<suite>`).
 | `scripts/tests/agent-verify.test.sh` | usage, `plan` mode (read-only, rejects `--summary-json`), the `--summary-json` contract: schemaVersion-1 shape, exact announced commands, stable phase order, fail-fast (process rc == JSON exitCode, one failed phase, later phases `not_run`), no file without the flag, identical human output with/without flag (timing normalized), target validation (missing/unwritable/invalid dir rejected before any phase; no parent creation; relative paths vs caller CWD), no secrets/env in summary, no leftover temp files | **no real profile executes** — phase tools replaced by deterministic PATH shims with scripted exit codes (same restricted-PATH convention as the doctor tests) | summary schema drift, fail-fast contract drift, mutation/leakage | none | CORE |
 | `scripts/tests/agent-observability.test.sh` | usage/exit codes; `config` output contract (loopback endpoints, `log_user_prompt=false`, repo-config rationale); gitignore coverage of all runtime artifact paths; `status` read-only + deterministic; collector config template (sanitization statements, loopback-only); `pins.json` integrity; `manifest.py` seed/finalize/summary + interrupted-run safety; probe-client usage contract; `CODEX_HOME`/`CODEX_PATH` resolution (discovery, explicit authority, invalid/ambiguous fail-closed); ACP probe-client schema contract vs codex-acp 1.7.0 (fake-agent fixture); collector-dependent e2e (start/stop idempotency + fake-secret sanitization + doctor) — executed only when a collector is present and none is running, else SKIPPED; Run Ledger: deterministic normalization of a synthetic capture (fixture OTel + real manifest seed/finalize in a temp git repo), idempotency, activity/timing/token metrics, git/WIP evidence, failures without invented classifications, explicit verification correlation (agentRunId match/mismatch), doctor evidence, annotations, privacy (dropped-key values never reach the ledger), dedup identity (distinct paired records sharing the correlation tuple are kept — incl. the 0.148.0 paired `response.completed` with/without token counters — while byte-equivalent copies collapse and the pair's counters reach token accounting), captured-conversation attribution (v3 ledger: clean single-conversation run unchanged; captured + foreign conversation → primary metrics = captured only with the foreign telemetry explicitly reported; multiple foreign conversations deterministic; missing identity → run-wide aggregate + `captured_conversation_unknown` gap; historical-incident reconstruction), pathological-run diagnostics (v4, diagnostic-only: explicit deterministic signals with observed-value evidence — incident shape detected, short no-tool / healthy long / tool-failure negative shapes, extreme-foreign isolation, unevaluated-evidence discipline, byte-identical re-normalization, incident replay via the forensic fixture), manifest `captured_conversation_id` persistence (seed, finalize survival, invalid value fails safe to null), missing telemetry → null + gaps, malformed manifest → clear failure | mixed: static + Python unit-level + one real-collector e2e section (conditional) | schema/pin drift, privacy regression, determinism break, correlation mismatch, dedup over-collapse (counter-bearing records dropped), liveness semantic regression | none (synthetic captures only) | CORE |
 | `scripts/tests/agent-product-launch.test.sh` | the per-**prompt-turn** lifecycle end-to-end: session open starts NO run; prompt A → run A (+ active-turn mapping); response A → graceful finalization (end Git evidence, ledger, mapping released, collector stopped) with the session STAYING ALIVE; prompt B → distinct run B; exact request-id correlation (forged wrong-id never finalizes; late duplicate bounded no-op); close during active turn → interrupted; duplicate/unknown closes harmless; no run for session-less process / session without prompt; prompt content never persisted; fragmented stream stays valid ACP; crash/signal fallbacks (crash mid-prompt → interrupted, no orphan collector, exit status kept; SIGTERM mid-turn → 143); concurrency (foreign live capture → fail open; after it ends the same session's next prompt is captured); run identity (inherited stale `FG_AGENT_RUN_ID` dropped; mapping resolves the turn's run including over a newer live run; explicit override still wins); verification correlation (summary attributed to the ACTIVE TURN's run via the mapping; finalization ledger consumes it); fail-open (broken collector → uncaptured, stream intact, bounded warning); re-opens (`session/resume` + `session/load` as fresh ROOT sessions, `session/fork` response id) — every prompt turn gets its own run; mapping-write failure contract; NDJSON wire on real newline-delimited traffic; opt-out `FG_AGENT_OBSERVABILITY=0`; doctor-snapshot knob; `start --json` contract; captured conversation identity persisted by the relay into the run manifest at start (`captured_conversation_id` — present after finalization and mapping release, echoed into the generated ledger identity); one-time install (backup/trampoline/config, idempotency, status, trampoline end-to-end with a real ACP session through the installed trampoline, fallback when the wrapper is missing, uninstall) | **yes** — real subprocesses: scenario driver + fake long-lived ACP server + **real collector** in temp dirs, plus the byte-level framer units (no collector needed) | lifecycle-boundary regression (wrong finalization trigger), correlation regression (id guessing), privacy leakage, install/rollback break, wire-format regression | none (fake ACP server stands in for the product launcher) | CORE mechanism + HOST INTEGRATION contract |
-| `scripts/tests/core-workflow.test.sh` | `.github/workflows/core.yml` security/contract invariants: triggers exactly PR(main)+push(main)+dispatch; `permissions: contents: read`; single job on pinned ubuntu (no `ubuntu-latest`) with bounded timeout; concurrency cancels PR superseded runs only; all `uses:` pinned to 40-char SHAs; `postgres:16` health-checked service on 5432; reproducible setup (`npm ci`, `uv sync --frozen`, **no** Playwright browser); exactly one canonical `agent-verify … core` invocation with the `--summary-json` target; upload conditions `!cancelled()` | no (static file assertions; optional actionlint if installed) | trigger/permission drift, unpinned action, non-canonical gate invocation, browser leak into core | none | CONFIG (FG CI wiring) |
-| `scripts/tests/e2e-workflow.test.sh` | same for `e2e.yml`, plus: Playwright chromium-only install; **no** direct `npm run test:e2e` / `playwright test` gate call — the only invocation is the canonical `agent-verify e2e` with `--summary-json`; `FG_ALLOW_E2E_RESET` appears **exactly once**, on the canonical gate line; exact upload matrix (summary `!cancelled()`; failure artifacts `failure() && !cancelled()`) | no (static) | consent flag duplication/missing, non-canonical gate, upload matrix drift | none | CONFIG |
+| `scripts/tests/core-workflow.test.sh` | `.github/workflows/core.yml` security/contract invariants: triggers exactly PR(main)+dispatch (no push — main-push verification lives in the release DAG); `permissions: contents: read`; single job on pinned ubuntu (no `ubuntu-latest`) with bounded timeout; concurrency cancels PR superseded runs only; all `uses:` pinned to 40-char SHAs; `postgres:16` health-checked service on 5432; reproducible setup (`npm ci`, `uv sync --frozen`, **no** Playwright browser); exactly one canonical `agent-verify … core` invocation with the `--summary-json` target; upload conditions `!cancelled()` | no (static file assertions; optional actionlint if installed) | trigger/permission drift, unpinned action, non-canonical gate invocation, browser leak into core | none | CONFIG (FG CI wiring) |
+| `scripts/tests/e2e-workflow.test.sh` | same for `e2e.yml` (no push trigger), plus: Playwright chromium-only install; **no** direct `npm run test:e2e` / `playwright test` gate call — the only invocation is the canonical `agent-verify e2e` with `--summary-json`; `FG_ALLOW_E2E_RESET` appears **exactly once**, on the canonical gate line; exact upload matrix (summary `!cancelled()`; failure artifacts `failure() && !cancelled()`) | no (static) | consent flag duplication/missing, non-canonical gate, upload matrix drift | none | CONFIG |
+| `scripts/tests/publish-workflow.test.sh` | `.github/workflows/publish-images.yml` release-DAG contract: name `Production image publication (GHCR)`; push-to-main trigger ONLY (no workflow_run/pull_request/workflow_dispatch; no `github.event.*` anywhere); exactly four jobs (embedded `core` + `e2e` canonical gate jobs, `publish-api`, `publish-web`); both publication jobs `needs: [core, e2e]` (checked semantically, formatting-independent); no `always()`; embedded canonical core + e2e invocations (byte-identical `--summary-json` targets vs the standalone workflows; `FG_ALLOW_E2E_RESET` exactly once, on the gate line); `github.sha` publication SHA + checkout ref + checked-out-HEAD assertion; workflow permissions contents:read+packages:write with gate jobs narrowed to contents:read; all `uses:` pinned to 40-char SHAs with version comments (checkout pin shared with the standalone gates); GITHUB_TOKEN-only authentication; existing Dockerfiles/contexts; linux/amd64 only; full-SHA-only tags (no mutable tag); lowercase GHCR names via runtime Bash step; OCI labels; queued main concurrency (`cancel-in-progress: false`, no `queue:` max); Compose compatibility | no (static file assertions; optional actionlint if installed) | trigger/topology drift, cross-workflow coordination reintroduced, gate-job permission broadening, non-canonical embedded gate, mutable tag, unpinned action | none | CONFIG (FG CI wiring) |
 
 Fixtures (`scripts/tests/fixtures/`):
 
@@ -2658,6 +2684,7 @@ cloud telemetry, no monkey-patching, no cross-run inference.
 | `scripts/tests/fixtures/ndjson-framer-units.py` | byte-level NDJSON framer units | CORE test fixture | generic | product-launch suite |
 | `.github/workflows/core.yml` | CI core gate (canonical `core` profile) | CONFIG | FG wiring | `core-workflow.test.sh` |
 | `.github/workflows/e2e.yml` | CI E2E gate (canonical `e2e` profile + consent once) | CONFIG | FG wiring | `e2e-workflow.test.sh` |
+| `.github/workflows/publish-images.yml` | push-`main` release DAG: embedded core + e2e canonical gates, `publish-api`/`publish-web` with `needs: [core, e2e]`, `github.sha` publication SHA | CONFIG | FG wiring | `publish-workflow.test.sh` |
 | `playwright.config.ts` | E2E config: webServers (reset+runserver+vite), serial execution, chromium | CONFIG | FG | `e2e-workflow.test.sh` (indirect); E2E suite |
 | `playwright.diagnostics.config.ts` | browser-free diagnostics unit-test config | CONFIG | FG | `npx playwright test -c …` |
 | `e2e/*.spec.ts` (25 specs) + `e2e/helpers.ts`, `my-work-helpers.ts` | browser E2E suite | REPO KNOWLEDGE | FG | E2E profile |

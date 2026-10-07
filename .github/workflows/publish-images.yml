@@ -1,22 +1,27 @@
 # Canonical production image publication for FG Workspace (GHCR).
 #
-# Publishes exactly two immutable production images for one verified
-# commit:
+# A push to main starts ONE release DAG for that commit X: the canonical
+# Core verification job, the canonical E2E job, and two publication jobs.
+# All four jobs belong to the SAME workflow run, so github.sha == X is the
+# authoritative SHA for Core(X), E2E(X) and publication. There is no
+# cross-workflow correlation and no completion-order race: publication
+# eligibility is purely declarative through `needs`.
+#
+# Both publication jobs declare needs on BOTH gate jobs, so a failed,
+# cancelled, or skipped gate prevents publication through native
+# dependency semantics, regardless of which gate finishes first.
+#
+# The publication jobs verify nothing by themselves: they build and push
+# the two immutable production images of the one revision both embedded
+# gates checked out and verified:
 #
 #   ghcr.io/<lowercase-owner>/<repo>-api :<40-char Git SHA>
 #   ghcr.io/<lowercase-owner>/<repo>-web :<40-char Git SHA>
 #
-# This workflow verifies nothing by itself and re-runs no test suite.
-# It depends on the canonical Core verification workflow (its exact
-# top-level `name:` value: `Core verification`) through a `workflow_run`
-# trigger: a publication job runs ONLY when a COMPLETED and SUCCESSFUL
-# core run of a `push` to `main` finishes. The published source revision
-# is that core run's head SHA — the same commit the gate verified — and
-# a step asserts the checked-out HEAD equals it before any build starts.
-#
-# Automatic publication is `push` to `main` ONLY. Pull requests, other
-# branches, and manual `workflow_dispatch` of the core gate never
-# publish (both jobs skip via the visible job condition).
+# Automatic execution is `push` to `main` ONLY. Pull requests and manual
+# verification runs are handled by the standalone gate workflows
+# (core.yml, e2e.yml); this workflow adds no manual trigger and is
+# started by no event other than a push to main.
 #
 # Invariants:
 #   * The exact 40-character Git commit SHA is the ONLY deployment tag.
@@ -36,60 +41,279 @@
 #     VServer, or a Compose stack. The published references are consumed
 #     later through FG_API_IMAGE / FG_WEB_IMAGE.
 #
-# Concurrency: no cancellation is introduced. The core gate already
-# serializes pushes to main (queued, never cancelled), so superseded
-# commits never publish in parallel, and a re-run of one head SHA
-# republishes the identical immutable tag (idempotent).
+# Concurrency: the release DAG keeps the former effective main-run
+# behavior of the standalone core gate: pushes to main are queued and
+# never cancelled (same group shape, cancel-in-progress: false), so
+# superseded commits never publish in parallel, and a re-run of one
+# commit republishes the identical immutable tags (idempotent).
 #
 # Cache: none. Cold-cache builds are the verified contract; a GHA cache
 # would additionally require actions: read/write permissions beyond the
 # minimum publication envelope and is not needed for correctness.
 #
-# Artifacts: none — the registry is the artifact.
+# Artifacts: the registry is the publication artifact. The embedded gate
+# jobs keep their standard access-protected summary/failure artifacts
+# (uploading an artifact never proves gate success — see
+# docs/agent/WORKFLOW.md).
 name: Production image publication (GHCR)
 
 on:
-  workflow_run:
-    # The gate this publication depends on: the canonical Core
-    # verification workflow, referenced by its exact top-level `name:`
-    # value. Renaming that `name:` in the Core workflow requires
-    # updating this list.
-    workflows: ["Core verification"]
-    types: [completed]
+  push:
+    branches: [main]
 
 permissions:
   contents: read
   packages: write
 
+# Same effective main-run concurrency as the former standalone core
+# gate: pushes to main are queued and never cancelled, so completed main
+# evidence is preserved and superseded commits never publish in parallel.
+concurrency:
+  group: publish-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  core:
+    name: Core verification
+    # Job-level permissions narrowed to what the gate itself requires.
+    # The publication envelope (packages: write) stays at the workflow
+    # level, where the publication jobs inherit it.
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    # The core profile runs the complete frontend and backend suites
+    # (no browser, no E2E reset). The prior observed successful runtime
+    # was ~19m31s, but a real GitHub-hosted run (commit ef92bda, run #59,
+    # started ~19:20 UTC, cancelled ~19:51 UTC) exceeded the 30-minute
+    # ceiling, so 30 minutes has been proven insufficient; 45 minutes is
+    # the bounded CI budget, covering setup (checkout, npm ci, uv sync)
+    # and the complete suites while still bounding hanging jobs.
+    timeout-minutes: 45
+
+    # CI-only, non-secret PostgreSQL contract for config.settings:
+    # Django connects to database "fg_workspace" as user "fg_ci" and the
+    # backend test suite creates and drops its own test database. No
+    # production credentials and no GitHub secrets.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: fg_ci
+          POSTGRES_PASSWORD: fg-ci-only
+          POSTGRES_DB: fg_workspace
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U fg_ci -d fg_workspace"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # Only the environment variables config.settings actually requires.
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: fg_workspace
+      POSTGRES_USER: fg_ci
+      POSTGRES_PASSWORD: fg-ci-only
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: "Set up Node.js (repo contract: .nvmrc = 24, engines >= 24)"
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install JavaScript dependencies (lockfile only)
+        run: npm ci
+
+      - name: "Set up uv (repo contract: requires-python >= 3.12)"
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: 0.12.16
+          python-version: "3.12"
+          # Caches uv dependency downloads only (never virtual environment
+          # state); the cache key derives from the repository lockfiles.
+          enable-cache: true
+
+      - name: Install backend dependencies (lockfile only, no lock update)
+        working-directory: apps/api
+        run: uv sync --frozen
+
+      # The core profile is non-browser: no Playwright browser install.
+
+      - name: Prepare core summary target directory
+        run: mkdir -p "$RUNNER_TEMP/fg-core"
+
+      # The ONLY core invocation in this workflow: the canonical gate.
+      # The real exit code of agent-verify.sh is preserved (no retries,
+      # no wrapping that could hide a failed phase).
+      - name: Run canonical core verification gate
+        run: |
+          ./scripts/agent-verify.sh \
+            --summary-json "$RUNNER_TEMP/fg-core/core-summary.json" \
+            core
+
+      # Runs on success AND on regular failure; skipped on cancellation so
+      # a potentially incomplete summary is never uploaded. A cancelled run
+      # is never presented as success evidence. Upload errors remain visible
+      # but do not replace the original core failure (a missing summary
+      # cannot mask it either).
+      - name: Upload core run summary
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: core-summary-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/fg-core/core-summary.json
+          retention-days: 14
+          if-no-files-found: warn
+
+  e2e:
+    name: Playwright E2E (chromium)
+    # Job-level permissions narrowed to what the gate itself requires.
+    # The publication envelope (packages: write) stays at the workflow
+    # level, where the publication jobs inherit it.
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    # Observed E2E run is ~2.5 minutes; 20 minutes covers setup
+    # (checkout, npm ci, uv sync, Playwright browser install) and bounds
+    # hanging jobs.
+    timeout-minutes: 20
+
+    # CI-only, non-secret PostgreSQL contract for config.settings_e2e:
+    # Django connects to database "fg_workspace" as user "fg_ci" and works
+    # inside the isolated fg_e2e schema (the only schema the E2E reset
+    # may touch). No production credentials and no GitHub secrets.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: fg_ci
+          POSTGRES_PASSWORD: fg-ci-only
+          POSTGRES_DB: fg_workspace
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U fg_ci -d fg_workspace"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # Only the environment variables settings_e2e actually requires.
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: fg_workspace
+      POSTGRES_USER: fg_ci
+      POSTGRES_PASSWORD: fg-ci-only
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: "Set up Node.js (repo contract: .nvmrc = 24, engines >= 24)"
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install JavaScript dependencies (lockfile only)
+        run: npm ci
+
+      - name: "Set up uv (repo contract: requires-python >= 3.12)"
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: 0.12.16
+          python-version: "3.12"
+          # Caches uv dependency downloads only (never virtual environment
+          # state); the cache key derives from the repository lockfiles.
+          enable-cache: true
+
+      - name: Install backend dependencies (lockfile only, no lock update)
+        working-directory: apps/api
+        run: uv sync --frozen
+
+      - name: Install Playwright chromium (the only configured browser project)
+        run: npx playwright install --with-deps chromium
+
+      - name: Prepare E2E summary target directory
+        run: mkdir -p "$RUNNER_TEMP/fg-e2e"
+
+      # The ONLY E2E invocation in this workflow: the canonical gate.
+      # The destructive-reset consent flag is set here and only here; it
+      # consents to resetting the isolated fg_e2e schema in the CI database.
+      - name: Run canonical E2E gate
+        run: |
+          FG_ALLOW_E2E_RESET=1 ./scripts/agent-verify.sh \
+            --summary-json "$RUNNER_TEMP/fg-e2e/e2e-summary.json" \
+            e2e
+
+      # Runs on success AND on regular failure; skipped on cancellation so
+      # a potentially incomplete summary is never uploaded. A cancelled run
+      # is never presented as success evidence. Upload errors remain visible
+      # but do not replace the original E2E failure (a missing summary
+      # cannot mask it either).
+      - name: Upload E2E run summary
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-summary-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/fg-e2e/e2e-summary.json
+          retention-days: 14
+          if-no-files-found: warn
+
+      # Failure evidence only: runs on regular failure, never on success,
+      # and !cancelled() explicitly excludes cancelled runs, so a cancelled
+      # run never uploads test-results as failure evidence. A missing
+      # artifact path warns instead of failing, so the original test
+      # failure stays the reported cause.
+      - name: Upload Playwright failure artifacts
+        if: ${{ failure() && !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 14
+          if-no-files-found: warn
+
   publish-api:
     name: Publish API image (full-SHA tag)
-    # Publication happens only after a SUCCESSFUL core gate run of a
-    # push to main. Any other core run (failure, cancellation, PR,
-    # dispatch, other branch) skips both jobs without publishing.
-    if: >-
-      github.event.workflow_run.conclusion == 'success'
-      && github.event.workflow_run.event == 'push'
-      && github.event.workflow_run.head_branch == 'main'
+    # Publication is eligible only when BOTH canonical gates of THIS run
+    # succeeded: Core(X) AND E2E(X). A failed, cancelled, or skipped gate
+    # skips this job through native dependency semantics; the completion
+    # order of the two gates is irrelevant.
+    needs:
+      - core
+      - e2e
     runs-on: ubuntu-24.04
     # Cold-cache build of the production API image (uv sync from the
     # committed lockfile inside the image) plus push; 20 minutes bounds
     # hanging jobs with wide margin.
     timeout-minutes: 20
     env:
-      # The verified revision: the head commit of the completed core
-      # run. For a push to main this is the pushed commit — the same
-      # revision the core gate checked out and verified. This is the
-      # production image identity; the workflow_run event's own commit
-      # is deliberately NOT used for it.
-      FG_PUBLISH_SHA: ${{ github.event.workflow_run.head_sha }}
+      # The verified revision: the pushed commit of THIS release run —
+      # the same revision both embedded gates checked out and verified.
+      # This is the production image identity.
+      FG_PUBLISH_SHA: ${{ github.sha }}
     steps:
       - name: Checkout the verified revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # The canonical revision of the core run — never the default
-          # branch HEAD, which a workflow_run run would check out.
-          ref: ${{ github.event.workflow_run.head_sha }}
+          # The pushed commit of this run — never a default-branch HEAD
+          # resolved at publication time.
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       # The checkout must not silently build another revision.
@@ -151,22 +375,25 @@ jobs:
 
   publish-web:
     name: Publish web image (full-SHA tag)
-    if: >-
-      github.event.workflow_run.conclusion == 'success'
-      && github.event.workflow_run.event == 'push'
-      && github.event.workflow_run.head_branch == 'main'
+    # Publication is eligible only when BOTH canonical gates of THIS run
+    # succeeded: Core(X) AND E2E(X). A failed, cancelled, or skipped gate
+    # skips this job through native dependency semantics; the completion
+    # order of the two gates is irrelevant.
+    needs:
+      - core
+      - e2e
     runs-on: ubuntu-24.04
     # Cold-cache build of the production web image (npm ci from the
     # committed root lockfile + canonical Vite build inside the image)
     # plus push; 20 minutes bounds hanging jobs with wide margin.
     timeout-minutes: 20
     env:
-      FG_PUBLISH_SHA: ${{ github.event.workflow_run.head_sha }}
+      FG_PUBLISH_SHA: ${{ github.sha }}
     steps:
       - name: Checkout the verified revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Verify the checked-out revision
