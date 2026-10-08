@@ -57,6 +57,17 @@ async function createImportTemplate(
     `/meetings/series?group=${groupId}`,
   )
 
+  // A cold page load resolves the Research Group scope
+  // asynchronously: until the group subtitle renders,
+  // "Create template" submits nothing. Wait for the
+  // scope-ready state before using the create form.
+  await expect(
+    page.getByText(
+      'Meeting templates in FG Example.',
+      { exact: true },
+    ),
+  ).toBeVisible()
+
   await page
     .getByLabel('Name')
     .fill(TEMPLATE_TITLE)
