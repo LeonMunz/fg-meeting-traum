@@ -283,6 +283,14 @@ django() {
   (cd "$REPO_ROOT/apps/api" && exec uv run python manage.py "${django_args[@]}")
 }
 
+# Run the Django test suite in the canonical uv environment with the
+# backend-test settings module (config.settings_test): normal settings
+# plus the fast single-iteration password hasher. The check and
+# migration-drift phases keep running on config.settings.
+django_test() {
+  (cd "$REPO_ROOT/apps/api" && DJANGO_SETTINGS_MODULE=config.settings_test exec uv run python manage.py test "$@")
+}
+
 # run_cmd <phase> <mutation-classification> <display-command> <command...>
 # In plan mode the phase is printed without executing; in run mode it is
 # executed and its nonzero exit status aborts the script (fail-fast).
@@ -354,7 +362,7 @@ phase_django_migrations() {
 }
 
 phase_django_tests() {
-  run_cmd "backend: django tests" "$MUTATE_TESTDB" "cd apps/api && uv run python manage.py test" django test
+  run_cmd "backend: django tests" "$MUTATE_TESTDB" "cd apps/api && DJANGO_SETTINGS_MODULE=config.settings_test uv run python manage.py test" django_test
 }
 
 phase_e2e() {

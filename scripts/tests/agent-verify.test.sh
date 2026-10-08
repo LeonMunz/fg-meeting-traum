@@ -52,6 +52,9 @@
 #     exact host command and never invokes the Playwright phase; the host
 #     gate proceeds to the (shimmed) Playwright phase; an undeterminable
 #     gate fails closed (refusal, no browser)
+#   * backend settings boundary (plan): check and migration-drift stay
+#     on config.settings; only the Django test phase runs with
+#     DJANGO_SETTINGS_MODULE=config.settings_test (fast test hasher)
 
 set -Eeuo pipefail
 
@@ -495,6 +498,15 @@ run_cmd "$BASH_BIN" "$VERIFY" --summary-json "$SUMDIR/plan.json" plan quick
 expect_rc "t09g plan rejects --summary-json (exit 2)" 2 "$RC"
 expect_contains "t09h rejection message names plan" "$CAP_OUT" "plan"
 expect_no_file "t09i plan writes no summary file" "$SUMDIR/plan.json"
+
+# Backend settings boundary: the plan output must pin the exact
+# settings module per phase — normal settings for check and
+# migration-drift, config.settings_test for the test suite.
+run_cmd "$BASH_BIN" "$VERIFY" plan backend
+expect_rc "t09j plan backend exits 0" 0 "$RC"
+expect_contains "t09k backend plan keeps check on normal settings" "$CAP_OUT" "cd apps/api && uv run python manage.py check"
+expect_contains "t09l backend plan keeps migration drift on normal settings" "$CAP_OUT" "cd apps/api && uv run python manage.py makemigrations --check --dry-run"
+expect_contains "t09m backend plan runs tests on config.settings_test" "$CAP_OUT" "cd apps/api && DJANGO_SETTINGS_MODULE=config.settings_test uv run python manage.py test"
 
 # -------------------------------------------- t10 relative target path -----
 run_cmd bash -c 'cd "$1" && PATH="$2" exec "$3" "$4" --summary-json rel.json quick' \

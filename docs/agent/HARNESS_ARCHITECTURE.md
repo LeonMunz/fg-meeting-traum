@@ -362,7 +362,8 @@ because instructions say so). §28 classifies every rule precisely.
   `--summary-json`), `agent-observability` (12 subcommands),
   `agent-product-launch` (install/status/uninstall/launch), targeted
   commands from the scoped `AGENTS.md` ladders (`npm run typecheck`,
-  `uv run python manage.py test <app>`, etc.), and the human setup/dev
+  `DJANGO_SETTINGS_MODULE=config.settings_test uv run python manage.py
+  test <app>`, etc.), and the human setup/dev
   commands in the root `README.md`.
 - **Canonical sources** — the scripts themselves (usage/help output is the
   contract), `docs/agent/OBSERVABILITY.md` (observability surface).
@@ -381,7 +382,12 @@ because instructions say so). §28 classifies every rule precisely.
 - **Current implementation** —
   - Backend tests: Django test runner creates and drops its own test
     database (mutation class `MUTATE_TESTDB`; the development database is
-    never touched).
+    never touched). The suite runs with
+    `DJANGO_SETTINGS_MODULE=config.settings_test` (normal settings plus
+    the fast single-iteration password hasher
+    `config.test_hashers.FastPBKDF2PasswordHasher`); `check` and
+    migration-drift stay on `config.settings` (contract:
+    `apps/api/config/test_settings_contract.py`).
   - E2E: the Playwright `webServer` startup runs `reset_e2e`
     (`DROP SCHEMA fg_e2e CASCADE` + migrations + `seed_dev` +
     `seed_e2e_scope`) inside the isolated `fg_e2e` schema only
@@ -770,7 +776,7 @@ and `plan` output.
 | `frontend: build` | `npm run build` | build output only (`dist/`, gitignored) |
 | `backend: django check` | `cd apps/api && uv run python manage.py check` | none |
 | `backend: migration drift` | `cd apps/api && uv run python manage.py makemigrations --check --dry-run` | none |
-| `backend: django tests` | `cd apps/api && uv run python manage.py test` | Django test database only (created + dropped; development database untouched) |
+| `backend: django tests` | `cd apps/api && DJANGO_SETTINGS_MODULE=config.settings_test uv run python manage.py test` | Django test database only (created + dropped; development database untouched); settings module `config.settings_test` (fast single-iteration test hasher) |
 | `e2e: playwright` | `npm run test:e2e [args]` | **DESTRUCTIVE: resets `fg_e2e` schema (DROP SCHEMA CASCADE + migrate + seed); writes `playwright-report/` and `test-results/`** |
 
 Profiles: `quick` = hygiene + typecheck + lint + django check + migration
@@ -2693,6 +2699,8 @@ cloud telemetry, no monkey-patching, no cross-run inference.
 | `apps/api/accounts/management/commands/seed_dev.py` | deterministic dev/E2E seed (users, group, projects) | REPO KNOWLEDGE | FG | `apps/api/accounts` seed tests |
 | `apps/api/accounts/management/commands/seed_e2e_scope.py` | E2E scope fixtures | REPO KNOWLEDGE | FG | E2E authorization specs |
 | `apps/api/config/settings_e2e.py` | E2E Django settings (isolated `fg_e2e` schema) | CONFIG | FG | E2E profile; reset tests |
+| `apps/api/config/settings_test.py` + `test_hashers.py` | backend-test settings (normal settings + single-iteration PBKDF2 test hasher) | CONFIG | FG | `backend: django tests`; contract tests |
+| `apps/api/config/test_settings_contract.py` | settings-module / hasher boundary contract (normal, test, E2E probes) | CONFIG | FG | backend suite |
 | `.artifacts/` (git-ignored) | all runtime harness state (§21) | CORE convention | layout generic, content per-repo | observability suite (gitignore coverage) |
 | `.gitignore` (`.artifacts/` entry) | keeps runtime state out of git | CORE convention | generic | observability suite |
 | `.nvmrc`, `package.json`, `apps/api/pyproject.toml` | runtime version contracts (Node 24, workspaces, Python ≥ 3.12) | CONFIG | FG values | doctor probes; CI pins |

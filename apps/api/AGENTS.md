@@ -20,6 +20,29 @@ This file adds backend-specific execution and verification guidance.
 - No client-only authorization semantics; the UI never grants access.
 - CSRF is enforced by DRF session authentication for authenticated unsafe requests.
 
+## Settings modules
+
+Four runtime settings modules, one per execution context:
+
+- `config.settings` — normal/default: development server, `manage.py
+  check`, `makemigrations --check --dry-run`.
+- `config.settings_production` — production deployment.
+- `config.settings_e2e` — browser E2E (isolated `fg_e2e` schema).
+- `config.settings_test` — backend test runs only. Inherits
+  `config.settings` and swaps `PASSWORD_HASHERS` for
+  `config.test_hashers.FastPBKDF2PasswordHasher` (PBKDF2-SHA256, single
+  iteration) so the test suite does not pay the production
+  key-derivation cost.
+
+Canonical backend test command (full suite and targeted subsets):
+
+```text
+cd apps/api && DJANGO_SETTINGS_MODULE=config.settings_test uv run python manage.py test
+```
+
+Never import `config.settings_test` into a server process; never let
+production or E2E settings import from it.
+
 ## E2E reset consent (`reset_e2e`)
 
 The destructive `reset_e2e` management command (started by the Playwright
@@ -42,7 +65,8 @@ Run from `apps/api/`, widening only as far as the task requires:
 1. **Django system check** — `uv run python manage.py check`.
 2. **Migration integrity** — `uv run python manage.py makemigrations --check --dry-run`.
 3. **Smallest relevant app/test subset** —
-   `uv run python manage.py test <app-oder-testpfad>` for the changed area;
+   `DJANGO_SETTINGS_MODULE=config.settings_test uv run python manage.py
+   test <app-oder-testpfad>` for the changed area;
    the label may be an app, a module, a class, or a single method, e.g.
    `test accounts`, `test accounts.test_seed_dev`, or
    `test accounts.test_seed_dev.SeedDevIdempotencyTest.test_seed_dev_runs_twice_without_duplicates`.

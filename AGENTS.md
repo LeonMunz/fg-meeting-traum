@@ -161,7 +161,10 @@ executable verification interface. Profiles:
 - `frontend` — complete non-browser frontend: typecheck, lint, complete unit
   suite, design-token contract suite, production build.
 - `backend` — complete backend: Django system check, migration-drift check,
-  complete Django test suite (canonical uv environment).
+  complete Django test suite (canonical uv environment; the test phase
+  runs with `DJANGO_SETTINGS_MODULE=config.settings_test`, the
+  backend-test settings module with the fast single-iteration password
+  hasher).
 - `core` — all complete non-browser validation: repo hygiene + `frontend` +
   `backend`. Strongest profile expected to pass in the agent sandbox.
 - `e2e` — browser E2E only. Requires a browser-capable environment and
@@ -185,7 +188,10 @@ The summary is execution evidence only and never upgrades an Evidence
 Contract status.
 Targeted validation during development stays available (see `apps/web/AGENTS.md`
 and `apps/api/AGENTS.md`), e.g. `npm run typecheck`, `npm run test:unit
---workspace=web`, or `uv run python manage.py test <app>` from `apps/api/`.
+--workspace=web`, or `DJANGO_SETTINGS_MODULE=config.settings_test uv run
+python manage.py test <app>` from `apps/api/` (backend tests always run
+on the test settings module; `check` and `makemigrations --check
+--dry-run` stay on `config.settings`).
 
 `./scripts/agent-doctor.sh` (read-only; `--json` for machine-readable output)
 diagnoses which verification capabilities are available or blocked in the
