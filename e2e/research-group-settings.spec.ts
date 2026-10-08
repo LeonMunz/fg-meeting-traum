@@ -7,36 +7,97 @@ import {
 import {
   login,
   logout,
-  openResearchGroupOverview,
 } from './helpers'
 
-async function selectResearchGroup(
-  page: Page,
-  name: string,
-) {
-  await openResearchGroupOverview(page, name)
+/**
+ * State ownership: each test in this spec creates its own Research
+ * Group through the user-facing creation flow and mutates only that
+ * group (rename, memberships, roles). The shared seeded Research
+ * Groups (Robotics Lab, FG Example) and their memberships are never
+ * touched; the run-level fg_e2e reset is the only cleanup.
+ */
 
-  await expect(
-    page
-      .getByRole('group', { name })
-      .getByRole('button', {
-        name,
-        exact: true,
-      }),
-  ).toHaveAttribute(
-    'aria-current',
-    'true',
-  )
+type OwnedResearchGroup = {
+  id: string
+  name: string
 }
 
-async function openResearchGroupSettings(
+/**
+ * Creates a test-owned Research Group through the user-facing
+ * creation flow (the permanent sidebar entry + dialog) for the
+ * currently logged-in user. The server response proves the creator
+ * becomes admin of the new group, and creation lands on the new
+ * group's canonical Overview.
+ */
+async function createResearchGroup(
   page: Page,
   name: string,
-) {
-  // The Sidebar name controls disclosure. Open the still-canonical
-  // Overview directly, then use its admin-only Settings link.
-  await openResearchGroupOverview(page, name)
+): Promise<OwnedResearchGroup> {
+  const createEntry =
+    page.getByRole('button', {
+      name: 'Create research group',
+    })
 
+  await expect(createEntry).toBeVisible()
+  await createEntry.click()
+
+  const dialog =
+    page.getByRole('dialog', {
+      name: 'Create research group',
+    })
+
+  await expect(dialog).toBeVisible()
+
+  const createResponse =
+    page.waitForResponse(
+      (response) =>
+        response
+          .url()
+          .endsWith('/api/research-groups/') &&
+        response.request().method() === 'POST',
+    )
+
+  await dialog
+    .getByLabel('Research group name')
+    .fill(name)
+
+  await dialog
+    .getByRole('button', {
+      name: 'Create research group',
+    })
+    .click()
+
+  const response = await createResponse
+  expect(response.status()).toBe(201)
+  const created = (await response.json()) as {
+    id: number
+    role: string
+  }
+
+  // The creator is admin of the new group.
+  expect(created.role).toBe('admin')
+
+  await expect(dialog).toBeHidden()
+
+  // Creation lands on the new group's canonical Overview, where
+  // the admin-only Settings link is available to the creator.
+  await expect(page).toHaveURL(
+    new RegExp(`/groups/${created.id}$`),
+  )
+
+  return {
+    id: String(created.id),
+    name,
+  }
+}
+
+/**
+ * Opens the test-owned group's admin Settings from its Overview.
+ */
+async function openOwnedGroupSettings(
+  page: Page,
+  group: OwnedResearchGroup,
+) {
   await page
     .getByRole('link', {
       name: 'Settings',
@@ -45,8 +106,90 @@ async function openResearchGroupSettings(
     .click()
 
   await expect(page).toHaveURL(
-    /\/groups\/\d+\/settings$/,
+    new RegExp(`/groups/${group.id}/settings$`),
   )
+}
+
+/**
+ * Adds the named seeded account as a regular member of the
+ * test-owned group through the Members settings dialog.
+ */
+async function addMemberBySearch(
+  page: Page,
+  username: string,
+) {
+  await page
+    .getByRole('button', {
+      name: 'Add member',
+      exact: true,
+    })
+    .click()
+
+  const dialog =
+    page.getByRole('dialog', {
+      name: 'Add member',
+    })
+
+  await expect(dialog).toBeVisible()
+
+  const searchInput =
+    dialog.getByLabel(
+      'Search person',
+    )
+
+  // No broad user enumeration before a useful query.
+  await expect(
+    dialog.getByText(
+      'Enter at least 2 characters.',
+      { exact: true },
+    ),
+  ).toBeVisible()
+
+  await searchInput.fill(
+    username,
+  )
+
+  const candidate =
+    dialog
+      .getByRole('button')
+      .filter({
+        hasText: `@${username}`,
+      })
+
+  await expect(
+    candidate,
+  ).toBeVisible()
+  await candidate.click()
+
+  await expect(
+    dialog.getByRole(
+      'radio',
+      {
+        name: 'Member',
+        exact: true,
+      },
+    ),
+  ).toBeChecked()
+
+  await dialog
+    .getByRole('button', {
+      name: 'Add member',
+      exact: true,
+    })
+    .click()
+
+  await expect(
+    dialog,
+  ).toHaveCount(0)
+
+  // The new membership is immediately reflected in the
+  // settings list.
+  await expect(
+    page.getByText(
+      `@${username}`,
+      { exact: true },
+    ),
+  ).toBeVisible()
 }
 
 test(
@@ -54,14 +197,19 @@ test(
   async ({ page }) => {
     await login(page, 'alex')
 
-    await selectResearchGroup(
-      page,
-      'Robotics Lab',
-    )
+    const suffix =
+      Date.now()
+    const group =
+      await createResearchGroup(
+        page,
+        `E2E Settings Rename ${suffix}`,
+      )
+    const renamedName =
+      `E2E Settings Rename Verified ${suffix}`
 
-    await openResearchGroupSettings(
+    await openOwnedGroupSettings(
       page,
-      'Robotics Lab',
+      group,
     )
 
     const settingsPath =
@@ -73,7 +221,7 @@ test(
 
     await expect(
       page.getByRole('heading', {
-        name: 'Robotics Lab',
+        name: group.name,
         exact: true,
       }),
     ).toBeVisible()
@@ -85,12 +233,10 @@ test(
 
     await expect(
       nameInput,
-    ).toHaveValue(
-      'Robotics Lab',
-    )
+    ).toHaveValue(group.name)
 
     await nameInput.fill(
-      'Robotics Lab E2E',
+      renamedName,
     )
 
     await page
@@ -102,38 +248,21 @@ test(
 
     await expect(
       page.getByRole('heading', {
-        name: 'Robotics Lab E2E',
+        name: renamedName,
         exact: true,
       }),
     ).toBeVisible()
 
+    // The renamed test-owned group is reflected in the
+    // workspace tree; the final name remains the renamed one.
     await expect(
       page
-        .getByRole('group', { name: 'Robotics Lab E2E' })
+        .getByRole('group', { name: renamedName })
         .getByRole('button', {
-          name: 'Robotics Lab E2E',
+          name: renamedName,
           exact: true,
         }),
     ).toHaveAttribute('aria-current', 'true')
-
-    // Restore canonical E2E name.
-    await nameInput.fill(
-      'Robotics Lab',
-    )
-
-    await page
-      .getByRole('button', {
-        name: 'Save',
-        exact: true,
-      })
-      .click()
-
-    await expect(
-      page.getByRole('heading', {
-        name: 'Robotics Lab',
-        exact: true,
-      }),
-    ).toBeVisible()
 
     // --------------------------------------------------------
     // Members
@@ -145,6 +274,13 @@ test(
         exact: true,
       })
       .click()
+
+    // Chris is added to this test-owned group; the seeded
+    // Chris membership of Robotics Lab is not touched.
+    await addMemberBySearch(
+      page,
+      'chris',
+    )
 
     const chrisRole =
       page.getByLabel(
@@ -163,7 +299,10 @@ test(
       chrisRole,
     ).toHaveValue('admin')
 
-    // Restore canonical E2E role.
+    // The authorization assertions below require Chris to be
+    // a non-admin of his own group, so the test-owned role is
+    // returned to member (no shared seed state is restored —
+    // the membership belongs to this test).
     await chrisRole.selectOption(
       'member',
     )
@@ -223,20 +362,20 @@ test(
   },
 )
 
-
 test(
   'admin can search and add a research group member',
   async ({ page }) => {
     await login(page, 'alex')
 
-    await selectResearchGroup(
-      page,
-      'Robotics Lab',
-    )
+    const group =
+      await createResearchGroup(
+        page,
+        `E2E Settings Add Member ${Date.now()}`,
+      )
 
-    await openResearchGroupSettings(
+    await openOwnedGroupSettings(
       page,
-      'Robotics Lab',
+      group,
     )
 
     await page
@@ -246,82 +385,13 @@ test(
       })
       .click()
 
-    await page
-      .getByRole('button', {
-        name: 'Add member',
-        exact: true,
-      })
-      .click()
-
-    const dialog =
-      page.getByRole('dialog', {
-        name: 'Add member',
-      })
-
-    await expect(
-      dialog,
-    ).toBeVisible()
-
-    const searchInput =
-      dialog.getByLabel(
-        'Search person',
-      )
-
-    // No broad user enumeration before a useful query.
-    await expect(
-      dialog.getByText(
-        'Enter at least 2 characters.',
-        { exact: true },
-      ),
-    ).toBeVisible()
-
-    await searchInput.fill(
+    await addMemberBySearch(
+      page,
       'laura',
     )
 
-    const lauraCandidate =
-      dialog
-        .getByRole('button')
-        .filter({
-          hasText: '@laura',
-        })
-
-    await expect(
-      lauraCandidate,
-    ).toBeVisible()
-
-    await lauraCandidate.click()
-
-    await expect(
-      dialog.getByRole(
-        'radio',
-        {
-          name: 'Member',
-          exact: true,
-        },
-      ),
-    ).toBeChecked()
-
-    await dialog
-      .getByRole('button', {
-        name: 'Add member',
-        exact: true,
-      })
-      .click()
-
-    await expect(
-      dialog,
-    ).toHaveCount(0)
-
-    // New membership is immediately reflected in the settings list.
-    await expect(
-      page.getByText(
-        '@laura',
-        { exact: true },
-      ),
-    ).toBeVisible()
-
-    // Once added, Laura must no longer be discoverable as a candidate.
+    // Once added, Laura must no longer be discoverable as a
+    // candidate of this test-owned group.
     await page
       .getByRole('button', {
         name: 'Add member',
