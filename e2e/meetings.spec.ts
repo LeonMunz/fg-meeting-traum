@@ -3522,6 +3522,17 @@ test(
     const groupId = meetingsUrl.searchParams.get('group') ?? '1'
 
     await page.goto(`/meetings/series?group=${groupId}`)
+
+    // Same scope-readiness wait: the cold load may still be
+    // resolving the group while the create form is already
+    // rendered but inert.
+    await expect(
+      page.getByText(
+        'Meeting templates in FG Example.',
+        { exact: true },
+      ),
+    ).toBeVisible()
+
     await page.getByLabel('Name').fill('E2E Cancel Follow-up Series')
     await page.getByRole('button', { name: /Create template/ }).click()
     await expect(page).toHaveURL(/\/meetings\/series\/\d+$/)
