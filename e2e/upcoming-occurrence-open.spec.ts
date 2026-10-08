@@ -92,7 +92,15 @@ async function createTemplate(page: Page) {
   ).toBeVisible()
 
   await page
-    .getByLabel('Name')
+    // The page-level Research Group context can render a group
+    // whose accessible name CONTAINS 'name' (e.g. a test group
+    // renamed to include "Rename"), so a substring label match
+    // is ambiguous in strict mode. Target the editable template
+    // name field by its exact role + accessible name.
+    .getByRole('textbox', {
+      name: 'Name',
+      exact: true,
+    })
     .fill(TEMPLATE_NAME)
 
   await page
