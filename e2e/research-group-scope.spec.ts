@@ -78,6 +78,79 @@ function getGroupIdFromUrl(
   return groupId!
 }
 
+type OwnedResearchGroup = {
+  id: string
+  name: string
+}
+
+/**
+ * State ownership: creates a test-owned Research Group through
+ * the user-facing creation flow for the currently logged-in
+ * user. The server response proves the creator becomes admin of
+ * the new group, and creation lands on the new group's canonical
+ * Overview.
+ */
+async function createResearchGroup(
+  page: Page,
+  name: string,
+): Promise<OwnedResearchGroup> {
+  const createEntry =
+    page.getByRole('button', {
+      name: 'Create research group',
+    })
+
+  await expect(createEntry).toBeVisible()
+  await createEntry.click()
+
+  const dialog =
+    page.getByRole('dialog', {
+      name: 'Create research group',
+    })
+
+  await expect(dialog).toBeVisible()
+
+  const createResponse =
+    page.waitForResponse(
+      (response) =>
+        response
+          .url()
+          .endsWith('/api/research-groups/') &&
+        response.request().method() === 'POST',
+    )
+
+  await dialog
+    .getByLabel('Research group name')
+    .fill(name)
+
+  await dialog
+    .getByRole('button', {
+      name: 'Create research group',
+    })
+    .click()
+
+  const response = await createResponse
+  expect(response.status()).toBe(201)
+  const created = (await response.json()) as {
+    id: number
+    role: string
+  }
+
+  // The creator is admin of the new group.
+  expect(created.role).toBe('admin')
+
+  await expect(dialog).toBeHidden()
+
+  // Creation lands on the new group's canonical Overview.
+  await expect(page).toHaveURL(
+    new RegExp(`/groups/${created.id}$`),
+  )
+
+  return {
+    id: String(created.id),
+    name,
+  }
+}
+
 test(
   'personal work stays global while group navigation follows explicit context',
   async ({ page, context }) => {
@@ -428,23 +501,24 @@ test(
   async ({ page }) => {
     await login(page, 'alex')
 
-    await selectResearchGroup(
-      page,
-      'Robotics Lab',
-    )
-
-    const roboticsGroupId =
-      new URL(page.url())
-        .pathname.match(/^\/groups\/(\d+)$/)![1]
+    // State ownership: the Meeting is created inside a
+    // test-owned Research Group, so no seeded group ever
+    // receives the test Meeting (the run-level reset remains
+    // the only cleanup).
+    const ownedGroup =
+      await createResearchGroup(
+        page,
+        `E2E Scope Deep Link ${Date.now()}`,
+      )
 
     await expandResearchGroup(
       page,
-      'Robotics Lab',
+      ownedGroup.name,
     )
 
     await page
       .getByRole('group', {
-        name: 'Robotics Lab',
+        name: ownedGroup.name,
       })
       .getByRole('link', {
         name: /Meetings/,
@@ -453,7 +527,7 @@ test(
 
     await expect(page).toHaveURL(
       new RegExp(
-        `/meetings\\?group=${roboticsGroupId}$`,
+        `/meetings\\?group=${ownedGroup.id}$`,
       ),
     )
 
@@ -471,7 +545,7 @@ test(
     await page
       .getByLabel('Title')
       .fill(
-        'E2E Robotics Scope Meeting',
+        'E2E Owned Scope Meeting',
       )
 
     await replaceControlValue(
@@ -496,7 +570,7 @@ test(
         .getByRole('button')
         .filter({
           hasText:
-            'E2E Robotics Scope Meeting',
+            'E2E Owned Scope Meeting',
         })
 
     await expect(meetingRow).toBeVisible()
@@ -517,7 +591,7 @@ test(
 
     await expect(page).toHaveURL(
       new RegExp(
-        `/meetings\\?group=${roboticsGroupId}$`,
+        `/meetings\\?group=${ownedGroup.id}$`,
       ),
     )
 
@@ -546,23 +620,23 @@ test(
       /\/meetings\?group=\d+$/,
     )
 
-    // No Robotics meeting leaks into the FG Example scope.
+    // The owned Meeting does not leak into the FG Example
+    // scope.
     await expect(
       page.getByText(
-        'E2E Robotics Scope Meeting',
+        'E2E Owned Scope Meeting',
         { exact: true },
       ),
     ).toHaveCount(0)
 
-    // Opening the Robotics meeting directly restores Robotics
-    // context (the provider's active group drives the
+    // Opening the owned Meeting directly restores its owning
+    // group's context (the provider's active group drives the
     // unscoped list scope).
     await page.goto(meetingPath)
 
     await expect(
       page.getByRole('heading', {
-        name:
-          'E2E Robotics Scope Meeting',
+        name: 'E2E Owned Scope Meeting',
         exact: true,
       }),
     ).toBeVisible()
@@ -571,7 +645,7 @@ test(
 
     await expect(page).toHaveURL(
       new RegExp(
-        `/meetings\\?group=${roboticsGroupId}$`,
+        `/meetings\\?group=${ownedGroup.id}$`,
       ),
     )
   },
