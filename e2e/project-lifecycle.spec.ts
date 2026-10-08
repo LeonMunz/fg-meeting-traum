@@ -282,10 +282,17 @@ test(
     await backToProjects(page)
 
     await expect(
-      page.getByText(
-        projectName,
-        { exact: true },
-      ),
+      // The current Projects list renders each Project as an
+      // entity link whose accessible name is the row text
+      // (title + description + status/role/updated metadata),
+      // so the name is matched as a substring of that row name
+      // - the same contract openVisibleProject uses. The
+      // Sidebar Quick Access entry is a button, never a link,
+      // so the role filter keeps this assertion on the list
+      // row rather than the global application shell.
+      page.getByRole('link', {
+        name: projectName,
+      }),
     ).toBeVisible()
 
     // --------------------------------------------------------
