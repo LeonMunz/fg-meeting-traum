@@ -12,10 +12,14 @@ runs:
 - ``config.settings_e2e`` (browser E2E): normal PBKDF2, fast test
   hasher absent.
 
-The E2E module is probed in a separate interpreter: importing
-``config.settings_e2e`` mutates the inherited ``DATABASES`` dict at
-import time, so it must never be imported into the active backend-test
-process.
+Import purity: ``config.settings_e2e`` derives from ``config.settings``
+but must not mutate mutable objects owned by ``config.settings`` when
+imported. It owns an independent ``DATABASES`` structure (new outer
+dict, per-alias entry, OPTIONS dict), so the ``fg_e2e`` search-path
+override is visible only through the E2E module itself. The
+import-purity contract is probed in a fresh interpreter that imports
+both modules in one process without configuring Django's global
+settings singleton.
 """
 
 import json
@@ -51,6 +55,27 @@ def run_settings_probe(settings_module, code):
     )
 
 
+def run_module_probe(code):
+    """Evaluate plain settings-module code in a fresh interpreter.
+
+    Unlike ``run_settings_probe``, the probe imports the ``config``
+    settings modules directly as Python modules and never touches
+    Django's global configured-settings singleton;
+    ``DJANGO_SETTINGS_MODULE`` is removed so no accidental Django
+    configuration can pick a module up from the caller environment.
+    """
+    environment = os.environ.copy()
+    environment.pop("DJANGO_SETTINGS_MODULE", None)
+    return subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=API_ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
 PROBE_CODE = (
     "import json\n"
     "from django.conf import settings\n"
@@ -60,6 +85,23 @@ PROBE_CODE = (
     "    'hashers': settings.PASSWORD_HASHERS,\n"
     "    'algorithm': hasher.algorithm,\n"
     "    'iterations': hasher.iterations,\n"
+    "}))\n"
+)
+
+E2E_IMPORT_PURITY_PROBE = (
+    "import copy\n"
+    "import json\n"
+    "from config import settings as base_settings\n"
+    "base_before = copy.deepcopy(base_settings.DATABASES)\n"
+    "import config.settings_e2e as e2e_settings\n"
+    "base_default = base_settings.DATABASES['default']\n"
+    "e2e_default = e2e_settings.DATABASES['default']\n"
+    "print(json.dumps({\n"
+    "    'base_before': base_before,\n"
+    "    'base_after': copy.deepcopy(base_settings.DATABASES),\n"
+    "    'e2e_default_options': e2e_default.get('OPTIONS'),\n"
+    "    'shares_databases': e2e_settings.DATABASES is base_settings.DATABASES,\n"
+    "    'shares_default': e2e_default is base_default,\n"
     "}))\n"
 )
 
@@ -84,11 +126,11 @@ class ActiveTestProcessContract(SimpleTestCase):
         self.assertFalse(check_password("wrong-password", encoded))
 
     def test_e2e_settings_module_is_not_imported_into_the_active_process(self):
-        # config.settings_e2e mutates the inherited DATABASES dict at
-        # import time (OPTIONS["options"] = "-c search_path=fg_e2e");
-        # that override must not be visible in the backend-test process.
-        # Django's connection handler adds an empty OPTIONS dict during
-        # normal startup, so assert on the search_path override itself.
+        # The fg_e2e search-path override belongs exclusively to
+        # config.settings_e2e (import-safe now, but E2E-only); it must
+        # not be visible in the backend-test process. Django's
+        # connection handler adds an empty OPTIONS dict during normal
+        # startup, so assert on the search_path override itself.
         from config import settings as normal_settings
 
         options = normal_settings.DATABASES["default"].get("OPTIONS", {})
@@ -124,3 +166,41 @@ class E2ESettingsContract(SimpleTestCase):
         self.assertEqual(contract["algorithm"], "pbkdf2_sha256")
         self.assertEqual(contract["iterations"], 1000000)
         self.assertNotIn(FAST_TEST_HASHER, contract["hashers"])
+
+
+class E2EImportPurityContract(SimpleTestCase):
+    """Importing config.settings_e2e must not mutate config.settings.
+
+    Both modules are imported into one fresh interpreter (no Django
+    settings singleton involved); the probe reports the base DATABASES
+    state before and after the E2E import, the E2E override, and the
+    identity of the mutable structures.
+    """
+
+    def test_importing_e2e_settings_does_not_mutate_base_settings(self):
+        result = run_module_probe(E2E_IMPORT_PURITY_PROBE)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        contract = json.loads(result.stdout)
+
+        # A. Base settings remain semantically identical to their
+        # pre-import state; in particular the fg_e2e search path is
+        # never injected into config.settings.DATABASES.
+        self.assertEqual(contract["base_before"], contract["base_after"])
+        base_options = contract["base_after"]["default"].get("OPTIONS", {})
+        self.assertNotIn("options", base_options)
+        self.assertNotIn("search_path=fg_e2e", base_options.get("options", ""))
+
+        # B. E2E settings keep the isolated fg_e2e search path while
+        # preserving any base OPTIONS entries.
+        self.assertEqual(
+            contract["e2e_default_options"],
+            {
+                **contract["base_before"]["default"].get("OPTIONS", {}),
+                "options": "-c search_path=fg_e2e",
+            },
+        )
+
+        # Mutable ownership is independent: the E2E module must not
+        # alias the base DATABASES dict or its default entry.
+        self.assertFalse(contract["shares_databases"])
+        self.assertFalse(contract["shares_default"])

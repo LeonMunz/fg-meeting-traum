@@ -28,6 +28,10 @@ Four runtime settings modules, one per execution context:
   check`, `makemigrations --check --dry-run`.
 - `config.settings_production` — production deployment.
 - `config.settings_e2e` — browser E2E (isolated `fg_e2e` schema).
+  Derives from `config.settings` but must not mutate mutable objects
+  owned by `config.settings` when imported (import purity): it owns an
+  independent `DATABASES` structure, so the `fg_e2e` search-path
+  override is visible only through the E2E module.
 - `config.settings_test` — backend test runs only. Inherits
   `config.settings` and swaps `PASSWORD_HASHERS` for
   `config.test_hashers.FastPBKDF2PasswordHasher` (PBKDF2-SHA256, single
