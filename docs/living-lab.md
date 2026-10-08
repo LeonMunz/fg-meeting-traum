@@ -470,15 +470,16 @@ Contract:
 
 - **Trigger + gate** — the workflow runs ONLY for a `push` to `main`,
   and each push starts ONE release DAG for that commit X: the canonical
-  Core verification job, the canonical E2E job, and the two publication
-  jobs. Both publication jobs declare `needs: [core, e2e]`, so
-  publication happens only when BOTH Core(X) AND E2E(X) succeeded inside
+  Core verification job, the canonical E2E job, the canonical Harness
+  contract job, and the two publication jobs. Both publication jobs
+  declare `needs: [core, e2e, harness]`, so publication happens only
+  when ALL THREE of Core(X), E2E(X) AND Harness(X) succeeded inside
   that same run — native dependency semantics, in any completion order;
   a failed, cancelled, or skipped gate publishes nothing. The
   publication jobs re-run no test suite and verify nothing by
-  themselves. The standalone `core.yml` / `e2e.yml` workflows run the
-  same canonical gates only for pull requests to `main` and manual
-  `workflow_dispatch` — they never publish.
+  themselves. The standalone `core.yml` / `e2e.yml` / `harness.yml`
+  workflows run the same canonical gates only for pull requests to
+  `main` and manual `workflow_dispatch` — they never publish.
 - **Immutability** — the exact 40-character Git commit SHA is the ONLY
   tag. No `latest`, branch, short-SHA, or timestamp tag is ever
   published. The built revision is `github.sha` of the push-triggered

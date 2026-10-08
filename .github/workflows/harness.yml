@@ -1,0 +1,64 @@
+# Canonical Harness / CI contract gate for FG Workspace (single job, no
+# matrix).
+#
+# Triggers: pull requests to main and manual workflow_dispatch. Pushes to
+# main run this same canonical job inside the release DAG
+# (.github/workflows/publish-images.yml); there is no standalone
+# push-to-main trigger in this workflow.
+#
+# Runs the canonical fast Harness contract suite
+# (scripts/tests/harness-contracts.test.sh): the clean-checkout-safe
+# static and simulated contracts for the harness and the CI workflows
+# themselves. The individual suite list lives in the runner, not in this
+# file.
+#
+# Clean CI-safe execution contract: Node 24 only (the agent-verify suite
+# uses node for JSON validation); no dependency installation, no
+# database service, no browser, no Docker, no secrets, no artifacts —
+# the fast textual suite reports per-check ok/FAIL lines directly in the
+# job log, and there is no summary-artifact contract for this gate.
+name: Harness contracts
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Cancel superseded runs of the same PR branch only; manual dispatch
+# runs are queued and never cancelled. Main-push verification runs in
+# the release DAG (publish-images.yml).
+concurrency:
+  group: harness-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  harness:
+    name: Harness contracts
+    runs-on: ubuntu-24.04
+    # Measured baseline: the full fast suite completes in under 15 s on
+    # a clean checkout (the agent-verify suite dominates, ~6 s). 10
+    # minutes covers checkout + Node setup with wide margin while still
+    # bounding hanging jobs.
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Node 24 per the repository contract (.nvmrc = 24, engines >= 24).
+      # No cache inputs: this gate installs nothing, so there is
+      # nothing to cache.
+      - name: "Set up Node.js (repo contract: .nvmrc = 24, engines >= 24)"
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      # The ONLY harness invocation in this workflow: the canonical fast
+      # Harness contract suite (the individual suite list lives in the
+      # runner, not in this file).
+      - name: Run canonical Harness contract suite
+        run: bash scripts/tests/harness-contracts.test.sh

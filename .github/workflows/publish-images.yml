@@ -1,19 +1,20 @@
 # Canonical production image publication for FG Workspace (GHCR).
 #
 # A push to main starts ONE release DAG for that commit X: the canonical
-# Core verification job, the canonical E2E job, and two publication jobs.
-# All four jobs belong to the SAME workflow run, so github.sha == X is the
-# authoritative SHA for Core(X), E2E(X) and publication. There is no
+# Core verification job, the canonical E2E job, the canonical Harness
+# contract job, and two publication jobs. All five jobs belong to the
+# SAME workflow run, so github.sha == X is the authoritative SHA for
+# Core(X), E2E(X), Harness(X) and publication. There is no
 # cross-workflow correlation and no completion-order race: publication
 # eligibility is purely declarative through `needs`.
 #
-# Both publication jobs declare needs on BOTH gate jobs, so a failed,
-# cancelled, or skipped gate prevents publication through native
-# dependency semantics, regardless of which gate finishes first.
+# Both publication jobs declare needs on ALL THREE gate jobs, so a
+# failed, cancelled, or skipped gate prevents publication through
+# native dependency semantics, regardless of which gate finishes first.
 #
 # The publication jobs verify nothing by themselves: they build and push
-# the two immutable production images of the one revision both embedded
-# gates checked out and verified:
+# the two immutable production images of the one revision all three
+# embedded gates checked out and verified:
 #
 #   ghcr.io/<lowercase-owner>/<repo>-api :<40-char Git SHA>
 #   ghcr.io/<lowercase-owner>/<repo>-web :<40-char Git SHA>
@@ -288,15 +289,48 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
 
+  harness:
+    name: Harness contracts
+    # Job-level permissions narrowed to what the gate itself requires.
+    # The publication envelope (packages: write) stays at the workflow
+    # level, where the publication jobs inherit it.
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    # The fast Harness contract suite is a clean-checkout-safe,
+    # static/simulated contract pass (measured under 15 s); 10 minutes
+    # covers checkout + Node setup with wide margin and bounds hanging
+    # jobs. Node 24 only: no dependency installation, no database
+    # service, no browser, no Docker, no artifacts.
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: "Set up Node.js (repo contract: .nvmrc = 24, engines >= 24)"
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      # The ONLY harness invocation in this workflow: the canonical fast
+      # Harness contract suite (the individual suite list lives in the
+      # runner, not in this file).
+      - name: Run canonical Harness contract suite
+        run: bash scripts/tests/harness-contracts.test.sh
+
   publish-api:
     name: Publish API image (full-SHA tag)
-    # Publication is eligible only when BOTH canonical gates of THIS run
-    # succeeded: Core(X) AND E2E(X). A failed, cancelled, or skipped gate
-    # skips this job through native dependency semantics; the completion
-    # order of the two gates is irrelevant.
+    # Publication is eligible only when ALL THREE canonical gates of
+    # THIS run succeeded: Core(X) AND E2E(X) AND Harness(X). A failed,
+    # cancelled, or skipped gate skips this job through native
+    # dependency semantics; the completion order of the gates is
+    # irrelevant.
     needs:
       - core
       - e2e
+      - harness
     runs-on: ubuntu-24.04
     # Cold-cache build of the production API image (uv sync from the
     # committed lockfile inside the image) plus push; 20 minutes bounds
@@ -375,13 +409,15 @@ jobs:
 
   publish-web:
     name: Publish web image (full-SHA tag)
-    # Publication is eligible only when BOTH canonical gates of THIS run
-    # succeeded: Core(X) AND E2E(X). A failed, cancelled, or skipped gate
-    # skips this job through native dependency semantics; the completion
-    # order of the two gates is irrelevant.
+    # Publication is eligible only when ALL THREE canonical gates of
+    # THIS run succeeded: Core(X) AND E2E(X) AND Harness(X). A failed,
+    # cancelled, or skipped gate skips this job through native
+    # dependency semantics; the completion order of the gates is
+    # irrelevant.
     needs:
       - core
       - e2e
+      - harness
     runs-on: ubuntu-24.04
     # Cold-cache build of the production web image (npm ci from the
     # committed root lockfile + canonical Vite build inside the image)

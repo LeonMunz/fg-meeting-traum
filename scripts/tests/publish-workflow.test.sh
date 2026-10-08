@@ -12,11 +12,12 @@
 #
 # Topology under test (single same-SHA release DAG for push to main):
 #
-#   push main @ X  ->  ONE workflow run with four jobs:
-#                       core  (canonical Core verification)
-#                       e2e   (canonical Playwright E2E)
-#                       publish-api (needs: [core, e2e])
-#                       publish-web (needs: [core, e2e])
+#   push main @ X  ->  ONE workflow run with five jobs:
+#                       core      (canonical Core verification)
+#                       e2e       (canonical Playwright E2E)
+#                       harness   (canonical fast Harness contract suite)
+#                       publish-api (needs: [core, e2e, harness])
+#                       publish-web (needs: [core, e2e, harness])
 #   github.sha == X is the authoritative publication SHA; there is no
 #   cross-workflow correlation and no completion-order race.
 #
@@ -28,12 +29,17 @@
 #   * permissions: workflow level exactly contents: read + packages:
 #     write (no id-token, no other write scope); the embedded gate jobs
 #     narrow their job-level permissions to contents: read
-#   * exactly four jobs (core, e2e, publish-api, publish-web); pinned
-#     ubuntu-24.04 (no ubuntu-latest); bounded timeouts (core 45 min;
-#     e2e + both publication jobs 20 min)
-#   * both publication jobs depend on BOTH gate jobs (needs: core +
-#     e2e — checked semantically, independent of list formatting); no
-#     always() bypass anywhere
+#   * exactly five jobs (core, e2e, harness, publish-api, publish-web);
+#     pinned ubuntu-24.04 (no ubuntu-latest); bounded timeouts (core
+#     45 min; e2e + both publication jobs 20 min; harness 10 min)
+#   * both publication jobs depend on ALL THREE gate jobs (needs: core
+#     + e2e + harness — checked semantically, independent of list
+#     formatting); no always() bypass anywhere
+#   * the embedded harness job preserves the canonical fast Harness
+#     contract runner invocation (identical to the standalone harness
+#     workflow) with the clean CI-safe setup: Node 24 only, no
+#     dependency installation, no database, no browser, no Docker,
+#     narrowed read-only permissions, 10-minute budget
 #   * the embedded core job preserves the canonical core verification
 #     invocation (agent-verify core profile, --summary-json target in
 #     runner temp, postgres:16 health-checked service, 45-minute budget,
@@ -79,6 +85,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 WF="$REPO_ROOT/.github/workflows/publish-images.yml"
 CORE_WF="$REPO_ROOT/.github/workflows/core.yml"
 E2E_WF="$REPO_ROOT/.github/workflows/e2e.yml"
+HARNESS_WF="$REPO_ROOT/.github/workflows/harness.yml"
 COMPOSE="$REPO_ROOT/deploy/compose.production.yaml"
 
 PASS=0
@@ -166,6 +173,7 @@ expect_exists "t01 workflow file exists" "$WF"
 [ -f "$WF" ] || { printf 'publish-workflow tests: FAIL (no workflow file)\n'; exit 1; }
 expect_exists "t02 standalone core gate workflow exists" "$CORE_WF"
 expect_exists "t03 standalone e2e gate workflow exists" "$E2E_WF"
+expect_exists "t03 standalone harness gate workflow exists" "$HARNESS_WF"
 
 WF_TEXT="$(cat "$WF")"
 COMPOSE_TEXT="$(cat "$COMPOSE")"
@@ -194,43 +202,47 @@ expect_line_count "t11 workflow-level permissions packages: write" 1 '^  package
 expect_not_contains "t12 no id-token permission" "$WF_TEXT" "id-token:"
 expect_line_count "t13 exactly one workflow-level write scope (packages)" 1 \
   '^  [a-z-]+: write$' "$WF"
-expect_line_count "t14 exactly two job-level permissions blocks (the gate jobs)" 2 \
+expect_line_count "t14 exactly three job-level permissions blocks (the gate jobs)" 3 \
   '^    permissions:$' "$WF"
-expect_line_count "t15 gate jobs narrow to contents: read (both)" 2 \
+expect_line_count "t15 gate jobs narrow to contents: read (all three)" 3 \
   '^      contents: read$' "$WF"
 expect_line_count "t16 no job-level write scope" 0 '^      [a-z-]+: write$' "$WF"
 
 # Exactly the four intended jobs.
 JOB_KEYS="$(awk '/^jobs:$/{inj=1; next} inj && /^  [A-Za-z0-9_-]+:$/{print $0}' "$WF")"
-[ "$(printf '%s\n' "$JOB_KEYS" | grep -c .)" -eq 4 ] \
-  && ok "t17 exactly four jobs under jobs:" \
-  || bad "t17 exactly four jobs under jobs: (got: $(printf '%s' "$JOB_KEYS" | tr '\n' ' '))"
-for key in core e2e publish-api publish-web; do
+[ "$(printf '%s\n' "$JOB_KEYS" | grep -c .)" -eq 5 ] \
+  && ok "t17 exactly five jobs under jobs:" \
+  || bad "t17 exactly five jobs under jobs: (got: $(printf '%s' "$JOB_KEYS" | tr '\n' ' '))"
+for key in core e2e harness publish-api publish-web; do
   expect_line_count "t18 job key present exactly once: $key" 1 "^  ${key}:" "$WF"
 done
 expect_fixed_count "t19 visible gate job name: Core verification" 1 \
   "name: Core verification" "$WF"
 expect_fixed_count "t19 visible gate job name: Playwright E2E (chromium)" 1 \
   "name: Playwright E2E (chromium)" "$WF"
+expect_fixed_count "t19 visible gate job name: Harness contracts" 1 \
+  "name: Harness contracts" "$WF"
 
 # Runners + timeouts: four jobs, pinned generation, bounded budgets.
-expect_line_count "t20 exactly four jobs run (runs-on lines)" 4 '^[[:space:]]*runs-on:' "$WF"
-expect_line_count "t20 all jobs on pinned ubuntu-24.04" 4 '^[[:space:]]*runs-on: ubuntu-24\.04$' "$WF"
+expect_line_count "t20 exactly five jobs run (runs-on lines)" 5 '^[[:space:]]*runs-on:' "$WF"
+expect_line_count "t20 all jobs on pinned ubuntu-24.04" 5 '^[[:space:]]*runs-on: ubuntu-24\.04$' "$WF"
 expect_not_contains "t21 no floating ubuntu-latest" "$WF_TEXT" "ubuntu-latest"
 expect_line_count "t22 core gate keeps the 45-minute budget" 1 \
   '^[[:space:]]*timeout-minutes: 45$' "$WF"
 expect_line_count "t22 e2e + both publication jobs keep 20-minute budgets" 3 \
   '^[[:space:]]*timeout-minutes: 20$' "$WF"
+expect_line_count "t22 harness gate keeps the 10-minute budget" 1 \
+  '^[[:space:]]*timeout-minutes: 10$' "$WF"
 
 # Publication is declaratively gated on BOTH gate jobs of THIS run.
 expect_line_count "t23 needs: declared exactly twice (the publication jobs)" 2 \
   '^[[:space:]]+needs:' "$WF"
-[ "$(needs_norm publish-api)" = "core e2e " ] \
-  && ok "t24 publish-api needs exactly [core, e2e] (semantic)" \
-  || bad "t24 publish-api needs exactly [core, e2e] (semantic) (got: $(needs_norm publish-api))"
-[ "$(needs_norm publish-web)" = "core e2e " ] \
-  && ok "t25 publish-web needs exactly [core, e2e] (semantic)" \
-  || bad "t25 publish-web needs exactly [core, e2e] (semantic) (got: $(needs_norm publish-web))"
+[ "$(needs_norm publish-api)" = "core e2e harness " ] \
+  && ok "t24 publish-api needs exactly [core, e2e, harness] (semantic)" \
+  || bad "t24 publish-api needs exactly [core, e2e, harness] (semantic) (got: $(needs_norm publish-api))"
+[ "$(needs_norm publish-web)" = "core e2e harness " ] \
+  && ok "t25 publish-web needs exactly [core, e2e, harness] (semantic)" \
+  || bad "t25 publish-web needs exactly [core, e2e, harness] (semantic) (got: $(needs_norm publish-web))"
 expect_line_count "t26 no always() bypass anywhere" 0 'always\(' "$WF"
 
 # Publication SHA: github.sha of the push-triggered run, both jobs.
@@ -238,7 +250,7 @@ expect_line_count "t27 publish SHA env is github.sha (both jobs)" 2 \
   '^[[:space:]]*FG_PUBLISH_SHA: \$\{\{ github\.sha \}\}$' "$WF"
 expect_line_count "t28 checkout ref is github.sha (both jobs)" 2 \
   '^[[:space:]]*ref: \$\{\{ github\.sha \}\}$' "$WF"
-expect_line_count "t29 checkout with persist-credentials: false (all four jobs)" 4 \
+expect_line_count "t29 checkout with persist-credentials: false (all five jobs)" 5 \
   '^[[:space:]]*persist-credentials: false$' "$WF"
 expect_fixed_count "t30 checked-out-HEAD equality assertion (both publication jobs)" 2 \
   'test "$(git rev-parse HEAD)" = "$FG_PUBLISH_SHA"' "$WF"
@@ -295,12 +307,36 @@ expect_fixed_count "t45 e2e summary target directory prepared" 1 \
 expect_line_count "t46 e2e artifact names deterministic per run id + attempt" 2 \
   'e2e-(summary|failure)-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}' "$WF"
 
+# Embedded canonical Harness gate: the same canonical fast contract
+# runner as the standalone harness workflow, with the clean CI-safe
+# setup (Node 24 only; no database, no browser, no Docker, no
+# dependency installation).
+expect_line_count "t46a embedded harness invokes the canonical runner exactly once" 1 \
+  'bash scripts/tests/harness-contracts\.test\.sh' "$WF"
+expect_line_count "t46a standalone harness workflow carries the identical runner" 1 \
+  'bash scripts/tests/harness-contracts\.test\.sh' "$HARNESS_WF"
+expect_line_count "t46a no individual suite list duplication in the release DAG" 0 \
+  'scripts/tests/(agent-verify|core-workflow|e2e-workflow|publish-workflow|harness-workflow)\.test\.sh' "$WF"
+HARNESS_JOB_BLOCK="$(awk '/^  harness:$/{inj=1} /^  [A-Za-z0-9_-]+:$/ && !/^  harness:$/{if (inj) exit} inj' "$WF")"
+if [ -n "$HARNESS_JOB_BLOCK" ] \
+    && ! printf '%s\n' "$HARNESS_JOB_BLOCK" | grep -q 'npm ci\|npm install\|uv sync\|setup-uv' \
+    && ! printf '%s\n' "$HARNESS_JOB_BLOCK" | grep -qi 'playwright\|chromium\|postgres\|5432' \
+    && ! printf '%s\n' "$HARNESS_JOB_BLOCK" | grep -qi 'buildx\|docker build\|ghcr'; then
+  ok "t46b harness job block stays CI-safe (no install, no database, no browser, no Docker)"
+else
+  bad "t46b harness job block stays CI-safe (no install, no database, no browser, no Docker)"
+fi
+
 # Reproducible setup contract (shared by both embedded gate jobs).
 expect_contains     "t47 checkout with persist-credentials: false" "$WF_TEXT" "persist-credentials: false"
 expect_contains     "t47 npm ci is the JS install"                  "$WF_TEXT" "npm ci"
+expect_line_count   "t47 npm ci only in the two product gate jobs (harness installs nothing)" 2 \
+  '^[[:space:]]*run: npm ci$' "$WF"
 expect_not_contains "t47 no npm install"                             "$WF_TEXT" "npm install"
 expect_line_count   "t47 uv sync --frozen in both gate jobs (no lockfile update)" 2 \
   '^[[:space:]]*run: uv sync --frozen$' "$WF"
+expect_line_count   "t47 Node 24 in all three gate jobs" 3 \
+  '^[[:space:]]*node-version: 24$' "$WF"
 expect_fixed_count  "t48 playwright chromium install with deps (e2e job only)" 1 \
   'npx playwright install --with-deps chromium' "$WF"
 expect_line_count   "t48 no playwright test call" 0 'playwright test' "$WF"
@@ -310,9 +346,9 @@ expect_not_contains "t49 no direct Django manage.py gate" "$WF_TEXT" "manage.py"
 # Action references: full commit SHAs only, version comments documented.
 USES_TOTAL="$(line_count '^[[:space:]]*uses:' "$WF")"
 USES_SHA="$(line_count '^[[:space:]]*uses: [A-Za-z0-9_-]+/[A-Za-z0-9._-]+@[0-9a-f]{40}' "$WF")"
-[ "$USES_TOTAL" -eq 17 ] \
-  && ok "t50 exactly 17 uses: references (4 core + 5 e2e + 4 + 4 publish)" \
-  || bad "t50 exactly 17 uses: references (4 core + 5 e2e + 4 + 4 publish) (got: $USES_TOTAL)"
+[ "$USES_TOTAL" -eq 19 ] \
+  && ok "t50 exactly 19 uses: references (4 core + 5 e2e + 2 harness + 4 + 4 publish)" \
+  || bad "t50 exactly 19 uses: references (4 core + 5 e2e + 2 harness + 4 + 4 publish) (got: $USES_TOTAL)"
 [ "$USES_TOTAL" -eq "$USES_SHA" ] \
   && ok "t51 every uses: reference is a full 40-char commit SHA" \
   || bad "t51 every uses: reference is a full 40-char commit SHA (total: $USES_TOTAL, sha: $USES_SHA)"
@@ -323,8 +359,10 @@ expect_line_count "t52 no @vN tag references" 0 '^[[:space:]]*uses: .*@v[0-9]' "
 expect_not_contains "t54 no floating latest refs" "$WF_TEXT" "@latest"
 expect_not_contains "t55 no floating main refs"   "$WF_TEXT" "@main"
 # Same checkout pin as the standalone gate workflows (identical SHA).
-expect_line_count "t56 checkout pin used by all four jobs" 4 \
+expect_line_count "t56 checkout pin used by all five jobs" 5 \
   'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' "$WF"
+expect_line_count "t56 setup-node pin used by all three gate jobs" 3 \
+  'actions/setup-node@820762786026740c76f36085b0efc47a31fe5020' "$WF"
 expect_contains "t56 checkout pin shared with the standalone core workflow" \
   "$(cat "$CORE_WF")" "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
 expect_contains "t56 checkout pin shared with the standalone e2e workflow" \
