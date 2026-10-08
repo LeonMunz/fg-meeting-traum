@@ -1540,6 +1540,17 @@ test(
       `/meetings/series?group=${groupId}`,
     )
 
+    // A cold page load resolves the Research Group scope
+    // asynchronously: until the group subtitle renders,
+    // "Create template" submits nothing. Wait for the
+    // scope-ready state before using the create form.
+    await expect(
+      page.getByText(
+        'Meeting templates in FG Example.',
+        { exact: true },
+      ),
+    ).toBeVisible()
+
     // --------------------------------------------------------
     // 2. Create a disposable template, give it a Section,
     //    and create a Meeting occurrence from it BEFORE
@@ -1591,6 +1602,16 @@ test(
     await page.goto(
       `/meetings/series?group=${groupId}`,
     )
+
+    // Same scope-readiness wait: the cold load may still be
+    // resolving the group while the create form is already
+    // rendered but inert.
+    await expect(
+      page.getByText(
+        'Meeting templates in FG Example.',
+        { exact: true },
+      ),
+    ).toBeVisible()
 
     await page
       .getByLabel('Name')
