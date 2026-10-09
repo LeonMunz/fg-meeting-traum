@@ -511,19 +511,24 @@ test(
         `E2E Scope Deep Link ${Date.now()}`,
       )
 
-    await expandResearchGroup(
-      page,
-      ownedGroup.name,
-    )
-
-    await page
-      .getByRole('group', {
+    // The creation flow already landed on the owned group's
+    // Overview: the current route contextually reveals its child
+    // rows. Synchronize on that reveal by waiting for the
+    // destination this test actually needs, instead of toggling
+    // the disclosure manually (a toggle racing the contextual
+    // reveal would collapse the group).
+    const ownedGroupNavigation =
+      page.getByRole('group', {
         name: ownedGroup.name,
       })
-      .getByRole('link', {
+
+    const ownedMeetingsLink =
+      ownedGroupNavigation.getByRole('link', {
         name: /Meetings/,
       })
-      .click()
+
+    await expect(ownedMeetingsLink).toBeVisible()
+    await ownedMeetingsLink.click()
 
     await expect(page).toHaveURL(
       new RegExp(
