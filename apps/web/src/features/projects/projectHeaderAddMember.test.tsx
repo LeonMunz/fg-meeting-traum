@@ -252,7 +252,7 @@ async function openAddMemberDialogFromHeader() {
     }),
   )
 
-  const dialog = screen.getByRole('dialog', {
+  const dialog = await screen.findByRole('dialog', {
     name: 'Add project member',
   })
 
