@@ -103,8 +103,6 @@ import type {
 } from '../../api/types'
 import { useSyncResearchGroupContext } from '../research-group/useSyncResearchGroupContext'
 
-type MeetingState = 'upcoming' | 'live' | 'completed' | 'cancelled'
-
 function getErrorMessage(
   error: unknown,
   fallback: string,
@@ -163,31 +161,117 @@ function getInitials(person: {
   return `${first}${last}`.toUpperCase()
 }
 
-function meetingContentHeading(
-  status: MeetingState,
-) {
-  if (status === 'upcoming') {
-    return 'Agenda preparation'
+// ── Upcoming preparation presentation helpers (approved Stitch
+// design): compact date/clock labels and row authorship recency. ──
+
+function formatMeetingDayLabel(value: string): string {
+  const date = new Date(value)
+
+  if (Number.isNaN(date.getTime())) {
+    return value
   }
 
-  if (status === 'completed') {
-    return 'Protocol'
+  const startOfDay = (input: Date): Date =>
+    new Date(
+      input.getFullYear(),
+      input.getMonth(),
+      input.getDate(),
+    )
+
+  const dayDiff = Math.round(
+    (startOfDay(new Date()).getTime() -
+      startOfDay(date).getTime()) /
+    86_400_000,
+  )
+
+  if (dayDiff === 0) {
+    return 'Today'
   }
 
-  return 'Discussion'
+  if (dayDiff === 1) {
+    return 'Tomorrow'
+  }
+
+  return new Intl.DateTimeFormat('en', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+  }).format(date)
 }
 
-function meetingContentSubtitle(
-  status: MeetingState,
-) {
-  // Only Upcoming and Completed keep the classic all-items layout;
-  // a Live Meeting renders its own Agenda | Current Item shell.
-  if (status === 'upcoming') {
-    return 'Agenda items, grouped by section.'
+function formatMeetingClock(value: string): string {
+  const date = new Date(value)
+
+  if (Number.isNaN(date.getTime())) {
+    return value
   }
 
-  return 'Meeting record, grouped by section.'
+  return new Intl.DateTimeFormat('en', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(date)
 }
+
+// Compact relative time for agenda row authorship metadata
+// ("2h ago", "Yesterday"), matching the approved design.
+function formatItemRelativeTime(value: string): string {
+  const date = new Date(value)
+
+  if (Number.isNaN(date.getTime())) {
+    return ''
+  }
+
+  const diffMinutes = Math.round(
+    (Date.now() - date.getTime()) / 60_000,
+  )
+
+  if (diffMinutes < 1) {
+    return 'just now'
+  }
+
+  if (diffMinutes < 60) {
+    return `${diffMinutes}m ago`
+  }
+
+  const diffHours = Math.round(diffMinutes / 60)
+
+  if (diffHours < 24) {
+    return `${diffHours}h ago`
+  }
+
+  const startOfDay = (input: Date): Date =>
+    new Date(
+      input.getFullYear(),
+      input.getMonth(),
+      input.getDate(),
+    )
+
+  const dayDiff = Math.round(
+    (startOfDay(new Date()).getTime() -
+      startOfDay(date).getTime()) /
+    86_400_000,
+  )
+
+  if (dayDiff <= 1) {
+    return 'Yesterday'
+  }
+
+  if (dayDiff < 7) {
+    return `${dayDiff}d ago`
+  }
+
+  return new Intl.DateTimeFormat('en', {
+    month: 'short',
+    day: 'numeric',
+  }).format(date)
+}
+
+// The approved Stitch shortcut hint keys on the platform (⌘K on
+// Mac); both Cmd and Ctrl focus the Quick Add input.
+const isMacLike =
+  typeof navigator !== 'undefined' &&
+  /mac|iphone|ipad|ipod/i.test(navigator.userAgent)
 
 function MenuItem({
   preparation = false,
@@ -236,11 +320,13 @@ function MenuItem({
 
 function MenuTrigger({
   preparation = false,
+  compact = false,
   label,
   ariaLabel,
   children,
 }: {
   preparation?: boolean
+  compact?: boolean
   label: string
   ariaLabel?: string
   children: (
@@ -315,15 +401,24 @@ function MenuTrigger({
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={toggle}
-        className={[
-          'flex h-8 w-8 items-center justify-center rounded-lg text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface',
-          open ? 'bg-surface-hover text-text' : '',
-          preparation && !open ? 'group-hover/menu:bg-surface-hover' : '',
-        ].join(' ')}
+        className={
+          compact
+            ? [
+                'flex h-7 w-7 items-center justify-center rounded-md text-[#c8c6c5] outline-none transition hover:bg-[#222222] hover:text-[#E6E6E6] focus-visible:ring-2 focus-visible:ring-[#6898F0]',
+                open ? 'bg-[#222222] text-[#E6E6E6]' : '',
+              ].join(' ')
+            : [
+                'flex h-8 w-8 items-center justify-center rounded-lg text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface',
+                open ? 'bg-surface-hover text-text' : '',
+                preparation && !open
+                  ? 'group-hover/menu:bg-surface-hover'
+                  : '',
+              ].join(' ')
+        }
       >
         <span
           aria-hidden="true"
-          className="material-symbols-outlined text-[18px]"
+          className={`material-symbols-outlined ${compact ? 'text-[16px]' : 'text-[18px]'}`}
         >
           more_horiz
         </span>
@@ -340,6 +435,148 @@ function MenuTrigger({
           className="z-50 w-52 rounded-xl border border-border-subtle bg-surface p-1 shadow-lg"
         >
           {children(open, toggle)}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Quick Add section destination selector: a quiet text button with
+// the Stitch arrow affordance. Lists the Meeting's VISIBLE sections
+// only; the selection is presentation state that decides where the
+// created item lands.
+function QuickAddSectionSelect({
+  sections,
+  selectedId,
+  onSelect,
+  disabled,
+}: {
+  sections: ApiMeetingSection[]
+  selectedId: number | null
+  onSelect: (id: number) => void
+  disabled: boolean
+}) {
+  const [open, setOpen] = useState(false)
+  const [position, setPosition] = useState({
+    top: 0,
+    left: 0,
+  })
+  const ref = useRef<HTMLDivElement>(null)
+  const selected =
+    sections.find(
+      (section) => section.id === selectedId,
+    ) ?? sections[0] ?? null
+
+  useEffect(() => {
+    if (!open) {
+      return
+    }
+
+    const onOutside = (event: MouseEvent) => {
+      if (
+        ref.current &&
+        !ref.current.contains(
+          event.target as Node,
+        )
+      ) {
+        setOpen(false)
+      }
+    }
+
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setOpen(false)
+      }
+    }
+
+    const onScroll = () => setOpen(false)
+
+    document.addEventListener('mousedown', onOutside, true)
+    document.addEventListener('keydown', onKey)
+    window.addEventListener('scroll', onScroll, true)
+
+    return () => {
+      document.removeEventListener('mousedown', onOutside, true)
+      document.removeEventListener('keydown', onKey)
+      window.removeEventListener('scroll', onScroll, true)
+    }
+  }, [open])
+
+  const toggle = () => {
+    if (disabled) {
+      return
+    }
+
+    if (!open && ref.current) {
+      const rect =
+        ref.current.getBoundingClientRect()
+
+      setPosition({
+        top: rect.bottom + 6,
+        left: Math.max(8, rect.left),
+      })
+    }
+
+    setOpen((current) => !current)
+  }
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={toggle}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label="Quick add section"
+        className="flex shrink-0 items-center gap-1 text-[13px] font-medium text-[#E6E6E6] outline-none transition hover:text-white focus-visible:ring-2 focus-visible:ring-[#6898F0] disabled:opacity-50"
+      >
+        <span>
+          {selected ? selected.name : 'Select a section'}
+        </span>
+        <span
+          aria-hidden="true"
+          className="material-symbols-outlined text-[14px] text-[#8A8A8A]"
+        >
+          arrow_drop_down
+        </span>
+      </button>
+
+      {open && (
+        <div
+          role="menu"
+          style={{
+            position: 'fixed',
+            top: position.top,
+            left: position.left,
+          }}
+          className="z-50 w-52 rounded-xl border border-border-subtle bg-surface p-1 shadow-lg"
+        >
+          {sections.map((section) => (
+            <button
+              key={section.id}
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                onSelect(section.id)
+                setOpen(false)
+              }}
+              className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-sm text-text outline-none transition hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-inset"
+            >
+              <span className="flex-1 truncate">
+                {section.name}
+              </span>
+
+              {section.id === selected?.id && (
+                <span
+                  aria-hidden="true"
+                  className="material-symbols-outlined text-[16px] text-accent-text"
+                >
+                  check
+                </span>
+              )}
+            </button>
+          ))}
         </div>
       )}
     </div>
@@ -405,6 +642,21 @@ export function MeetingDetailPage() {
   const [
     managingParticipants,
     setManagingParticipants,
+  ] = useState(false)
+
+  // ── Upcoming Quick Add bar (top of the preparation view) ──
+  // Presentation-local state only: the draft title and the selected
+  // destination section. Creation goes through the canonical
+  // createMeetingItem path; nothing is persisted here.
+  const [quickAddTitle, setQuickAddTitle] =
+    useState('')
+  const [
+    quickAddSectionId,
+    setQuickAddSectionId,
+  ] = useState<number | null>(null)
+  const [
+    quickAddCreating,
+    setQuickAddCreating,
   ] = useState(false)
 
   const [sections, setSections] =
@@ -585,6 +837,11 @@ export function MeetingDetailPage() {
     setInspectorLoading,
   ] = useState(false)
   const quickAddInputRef =
+    useRef<HTMLInputElement>(null)
+
+  // The Upcoming Quick Add bar input (Cmd/Ctrl+K target). Kept
+  // separate from the section-local composer's quickAddInputRef.
+  const topQuickAddInputRef =
     useRef<HTMLInputElement>(null)
 
   const { user } = useSession()
@@ -845,6 +1102,30 @@ export function MeetingDetailPage() {
     }
   }, [creatingSectionId])
 
+  // The approved Quick Add shortcut: Cmd/Ctrl+K focuses the top
+  // Quick Add input on the Upcoming preparation view.
+  useEffect(() => {
+    if (meeting?.status !== 'upcoming') {
+      return
+    }
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        (event.key === 'k' || event.key === 'K')
+      ) {
+        event.preventDefault()
+        topQuickAddInputRef.current?.focus()
+      }
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [meeting?.status])
+
 
   const participantUserIds = useMemo(
     () =>
@@ -980,6 +1261,36 @@ export function MeetingDetailPage() {
     return map
   }, [sortedItems])
 
+  // Agenda row authorship: resolve the item's creator to a Meeting
+  // participant's user (the API carries createdById only).
+  const participantUserById = useMemo(() => {
+    const map = new Map<
+      number,
+      ApiMeetingParticipant['user']
+    >()
+
+    for (const participant of participants) {
+      map.set(participant.user.id, participant.user)
+    }
+
+    return map
+  }, [participants])
+
+  // The Quick Add bar's effective destination: the explicit
+  // selection while it is still a visible section, otherwise the
+  // first visible section.
+  const quickAddTargetSection = useMemo(() => {
+    if (visibleSections.length === 0) {
+      return null
+    }
+
+    return (
+      visibleSections.find(
+        (section) => section.id === quickAddSectionId,
+      ) ?? visibleSections[0]
+    )
+  }, [visibleSections, quickAddSectionId])
+
   const handleAddParticipant = async (
     candidate: ApiMeetingParticipantCandidate,
   ) => {
@@ -1091,6 +1402,24 @@ export function MeetingDetailPage() {
     }
   }
 
+  const toggleParticipantManagement = () => {
+    setManagingParticipants((value) => {
+      const next = !value
+
+      if (next) {
+        requestAnimationFrame(() => {
+          document
+            .querySelector<HTMLInputElement>(
+              'input[data-participant-search]',
+            )
+            ?.focus()
+        })
+      }
+
+      return next
+    })
+  }
+
   const handleCreateItemInSection = async (
     section: ApiMeetingSection,
   ) => {
@@ -1137,6 +1466,52 @@ export function MeetingDetailPage() {
           'Agenda item could not be created.',
         ),
       )
+    }
+  }
+
+  // Top Quick Add bar: creates through the same canonical
+  // createMeetingItem path as the section-local composer, using
+  // the bar's selected visible section as destination.
+  const handleQuickAddSubmit = async () => {
+    if (meetingId == null || quickAddCreating) {
+      return
+    }
+
+    const section = quickAddTargetSection
+    const title = quickAddTitle.trim()
+
+    if (section == null || !title) {
+      return
+    }
+
+    setQuickAddCreating(true)
+    setActionError(null)
+
+    try {
+      const item = await createMeetingItem(
+        meetingId,
+        {
+          meetingSectionId: section.id,
+          title,
+        },
+      )
+
+      setItems((current) => [
+        ...current.filter(
+          (candidate) => candidate.id !== item.id,
+        ),
+        item,
+      ])
+      setQuickAddTitle('')
+    } catch (error) {
+      setActionError(
+        getErrorMessage(
+          error,
+          'Agenda item could not be created.',
+        ),
+      )
+    } finally {
+      setQuickAddCreating(false)
     }
   }
 
@@ -2582,10 +2957,224 @@ export function MeetingDetailPage() {
     <div className="mx-auto w-full max-w-5xl px-6 py-8 lg:px-8 lg:py-10 xl:px-10">
       <div
         className={
-          isCompleted ? 'w-full max-w-[840px]' : undefined
+          isCompleted
+            ? 'w-full max-w-[840px]'
+            : isUpcoming
+              ? 'w-full max-w-[880px]'
+              : undefined
         }
       >
-      {/* Header */}
+      {/* Header — the Upcoming preparation view carries the
+          approved Stitch composition (breadcrumb, title row with
+          the structure/lifecycle actions, metadata row with the
+          compact participant stack, and the Quick Add bar); Live
+          and Completed keep the shared header below. */}
+      {isUpcoming ? (
+        <div className="flex flex-col">
+          {/* Breadcrumb */}
+          <nav
+            aria-label="Breadcrumb"
+            className="mb-1.5 flex select-none items-center gap-1.5 text-[13px] leading-[18px] text-[#8A8A8A]"
+          >
+            <button
+              type="button"
+              onClick={() => navigate('/meetings')}
+              className="-mx-1 rounded px-1 outline-none transition hover:text-[#E6E6E6] focus-visible:ring-2 focus-visible:ring-[#6898F0]"
+            >
+              Meetings
+            </button>
+
+            {activeResearchGroup?.name && (
+              <>
+                <span aria-hidden="true" className="text-[#666666]">
+                  /
+                </span>
+
+                <span className="truncate">
+                  {activeResearchGroup.name}
+                </span>
+              </>
+            )}
+          </nav>
+
+          {/* Title row */}
+          <div className="mb-2.5 mt-1 flex items-center justify-between gap-6">
+            <h1 className="min-w-0 truncate text-2xl font-semibold leading-8 tracking-tight text-[#E6E6E6]">
+              {meeting.title}
+            </h1>
+
+            <div className="flex shrink-0 items-center gap-2.5">
+              {canPrepare && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    setStructureEditing(
+                      (value) => !value,
+                    )
+                  }
+                  aria-expanded={structureEditing}
+                  className="flex items-center gap-1.5 rounded-md border border-white/[0.08] px-3 py-1.5 text-[13px] font-medium text-[#A3A3A3] outline-none transition hover:bg-[#222222] hover:text-[#E6E6E6] focus-visible:ring-2 focus-visible:ring-[#6898F0]"
+                >
+                  {structureEditing
+                    ? 'Done editing structure'
+                    : 'Edit structure'}
+                </button>
+              )}
+
+              {canManageLifecycle && (
+                <button
+                  type="button"
+                  disabled={updatingMeeting}
+                  onClick={() => void handleStartMeeting()}
+                  className="flex items-center gap-1.5 rounded-md bg-[#6E9BF5] px-3.5 py-1.5 text-[13px] font-medium text-[#101114] shadow-xs outline-none transition hover:bg-[#5a87e0] focus-visible:ring-2 focus-visible:ring-[#6898F0] focus-visible:ring-offset-2 focus-visible:ring-offset-canvas disabled:opacity-60"
+                >
+                  <span aria-hidden="true" className="material-symbols-outlined text-[16px]">
+                    play_arrow
+                  </span>
+                  Start meeting
+                </button>
+              )}
+
+              {canAdministerMeeting && (
+                <MenuTrigger label="Meeting actions">
+                  {(_, close) => (
+                    <>
+                      <MenuItem
+                        label="Delete meeting"
+                        icon="delete"
+                        danger
+                        onClick={() => {
+                          setDeleteDialogOpen(true)
+                          close()
+                        }}
+                      />
+                    </>
+                  )}
+                </MenuTrigger>
+              )}
+            </div>
+          </div>
+
+          {/* Metadata row: date · time · context | participant
+              stack · Manage */}
+          <div className="mb-6 flex items-center gap-4 text-[13px] leading-[18px] text-[#A3A3A3]">
+            <div className="flex items-center gap-1.5">
+              <span>
+                {formatMeetingDayLabel(
+                  meeting.scheduledAt,
+                )}
+              </span>
+
+              <span aria-hidden="true">·</span>
+              <span>
+                {formatMeetingClock(meeting.scheduledAt)}
+              </span>
+
+              <span aria-hidden="true">·</span>
+              <span>
+                {meeting.scope === 'project'
+                  ? 'Project Meeting'
+                  : 'Research Group Meeting'}
+              </span>
+            </div>
+
+            <span aria-hidden="true" className="text-[#444444]">
+              |
+            </span>
+
+            <div
+              role="group"
+              aria-label="Participants"
+              className="flex items-center -space-x-1.5"
+            >
+              {sortedParticipants.slice(0, 4).map(
+                (participant) => (
+                  <span
+                    key={participant.id}
+                    title={getPersonName(participant.user)}
+                    className="flex h-6 w-6 select-none items-center justify-center rounded-full bg-[#2A2A2A] text-[10px] font-medium text-[#E6E6E6] ring-2 ring-canvas"
+                  >
+                    {getInitials(participant.user)}
+                  </span>
+                ),
+              )}
+
+              {participants.length > 4 && (
+                <span className="flex h-6 w-6 select-none items-center justify-center rounded-full bg-[#202020] text-[10px] font-medium text-[#A3A3A3] ring-2 ring-canvas">
+                  +{participants.length - 4}
+                </span>
+              )}
+            </div>
+
+            {canEditParticipants && (
+              <button
+                type="button"
+                onClick={toggleParticipantManagement}
+                aria-expanded={managingParticipants}
+                className="ml-[-4px] rounded text-[13px] font-medium text-[#6E9BF5] outline-none hover:underline focus-visible:ring-2 focus-visible:ring-[#6898F0]"
+              >
+                {managingParticipants ? 'Done' : 'Manage'}
+              </button>
+            )}
+          </div>
+
+          {/* Quick Add bar */}
+          {canPrepare && (
+            <div className="flex h-12 items-center justify-between rounded-lg border border-white/[0.06] bg-[#1A1A1A] px-4 shadow-xs">
+              <div className="flex min-w-0 flex-1 items-center gap-3">
+                <span aria-hidden="true" className="material-symbols-outlined text-[16px] text-[#A3A3A3]">
+                  add
+                </span>
+
+                <QuickAddSectionSelect
+                  sections={visibleSections}
+                  selectedId={
+                    quickAddTargetSection?.id ?? null
+                  }
+                  onSelect={setQuickAddSectionId}
+                  disabled={visibleSections.length === 0}
+                />
+
+                <div className="mx-1 h-4 w-[1px] shrink-0 bg-white/[0.08]" />
+
+                <input
+                  ref={topQuickAddInputRef}
+                  type="text"
+                  value={quickAddTitle}
+                  disabled={
+                    visibleSections.length === 0 ||
+                    quickAddCreating
+                  }
+                  onChange={(event) =>
+                    setQuickAddTitle(event.target.value)
+                  }
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault()
+                      void handleQuickAddSubmit()
+                    }
+
+                    if (event.key === 'Escape') {
+                      event.preventDefault()
+                      setQuickAddTitle('')
+                    }
+                  }}
+                  placeholder="Add a topic…"
+                  aria-label="Add a topic"
+                  className="min-w-0 flex-1 bg-transparent pr-2 text-[13px] text-[#E6E6E6] outline-none placeholder:text-[#8A8A8A] disabled:opacity-50"
+                />
+              </div>
+
+              <div className="flex shrink-0 items-center gap-1.5">
+                <kbd className="select-none rounded border border-white/[0.08] bg-white/[0.04] px-1.5 py-0.5 font-sans text-[11px] text-[#8A8A8A]">
+                  {isMacLike ? '⌘K' : 'Ctrl K'}
+                </kbd>
+              </div>
+            </div>
+          )}
+        </div>
+      ) : (
+        <>
       <nav>
         <button
           type="button"
@@ -2675,20 +3264,6 @@ export function MeetingDetailPage() {
             </button>
           )}
 
-          {isUpcoming && canManageLifecycle && (
-            <button
-              type="button"
-              disabled={updatingMeeting}
-              onClick={() => void handleStartMeeting()}
-              className="inline-flex h-10 items-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-text-inverse outline-none transition hover:bg-accent-hover focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-60"
-            >
-              <span aria-hidden="true" className="material-symbols-outlined text-[18px]">
-                play_arrow
-              </span>
-              Start meeting
-            </button>
-          )}
-
           {isLive && canManageLifecycle && (
             <button
               type="button"
@@ -2722,7 +3297,8 @@ export function MeetingDetailPage() {
           )}
         </div>
       </header>
-
+        </>
+      )}
       {actionError && (
         <div
           role="alert"
@@ -2732,71 +3308,11 @@ export function MeetingDetailPage() {
         </div>
       )}
 
-      {/* Participants — compact context surface. Hidden while Live
-          and Completed because the header metadata line already
-          shows the count. */}
-      {!isLive && !isCompleted && (
-      <div className="mt-6 flex flex-wrap items-center gap-3 border-b border-border-subtle pb-5">
-        <div className="flex -space-x-1.5">
-          {sortedParticipants.slice(0, 6).map((participant) => (
-            <span
-              key={participant.id}
-              title={getPersonName(participant.user)}
-              className="flex h-7 w-7 items-center justify-center rounded-full border-2 border-canvas bg-surface-muted text-[10px] font-semibold text-text"
-            >
-              {getInitials(participant.user)}
-            </span>
-          ))}
-
-          {participants.length > 6 && (
-            <span className="flex h-7 w-7 items-center justify-center rounded-full border-2 border-canvas bg-surface-muted text-[10px] font-semibold text-text-muted">
-              +{participants.length - 6}
-            </span>
-          )}
-        </div>
-
-        <span className="text-sm text-text-muted">
-          <span className="font-medium text-text">
-            Participants
-          </span>{' '}
-          · {participants.length}
-        </span>
-
-        {canEditParticipants && (
-          <button
-            type="button"
-            onClick={() => {
-              setManagingParticipants((value) => {
-                const next = !value
-
-                if (next) {
-                  requestAnimationFrame(() => {
-                    document
-                      .querySelector<HTMLInputElement>(
-                        'input[data-participant-search]',
-                      )
-                      ?.focus()
-                  })
-                }
-
-                return next
-              })
-            }}
-            aria-expanded={managingParticipants}
-            className="inline-flex h-8 items-center gap-1 rounded-lg px-2.5 text-sm font-medium text-accent-text outline-none transition hover:bg-accent-subtle focus-visible:ring-2 focus-visible:ring-focus/40"
-          >
-            <span aria-hidden="true" className="material-symbols-outlined text-[17px]">
-              {managingParticipants
-                ? 'close'
-                : 'manage_accounts'}
-            </span>
-            {managingParticipants
-              ? 'Done'
-              : 'Manage'}
-          </button>
-        )}
-      </div>
-      )}
+      {/* Participants — the Upcoming resting layout carries
+          the compact avatar stack + Manage in the header
+          metadata row (approved design); the management
+          panel below is the only dedicated participant
+          surface. */}
 
       {managingParticipants && canEditParticipants && (
         <div className="mt-4 rounded-xl border border-border-subtle bg-surface-quiet p-4">
@@ -2926,39 +3442,6 @@ export function MeetingDetailPage() {
             ))}
           </div>
         </div>
-      )}
-
-      {/* Content heading — the Live shell and the Completed
-          recap carry their own structure and do not repeat a
-          content heading. */}
-      {!isLive && !isCompleted && (
-      <div className="mt-8 flex items-end justify-between gap-6">
-        <div>
-          <h2 className="text-lg font-semibold text-text">
-            {meetingContentHeading(meeting.status)}
-          </h2>
-
-          <p className="mt-1 text-sm text-text-muted">
-            {meetingContentSubtitle(meeting.status)}
-          </p>
-        </div>
-
-        {canPrepare && !isLive && (
-          <button
-            type="button"
-            onClick={() => setStructureEditing((value) => !value)}
-            aria-expanded={structureEditing}
-            className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-border-subtle bg-surface px-3 text-xs font-semibold text-text outline-none transition hover:border-border-default hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
-          >
-            <span aria-hidden="true" className="material-symbols-outlined text-[16px]">
-              {structureEditing ? 'close' : 'edit_note'}
-            </span>
-            {structureEditing
-              ? 'Done editing structure'
-              : 'Edit structure'}
-          </button>
-        )}
-      </div>
       )}
 
       {/* Structure editing banner */}
@@ -3904,8 +4387,10 @@ export function MeetingDetailPage() {
         onOpenLinkedWork={openLinkedWorkInspector}
       />
       ) : (
-      /* Agenda / Protocol */
-      <div className="mt-6">
+      /* Agenda / Protocol — the Upcoming preparation layout
+          (approved Stitch design). Live and Completed render
+          their own shells in the branches above. */
+      <div className="flex w-full flex-col gap-8 pb-16">
         {visibleSections.length === 0 ? (
           <div className="rounded-xl border border-dashed border-border-subtle px-6 py-12 text-center">
             <span aria-hidden="true" className="material-symbols-outlined text-[26px] text-text-muted">
@@ -3932,45 +4417,45 @@ export function MeetingDetailPage() {
             )}
           </div>
         ) : (
-          <div className="space-y-10">
-            {(structureEditing && canPrepare
-              ? sortedSections
-              : visibleSections
-            ).map((section) => {
-              const sectionItems =
-                itemsBySection.get(section.id) ?? []
+          (structureEditing && canPrepare
+            ? sortedSections
+            : visibleSections
+          ).map((section) => {
+            const sectionItems =
+              itemsBySection.get(section.id) ?? []
 
-              return (
-                <section key={section.id} aria-label={section.name}>
+            return (
+                <section
+                  key={section.id}
+                  aria-label={section.name}
+                  className="flex flex-col rounded-lg border border-white/[0.06] bg-[#1A1A1A] px-4 pb-1.5 pt-4"
+                >
                   {/* Section header */}
-                  <div className="group/menu flex items-center gap-2">
-                    <h3 className="text-base font-semibold text-text">
-                      {section.name}
-                    </h3>
+                  <div className="group/menu flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <h2 className="text-[15px] font-semibold leading-5 text-[#E6E6E6]">
+                        {section.name}
+                      </h2>
 
-                    {section.description && (
-                      <span className="truncate text-sm text-text-muted">
-                        {section.description}
-                      </span>
-                    )}
+                      {sectionItems.length > 0 && (
+                        <span className="text-[13px] leading-[18px] text-[#c8c6c5]">
+                          {sectionItems.length}
+                        </span>
+                      )}
 
-                    <span className="text-xs tabular-nums text-text-muted">
-                      {sectionItems.length}{' '}
-                      {sectionItems.length === 1
-                        ? 'item'
-                        : 'items'}
-                    </span>
-
-                    {!section.isVisible && (
-                      <span className="rounded-full bg-surface-muted px-2 py-0.5 text-[11px] font-medium text-text-muted">
-                        hidden
-                      </span>
-                    )}
+                      {structureEditing &&
+                        !section.isVisible && (
+                          <span className="rounded-full bg-surface-muted px-2 py-0.5 text-[11px] font-medium text-text-muted">
+                            hidden
+                          </span>
+                        )}
+                    </div>
 
                     {canPrepare && (
-                      <span className="ml-auto flex items-center gap-0.5">
+                      <span className="-mr-1 flex items-center">
                         <MenuTrigger
                           preparation
+                          compact
                           label={`Actions for section ${section.name}`}
                         >
                           {(_, close) => (
@@ -4042,10 +4527,16 @@ export function MeetingDetailPage() {
                     )}
                   </div>
 
+                  {section.description && (
+                    <p className="mb-1 mt-1 text-[13px] leading-[18px] text-[#A3A3A3]">
+                      {section.description}
+                    </p>
+                  )}
+
                   {/* Section edit form */}
                   {canPrepare &&
                     editingSectionId === section.id && (
-                      <div className="mt-3 rounded-xl border border-border-subtle bg-surface-quiet p-4">
+                      <div className="mb-1 mt-2 rounded-lg border border-border-subtle bg-surface-quiet p-4">
                         <div className="flex flex-wrap items-end gap-3">
                           <label className="min-w-40 flex-1">
                             <span className="mb-1 block text-xs font-medium text-text-muted">
@@ -4102,22 +4593,27 @@ export function MeetingDetailPage() {
                         </div>
                       </div>
                     )}
-
                   {/* Items */}
-                  <div className="mt-3">
+                  <div className="flex flex-col">
                     {sectionItems.length === 0 && !canPrepare && (
-                      <p className="text-sm text-text-muted">
+                      <p className="px-2 py-1 text-[13px] leading-[18px] text-[#A3A3A3]">
                         No agenda items yet.
                       </p>
                     )}
 
-                    <ul className="space-y-1">
-                      {sectionItems.map((item, itemIndex) => (
+                    <ul className="flex flex-col">
+                      {sectionItems.map((item) => {
+                        const author =
+                          participantUserById.get(
+                            item.createdById,
+                          )
+
+                        return (
                         <li key={item.id}>
                           {/* Item editing form */}
                           {canPrepare &&
                             editingItemId === item.id ? (
-                            <div className="rounded-xl border border-border-subtle bg-surface-quiet p-4">
+                            <div className="my-1 rounded-lg border border-border-subtle bg-surface-quiet p-3">
                               <label className="block">
                                 <span className="mb-1 block text-xs font-medium text-text-muted">
                                   Title
@@ -4172,495 +4668,46 @@ export function MeetingDetailPage() {
                               </div>
                             </div>
                           ) : (
-                            <div className="group/item -mx-3 rounded-lg px-3 py-2.5 transition hover:bg-surface-hover">
-                              <div className="flex items-start gap-3">
+                            <div className="group/item flex h-7 items-center justify-between gap-3 rounded-md px-2 transition hover:bg-[#222222]">
+                              <div className="flex min-w-0 flex-1 items-center gap-2">
                                 <span
                                   aria-hidden="true"
-                                  className="mt-0.5 select-none text-xs tabular-nums text-text-muted"
+                                  className="material-symbols-outlined w-4 shrink-0 cursor-grab select-none text-[14px] text-[#c8c6c5] opacity-0 transition-opacity group-hover/item:opacity-100"
                                 >
-                                  {itemIndex + 1}
+                                  drag_indicator
                                 </span>
 
-                                <div className="min-w-0 flex-1">
-                                  <div className="flex items-baseline gap-2">
-                                    <h4
-                                      className={[
-                                        'text-sm font-medium',
-                                        (item.outcome === 'done' ||
-                                          item.outcome === 'follow_up') &&
-                                        !isLive
-                                          ? 'text-text-muted'
-                                          : 'text-text',
-                                      ].join(' ')}
-                                    >
-                                      {item.title}
-                                    </h4>
+                                <span className="truncate text-[15px] leading-[22px] text-[#E6E6E6]">
+                                  {item.title}
+                                </span>
+                              </div>
 
-                                    {item.outcome === 'done' && (
-                                      <span className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-success">
-                                        <span aria-hidden="true" className="material-symbols-outlined text-[13px]">
-                                          check_circle
-                                        </span>
-                                        Done
-                                      </span>
-                                    )}
-
-                                    {item.outcome === 'follow_up' && (
-                                      <span className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-text-muted">
-                                        <span aria-hidden="true" className="material-symbols-outlined text-[13px]">
-                                          followup
-                                        </span>
-                                        Follow-up
-                                      </span>
-                                    )}
-                                  </div>
-
-                                  {item.contextNotes && (
-                                    <p className="mt-1 line-clamp-2 whitespace-pre-wrap text-sm text-text-muted">
-                                      {item.contextNotes}
-                                    </p>
+                              <div className="flex shrink-0 items-center gap-2">
+                                {/* Attribution: always visible, at rest
+                                    and on row hover/focus alike. */}
+                                <div className="flex w-[200px] shrink-0 items-center justify-start gap-2 text-[13px] leading-[18px] text-[#c8c6c5]">
+                                  {author && (
+                                    <span className="flex h-5 w-5 shrink-0 select-none items-center justify-center rounded-full bg-[#2A2A2A] text-[10px]">
+                                      {getInitials(author)}
+                                    </span>
                                   )}
 
-                                  {item.workItemIds.length > 0 && (
-                                    <div className="mt-1.5 inline-flex items-center gap-1 text-xs font-medium text-text-muted">
-                                      <span aria-hidden="true" className="material-symbols-outlined text-[14px]">
-                                        task_alt
-                                      </span>
-                                      {item.workItemIds.length}{' '}
-                                      linked work{' '}
-                                      {item.workItemIds.length === 1
-                                        ? 'item'
-                                        : 'items'}
-                                    </div>
-                                  )}
-
-                                  {/* Persistent meeting Notes:
-                                      saved notes render in Live and Completed;
-                                      authoring controls are Live-only. */}
-                                  {(isLive || isCompleted) && (
-                                    <div className="mt-2">
-                                      {isLive &&
-                                      noteComposerItemId ===
-                                        item.id && (
-                                          <div className="mb-2">
-                                            <textarea
-                                              value={noteDraftContent}
-                                              onChange={(event) =>
-                                                setNoteDraftContent(
-                                                  event.target.value,
-                                                )
-                                              }
-                                              onKeyDown={(event) => {
-                                                if (
-                                                  event.key ===
-                                                    'Escape'
-                                                ) {
-                                                  event.preventDefault()
-                                                  cancelNoteComposer()
-                                                }
-                                              }}
-                                              autoFocus
-                                              rows={2}
-                                              placeholder="Add what came up during the discussion…"
-                                              aria-label={`Add note to ${item.title}`}
-                                              className="w-full resize-y rounded-lg border border-outline-variant bg-surface-container-lowest px-3 py-2 text-sm text-on-surface outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
-                                            />
-
-                                            <div className="mt-2 flex items-center justify-end gap-2">
-                                              <button
-                                                type="button"
-                                                onClick={
-                                                  cancelNoteComposer
-                                                }
-                                                className="h-8 rounded-lg px-2 text-sm font-medium text-on-surface-variant outline-none transition hover:bg-surface-container-high focus-visible:ring-2 focus-visible:ring-primary/40"
-                                              >
-                                                Cancel
-                                              </button>
-
-                                              <button
-                                                type="button"
-                                                disabled={
-                                                  !noteDraftContent.trim()
-                                                }
-                                                onClick={() =>
-                                                  void
-                                                    submitNoteThenCreateWorkItem(
-                                                      item,
-                                                    )
-                                                }
-                                                className="h-8 rounded-lg px-2 text-xs font-medium text-on-surface-variant outline-none transition hover:bg-surface-container-high hover:text-on-surface focus-visible:ring-2 focus-visible:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-45"
-                                              >
-                                                Create work item
-                                              </button>
-
-                                              <button
-                                                type="button"
-                                                disabled={
-                                                  !noteDraftContent.trim()
-                                                }
-                                                onClick={() =>
-                                                  void submitNoteComposer(
-                                                    item,
-                                                  )
-                                                }
-                                                className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-sm font-semibold text-white outline-none transition hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-45"
-                                              >
-                                                {creatingNoteItemId ===
-                                                item.id && (
-                                                  <span
-                                                    aria-hidden="true"
-                                                    className="material-symbols-outlined animate-spin text-[15px]"
-                                                  >
-                                                    refresh
-                                                  </span>
-                                                )}
-                                                {creatingNoteItemId ===
-                                                item.id
-                                                  ? 'Adding…'
-                                                  : 'Add note'}
-                                              </button>
-                                            </div>
-                                          </div>
-                                        )}
-
-                                      {(item.notes ?? []).length >
-                                        0 && (
-                                        <div>
-                                          <p className="text-xs font-semibold text-on-surface-variant">
-                                            Notes
-                                          </p>
-
-                                          <ul className="mt-1 space-y-2">
-                                            {(item.notes ?? []).map(
-                                              (note) => (
-                                                <li
-                                                  key={note.id}
-                                                  className="group/note relative rounded-lg px-2 py-1 transition hover:bg-surface-container-low/60"
-                                                >
-                                                  {isLive &&
-                                                  editingNoteId ===
-                                                    note.id ? (
-                                                    <div>
-                                                      <textarea
-                                                        value={noteEditContent}
-                                                        onChange={(
-                                                          event,
-                                                        ) =>
-                                                          setNoteEditContent(
-                                                            event.target.value,
-                                                          )
-                                                        }
-                                                        onKeyDown={
-                                                          (event) => {
-                                                            if (
-                                                              event.key ===
-                                                                'Escape'
-                                                            ) {
-                                                              event.preventDefault()
-                                                              cancelEditingNote()
-                                                            }
-                                                          }
-                                                        }
-                                                        autoFocus
-                                                        rows={2}
-                                                        aria-label={`Edit note on ${item.title}`}
-                                                        className="w-full resize-y rounded-lg border border-outline-variant bg-surface-container-lowest px-2 py-1.5 text-sm text-on-surface outline-none focus:border-primary"
-                                                      />
-
-                                                      <div className="mt-1.5 flex items-center justify-end gap-2">
-                                                        <button
-                                                          type="button"
-                                                          onClick={
-                                                            cancelEditingNote
-                                                          }
-                                                          className="h-7 rounded-md px-2 text-xs font-medium text-on-surface-variant outline-none transition hover:bg-surface-container-high focus-visible:ring-2 focus-visible:ring-primary/40"
-                                                        >
-                                                          Cancel
-                                                        </button>
-
-                                                        <button
-                                                          type="button"
-                                                          disabled={
-                                                            !noteEditContent.trim()
-                                                          }
-                                                          onClick={
-                                                            () =>
-                                                              void saveNoteEdit(
-                                                                item,
-                                                                note,
-                                                              )
-                                                          }
-                                                          className="inline-flex h-7 items-center gap-1 rounded-md bg-primary px-2 text-xs font-semibold text-white outline-none transition hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-45"
-                                                        >
-                                                          {savingNoteId ===
-                                                          note.id && (
-                                                            <span
-                                                              aria-hidden="true"
-                                                              className="material-symbols-outlined animate-spin text-[13px]"
-                                                            >
-                                                              refresh
-                                                            </span>
-                                                          )}
-                                                          {savingNoteId ===
-                                                          note.id
-                                                            ? 'Saving…'
-                                                            : 'Save'}
-                                                        </button>
-                                                      </div>
-                                                    </div>
-                                                  ) : (
-                                                    <>
-                                                      <p className="whitespace-pre-wrap text-sm text-on-surface">
-                                                        {note.content}
-                                                      </p>
-
-                                                      <p className="mt-0.5 text-[11px] text-on-surface-variant/70">
-                                                        {getPersonName(
-                                                          note.author,
-                                                        )}{' '}
-                                                        ·{' '}
-                                                        {formatNoteTime(
-                                                          note.createdAt,
-                                                        )}
-                                                      </p>
-
-                                                      {/* Linked work:
-                                                          calm, contextual, and
-                                                          directly at the exact
-                                                          source Note. */}
-                                                      {(() => {
-                                                        const linked =
-                                                          note.linkedWorkItem
-
-                                                        if (
-                                                          linked ==
-                                                          null
-                                                        ) {
-                                                          return null
-                                                        }
-
-                                                        return (
-                                                          <div className="mt-1.5 rounded-lg border border-outline-variant/70 bg-surface-container-low/60 px-2.5 py-2">
-                                                            <p className="text-[11px] font-medium text-on-surface-variant">
-                                                              Linked work
-                                                            </p>
-
-                                                            <button
-                                                              type="button"
-                                                              onClick={() =>
-                                                                openLinkedWorkInspector(
-                                                                  linked,
-                                                                )
-                                                              }
-                                                              aria-label={`Open linked work item: ${linked.title}`}
-                                                              className="mt-1 flex w-full items-start gap-2 rounded-md text-left outline-none transition hover:bg-surface-container-high/60 focus-visible:ring-2 focus-visible:ring-primary/40"
-                                                            >
-                                                              <span aria-hidden="true" className="material-symbols-outlined mt-px text-[16px] text-on-surface-variant">
-                                                                check_box_outline_blank
-                                                              </span>
-
-                                                              <span className="min-w-0 flex-1">
-                                                                <span className="block truncate text-sm text-on-surface">
-                                                                  {linked.title}
-                                                                </span>
-
-                                                                <span className="block truncate text-[11px] text-text-muted">
-                                                                  {linked.projectName}
-                                                                  {' · '}
-                                                                  {linked.assigneeNames.length > 0
-                                                                    ? linked.assigneeNames.join(', ')
-                                                                    : 'Unassigned'}
-                                                                  {' · '}
-                                                                  {linked.statusName}
-                                                                </span>
-                                                              </span>
-                                                            </button>
-
-                                                            {justLinkedNoteId ===
-                                                            note.id && (
-                                                              <p role="status" className="mt-1 text-[11px] font-medium text-primary">
-                                                                Work item created
-                                                              </p>
-                                                            )}
-                                                          </div>
-                                                        )
-                                                      })()}
-
-                                                      {(isLive ||
-                                                      (canCreateWorkFromNote &&
-                                                      note.linkedWorkItem ==
-                                                      null)) && (
-                                                        <div className="mt-0.5 flex items-center justify-end gap-1 opacity-0 transition group-hover/note:opacity-100 focus-within:opacity-100">
-                                                          {canCreateWorkFromNote &&
-                                                          note.linkedWorkItem ==
-                                                            null && (
-                                                            <button
-                                                              type="button"
-                                                              onClick={() =>
-                                                                openNoteWorkItem(
-                                                                  item,
-                                                                  note,
-                                                                )
-                                                              }
-                                                              aria-label={`Create work item from note: ${note.content}`}
-                                                              title="Create work item"
-                                                              className="rounded-md p-1 text-on-surface-variant/50 outline-none transition hover:bg-surface-container-high hover:text-on-surface-variant focus-visible:text-primary focus-visible:ring-2 focus-visible:ring-primary/40"
-                                                            >
-                                                              <span aria-hidden="true" className="material-symbols-outlined text-[15px]">
-                                                                add_task
-                                                              </span>
-                                                            </button>
-                                                          )}
-
-                                                          {isLive && (
-                                                          <MenuTrigger
-                                                            label={`Note actions for ${note.content}`}
-                                                          >
-                                                            {(_, close) => (
-                                                              <>
-                                                                <MenuItem
-                                                                  label="Edit note"
-                                                                  icon="edit"
-                                                                  onClick={
-                                                                    () => {
-                                                                      startEditingNote(
-                                                                        note,
-                                                                      )
-                                                                      close()
-                                                                    }
-                                                                  }
-                                                                />
-
-                                                                <span
-                                                                  role="none"
-                                                                  className="my-1 border-t border-outline-variant"
-                                                                />
-
-                                                                <MenuItem
-                                                                  label="Delete note"
-                                                                  icon="delete"
-                                                                  danger
-                                                                  onClick={
-                                                                    () => {
-                                                                      close()
-                                                                      setPendingDeleteNote(
-                                                                        note,
-                                                                      )
-                                                                    }
-                                                                  }
-                                                                />
-                                                              </>
-                                                            )}
-                                                          </MenuTrigger>
-                                                          )}
-                                                        </div>
-                                                      )}
-                                                    </>
-                                                  )}
-                                                </li>
-                                              ),
-                                            )}
-                                          </ul>
-                                        </div>
-                                      )}
-
-                                      {isLive &&
-                                      noteComposerItemId !==
-                                        item.id && (
-                                        <button
-                                          type="button"
-                                          onClick={() =>
-                                            openNoteComposer(item)
-                                          }
-                                          className="mt-2 inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-xs font-medium text-on-surface-variant/70 outline-none transition hover:bg-surface-container-low hover:text-on-surface focus-visible:ring-2 focus-visible:ring-primary/40"
-                                        >
-                                          <span aria-hidden="true" className="material-symbols-outlined text-[14px]">
-                                            add
-                                          </span>
-                                          {(item.notes ?? []).length >
-                                          0
-                                            ? 'Add note'
-                                            : 'Add note…'}
-                                        </button>
-                                      )}
-                                    </div>
-                                  )}
+                                  <span className="min-w-0 truncate">
+                                    {author
+                                      ? `${getPersonName(author)} · ${formatItemRelativeTime(item.createdAt)}`
+                                      : formatItemRelativeTime(item.createdAt)}
+                                  </span>
                                 </div>
 
-                                {/* Live: canonical actions.
-                                    The current item (persisted on the
-                                    Meeting) can be closed with Done or
-                                    Follow-up; any non-current item can
-                                    be focused. */}
-                                {isLive && canManageLifecycle && (
-                                  <span className="flex shrink-0 items-center gap-2">
-                                    {item.id !==
-                                      meeting.currentMeetingItemId && (
-                                      <button
-                                        type="button"
-                                        disabled={
-                                          updatingItemId === item.id
-                                        }
-                                        onClick={() =>
-                                          void handleFocusItem(item)
-                                        }
-                                        aria-label={`Focus ${item.title}`}
-                                        title="Focus"
-                                        className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg text-on-surface-variant transition hover:bg-surface-container-high disabled:opacity-45"
-                                      >
-                                        <span aria-hidden="true" className="material-symbols-outlined text-[18px]">
-                                          radio_button_checked
-                                        </span>
-                                      </button>
-                                    )}
-                                    {item.id ===
-                                      meeting.currentMeetingItemId && (
-                                      <>
-                                        <button
-                                          type="button"
-                                          disabled={
-                                            updatingItemId === item.id
-                                          }
-                                          onClick={() =>
-                                            void handleDoneItem(item)
-                                          }
-                                          aria-label={`Mark ${item.title} as done`}
-                                          title="Done"
-                                          className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg text-on-surface-variant transition hover:bg-surface-container-high disabled:opacity-45"
-                                        >
-                                          <span aria-hidden="true" className="material-symbols-outlined text-[18px]">
-                                            check_circle
-                                          </span>
-                                        </button>
-                                        {item.followUpSchedule == null && (
-                                          <button
-                                            ref={followUpTriggerRef}
-                                            type="button"
-                                            disabled={
-                                              updatingItemId === item.id
-                                            }
-                                            onClick={() =>
-                                              setFollowUpSourceItem(item)
-                                            }
-                                            aria-label={`Schedule follow-up for ${item.title}`}
-                                            title="Schedule follow-up"
-                                            className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg text-text-muted transition hover:bg-surface-hover disabled:opacity-45"
-                                          >
-                                            <span aria-hidden="true" className="material-symbols-outlined text-[18px]">
-                                              event_repeat
-                                            </span>
-                                          </button>
-                                        )}
-                                      </>
-                                    )}
-                                  </span>
-                                )}
-
-                                {/* Upcoming: secondary actions on hover/focus */}
+                                {/* Reserved action zone: owns its own
+                                    space next to the attribution (never
+                                    overlays it) and stays quiet until
+                                    the row is hovered or focused. */}
                                 {canPrepare && (
-                                  <span className="shrink-0 opacity-0 transition group-hover/item:opacity-100 focus-within:opacity-100">
+                                  <span className="flex shrink-0 items-center opacity-0 transition-opacity focus-within:opacity-100 group-hover/item:opacity-100 group-focus-within/item:opacity-100">
                                     <MenuTrigger
                                       preparation
+                                      compact
                                       label={`Actions for agenda item ${item.title}`}
                                     >
                                       {(_, close) => (
@@ -4685,6 +4732,36 @@ export function MeetingDetailPage() {
                                             }}
                                           />
 
+                                          {item.workItemIds.length >
+                                            0 && (
+                                            <MenuItem
+                                              preparation
+                                              disabled
+                                              icon="task_alt"
+                                              label={`${item.workItemIds.length} linked work ${item.workItemIds.length === 1 ? 'item' : 'items'}`}
+                                              onClick={() => {}}
+                                            />
+                                          )}
+
+                                          {(item.outcome === 'done' ||
+                                            item.outcome === 'follow_up') && (
+                                            <MenuItem
+                                              preparation
+                                              disabled
+                                              icon={
+                                                item.outcome === 'done'
+                                                  ? 'check_circle'
+                                                  : 'followup'
+                                              }
+                                              label={
+                                                item.outcome === 'done'
+                                                  ? 'Done'
+                                                  : 'Follow-up'
+                                              }
+                                              onClick={() => {}}
+                                            />
+                                          )}
+
                                           <span role="none" className="my-1 border-t border-border-subtle" />
 
                                           <MenuItem
@@ -4706,110 +4783,101 @@ export function MeetingDetailPage() {
                             </div>
                           )}
                         </li>
-                      ))}
+                        )
+                      })}
                     </ul>
 
-                    {/* Inline quick-add: the inline form opens for any
-                        section (empty or not); the trigger label and
-                        emphasis adapt to the empty case. Spontaneous
-                        items remain creatable while the Meeting is
-                        Live. */}
+                    {/* Section-local quick add: "+ Add topic" opens
+                        the existing inline composer. */}
                     {creatingSectionId === section.id ? (
-                        <form
-                          data-quick-add-form={section.id}
-                          onSubmit={(e) => {
-                            e.preventDefault()
-                            void handleCreateItemInSection(section)
-                          }}
-                          className="mt-2 flex items-center gap-2"
-                        >
-                          <input
-                            ref={quickAddInputRef}
-                            type="text"
-                            value={
-                              sectionItemTitle[section.id] ?? ''
-                            }
-                            onChange={(e) =>
-                              setSectionItemTitle(
-                                (current) => ({
-                                  ...current,
-                                  [section.id]:
-                                    e.target.value,
-                                }),
-                              )
-                            }
-                            onKeyDown={(e) => {
-                              if (e.key === 'Escape') {
-                                e.preventDefault()
-                                setCreatingSectionId(null)
-                                setSectionItemTitle((current) => ({
-                                  ...current,
-                                  [section.id]: '',
-                                }))
-                              }
-                            }}
-                            placeholder="Agenda item title"
-                            aria-label={`Add item to ${section.name}`}
-                            className="h-9 min-w-0 flex-1 rounded-lg border border-border-control bg-surface px-3 text-sm text-text outline-none focus:border-focus focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-surface"
-                          />
-
-                          <button
-                            type="submit"
-                            disabled={
-                              !(
-                                sectionItemTitle[section.id] ??
-                                ''
-                              ).trim()
-                            }
-                            className="inline-flex h-9 items-center gap-1 rounded-lg bg-accent px-3 text-sm font-semibold text-text-inverse transition hover:bg-accent-hover disabled:opacity-45 outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
-                          >
-                            Add
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => {
+                      <form
+                        data-quick-add-form={section.id}
+                        onSubmit={(e) => {
+                          e.preventDefault()
+                          void handleCreateItemInSection(section)
+                        }}
+                        className="mt-1 flex h-9 items-center gap-2 rounded-md bg-[#222222] px-2"
+                      >
+                        <input
+                          ref={quickAddInputRef}
+                          type="text"
+                          value={
+                            sectionItemTitle[section.id] ?? ''
+                          }
+                          onChange={(e) =>
+                            setSectionItemTitle(
+                              (current) => ({
+                                ...current,
+                                [section.id]:
+                                  e.target.value,
+                              }),
+                            )
+                          }
+                          onKeyDown={(e) => {
+                            if (e.key === 'Escape') {
+                              e.preventDefault()
                               setCreatingSectionId(null)
                               setSectionItemTitle((current) => ({
                                 ...current,
                                 [section.id]: '',
                               }))
-                            }}
-                            className="inline-flex h-9 items-center rounded-lg px-3 text-sm font-medium text-text-muted transition hover:bg-surface-hover outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
-                          >
-                            Cancel
-                          </button>
-                        </form>
-                      ) : (
+                            }
+                          }}
+                          placeholder="Add a topic…"
+                          aria-label={`Add item to ${section.name}`}
+                          className="h-7 min-w-0 flex-1 bg-transparent px-1.5 text-[15px] leading-[22px] text-[#E6E6E6] outline-none placeholder:text-[#8A8A8A]"
+                        />
+
+                        <button
+                          type="submit"
+                          disabled={
+                            !(
+                              sectionItemTitle[section.id] ??
+                              ''
+                            ).trim()
+                          }
+                          className="h-7 shrink-0 rounded px-2 text-[13px] font-medium text-[#E6E6E6] outline-none transition hover:bg-white/[0.06] focus-visible:ring-2 focus-visible:ring-[#6898F0] disabled:opacity-45"
+                        >
+                          Add
+                        </button>
+
                         <button
                           type="button"
                           onClick={() => {
-                            setCreatingSectionId(section.id)
+                            setCreatingSectionId(null)
                             setSectionItemTitle((current) => ({
                               ...current,
                               [section.id]: '',
                             }))
                           }}
-                          className={
-                            sectionItems.length === 0
-                              ? 'mt-2 inline-flex h-9 items-center gap-1.5 rounded-lg px-2 text-sm font-medium text-text-muted outline-none transition hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface'
-                              : 'mt-2 inline-flex h-8 items-center gap-1.5 rounded-lg px-2 text-sm font-medium text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface'
-                          }
+                          className="h-7 shrink-0 rounded px-2 text-[13px] font-medium text-[#A3A3A3] outline-none transition hover:bg-white/[0.06] hover:text-[#E6E6E6] focus-visible:ring-2 focus-visible:ring-[#6898F0]"
                         >
-                          <span aria-hidden="true" className="material-symbols-outlined text-[17px]">
-                            add
-                          </span>
-                          {sectionItems.length === 0
-                            ? 'Add first item'
-                            : 'Add item'}
+                          Cancel
                         </button>
-                    )}
+                      </form>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCreatingSectionId(section.id)
+                          setSectionItemTitle((current) => ({
+                            ...current,
+                            [section.id]: '',
+                          }))
+                        }}
+                        className="flex h-7 w-full items-center gap-2 rounded-md px-2 text-left text-[13px] leading-[18px] text-[#A3A3A3] outline-none transition hover:bg-[#222222] hover:text-[#E6E6E6] focus-visible:ring-2 focus-visible:ring-[#6898F0]"
+                      >
+                        <span aria-hidden="true" className="material-symbols-outlined w-4 shrink-0 select-none text-[14px] opacity-0">
+                          drag_indicator
+                        </span>
 
+                        <span>+ Add topic</span>
+                      </button>
+                    )}
                   </div>
                 </section>
-              )
-            })}
-          </div>
+            )
+          })
         )}
       </div>
       )}

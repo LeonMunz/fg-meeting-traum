@@ -74,10 +74,13 @@ describe('MeetingDetailPage section and item controls', () => {
 
 describe('MeetingDetailPage participant surface', () => {
   it('renders a compact participant context with explicit manage state', () => {
+    // The approved design carries the compact participant stack +
+    // the "Manage" text link in the header metadata row (no icon);
+    // the management panel stays behind the managing state.
     expect(MEETING_DETAIL_SOURCE).toContain('Participants')
     expect(MEETING_DETAIL_SOURCE).toContain('Manage')
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'manage_accounts',
+      'setManagingParticipants',
     )
   })
 
@@ -119,13 +122,15 @@ describe('MeetingDetailPage persistent Meeting Notes', () => {
 
   it('renders persisted Notes in Live and Completed', () => {
     // Live: the item-detail pane renders the SELECTED (viewed)
-    // item's Notes; Completed: the classic protocol layout keeps
-    // rendering them.
+    // item's Notes; Completed: the recap document renders them
+    // from the same canonical items payload
+    // (CompletedMeetingRecap, a separate component). The redesigned
+    // Upcoming compact row intentionally carries no notes block.
     expect(MEETING_DETAIL_SOURCE).toContain(
       '(liveSelectedItem.notes ?? []).length >',
     )
     expect(MEETING_DETAIL_SOURCE).toContain(
-      '(item.notes ?? []).length >',
+      'CompletedMeetingRecap',
     )
     expect(MEETING_DETAIL_SOURCE).toContain(
       'Notes',
@@ -343,11 +348,13 @@ describe('MeetingDetailPage Live Meeting shell', () => {
 })
 
 describe('MeetingDetailPage Live visual polish', () => {
-  it('hides the duplicate Participants row while Live', () => {
-    // The participant context surface is hidden in the Live shell
-    // because the header metadata line already shows the count.
+  it('confines participant management to the Upcoming preparation state', () => {
+    // The standalone participant context surface is gone (the
+    // header metadata row carries the compact stack + Manage); the
+    // management panel can only open in the Upcoming preparation
+    // state because canEditParticipants derives from canPrepare.
     expect(MEETING_DETAIL_SOURCE).toContain(
-      '!isLive && /* @__PURE__ */',
+      'canPrepare && !structureEditing',
     )
   })
 
@@ -667,16 +674,16 @@ describe('MeetingDetailPage shared header color semantics', () => {
     )
   })
 
-  it('classifies Start meeting as the primary Accent action', () => {
+  it('classifies Start meeting with the approved Stitch primary treatment', () => {
+    // The approved design uses its own accent button treatment
+    // (#6E9BF5 / #101114) for the Upcoming header; the Start
+    // action keeps the canonical focus ring with that palette.
     const start = classNameOf(MEETING_DETAIL_SOURCE, 'Start meeting', 'handleStartMeeting')
-    expect(start).toContain('bg-accent')
-    expect(start).toContain('text-text-inverse')
-    expect(start).toContain('hover:bg-accent-hover')
+    expect(start).toContain('bg-[#6E9BF5]')
+    expect(start).toContain('text-[#101114]')
+    expect(start).toContain('hover:bg-[#5a87e0]')
     expect(start).toContain('focus-visible:ring-2')
-    expect(start).toContain('focus-visible:ring-focus')
-    expect(start).toContain('focus-visible:ring-offset-2')
-    expect(start).not.toContain('bg-primary')
-    expect(start).not.toContain('ring-primary')
+    expect(start).toContain('focus-visible:ring-[#6898F0]')
   })
 
   it('classifies End meeting as a Danger hover treatment', () => {
