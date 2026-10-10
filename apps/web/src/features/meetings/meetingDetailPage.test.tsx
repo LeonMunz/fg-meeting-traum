@@ -62,9 +62,22 @@ describe('MeetingDetailPage section and item controls', () => {
     expect(MEETING_DETAIL_SOURCE).toContain('Delete')
   })
 
-  it('offers an explicit structure editing mode', () => {
-    expect(MEETING_DETAIL_SOURCE).toContain('Edit structure')
-    expect(MEETING_DETAIL_SOURCE).toContain('Add section')
+  it('creates sections inline below the section list (no structure mode)', () => {
+    // Section creation is a quiet inline action: a subtle
+    // "+ Add section" row expands in place into a compact
+    // name input over the canonical creation API.
+    expect(MEETING_DETAIL_SOURCE).toContain('+ Add section')
+    expect(MEETING_DETAIL_SOURCE).toContain('New section name')
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'handleAddSection',
+    )
+    // The separate structure-editing mode is gone.
+    expect(MEETING_DETAIL_SOURCE).not.toContain(
+      'Edit structure',
+    )
+    expect(MEETING_DETAIL_SOURCE).not.toContain(
+      'structureEditing',
+    )
   })
 
   it('supports inline quick-add for agenda items', () => {
@@ -75,10 +88,10 @@ describe('MeetingDetailPage section and item controls', () => {
 describe('MeetingDetailPage participant surface', () => {
   it('renders a compact participant context with explicit manage state', () => {
     // The approved design carries the compact participant stack +
-    // the "Manage" text link in the header metadata row (no icon);
+    // the "Add user" text link in the header metadata row (no icon);
     // the management panel stays behind the managing state.
     expect(MEETING_DETAIL_SOURCE).toContain('Participants')
-    expect(MEETING_DETAIL_SOURCE).toContain('Manage')
+    expect(MEETING_DETAIL_SOURCE).toContain('Add user')
     expect(MEETING_DETAIL_SOURCE).toContain(
       'setManagingParticipants',
     )
@@ -352,9 +365,9 @@ describe('MeetingDetailPage Live visual polish', () => {
     // The standalone participant context surface is gone (the
     // header metadata row carries the compact stack + Manage); the
     // management panel can only open in the Upcoming preparation
-    // state because canEditParticipants derives from canPrepare.
+    // state because canEditParticipants is canPrepare itself.
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'canPrepare && !structureEditing',
+      'const canEditParticipants = canPrepare',
     )
   })
 

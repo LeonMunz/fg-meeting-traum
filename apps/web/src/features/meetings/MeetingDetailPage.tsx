@@ -679,10 +679,22 @@ export function MeetingDetailPage() {
   const [newSectionName, setNewSectionName] =
     useState('')
 
+  // Inline section creation: whether the compact name
+  // input is currently open directly below the section
+  // list (or inside the empty state).
   const [
-    structureEditing,
-    setStructureEditing,
+    sectionComposerOpen,
+    setSectionComposerOpen,
   ] = useState(false)
+  const sectionComposerInputRef =
+    useRef<HTMLInputElement>(null)
+
+  // The composer input is focused as soon as it opens.
+  useEffect(() => {
+    if (sectionComposerOpen) {
+      sectionComposerInputRef.current?.focus()
+    }
+  }, [sectionComposerOpen])
 
   const [
     editingSectionId,
@@ -1243,9 +1255,6 @@ export function MeetingDetailPage() {
     [sortedSections],
   )
 
-  const hiddenSectionCount =
-    sortedSections.length - visibleSections.length
-
   const itemsBySection = useMemo(() => {
     const map = new Map<number, ApiMeetingItem[]>()
 
@@ -1515,6 +1524,11 @@ export function MeetingDetailPage() {
     }
   }
 
+  const closeSectionComposer = () => {
+    setSectionComposerOpen(false)
+    setNewSectionName('')
+  }
+
   const handleAddSection = async () => {
     if (
       meetingId == null ||
@@ -1534,7 +1548,10 @@ export function MeetingDetailPage() {
       )
 
       setSections((current) => [...current, section])
-      setNewSectionName('')
+      // Success: the section is appended in its
+      // authoritative server position and the composer
+      // returns to the normal view.
+      closeSectionComposer()
     } catch (error) {
       setActionError(
         getErrorMessage(
@@ -1542,6 +1559,8 @@ export function MeetingDetailPage() {
           'Section could not be created.',
         ),
       )
+      // Failure: the draft stays in the open composer so
+      // the user can retry without retyping.
     } finally {
       setAddingSection(false)
     }
@@ -2788,8 +2807,79 @@ export function MeetingDetailPage() {
   const isCompleted = meeting.status === 'completed'
   const isLive = meeting.status === 'live'
   const canPrepare = isUpcoming && canManageLifecycle
-  const canEditParticipants =
-    canPrepare && !structureEditing
+  const canEditParticipants = canPrepare
+
+  // Preparation-view section list: a user who may prepare
+  // manages the full occurrence structure, including hidden
+  // Sections (marked as such, so they stay unhidable-reachable);
+  // everyone else sees only the visible agenda.
+  const preparationSections = canPrepare
+    ? sortedSections
+    : visibleSections
+
+  // Quiet inline section creation: an understated
+  // "+ Add section" row that expands in place into a compact
+  // name input (Enter creates, Escape / Cancel dismisses).
+  // Same presentation vocabulary as the section-local
+  // "+ Add topic" quick add; creation goes through the
+  // canonical createMeetingSection path.
+  const sectionCreationControl = sectionComposerOpen ? (
+    <form
+      onSubmit={(event) => {
+        event.preventDefault()
+        void handleAddSection()
+      }}
+      className="flex h-9 w-full items-center gap-2 rounded-md bg-[#222222] px-2"
+    >
+      <input
+        ref={sectionComposerInputRef}
+        autoFocus
+        type="text"
+        value={newSectionName}
+        onChange={(event) =>
+          setNewSectionName(event.target.value)
+        }
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault()
+            closeSectionComposer()
+          }
+        }}
+        placeholder="Section name"
+        aria-label="New section name"
+        className="h-7 min-w-0 flex-1 bg-transparent px-1.5 text-[15px] leading-[22px] text-[#E6E6E6] outline-none placeholder:text-[#8A8A8A]"
+      />
+
+      <button
+        type="submit"
+        disabled={
+          addingSection ||
+          !newSectionName.trim()
+        }
+        className="h-7 shrink-0 rounded px-2 text-[13px] font-medium text-[#E6E6E6] outline-none transition hover:bg-white/[0.06] focus-visible:ring-2 focus-visible:ring-[#6898F0] disabled:opacity-45"
+      >
+        {addingSection ? 'Adding…' : 'Add'}
+      </button>
+
+      <button
+        type="button"
+        onClick={closeSectionComposer}
+        className="h-7 shrink-0 rounded px-2 text-[13px] font-medium text-[#A3A3A3] outline-none transition hover:bg-white/[0.06] hover:text-[#E6E6E6] focus-visible:ring-2 focus-visible:ring-[#6898F0]"
+      >
+        Cancel
+      </button>
+    </form>
+  ) : (
+    <button
+      type="button"
+      onClick={() =>
+        setSectionComposerOpen(true)
+      }
+      className="flex h-7 w-full items-center gap-2 rounded-md px-2 text-left text-[13px] leading-[18px] text-[#A3A3A3] outline-none transition hover:bg-[#222222] hover:text-[#E6E6E6] focus-visible:ring-2 focus-visible:ring-[#6898F0]"
+    >
+      <span>+ Add section</span>
+    </button>
+  )
   // A persisted, unlinked Note may become a Work Item while the
   // Meeting is Live, and still after it is Completed — as long as
   // the current user can write the Meeting's scope (any member for
@@ -2966,7 +3056,7 @@ export function MeetingDetailPage() {
       >
       {/* Header — the Upcoming preparation view carries the
           approved Stitch composition (breadcrumb, title row with
-          the structure/lifecycle actions, metadata row with the
+          the lifecycle actions, metadata row with the
           compact participant stack, and the Quick Add bar); Live
           and Completed keep the shared header below. */}
       {isUpcoming ? (
@@ -3004,23 +3094,6 @@ export function MeetingDetailPage() {
             </h1>
 
             <div className="flex shrink-0 items-center gap-2.5">
-              {canPrepare && (
-                <button
-                  type="button"
-                  onClick={() =>
-                    setStructureEditing(
-                      (value) => !value,
-                    )
-                  }
-                  aria-expanded={structureEditing}
-                  className="flex items-center gap-1.5 rounded-md border border-white/[0.08] px-3 py-1.5 text-[13px] font-medium text-[#A3A3A3] outline-none transition hover:bg-[#222222] hover:text-[#E6E6E6] focus-visible:ring-2 focus-visible:ring-[#6898F0]"
-                >
-                  {structureEditing
-                    ? 'Done editing structure'
-                    : 'Edit structure'}
-                </button>
-              )}
-
               {canManageLifecycle && (
                 <button
                   type="button"
@@ -3056,7 +3129,7 @@ export function MeetingDetailPage() {
           </div>
 
           {/* Metadata row: date · time · context | participant
-              stack · Manage */}
+              stack · Add user */}
           <div className="mb-6 flex items-center gap-4 text-[13px] leading-[18px] text-[#A3A3A3]">
             <div className="flex items-center gap-1.5">
               <span>
@@ -3113,7 +3186,7 @@ export function MeetingDetailPage() {
                 aria-expanded={managingParticipants}
                 className="ml-[-4px] rounded text-[13px] font-medium text-[#6E9BF5] outline-none hover:underline focus-visible:ring-2 focus-visible:ring-[#6898F0]"
               >
-                {managingParticipants ? 'Done' : 'Manage'}
+                {managingParticipants ? 'Done' : 'Add user'}
               </button>
             )}
           </div>
@@ -3309,7 +3382,7 @@ export function MeetingDetailPage() {
       )}
 
       {/* Participants — the Upcoming resting layout carries
-          the compact avatar stack + Manage in the header
+          the compact avatar stack + Add user in the header
           metadata row (approved design); the management
           panel below is the only dedicated participant
           surface. */}
@@ -3441,57 +3514,6 @@ export function MeetingDetailPage() {
               </div>
             ))}
           </div>
-        </div>
-      )}
-
-      {/* Structure editing banner */}
-      {structureEditing && canPrepare && (
-        <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-border-subtle bg-surface-quiet px-4 py-3">
-          <span aria-hidden="true" className="material-symbols-outlined text-[18px] text-text-muted">
-            edit_note
-          </span>
-
-          <div className="min-w-0 flex-1 text-sm text-text">
-            Section structure editing.
-            {hiddenSectionCount > 0 && (
-              <span className="text-text-muted">
-                {' '}
-                {hiddenSectionCount} hidden{' '}
-                {hiddenSectionCount === 1
-                  ? 'section'
-                  : 'sections'}{' '}
-                are listed here.
-              </span>
-            )}
-          </div>
-
-          <form
-            onSubmit={(e) => {
-              e.preventDefault()
-              void handleAddSection()
-            }}
-            className="flex items-center gap-2"
-          >
-            <input
-              type="text"
-              value={newSectionName}
-              onChange={(e) => setNewSectionName(e.target.value)}
-              placeholder="New section name"
-              aria-label="New section name"
-              className="h-8 w-44 rounded-lg border border-border-control bg-surface px-2.5 text-sm text-text outline-none focus:border-focus focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-surface"
-            />
-
-            <button
-              type="submit"
-              disabled={addingSection || !newSectionName.trim()}
-              className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-accent px-3 text-xs font-semibold text-text-inverse transition hover:bg-accent-hover disabled:opacity-45 outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
-            >
-              <span aria-hidden="true" className="material-symbols-outlined text-[15px]">
-                add
-              </span>
-              {addingSection ? 'Adding…' : 'Add section'}
-            </button>
-          </form>
         </div>
       )}
 
@@ -4391,36 +4413,24 @@ export function MeetingDetailPage() {
           (approved Stitch design). Live and Completed render
           their own shells in the branches above. */
       <div className="flex w-full flex-col gap-8 pb-16">
-        {visibleSections.length === 0 ? (
+        {preparationSections.length === 0 ? (
           <div className="rounded-xl border border-dashed border-border-subtle px-6 py-12 text-center">
             <span aria-hidden="true" className="material-symbols-outlined text-[26px] text-text-muted">
               checklist
             </span>
 
             <p className="mt-3 text-sm font-medium text-text-muted">
-              {structureEditing && canPrepare
-                ? 'No sections yet'
-                : 'No agenda items yet.'}
+              No agenda items yet.
             </p>
 
-            {!structureEditing && canPrepare && (
-              <button
-                type="button"
-                onClick={() => setStructureEditing(true)}
-                className="mt-3 inline-flex h-9 items-center gap-1.5 rounded-lg border border-border-default bg-surface px-3.5 text-sm font-medium text-text transition hover:bg-surface-hover outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
-              >
-                <span aria-hidden="true" className="material-symbols-outlined text-[17px]">
-                  add
-                </span>
-                Add first section
-              </button>
+            {canPrepare && (
+              <div className="mx-auto mt-4 w-full max-w-72">
+                {sectionCreationControl}
+              </div>
             )}
           </div>
         ) : (
-          (structureEditing && canPrepare
-            ? sortedSections
-            : visibleSections
-          ).map((section) => {
+          preparationSections.map((section) => {
             const sectionItems =
               itemsBySection.get(section.id) ?? []
 
@@ -4443,7 +4453,7 @@ export function MeetingDetailPage() {
                         </span>
                       )}
 
-                      {structureEditing &&
+                      {canPrepare &&
                         !section.isVisible && (
                           <span className="rounded-full bg-surface-muted px-2 py-0.5 text-[11px] font-medium text-text-muted">
                             hidden
@@ -4878,6 +4888,14 @@ export function MeetingDetailPage() {
                 </section>
             )
           })
+        )}
+
+        {/* Inline section creation directly below the final
+            section. */}
+        {canPrepare && preparationSections.length > 0 && (
+          <div className="-mt-4">
+            {sectionCreationControl}
+          </div>
         )}
       </div>
       )}

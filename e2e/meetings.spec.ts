@@ -899,7 +899,7 @@ test(
 
     await expect(
       page.getByRole('button', {
-        name: 'Edit structure',
+        name: '+ Add section',
         exact: true,
       }),
     ).toHaveCount(0)
@@ -983,10 +983,11 @@ test(
       }),
     ).toBeVisible()
 
-    // Add a second section through explicit structure editing.
+    // Add a second section through the inline "+ Add section"
+    // control below the section list (Enter creates it).
     await page
       .getByRole('button', {
-        name: 'Edit structure',
+        name: '+ Add section',
         exact: true,
       })
       .click()
@@ -994,20 +995,7 @@ test(
     await page
       .getByLabel('New section name')
       .fill('TOPs')
-
-    await page
-      .getByRole('button', {
-        name: 'Add section',
-        exact: true,
-      })
-      .click()
-
-    await page
-      .getByRole('button', {
-        name: 'Done editing structure',
-        exact: true,
-      })
-      .click()
+      .press('Enter')
 
     await expect(
       page.getByRole('heading', {
