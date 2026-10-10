@@ -74,6 +74,10 @@ import {
   NoteLinkedWorkCard,
   NoteLinkedWorkCaption,
 } from './noteLinkedWork'
+import {
+  TopicMarkdownComposer,
+  TopicMarkdownDisplay,
+} from './TopicMarkdown'
 
 // The Work Item Inspector is the same shared drawer the Project
 // page uses; keep it out of the initial Meeting bundle.
@@ -716,12 +720,17 @@ export function MeetingDetailPage() {
     editingItemId,
     setEditingItemId,
   ] = useState<number | null>(null)
-  const [editItemTitle, setEditItemTitle] =
-    useState('')
-  const [editItemNotes, setEditItemNotes] =
-    useState('')
+  // The topic draft lives inside TopicMarkdownComposer itself
+  // (verbatim Markdown, preserved across failed saves); the page
+  // only tracks which item is being edited and whether the save is
+  // in flight.
   const [savingItemId, setSavingItemId] =
     useState<number | null>(null)
+
+  // In-flight flag for the section-local creation composer (its
+  // draft is composer-local; there is no item id yet).
+  const [creatingItem, setCreatingItem] =
+    useState(false)
 
   const [updatingItemId, setUpdatingItemId] =
     useState<number | null>(null)
@@ -1429,53 +1438,48 @@ export function MeetingDetailPage() {
     })
   }
 
+  // Canonical topic creation: the Markdown source is AUTHORITATIVE
+  // (the server derives the compatibility title); the client never
+  // sends title / notes alongside content. Errors propagate to the
+  // caller — the preparation composer shows them inline and keeps
+  // its draft, the Live quick-add surfaces them via the page
+  // action-error banner.
   const handleCreateItemInSection = async (
     section: ApiMeetingSection,
+    content: string,
   ) => {
     if (meetingId == null) {
       return
     }
 
-    const title = (sectionItemTitle[section.id] ?? '').trim()
-    if (!title) {
+    if (content.trim() === '') {
       return
     }
 
-    setActionError(null)
+    const item = await createMeetingItem(
+      meetingId,
+      {
+        meetingSectionId: section.id,
+        content,
+      },
+    )
 
-    try {
-      const item = await createMeetingItem(
-        meetingId,
-        {
-          meetingSectionId: section.id,
-          title,
-        },
-      )
+    setItems((current) => [
+      ...current.filter(
+        (candidate) =>
+          candidate.id !== item.id,
+      ),
+      item,
+    ])
 
-      setItems((current) => [
-        ...current.filter(
-          (candidate) =>
-            candidate.id !== item.id,
-        ),
-        item,
-      ])
-
-      setSectionItemTitle((current) => ({
-        ...current,
-        [section.id]: '',
-      }))
-      // Collapse the inline composer after a successful create so it
-      // is not left open; the newly added item (not_discussed,
-      // appended, not replacing the current item) is shown in the rail.
-      setCreatingSectionId(null)
-    } catch (error) {
-      setActionError(
-        getErrorMessage(
-          error,
-          'Agenda item could not be created.',
-        ),
-      )
-    }
+    setSectionItemTitle((current) => ({
+      ...current,
+      [section.id]: '',
+    }))
+    // Collapse the inline composer after a successful create so it
+    // is not left open; the newly added item (not_discussed,
+    // appended, not replacing the current item) is shown in the rail.
+    setCreatingSectionId(null)
   }
 
   // Top Quick Add bar: creates through the same canonical
@@ -1501,7 +1505,9 @@ export function MeetingDetailPage() {
         meetingId,
         {
           meetingSectionId: section.id,
-          title,
+          // Canonical content write: a one-line quick-add topic is
+          // valid Markdown; the server derives the title.
+          content: title,
         },
       )
 
@@ -1681,37 +1687,30 @@ export function MeetingDetailPage() {
   }
 
   const startEditingItem = (item: ApiMeetingItem) => {
+    // The rendered content is the entry point: the composer mounts
+    // in the same row and initializes from the canonical content
+    // (verbatim; no title / notes reconstruction).
     setEditingItemId(item.id)
-    setEditItemTitle(item.title)
-    setEditItemNotes(item.contextNotes)
   }
 
   const handleSaveItem = async (
     item: ApiMeetingItem,
+    content: string,
   ) => {
     if (savingItemId != null) {
       return
     }
 
-    const title = editItemTitle.trim()
-
-    if (!title) {
-      setActionError(
-        'Agenda item title must not be empty.',
-      )
-
-      return
-    }
-
     setSavingItemId(item.id)
-    setActionError(null)
 
     try {
       const updated = await updateMeetingItem(
         item.id,
         {
-          title,
-          notes: editItemNotes.trim(),
+          // Canonical content write: the ENTIRE Markdown source,
+          // verbatim — never a legacy title / notes pair (content-
+          // authored items would reject it server-side anyway).
+          content,
         },
       )
 
@@ -1724,12 +1723,10 @@ export function MeetingDetailPage() {
       )
       setEditingItemId(null)
     } catch (error) {
-      setActionError(
-        getErrorMessage(
-          error,
-          'Agenda item could not be updated.',
-        ),
-      )
+      // Re-throw so the composer keeps the draft and shows the
+      // error inline (preserving uncommitted edits after a failed
+      // save is part of the contract).
+      throw error
     } finally {
       setSavingItemId(null)
     }
@@ -3644,7 +3641,20 @@ export function MeetingDetailPage() {
                           data-quick-add-form={section.id}
                           onSubmit={(e) => {
                             e.preventDefault()
-                            void handleCreateItemInSection(section)
+                            void handleCreateItemInSection(
+                              section,
+                              (
+                                sectionItemTitle[section.id] ??
+                                ''
+                              ).trim(),
+                            ).catch((error) => {
+                              setActionError(
+                                getErrorMessage(
+                                  error,
+                                  'Agenda item could not be created.',
+                                ),
+                              )
+                            })
                           }}
                           className="mt-1.5 flex items-center gap-1.5 pl-3 pr-2"
                         >
@@ -4617,79 +4627,71 @@ export function MeetingDetailPage() {
                           participantUserById.get(
                             item.createdById,
                           )
+                        const isEditingItem =
+                          canPrepare &&
+                          editingItemId === item.id
 
                         return (
                         <li key={item.id}>
-                          {/* Item editing form */}
-                          {canPrepare &&
-                            editingItemId === item.id ? (
-                            <div className="my-1 rounded-lg border border-border-subtle bg-surface-quiet p-3">
-                              <label className="block">
-                                <span className="mb-1 block text-xs font-medium text-text-muted">
-                                  Title
-                                </span>
-
-                                <input
-                                  type="text"
-                                  value={editItemTitle}
-                                  onChange={(e) =>
-                                    setEditItemTitle(e.target.value)
-                                  }
-                                  className="h-9 w-full rounded-lg border border-border-control bg-surface px-3 text-sm text-text outline-none focus:border-focus focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-surface"
-                                />
-                              </label>
-
-                              <label className="mt-3 block">
-                                <span className="mb-1 block text-xs font-medium text-text-muted">
-                                  Context / notes
-                                </span>
-
-                                <textarea
-                                  value={editItemNotes}
-                                  onChange={(e) =>
-                                    setEditItemNotes(e.target.value)
-                                  }
-                                  rows={3}
-                                  className="w-full rounded-lg border border-border-control bg-surface px-3 py-2 text-sm text-text outline-none focus:border-focus focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-surface"
-                                />
-                              </label>
-
-                              <div className="mt-3 flex items-center gap-2">
-                                <button
-                                  type="button"
-                                  disabled={savingItemId === item.id}
-                                  onClick={() =>
-                                    void handleSaveItem(item)
-                                  }
-                                  className="h-9 rounded-lg bg-accent px-4 text-sm font-semibold text-text-inverse transition hover:bg-accent-hover disabled:opacity-45 outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
-                                >
-                                  {savingItemId === item.id
-                                    ? 'Saving…'
-                                    : 'Save'}
-                                </button>
-
-                                <button
-                                  type="button"
-                                  onClick={() => setEditingItemId(null)}
-                                  className="h-9 rounded-lg px-3 text-sm font-medium text-text-muted transition hover:bg-surface-hover outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
-                                >
-                                  Cancel
-                                </button>
-                              </div>
+                          {/* Unified inline Markdown: the SAME
+                              composer for creation (below) and
+                              editing (here) — the rendered topic is
+                              the editing entry point, so there is no
+                              separate edit card, popover, or
+                              title / notes form. */}
+                          {isEditingItem ? (
+                            <div className="px-2 py-1.5">
+                              <TopicMarkdownComposer
+                                initialValue={item.content}
+                                ariaLabel={`Edit topic ${item.title}`}
+                                saving={
+                                  savingItemId ===
+                                  item.id
+                                }
+                                onSave={(content) =>
+                                  handleSaveItem(
+                                    item,
+                                    content,
+                                  )
+                                }
+                                onCancel={() =>
+                                  setEditingItemId(
+                                    null,
+                                  )
+                                }
+                              />
                             </div>
                           ) : (
-                            <div className="group/item flex h-7 items-center justify-between gap-3 rounded-md px-2 transition hover:bg-[#222222]">
-                              <div className="flex min-w-0 flex-1 items-center gap-2">
-                                <span
-                                  aria-hidden="true"
-                                  className="material-symbols-outlined w-4 shrink-0 cursor-grab select-none text-[14px] text-[#c8c6c5] opacity-0 transition-opacity group-hover/item:opacity-100"
-                                >
-                                  drag_indicator
-                                </span>
+                            <div className="group/item flex flex-wrap items-start gap-x-3 gap-y-1.5 rounded-md px-2 py-1.5 transition hover:bg-[#222222]">
+                              <span
+                                aria-hidden="true"
+                                className="material-symbols-outlined mt-[3px] w-4 shrink-0 cursor-grab select-none text-[14px] text-[#c8c6c5] opacity-0 transition-opacity group-hover/item:opacity-100"
+                              >
+                                drag_indicator
+                              </span>
 
-                                <span className="truncate text-[15px] leading-[22px] text-[#E6E6E6]">
-                                  {item.title}
-                                </span>
+                              {/* The ENTIRE saved topic, always
+                                  visible: no truncation, no clamp,
+                                  no internal scroll. For preparers
+                                  the rendered content itself opens
+                                  editing in place. */}
+                              <div className="min-w-0 flex-1">
+                                <TopicMarkdownDisplay
+                                  content={item.content}
+                                  onEdit={
+                                    canPrepare
+                                      ? () =>
+                                          startEditingItem(
+                                            item,
+                                          )
+                                      : undefined
+                                  }
+                                  editLabel={
+                                    canPrepare
+                                      ? `Edit topic ${item.title}`
+                                      : undefined
+                                  }
+                                />
                               </div>
 
                               <div className="flex shrink-0 items-center gap-2">
@@ -4722,16 +4724,11 @@ export function MeetingDetailPage() {
                                     >
                                       {(_, close) => (
                                         <>
-                                          <MenuItem
-                                            preparation
-                                            label="Edit"
-                                            icon="edit"
-                                            onClick={() => {
-                                              startEditingItem(item)
-                                              close()
-                                            }}
-                                          />
-
+                                          {/* Editing is DIRECT: the
+                                              rendered topic is the
+                                              entry point, so the menu
+                                              no longer carries a
+                                              redundant Edit action. */}
                                           <MenuItem
                                             preparation
                                             label="Create work item"
@@ -4798,74 +4795,43 @@ export function MeetingDetailPage() {
                     </ul>
 
                     {/* Section-local quick add: "+ Add topic" opens
-                        the existing inline composer. */}
-                    {creatingSectionId === section.id ? (
-                      <form
-                        data-quick-add-form={section.id}
-                        onSubmit={(e) => {
-                          e.preventDefault()
-                          void handleCreateItemInSection(section)
-                        }}
-                        className="mt-1 flex h-9 items-center gap-2 rounded-md bg-[#222222] px-2"
-                      >
-                        <input
-                          ref={quickAddInputRef}
-                          type="text"
-                          value={
-                            sectionItemTitle[section.id] ?? ''
-                          }
-                          onChange={(e) =>
-                            setSectionItemTitle(
-                              (current) => ({
-                                ...current,
-                                [section.id]:
-                                  e.target.value,
-                              }),
-                            )
-                          }
-                          onKeyDown={(e) => {
-                            if (e.key === 'Escape') {
-                              e.preventDefault()
-                              setCreatingSectionId(null)
-                              setSectionItemTitle((current) => ({
-                                ...current,
-                                [section.id]: '',
-                              }))
+                        the unified Markdown composer in place (one
+                        multiline field — no title / notes form).
+                        Adding a topic is Meeting collaboration
+                        (the canonical MEETING_WRITE rule), so the
+                        affordance renders only for users who may
+                        prepare. */}
+                    {canPrepare && creatingSectionId === section.id ? (
+                      <div className="px-2 py-1.5">
+                        <TopicMarkdownComposer
+                          initialValue=""
+                          ariaLabel={`Add a topic to ${section.name}`}
+                          saving={creatingItem}
+                          onSave={async (content) => {
+                            // Client-side mirror of the server's
+                            // authoritative MEETING_WRITE check:
+                            // never submit an unauthorized create.
+                            if (!canPrepare) {
+                              return
+                            }
+
+                            setCreatingItem(true)
+
+                            try {
+                              await handleCreateItemInSection(
+                                section,
+                                content,
+                              )
+                            } finally {
+                              setCreatingItem(false)
                             }
                           }}
-                          placeholder="Add a topic…"
-                          aria-label={`Add item to ${section.name}`}
-                          className="h-7 min-w-0 flex-1 bg-transparent px-1.5 text-[15px] leading-[22px] text-[#E6E6E6] outline-none placeholder:text-[#8A8A8A]"
-                        />
-
-                        <button
-                          type="submit"
-                          disabled={
-                            !(
-                              sectionItemTitle[section.id] ??
-                              ''
-                            ).trim()
-                          }
-                          className="h-7 shrink-0 rounded px-2 text-[13px] font-medium text-[#E6E6E6] outline-none transition hover:bg-white/[0.06] focus-visible:ring-2 focus-visible:ring-[#6898F0] disabled:opacity-45"
-                        >
-                          Add
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => {
+                          onCancel={() =>
                             setCreatingSectionId(null)
-                            setSectionItemTitle((current) => ({
-                              ...current,
-                              [section.id]: '',
-                            }))
-                          }}
-                          className="h-7 shrink-0 rounded px-2 text-[13px] font-medium text-[#A3A3A3] outline-none transition hover:bg-white/[0.06] hover:text-[#E6E6E6] focus-visible:ring-2 focus-visible:ring-[#6898F0]"
-                        >
-                          Cancel
-                        </button>
-                      </form>
-                    ) : (
+                          }
+                        />
+                      </div>
+                    ) : canPrepare ? (
                       <button
                         type="button"
                         onClick={() => {
@@ -4883,7 +4849,7 @@ export function MeetingDetailPage() {
 
                         <span>+ Add topic</span>
                       </button>
-                    )}
+                    ) : null}
                   </div>
                 </section>
             )

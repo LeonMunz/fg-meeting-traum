@@ -95,6 +95,7 @@ function makeItem(
     meetingSectionId: 1,
     title: 'Alpha',
     contextNotes: '',
+    content: 'Alpha',
     position: 0,
     outcome: 'not_discussed',
     followUpSchedule: null,

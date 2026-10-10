@@ -9,12 +9,14 @@ import {
 import {
   apiGet,
   apiGetFile,
+  apiPatch,
   apiPost,
   ApiError,
 } from './client'
 import {
   cancelMeetingItemFollowUp,
   createMeeting,
+  createMeetingItem,
   createMeetingFromSeries,
   createMeetingRecurrence,
   exportMeetingSeriesAgenda,
@@ -29,6 +31,7 @@ import {
   searchMeetingParticipantCandidates,
   searchMeetingSeriesParticipantCandidates,
   searchStandaloneMeetingParticipantCandidates,
+  updateMeetingItem,
 } from './meetings'
 
 import type {
@@ -105,6 +108,7 @@ const itemWithoutSchedule: ApiMeetingItem = {
   meetingSectionId: 13,
   title: 'Review the experiment',
   contextNotes: '',
+  content: 'Review the experiment',
   position: 0,
   outcome: 'follow_up',
   followUpSchedule: null,
@@ -771,6 +775,59 @@ describe('Meeting Template agenda JSON API client', () => {
 
     await expect(importMeetingSeriesAgenda(7, document)).rejects.toEqual(
       error,
+    )
+  })
+})
+
+describe('MeetingItem canonical content write API client', () => {
+  beforeEach(() => {
+    vi.mocked(apiPatch).mockReset()
+    vi.mocked(apiPost).mockReset()
+  })
+
+  it('creates a topic with the canonical content payload only', async () => {
+    const created: ApiMeetingItem = {
+      ...itemWithoutSchedule,
+      id: 51,
+      content:
+        '## Plan\n\n- step one\n- step two',
+    }
+    vi.mocked(apiPost).mockResolvedValue(created)
+
+    const result = await createMeetingItem(11, {
+      meetingSectionId: 13,
+      content: '## Plan\n\n- step one\n- step two',
+    })
+
+    expect(result).toEqual(created)
+    expect(apiPost).toHaveBeenCalledWith(
+      '/api/meetings/11/items/',
+      {
+        meetingSectionId: 13,
+        content:
+          '## Plan\n\n- step one\n- step two',
+      },
+    )
+  })
+
+  it('updates a topic with the canonical content payload only', async () => {
+    const updated: ApiMeetingItem = {
+      ...itemWithoutSchedule,
+      content: '## Plan\n\n- step one\n- step two',
+    }
+    vi.mocked(apiPatch).mockResolvedValue(updated)
+
+    const result = await updateMeetingItem(17, {
+      content: '## Plan\n\n- step one\n- step two',
+    })
+
+    expect(result).toEqual(updated)
+    expect(apiPatch).toHaveBeenCalledWith(
+      '/api/meeting-items/17/',
+      {
+        content:
+          '## Plan\n\n- step one\n- step two',
+      },
     )
   })
 })

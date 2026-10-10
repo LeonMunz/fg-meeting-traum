@@ -154,6 +154,7 @@ function makeItem(
     meetingSectionId: 1,
     title: 'Budget review',
     contextNotes: '',
+    content: 'Budget review',
     position: 0,
     outcome: 'not_discussed',
     followUpSchedule: null,

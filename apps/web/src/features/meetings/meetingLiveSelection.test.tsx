@@ -99,6 +99,7 @@ function makeItem(
     meetingSectionId: 1,
     title: 'Alpha',
     contextNotes: '',
+    content: 'Alpha',
     position: 0,
     outcome: 'not_discussed',
     followUpSchedule: null,
@@ -1604,12 +1605,15 @@ describe('Live Meeting selection (decoupled from current)', () => {
         _meetingId: number,
         payload: {
           meetingSectionId: number
-          title: string
+          content: string
         },
       ) =>
         makeItem({
           id: 9,
-          title: payload.title,
+          // Content contract: the one-line quick-add source is the
+          // canonical content; the derived title equals it.
+          title: payload.content,
+          content: payload.content,
           meetingSectionId: payload.meetingSectionId,
           position: fake.items.length,
         }),

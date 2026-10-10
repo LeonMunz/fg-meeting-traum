@@ -181,6 +181,7 @@ function makeItem(
     meetingSectionId: 1,
     title: 'GPU procurement',
     contextNotes: '',
+    content: 'GPU procurement',
     position: 10,
     outcome: 'not_discussed',
     followUpSchedule: null,

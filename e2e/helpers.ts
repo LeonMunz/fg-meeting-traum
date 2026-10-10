@@ -7,9 +7,13 @@ import {
 export const PASSWORD = 'DevPass1!'
 
 /**
- * The redesigned Meeting Detail uses an inline quick-add: a quiet
- * "+ Add item" button expands into a title input (required field)
- * plus Add / Cancel. Enter also submits.
+ * The redesigned Meeting Detail uses an inline quick-add. In the
+ * Upcoming preparation view it is the unified Markdown composer: a
+ * quiet "+ Add topic" trigger expands into one multiline field
+ * (the entire topic, sent as canonical `content`) plus Save /
+ * Cancel. The Live Agenda rail keeps its quiet single-line quick-
+ * add (Add / Cancel). Enter submits in the Live quick-add; the
+ * preparation composer saves via Save (or Cmd/Ctrl+Enter).
  */
 export async function quickAddAgendaItem(
   page: Page,
@@ -23,13 +27,16 @@ export async function quickAddAgendaItem(
     .locator('section')
     .filter({ hasText: sectionName })
 
-  const input = page.getByLabel(`Add item to ${sectionName}`)
+  // Upcoming preparation: the unified Markdown composer.
+  const composerInput = page.getByLabel(
+    `Add a topic to ${sectionName}`,
+  )
+  const composerTrigger = section.getByRole('button', {
+    name: '+ Add topic',
+  })
 
-  // The inline composer collapses after a successful submit and
-  // stays open after a failed one. If it is already open for this
-  // exact section, reuse it; otherwise open it via the
-  // 'Add item' / 'Add first item' trigger (the trigger is hidden
-  // while the composer is open).
+  // Live Agenda rail: the quiet single-line quick-add.
+  const liveInput = page.getByLabel(`Add item to ${sectionName}`)
   const addButton = section
     .getByRole('button', { name: 'Add item', exact: true })
     .or(
@@ -39,23 +46,54 @@ export async function quickAddAgendaItem(
       }),
     )
 
-  if (await input.isVisible().catch(() => false)) {
-    // Composer already open: use it directly.
+  // The inline composer collapses after a successful submit and
+  // stays open after a failed one. If one is already open for
+  // this exact section, reuse it; otherwise open it via its
+  // trigger (the trigger is hidden while the composer is open).
+  if (await composerInput.isVisible().catch(() => false)) {
+    // Preparation composer already open: use it directly.
+  } else if (
+    await liveInput.isVisible().catch(() => false)
+  ) {
+    // Live quick-add already open: use it directly.
+  } else if (
+    await composerTrigger.isVisible().catch(() => false)
+  ) {
+    await composerTrigger.scrollIntoViewIfNeeded()
+    await composerTrigger.click()
+    await composerInput.waitFor({ state: 'visible' })
   } else {
     await addButton.scrollIntoViewIfNeeded()
     await addButton.click()
-    await input.waitFor({ state: 'visible' })
+    await liveInput.waitFor({ state: 'visible' })
   }
 
-  await input.fill(title)
+  const usesPreparationComposer =
+    await composerInput
+      .isVisible()
+      .catch(() => false)
 
-  // The quick-add form's submit is 'Add'; scope it to the form so
-  // the participant panel's separate 'Add' button is never matched.
-  await section
-    .getByRole('button', { name: 'Add', exact: true })
-    .click()
+  if (usesPreparationComposer) {
+    await composerInput.fill(title)
 
-  // The newly created item title is visible inside this section.
+    // The preparation composer's submit is 'Save'; scope it to the
+    // section so no other 'Save' control is ever matched.
+    await section
+      .getByRole('button', { name: 'Save', exact: true })
+      .click()
+  } else {
+    await liveInput.fill(title)
+
+    // The quick-add form's submit is 'Add'; scope it to the form
+    // so the participant panel's separate 'Add' button is never
+    // matched.
+    await section
+      .getByRole('button', { name: 'Add', exact: true })
+      .click()
+  }
+
+  // The newly created topic content is visible inside this
+  // section.
   await expect(
     section.getByText(title, { exact: true }),
   ).toBeVisible()

@@ -512,6 +512,11 @@ export interface ApiMeetingItem {
   meetingSectionId: number
   title: string
   contextNotes: string
+  // Canonical full-length Markdown content — the single display and
+  // edit source (legacy items are backfilled to this shape).
+  // `title` / `contextNotes` remain the compatibility
+  // representations only; never a display source.
+  content: string
   position: number
   outcome: ApiMeetingItemOutcome
   followUpSchedule: ApiMeetingItemFollowUpSchedule | null
@@ -542,13 +547,17 @@ export interface ApiCancelMeetingItemFollowUpResult {
 
 export interface ApiCreateMeetingItemInput {
   meetingSectionId: number
-  title: string
-  notes?: string
+  // Canonical content write: the Markdown source is authoritative
+  // (title is derived server-side). Never combined with the legacy
+  // title / notes pair.
+  content: string
 }
 
 export interface ApiUpdateMeetingItemInput {
-  title?: string
-  notes?: string
+  // Canonical content write: the full Markdown source, verbatim.
+  // Content-authored items reject legacy title / notes writes, so
+  // the client contract is content-only.
+  content: string
 }
 
 export interface ApiWorkItemTypeDefinition {
