@@ -328,6 +328,67 @@ class CancelFollowUpDomainTest(CancelFollowUpBase):
         self.assertIsNotNone(follow_up.target_meeting_id)
         self.assertIsNotNone(follow_up.target_meeting_section_id)
 
+    # ── Target deletion: content-authored source ─────────────────
+
+    def _schedule_content_authored(self, *, content=None):
+        self.source_item = create_meeting_item(
+            meeting=self.source_meeting,
+            meeting_section=self.source_section,
+            actor=self.actor,
+            content=(
+                content
+                or "## Source topic\n\nLong **markdown** body."
+            ),
+        )
+        return self._schedule()
+
+    def test_content_authored_pristine_target_is_deleted_on_cancellation(self):
+        follow_up = self._schedule_content_authored()
+        target_item_pk = follow_up.target_meeting_item_id
+        self.assertIsNotNone(target_item_pk)
+
+        self._cancel(follow_up)
+
+        # An untouched copy of the canonical content is still
+        # provably pristine: the target is deleted like any pristine
+        # generated item.
+        self.assertEqual(
+            MeetingItem.objects.filter(pk=target_item_pk).count(),
+            0,
+        )
+
+    def test_content_edited_target_is_preserved_on_cancellation(self):
+        follow_up = self._schedule_content_authored()
+        target_item = follow_up.target_meeting_item
+
+        # Editing the target's canonical content is drift: the
+        # pristine content check must fail and the target is
+        # preserved, never silently deleted.
+        update_meeting_item(
+            meeting_item=target_item,
+            actor=self.actor,
+            content="## Source topic\n\nEdited in the target meeting.",
+        )
+
+        self._cancel(follow_up)
+
+        target_item.refresh_from_db()
+        self.assertTrue(MeetingItem.objects.filter(pk=target_item.pk).exists())
+        self.assertEqual(
+            target_item.content,
+            "## Source topic\n\nEdited in the target meeting.",
+        )
+        follow_up.refresh_from_db()
+        self.assertEqual(
+            follow_up.status,
+            MeetingItemFollowUp.Status.CANCELLED,
+        )
+        self.source_item.refresh_from_db()
+        self.assertEqual(
+            self.source_item.outcome,
+            MeetingItem.Outcome.NOT_DISCUSSED,
+        )
+
     # ── Target preservation: edited title ─────────────────────────
 
     def test_title_changed_target_is_preserved(self):

@@ -655,12 +655,11 @@ class MeetingItem(models.Model):
     )
     title = models.CharField(max_length=255)
     notes = models.TextField(default="", blank=True)
-    # Transitional Markdown content (migration 0021): the full-length
-    # Markdown source for the item. While the legacy title/notes write
-    # contract remains authoritative, the canonical domain services
-    # derive it from the effective (title, notes) pair on every
-    # supported write; explicit Markdown-content writing is a later
-    # slice (see docs/domain/meetings.md section 17).
+    # Canonical Markdown content (migration 0021): the full-length
+    # Markdown SOURCE for the item (never rendered HTML; the 255-char
+    # limit applies to ``title``, NOT here). Content-based writes
+    # store it verbatim; legacy title/notes writes derive it from the
+    # effective pair (see docs/domain/meetings.md section 17).
     content = models.TextField(default="", blank=True)
     position = models.PositiveIntegerField()
     outcome = models.CharField(

@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass
 from datetime import datetime as dt_datetime, timedelta, timezone as dt_timezone
 
@@ -2639,14 +2640,153 @@ def meeting_item_content_from_legacy(title, notes):
     return f"{title}\n\n{notes}"
 
 
+# ── Canonical Markdown content writes ──────────────────────────
+#
+# ``content`` is the authoritative write field (docs/domain/meetings.md
+# §17): for content-based creation and update the submitted Markdown
+# is stored verbatim, the legacy ``title`` is DERIVED from it, and the
+# legacy ``notes`` field takes the empty compatibility value. An item
+# whose stored content is not exactly the legacy derivation is a
+# CONTENT-AUTHORED item: the legacy pair is then a lossy
+# compatibility projection and legacy title/notes writes against it
+# are rejected explicitly (silent content loss is not allowed).
+
+# The legacy title keeps its existing 255-character limit; derived
+# titles longer than that are truncated deterministically (the
+# canonical content is never truncated).
+MEETING_ITEM_TITLE_MAX_LENGTH = 255
+
+_MEETING_ITEM_ATX_HEADING_RE = re.compile(r"^ {0,3}#{1,6}\s+(.*)$")
+_MEETING_ITEM_ATX_CLOSING_RE = re.compile(r"\s+#+$")
+_MEETING_ITEM_ORDERED_LIST_RE = re.compile(r"^ {0,3}\d{1,9}[.)]\s+")
+_MEETING_ITEM_UNORDERED_LIST_RE = re.compile(r"^ {0,3}[-*+]\s+")
+_MEETING_ITEM_CHECKBOX_RE = re.compile(r"^\[[ xX]\]\s+")
+_MEETING_ITEM_FENCE_RE = re.compile(r"^ {0,3}(```|~~~)")
+_MEETING_ITEM_BARE_HEADING_MARKERS_RE = re.compile(r"^#{1,6}$")
+_MEETING_ITEM_HORIZONTAL_RULE_RE = re.compile(r"^(-{3,}|\*{3,}|_{3,})$")
+_MEETING_ITEM_SETEXT_UNDERLINE_RE = re.compile(r"^(={3,}|-{1,})$")
+_MEETING_ITEM_IMAGE_OR_LINK_RE = re.compile(r"!?\[([^\]]*)\]\([^)]*\)")
+_MEETING_ITEM_BARE_LINK_RE = re.compile(r"\[([^\]]*)\]")
+_MEETING_ITEM_CODE_SPAN_RE = re.compile(r"`([^`]*)`")
+_MEETING_ITEM_INLINE_MARKUP_TRANSLATION = str.maketrans("", "", "*_~")
+
+
+def _meeting_item_line_visible_text(line):
+    """The visible text of one Markdown line.
+
+    Strips the basic line-level syntax (fence markers, blockquote
+    prefixes, ATX headings, list markers, task-list checkboxes) and
+    the basic inline syntax (images/links keep their visible text,
+    code spans keep their text, bold/italic/strikethrough markers are
+    removed). Returns ``""`` for lines that carry no meaningful text
+    (blank lines, horizontal rules, setext underlines, bare markers).
+    """
+    if _MEETING_ITEM_FENCE_RE.match(line):
+        return ""
+
+    text = line.strip()
+    if not text:
+        return ""
+
+    if (
+        _MEETING_ITEM_HORIZONTAL_RULE_RE.fullmatch(text)
+        or _MEETING_ITEM_SETEXT_UNDERLINE_RE.fullmatch(text)
+        or _MEETING_ITEM_BARE_HEADING_MARKERS_RE.fullmatch(text)
+    ):
+        return ""
+
+    # Blockquote prefixes.
+    while text.startswith(">"):
+        text = text[1:].lstrip()
+        if not text:
+            return ""
+
+    m = _MEETING_ITEM_ATX_HEADING_RE.match(text)
+    if m is not None:
+        text = m.group(1)
+        # Closing heading sequence (CommonMark "## Title ##").
+        text = _MEETING_ITEM_ATX_CLOSING_RE.sub("", text)
+    else:
+        m = _MEETING_ITEM_ORDERED_LIST_RE.match(text)
+        if m is not None:
+            text = text[m.end():]
+        else:
+            m = _MEETING_ITEM_UNORDERED_LIST_RE.match(text)
+            if m is not None:
+                text = text[m.end():]
+
+    m = _MEETING_ITEM_CHECKBOX_RE.match(text.strip())
+    if m is not None:
+        text = text.strip()[m.end():]
+
+    # Inline: images / links keep their visible text only.
+    text = _MEETING_ITEM_IMAGE_OR_LINK_RE.sub(r"\1", text)
+    text = _MEETING_ITEM_BARE_LINK_RE.sub(r"\1", text)
+    # Code spans keep their text.
+    text = _MEETING_ITEM_CODE_SPAN_RE.sub(r"\1", text)
+    # Bold / italic / strikethrough markers.
+    text = text.translate(_MEETING_ITEM_INLINE_MARKUP_TRANSLATION)
+
+    return text.strip()
+
+
+def derive_meeting_item_title(content):
+    """Derive the compatibility ``title`` from canonical Markdown.
+
+    Prefers the first line that carries meaningful visible text after
+    removing the basic Markdown line/inline syntax; the result is
+    truncated to the 255-character title limit. Returns ``None`` when
+    no line yields text — the write must then be rejected rather than
+    a label invented. The derivation is a pure function of the
+    content, so repeated writes derive the same title (no drift).
+
+    Lines inside a fenced code block (``` / ~~~) never yield a title:
+    code is not a topic label, so a code-only document yields ``None``
+    rather than a meaningless label.
+    """
+    in_fence = False
+    for line in (content or "").splitlines():
+        stripped = line.strip()
+        # Toggle fenced-code state on fence-delimiter lines.
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        text = _meeting_item_line_visible_text(line)
+        if text:
+            if len(text) > MEETING_ITEM_TITLE_MAX_LENGTH:
+                text = text[: MEETING_ITEM_TITLE_MAX_LENGTH].rstrip()
+            return text
+    return None
+
+
+def meeting_item_is_content_authored(meeting_item):
+    """Whether the item's stored content is authoritative beyond the
+    legacy pair.
+
+    True exactly when the stored ``content`` is NOT the derivation
+    from the stored ``title`` / ``notes`` — i.e. the content carries
+    information the legacy pair cannot express (a content-based
+    write). Legacy-written items always satisfy the derivation
+    equality, so their title/notes pair is a complete representation
+    and legacy writes remain lossless.
+    """
+    return meeting_item.content != meeting_item_content_from_legacy(
+        meeting_item.title,
+        meeting_item.notes,
+    )
+
+
 @transaction.atomic
 def create_meeting_item(
     *,
     meeting,
     meeting_section,
     actor,
-    title,
+    title=None,
     notes="",
+    content=None,
     record_activity=True,
 ):
     """Create one agenda item in a Meeting Section.
@@ -2656,18 +2796,53 @@ def create_meeting_item(
     logical action (e.g. follow-up scheduling materializes the target
     item), it passes ``record_activity=False`` so the single logical
     operation records exactly one Activity event.
+
+    Exactly one write contract may be supplied:
+
+    - legacy: ``title`` (required, non-blank) plus optional ``notes``;
+    - content: ``content`` (required, non-whitespace) — the canonical
+      Markdown, stored verbatim. ``title`` and ``notes`` must NOT be
+      supplied: the title is derived from the content and the notes
+      take the empty compatibility value.
+
+    Supplying neither, or supplying both, is a domain error.
     """
     _require_meeting_write_access(meeting=meeting, user=actor)
+
+    if (title is None) == (content is None):
+        raise MeetingDomainError(
+            "Exactly one of title or content must be supplied."
+        )
 
     if meeting_section.meeting_id != meeting.pk:
         raise MeetingDomainError(
             "The Section does not belong to this Meeting."
         )
 
-    title = title.strip()
-    if not title:
-        raise MeetingDomainError(
-            "Meeting item title is required."
+    if content is not None:
+        if not (content or "").strip():
+            raise MeetingDomainError(
+                "Meeting item content is required."
+            )
+        derived_title = derive_meeting_item_title(content)
+        if derived_title is None:
+            raise MeetingDomainError(
+                "A display title cannot be derived from the "
+                "meeting item content."
+            )
+        title = derived_title
+        notes = ""
+        item_content = content
+    else:
+        title = title.strip()
+        if not title:
+            raise MeetingDomainError(
+                "Meeting item title is required."
+            )
+        notes = notes.strip()
+        item_content = meeting_item_content_from_legacy(
+            title,
+            notes,
         )
 
     # Serialize position allocation for this Section.
@@ -2691,11 +2866,8 @@ def create_meeting_item(
         meeting=meeting,
         meeting_section=meeting_section,
         title=title,
-        notes=notes.strip(),
-        # Transitional Markdown persistence: content is derived from
-        # the legacy pair; the legacy write contract stays
-        # authoritative (see meeting_item_content_from_legacy).
-        content=meeting_item_content_from_legacy(title, notes),
+        notes=notes,
+        content=item_content,
         position=position,
         created_by=actor,
     )
@@ -2819,13 +2991,31 @@ def schedule_meeting_item_follow_up(
     # The target item is an internal step of the scheduling operation:
     # the logical action is "follow-up scheduled", so it records its own
     # event below and no separate agenda_item_added event.
-    target_meeting_item = create_meeting_item(
-        meeting=target_meeting,
-        meeting_section=target_meeting_section,
-        actor=actor,
-        title=source_meeting_item.title,
-        record_activity=False,
-    )
+    if meeting_item_is_content_authored(source_meeting_item):
+        # The source's canonical Markdown is authoritative beyond its
+        # legacy pair: the target item copies it verbatim so the
+        # original content survives the follow-up. Its derived title
+        # equals the source's stored title (content-authored items
+        # always carry the title derived from their content), so the
+        # pristine title check below stays valid.
+        target_meeting_item = create_meeting_item(
+            meeting=target_meeting,
+            meeting_section=target_meeting_section,
+            actor=actor,
+            content=source_meeting_item.content,
+            record_activity=False,
+        )
+    else:
+        # Legacy-consistent source: existing behavior — the target
+        # carries the source title only (no notes), and its content
+        # is the derivation from that pair.
+        target_meeting_item = create_meeting_item(
+            meeting=target_meeting,
+            meeting_section=target_meeting_section,
+            actor=actor,
+            title=source_meeting_item.title,
+            record_activity=False,
+        )
     follow_up = MeetingItemFollowUp.objects.create(
         source_meeting_item=source_meeting_item,
         target_meeting=target_meeting,
@@ -2890,6 +3080,18 @@ def schedule_meeting_item_follow_up(
 
 
 # ── Follow-up cancellation ─────────────────────────────────────
+
+
+def _follow_up_target_item_expected_content(source_item):
+    """The exact content a freshly scheduled target item carries.
+
+    A content-authored source copies its canonical Markdown verbatim;
+    a legacy-consistent source copies its title only (the target
+    starts without notes, so the derivation is the title alone).
+    """
+    if meeting_item_is_content_authored(source_item):
+        return source_item.content
+    return meeting_item_content_from_legacy(source_item.title, "")
 
 
 @transaction.atomic
@@ -3038,6 +3240,8 @@ def cancel_meeting_item_follow_up(*, follow_up_id, actor):
                 target_item.outcome == MeetingItem.Outcome.NOT_DISCUSSED
                 and target_item.title == source_item.title
                 and not target_item.notes
+                and target_item.content
+                == _follow_up_target_item_expected_content(source_item)
                 and not target_item.note_relations.exists()
                 and not target_item.work_item_relations.exists()
                 and (
@@ -3516,6 +3720,7 @@ def update_meeting_item(
     actor,
     title=None,
     notes=None,
+    content=None,
 ):
     """Update only the free-form MeetingItem fields.
 
@@ -3523,8 +3728,59 @@ def update_meeting_item(
     domain actions (start / focus / done / follow-up / reopen);
     a generic PATCH must never bypass the Live MeetingItem state
     machine, so ``status`` is not an accepted field here.
+
+    Exactly one write contract may be supplied:
+
+    - content: ``content`` — the canonical Markdown, stored verbatim.
+      The title is re-derived from it and the notes take the empty
+      compatibility value.
+    - legacy: ``title`` and/or ``notes`` with the existing
+      re-derivation of ``content`` from the effective pair.
+
+    A legacy write against a content-authored item (stored content
+    that is not exactly the derivation from its stored legacy pair)
+    is rejected explicitly: re-deriving would destroy the canonical
+    Markdown, and silent content loss is not allowed.
     """
     _require_meeting_write_access(meeting=meeting_item.meeting, user=actor)
+
+    if content is not None:
+        if title is not None or notes is not None:
+            raise MeetingDomainError(
+                "Exactly one of the content or the legacy "
+                "title/notes contract may be supplied."
+            )
+        if not (content or "").strip():
+            raise MeetingDomainError(
+                "Meeting item content is required."
+            )
+        derived_title = derive_meeting_item_title(content)
+        if derived_title is None:
+            raise MeetingDomainError(
+                "A display title cannot be derived from the "
+                "meeting item content."
+            )
+        meeting_item.title = derived_title
+        meeting_item.notes = ""
+        meeting_item.content = content
+        meeting_item.save(
+            update_fields=[
+                "title",
+                "notes",
+                "content",
+                "updated_at",
+            ],
+        )
+        return meeting_item
+
+    if (title is not None or notes is not None) and (
+        meeting_item_is_content_authored(meeting_item)
+    ):
+        raise MeetingDomainError(
+            "This meeting item is written from Markdown content "
+            "and cannot be updated through the legacy title or "
+            "notes fields."
+        )
 
     update_fields = []
 

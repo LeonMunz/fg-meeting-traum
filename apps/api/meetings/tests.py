@@ -1,7 +1,7 @@
 from datetime import timedelta
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import SimpleTestCase, TestCase
 from django.utils import timezone
 
 from research_groups.models import (
@@ -18,9 +18,11 @@ from .models import (
 from .services import (
     MeetingDomainError,
     add_meeting_participant,
+    derive_meeting_item_title,
     create_meeting,
     create_meeting_item,
     end_meeting,
+    meeting_item_is_content_authored,
     remove_meeting_participant,
     reopen_meeting,
     start_meeting,
@@ -593,3 +595,388 @@ class MeetingItemContentPersistenceTest(TestCase):
             item.content,
             "Renamed title\n\nRenamed notes.",
         )
+
+
+class MeetingItemTitleDerivationTest(SimpleTestCase):
+    """Deterministic title derivation from canonical Markdown content."""
+
+    def test_plain_line(self):
+        self.assertEqual(
+            derive_meeting_item_title("Discuss the budget"),
+            "Discuss the budget",
+        )
+
+    def test_atx_heading_markers_are_stripped(self):
+        for level in range(1, 7):
+            self.assertEqual(
+                derive_meeting_item_title(
+                    f"{'#' * level} Budget review"
+                ),
+                "Budget review",
+            )
+
+    def test_atx_closing_sequence_is_stripped(self):
+        self.assertEqual(
+            derive_meeting_item_title("## Closing ##"),
+            "Closing",
+        )
+
+    def test_inline_formatting_is_stripped(self):
+        self.assertEqual(
+            derive_meeting_item_title("**Bold** and *italic* end"),
+            "Bold and italic end",
+        )
+        self.assertEqual(
+            derive_meeting_item_title("~~Struck~~ sample"),
+            "Struck sample",
+        )
+
+    def test_code_spans_keep_their_text(self):
+        self.assertEqual(
+            derive_meeting_item_title("`code` sample"),
+            "code sample",
+        )
+
+    def test_links_and_images_keep_visible_text(self):
+        self.assertEqual(
+            derive_meeting_item_title(
+                "[Forecast](https://example.org)"
+            ),
+            "Forecast",
+        )
+        self.assertEqual(
+            derive_meeting_item_title("![Diagram](img.png)"),
+            "Diagram",
+        )
+
+    def test_list_markers_are_stripped(self):
+        self.assertEqual(
+            derive_meeting_item_title("- First bullet"),
+            "First bullet",
+        )
+        self.assertEqual(
+            derive_meeting_item_title("1. Step one"),
+            "Step one",
+        )
+        self.assertEqual(
+            derive_meeting_item_title("12) Step twelve"),
+            "Step twelve",
+        )
+
+    def test_task_list_checkboxes_are_stripped(self):
+        self.assertEqual(
+            derive_meeting_item_title("- [x] Done task"),
+            "Done task",
+        )
+        self.assertEqual(
+            derive_meeting_item_title("1. [ ] Open task"),
+            "Open task",
+        )
+
+    def test_blockquote_prefix_is_stripped(self):
+        self.assertEqual(
+            derive_meeting_item_title("> Quoted line"),
+            "Quoted line",
+        )
+
+    def test_first_meaningful_line_wins(self):
+        self.assertEqual(
+            derive_meeting_item_title("\n\n## After blanks"),
+            "After blanks",
+        )
+        self.assertEqual(
+            derive_meeting_item_title("---\n\n## Title"),
+            "Title",
+        )
+
+    def test_lines_without_meaningful_text_yield_none(self):
+        for content in (
+            "",
+            "   ",
+            "\n  \n",
+            "---",
+            "***",
+            "___",
+            "=====",
+            "##",
+            "###",
+            "**",
+            "```\ncode\n```",
+            "- ",
+        ):
+            with self.subTest(content=content):
+                self.assertIsNone(derive_meeting_item_title(content))
+
+    def test_derivation_never_invents_text(self):
+        # Only syntax, no visible text: no title is invented.
+        self.assertIsNone(derive_meeting_item_title("```\n```\n~~~"))
+
+    def test_long_lines_are_truncated_to_the_title_limit(self):
+        long_text = "w" * 300
+        derived = derive_meeting_item_title(long_text)
+        self.assertEqual(len(derived), 255)
+        self.assertEqual(derived, "w" * 255)
+
+    def test_truncation_rstrips_trailing_whitespace(self):
+        text = ("w" * 250) + "   "
+        derived = derive_meeting_item_title(text)
+        self.assertEqual(derived, "w" * 250)
+
+    def test_derivation_is_deterministic(self):
+        content = "## A\n\n- b\n"
+        self.assertEqual(
+            derive_meeting_item_title(content),
+            derive_meeting_item_title(content),
+        )
+
+
+class MeetingItemContentWriteContractTest(TestCase):
+    """Canonical Markdown content writes at the service layer.
+
+    ``content`` is the authoritative write field: it is stored
+    verbatim, the title is derived, the notes compatibility value is
+    empty, and legacy title/notes writes against a content-authored
+    item are rejected explicitly (docs/domain/meetings.md §17).
+    """
+
+    def setUp(self):
+        self.alex = User.objects.create_user(
+            username="alex-content-write",
+            password="Pass1!",
+        )
+        self.group = ResearchGroup.objects.create(
+            name="Content Write Research Group",
+            created_by=self.alex,
+        )
+        ResearchGroupMembership.objects.create(
+            research_group=self.group,
+            user=self.alex,
+            role=ResearchGroupMembership.Role.ADMIN,
+        )
+        self.scheduled_at = (
+            timezone.now() + timedelta(days=1)
+        )
+        self.meeting = create_meeting(
+            research_group=self.group,
+            actor=self.alex,
+            title="FG Weekly",
+            scheduled_at=self.scheduled_at,
+        )
+
+    def create_item(self, **kwargs):
+        return create_meeting_item(
+            meeting=self.meeting,
+            meeting_section=MeetingSection.objects.get(
+                meeting=self.meeting,
+            ),
+            actor=self.alex,
+            **kwargs,
+        )
+
+    # ── Content-based creation ─────────────────────────────────
+
+    def test_create_with_content_stores_it_verbatim(self):
+        content = "## Budget review\n\nLong **body**."
+        item = self.create_item(content=content)
+
+        self.assertEqual(item.content, content)
+        self.assertEqual(item.title, "Budget review")
+        self.assertEqual(item.notes, "")
+        self.assertTrue(meeting_item_is_content_authored(item))
+
+    def test_create_with_content_only_needs_no_title_or_notes(self):
+        item = self.create_item(content="Plain discussion.")
+
+        self.assertEqual(item.title, "Plain discussion.")
+        self.assertEqual(item.notes, "")
+        # A single plain line is fully represented by the legacy
+        # pair, so the item is NOT content-authored: legacy writes
+        # on it stay lossless.
+        self.assertFalse(meeting_item_is_content_authored(item))
+
+    def test_create_with_neither_title_nor_content_is_rejected(self):
+        with self.assertRaises(MeetingDomainError):
+            self.create_item()
+
+    def test_create_with_both_contracts_is_rejected(self):
+        with self.assertRaises(MeetingDomainError):
+            self.create_item(
+                title="First",
+                content="## First",
+            )
+        self.assertFalse(
+            MeetingItem.objects.filter(
+                meeting=self.meeting,
+            ).exists()
+        )
+
+    def test_create_with_empty_or_whitespace_content_is_rejected(self):
+        for content in ["", "   ", "\n\n"]:
+            with self.subTest(content=content):
+                with self.assertRaises(MeetingDomainError):
+                    self.create_item(content=content)
+        self.assertFalse(
+            MeetingItem.objects.filter(
+                meeting=self.meeting,
+            ).exists()
+        )
+
+    def test_create_with_underivable_content_is_rejected(self):
+        with self.assertRaises(MeetingDomainError):
+            self.create_item(content="---\n***")
+        self.assertFalse(
+            MeetingItem.objects.filter(
+                meeting=self.meeting,
+            ).exists()
+        )
+
+    def test_create_with_long_content_is_not_truncated(self):
+        content = "## Head\n\n" + "paragraph line.\n" * 100
+        item = self.create_item(content=content)
+
+        self.assertGreater(len(item.content), 255)
+        self.assertEqual(item.content, content)
+        self.assertLessEqual(len(item.title), 255)
+
+    # ── Content-based updates ──────────────────────────────────
+
+    def test_update_with_content_replaces_it_verbatim(self):
+        item = self.create_item(title="Legacy", notes="Old.")
+
+        new_content = "## Rewritten\n\nNew **body**."
+        update_meeting_item(
+            meeting_item=item,
+            actor=self.alex,
+            content=new_content,
+        )
+        item.refresh_from_db()
+
+        self.assertEqual(item.content, new_content)
+        self.assertEqual(item.title, "Rewritten")
+        self.assertEqual(item.notes, "")
+        self.assertTrue(meeting_item_is_content_authored(item))
+
+    def test_update_with_content_repeated_writes_have_no_drift(self):
+        item = self.create_item(content="## One")
+
+        for expected in ("## One\n\nBody.", "## One\n\nBody v2."):
+            update_meeting_item(
+                meeting_item=item,
+                actor=self.alex,
+                content=expected,
+            )
+            item.refresh_from_db()
+            self.assertEqual(item.content, expected)
+
+    def test_update_with_empty_content_is_rejected(self):
+        item = self.create_item(title="Legacy")
+
+        with self.assertRaises(MeetingDomainError):
+            update_meeting_item(
+                meeting_item=item,
+                actor=self.alex,
+                content="   ",
+            )
+
+        item.refresh_from_db()
+        self.assertEqual(item.content, "Legacy")
+
+    def test_update_with_underivable_content_is_rejected(self):
+        item = self.create_item(title="Legacy")
+
+        with self.assertRaises(MeetingDomainError):
+            update_meeting_item(
+                meeting_item=item,
+                actor=self.alex,
+                content="---",
+            )
+
+        item.refresh_from_db()
+        self.assertEqual(item.content, "Legacy")
+
+    def test_update_with_both_contracts_is_rejected(self):
+        item = self.create_item(title="Legacy")
+
+        with self.assertRaises(MeetingDomainError):
+            update_meeting_item(
+                meeting_item=item,
+                actor=self.alex,
+                content="## New",
+                title="New",
+            )
+
+        item.refresh_from_db()
+        self.assertEqual(item.content, "Legacy")
+
+    # ── Legacy writes against content-authored items ───────────
+
+    def _content_authored_item(self):
+        return self.create_item(
+            content="## Budget review\n\nLong **markdown** body.",
+        )
+
+    def test_legacy_title_update_of_content_authored_item_is_rejected(self):
+        item = self._content_authored_item()
+        before = (item.title, item.notes, item.content)
+
+        with self.assertRaises(MeetingDomainError):
+            update_meeting_item(
+                meeting_item=item,
+                actor=self.alex,
+                title="Something else",
+            )
+
+        item.refresh_from_db()
+        self.assertEqual(
+            (item.title, item.notes, item.content),
+            before,
+        )
+
+    def test_legacy_notes_update_of_content_authored_item_is_rejected(self):
+        item = self._content_authored_item()
+        before = (item.title, item.notes, item.content)
+
+        with self.assertRaises(MeetingDomainError):
+            update_meeting_item(
+                meeting_item=item,
+                actor=self.alex,
+                notes="A legacy note",
+            )
+
+        item.refresh_from_db()
+        self.assertEqual(
+            (item.title, item.notes, item.content),
+            before,
+        )
+
+    def test_legacy_update_of_legacy_item_still_works(self):
+        item = self.create_item(title="Legacy", notes="Old.")
+        self.assertFalse(meeting_item_is_content_authored(item))
+
+        update_meeting_item(
+            meeting_item=item,
+            actor=self.alex,
+            title="Legacy (v2)",
+        )
+        item.refresh_from_db()
+
+        self.assertEqual(item.title, "Legacy (v2)")
+        self.assertEqual(item.notes, "Old.")
+        self.assertEqual(item.content, "Legacy (v2)\n\nOld.")
+
+    def test_empty_legacy_update_is_a_no_op_on_any_item(self):
+        for item in (
+            self.create_item(title="Legacy"),
+            self._content_authored_item(),
+        ):
+            with self.subTest(title=item.title):
+                before = (item.title, item.notes, item.content)
+                update_meeting_item(
+                    meeting_item=item,
+                    actor=self.alex,
+                )
+                item.refresh_from_db()
+                self.assertEqual(
+                    (item.title, item.notes, item.content),
+                    before,
+                )

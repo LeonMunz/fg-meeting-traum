@@ -1771,28 +1771,6 @@ class MeetingParticipantDetailView(APIView):
         return Response(status=204)
 
 
-def _meeting_item_content_not_writable_response():
-    """Reject a client-supplied item ``content`` fail-closed.
-
-    During the transitional Markdown persistence phase the legacy
-    title/notes write contract is the ONLY write surface for item
-    content; ``content`` is derived from it and reported read-only.
-    A client-supplied ``content`` is therefore rejected explicitly
-    (400) instead of being silently ignored — explicit
-    Markdown-content writing arrives in a later API/domain slice.
-    """
-    return Response(
-        {
-            "error": (
-                "Meeting item content is not writable yet; it is "
-                "derived from the item's title and notes during "
-                "the transitional Markdown persistence phase."
-            )
-        },
-        status=400,
-    )
-
-
 class MeetingItemListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -1846,9 +1824,6 @@ class MeetingItemListCreateView(APIView):
         if not _has_scoped_write_access(request.user, meeting):
             return _mutation_forbidden_response()
 
-        if "content" in request.data:
-            return _meeting_item_content_not_writable_response()
-
         serializer = MeetingItemCreateSerializer(
             data=request.data,
         )
@@ -1880,13 +1855,24 @@ class MeetingItemListCreateView(APIView):
             )
 
         try:
-            item = create_meeting_item(
-                meeting=meeting,
-                meeting_section=section,
-                actor=request.user,
-                title=data["title"],
-                notes=data.get("notes", ""),
-            )
+            if "content" in data:
+                # Content contract: the canonical Markdown is
+                # authoritative; the domain service derives the
+                # title and applies the notes compatibility value.
+                item = create_meeting_item(
+                    meeting=meeting,
+                    meeting_section=section,
+                    actor=request.user,
+                    content=data["content"],
+                )
+            else:
+                item = create_meeting_item(
+                    meeting=meeting,
+                    meeting_section=section,
+                    actor=request.user,
+                    title=data["title"],
+                    notes=data.get("notes", ""),
+                )
         except MeetingDomainError as exc:
             return Response(
                 {"error": exc.message},
@@ -1960,9 +1946,6 @@ class MeetingItemDetailView(APIView):
                 status=400,
             )
 
-        if "content" in request.data:
-            return _meeting_item_content_not_writable_response()
-
         serializer = MeetingItemPatchSerializer(
             data=request.data,
         )
@@ -1987,12 +1970,22 @@ class MeetingItemDetailView(APIView):
             )
 
         try:
-            update_meeting_item(
-                meeting_item=item,
-                actor=request.user,
-                title=data.get("title"),
-                notes=data.get("notes"),
-            )
+            if "content" in data:
+                # Content contract: the canonical Markdown is
+                # authoritative; the domain service derives the
+                # title and applies the notes compatibility value.
+                update_meeting_item(
+                    meeting_item=item,
+                    actor=request.user,
+                    content=data["content"],
+                )
+            else:
+                update_meeting_item(
+                    meeting_item=item,
+                    actor=request.user,
+                    title=data.get("title"),
+                    notes=data.get("notes"),
+                )
         except MeetingDomainError as exc:
             return Response(
                 {"error": exc.message},

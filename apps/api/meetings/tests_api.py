@@ -995,7 +995,157 @@ class MeetingApiTest(TestCase):
             "First (renamed)\n\nInitial.",
         )
 
-    def test_create_rejects_client_supplied_content(self):
+    # ── Canonical Markdown content writes ───────────────────────
+
+    LONG_MARKDOWN_CONTENT = (
+        "## Budget review\n"
+        "\n"
+        "Discuss the **Q3 numbers** and the `procurement` plan.\n"
+        "\n"
+        "- GPU allocation\n"
+        "- Cloud costs\n"
+        "\n"
+        "1. Review the [forecast](https://example.org/forecast)\n"
+        "2. Agree the next step\n"
+        "\n"
+        "Second paragraph with *italic* emphasis and a\n"
+        "wrapped second line.\n"
+        "\n"
+        "A final paragraph that keeps the document comfortably beyond\n"
+        "the legacy 255-character title limit while preserving its\n"
+        "line breaks.\n"
+    )
+
+    def test_create_with_content_alone(self):
+        meeting = self.create_default_meeting()
+        self.login(self.alex)
+
+        section = MeetingSection.objects.get(meeting=meeting)
+
+        response = self.client.post(
+            f"/api/meetings/{meeting.pk}/items/",
+            {
+                "meetingSectionId": section.pk,
+                "content": "## Budget review\n\nDiscuss Q3.",
+            },
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_201_CREATED,
+        )
+
+        data = response.json()
+        item = MeetingItem.objects.get(meeting=meeting)
+
+        # The canonical Markdown is persisted verbatim...
+        self.assertEqual(
+            item.content,
+            "## Budget review\n\nDiscuss Q3.",
+        )
+        # ...the legacy title is derived from it...
+        self.assertEqual(item.title, "Budget review")
+        self.assertEqual(data["title"], "Budget review")
+        # ...and the notes compatibility value is empty.
+        self.assertEqual(item.notes, "")
+        self.assertEqual(data["contextNotes"], "")
+        # The response carries the persisted content.
+        self.assertEqual(
+            data["content"],
+            "## Budget review\n\nDiscuss Q3.",
+        )
+
+    def test_create_with_long_markdown_content_survives_round_trip(self):
+        meeting = self.create_default_meeting()
+        self.login(self.alex)
+
+        section = MeetingSection.objects.get(meeting=meeting)
+
+        response = self.client.post(
+            f"/api/meetings/{meeting.pk}/items/",
+            {
+                "meetingSectionId": section.pk,
+                "content": self.LONG_MARKDOWN_CONTENT,
+            },
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_201_CREATED,
+        )
+        self.assertGreater(len(self.LONG_MARKDOWN_CONTENT), 255)
+
+        item = MeetingItem.objects.get(meeting=meeting)
+
+        # No truncation, no silent normalization: the stored value
+        # is byte-identical to the submitted Markdown source.
+        self.assertEqual(item.content, self.LONG_MARKDOWN_CONTENT)
+        self.assertEqual(response.json()["content"], self.LONG_MARKDOWN_CONTENT)
+
+        # The title is derived deterministically from the first
+        # meaningful line and respects the 255-character limit.
+        self.assertEqual(item.title, "Budget review")
+        self.assertLessEqual(len(item.title), 255)
+
+        # A reload answers with the same value (no drift).
+        detail = self.client.get(f"/api/meeting-items/{item.pk}/")
+        self.assertEqual(detail.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            detail.json()["content"],
+            self.LONG_MARKDOWN_CONTENT,
+        )
+
+    def test_create_with_content_derives_title_from_first_meaningful_line(self):
+        meeting = self.create_default_meeting()
+        self.login(self.alex)
+
+        section = MeetingSection.objects.get(meeting=meeting)
+
+        response = self.client.post(
+            f"/api/meetings/{meeting.pk}/items/",
+            {
+                "meetingSectionId": section.pk,
+                "content": "\n\n- **Action** items\n\nbody",
+            },
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_201_CREATED,
+        )
+        self.assertEqual(response.json()["title"], "Action items")
+
+    def test_content_leading_and_trailing_whitespace_is_preserved(self):
+        meeting = self.create_default_meeting()
+        self.login(self.alex)
+
+        section = MeetingSection.objects.get(meeting=meeting)
+
+        # The submitted Markdown source is stored EXACTLY: no
+        # transport-level trimming of leading/trailing whitespace.
+        submitted = "\n## Preserved\n\nbody\n\n"
+        response = self.client.post(
+            f"/api/meetings/{meeting.pk}/items/",
+            {
+                "meetingSectionId": section.pk,
+                "content": submitted,
+            },
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_201_CREATED,
+        )
+        item = MeetingItem.objects.get(meeting=meeting)
+        self.assertEqual(item.content, submitted)
+        self.assertEqual(response.json()["content"], submitted)
+        self.assertEqual(item.title, "Preserved")
+
+    def test_create_rejects_mixed_content_and_title(self):
         meeting = self.create_default_meeting()
         self.login(self.alex)
 
@@ -1015,12 +1165,233 @@ class MeetingApiTest(TestCase):
             response.status_code,
             status.HTTP_400_BAD_REQUEST,
         )
-        self.assertIn("error", response.json())
+        self.assertIn("content", response.json())
         self.assertFalse(
             MeetingItem.objects.filter(meeting=meeting).exists()
         )
 
-    def test_patch_rejects_client_supplied_content(self):
+    def test_create_rejects_mixed_content_and_notes(self):
+        meeting = self.create_default_meeting()
+        self.login(self.alex)
+
+        section = MeetingSection.objects.get(meeting=meeting)
+
+        response = self.client.post(
+            f"/api/meetings/{meeting.pk}/items/",
+            {
+                "meetingSectionId": section.pk,
+                "notes": "Legacy notes",
+                "content": "# Explicit markdown",
+            },
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+        self.assertIn("content", response.json())
+        self.assertFalse(
+            MeetingItem.objects.filter(meeting=meeting).exists()
+        )
+
+    def test_create_rejects_content_without_any_field(self):
+        meeting = self.create_default_meeting()
+        self.login(self.alex)
+
+        section = MeetingSection.objects.get(meeting=meeting)
+
+        response = self.client.post(
+            f"/api/meetings/{meeting.pk}/items/",
+            {"meetingSectionId": section.pk},
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+        self.assertIn("title", response.json())
+        self.assertFalse(
+            MeetingItem.objects.filter(meeting=meeting).exists()
+        )
+
+    def test_create_rejects_empty_and_whitespace_content(self):
+        meeting = self.create_default_meeting()
+        self.login(self.alex)
+
+        section = MeetingSection.objects.get(meeting=meeting)
+
+        for content in ["", "   ", "\n\n  \n"]:
+            response = self.client.post(
+                f"/api/meetings/{meeting.pk}/items/",
+                {
+                    "meetingSectionId": section.pk,
+                    "content": content,
+                },
+                format="json",
+            )
+            self.assertEqual(
+                response.status_code,
+                status.HTTP_400_BAD_REQUEST,
+            )
+            self.assertIn("content", response.json())
+
+        self.assertFalse(
+            MeetingItem.objects.filter(meeting=meeting).exists()
+        )
+
+    def test_create_rejects_content_without_derivable_title(self):
+        meeting = self.create_default_meeting()
+        self.login(self.alex)
+
+        section = MeetingSection.objects.get(meeting=meeting)
+
+        for content in ["---", "**\n**", "##\n\n###", "```\n```\n~~~"]:
+            response = self.client.post(
+                f"/api/meetings/{meeting.pk}/items/",
+                {
+                    "meetingSectionId": section.pk,
+                    "content": content,
+                },
+                format="json",
+            )
+            self.assertEqual(
+                response.status_code,
+                status.HTTP_400_BAD_REQUEST,
+            )
+            self.assertIn("error", response.json())
+
+        self.assertFalse(
+            MeetingItem.objects.filter(meeting=meeting).exists()
+        )
+
+    def test_patch_with_content_alone_updates_legacy_item(self):
+        meeting = self.create_default_meeting()
+        section = MeetingSection.objects.get(meeting=meeting)
+        item = create_meeting_item(
+            meeting=meeting,
+            meeting_section=section,
+            actor=self.alex,
+            title="First",
+            notes="Initial.",
+        )
+
+        self.login(self.alex)
+
+        response = self.client.patch(
+            f"/api/meeting-items/{item.pk}/",
+            {"content": "## Rewritten\n\nNew body."},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        item.refresh_from_db()
+        self.assertEqual(item.content, "## Rewritten\n\nNew body.")
+        self.assertEqual(item.title, "Rewritten")
+        # The content write is authoritative: the legacy notes
+        # compatibility value is reset to empty.
+        self.assertEqual(item.notes, "")
+
+        data = response.json()
+        self.assertEqual(data["content"], "## Rewritten\n\nNew body.")
+        self.assertEqual(data["title"], "Rewritten")
+        self.assertEqual(data["contextNotes"], "")
+
+    def test_patch_content_repeated_edits_without_drift(self):
+        meeting = self.create_default_meeting()
+        self.login(self.alex)
+
+        section = MeetingSection.objects.get(meeting=meeting)
+        item = create_meeting_item(
+            meeting=meeting,
+            meeting_section=section,
+            actor=self.alex,
+            content="## One",
+        )
+
+        first_edit = "## One\n\nEdited body."
+        second_edit = "## One renamed\n\nEdited body.\n\nMore."
+
+        for expected in (first_edit, second_edit):
+            response = self.client.patch(
+                f"/api/meeting-items/{item.pk}/",
+                {"content": expected},
+                format="json",
+            )
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            self.assertEqual(response.json()["content"], expected)
+
+        # A reload answers with the exact last submitted source.
+        item.refresh_from_db()
+        self.assertEqual(item.content, second_edit)
+        detail = self.client.get(f"/api/meeting-items/{item.pk}/")
+        self.assertEqual(
+            detail.json()["content"],
+            second_edit,
+        )
+
+    def test_patch_rejects_mixed_content_and_legacy_fields(self):
+        meeting = self.create_default_meeting()
+        section = MeetingSection.objects.get(meeting=meeting)
+        item = create_meeting_item(
+            meeting=meeting,
+            meeting_section=section,
+            actor=self.alex,
+            title="First",
+        )
+
+        self.login(self.alex)
+
+        for payload in (
+            {"content": "## A", "title": "A"},
+            {"content": "## A", "notes": "notes"},
+        ):
+            response = self.client.patch(
+                f"/api/meeting-items/{item.pk}/",
+                payload,
+                format="json",
+            )
+            self.assertEqual(
+                response.status_code,
+                status.HTTP_400_BAD_REQUEST,
+            )
+            self.assertIn("content", response.json())
+
+        # The rejection leaves the item unmodified.
+        item.refresh_from_db()
+        self.assertEqual(item.title, "First")
+        self.assertEqual(item.content, "First")
+
+    def test_patch_rejects_empty_and_whitespace_content(self):
+        meeting = self.create_default_meeting()
+        section = MeetingSection.objects.get(meeting=meeting)
+        item = create_meeting_item(
+            meeting=meeting,
+            meeting_section=section,
+            actor=self.alex,
+            title="First",
+        )
+
+        self.login(self.alex)
+
+        for content in ["", "   ", "\n"]:
+            response = self.client.patch(
+                f"/api/meeting-items/{item.pk}/",
+                {"content": content},
+                format="json",
+            )
+            self.assertEqual(
+                response.status_code,
+                status.HTTP_400_BAD_REQUEST,
+            )
+            self.assertIn("content", response.json())
+
+        item.refresh_from_db()
+        self.assertEqual(item.content, "First")
+
+    def test_patch_rejects_content_without_derivable_title(self):
         meeting = self.create_default_meeting()
         section = MeetingSection.objects.get(meeting=meeting)
         item = create_meeting_item(
@@ -1034,7 +1405,7 @@ class MeetingApiTest(TestCase):
 
         response = self.client.patch(
             f"/api/meeting-items/{item.pk}/",
-            {"content": "# Explicit markdown"},
+            {"content": "---\n---"},
             format="json",
         )
 
@@ -1044,9 +1415,97 @@ class MeetingApiTest(TestCase):
         )
         self.assertIn("error", response.json())
 
-        # The rejection leaves the derived content untouched.
         item.refresh_from_db()
         self.assertEqual(item.content, "First")
+
+    def test_legacy_update_of_content_authored_item_is_rejected(self):
+        meeting = self.create_default_meeting()
+        self.login(self.alex)
+
+        section = MeetingSection.objects.get(meeting=meeting)
+        item = create_meeting_item(
+            meeting=meeting,
+            meeting_section=section,
+            actor=self.alex,
+            content="## Budget review\n\nLong **markdown** body.",
+        )
+        self.assertEqual(item.title, "Budget review")
+
+        # A legacy title write would re-derive content from the lossy
+        # legacy pair and destroy the Markdown: it is rejected
+        # explicitly, with no partial modification.
+        response = self.client.patch(
+            f"/api/meeting-items/{item.pk}/",
+            {"title": "Budget review (edited)"},
+            format="json",
+        )
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+        self.assertIn("error", response.json())
+
+        item.refresh_from_db()
+        self.assertEqual(item.title, "Budget review")
+        self.assertEqual(item.notes, "")
+        self.assertEqual(
+            item.content,
+            "## Budget review\n\nLong **markdown** body.",
+        )
+
+    def test_legacy_notes_update_of_content_authored_item_is_rejected(self):
+        meeting = self.create_default_meeting()
+        self.login(self.alex)
+
+        section = MeetingSection.objects.get(meeting=meeting)
+        item = create_meeting_item(
+            meeting=meeting,
+            meeting_section=section,
+            actor=self.alex,
+            content="## Budget review\n\nLong **markdown** body.",
+        )
+
+        response = self.client.patch(
+            f"/api/meeting-items/{item.pk}/",
+            {"notes": "A legacy note"},
+            format="json",
+        )
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+        item.refresh_from_db()
+        self.assertEqual(item.notes, "")
+        self.assertEqual(
+            item.content,
+            "## Budget review\n\nLong **markdown** body.",
+        )
+
+    def test_legacy_write_of_legacy_item_still_rederives_content(self):
+        meeting = self.create_default_meeting()
+        self.login(self.alex)
+
+        section = MeetingSection.objects.get(meeting=meeting)
+        item = create_meeting_item(
+            meeting=meeting,
+            meeting_section=section,
+            actor=self.alex,
+            title="First",
+            notes="Initial.",
+        )
+
+        response = self.client.patch(
+            f"/api/meeting-items/{item.pk}/",
+            {"title": "First (renamed)", "notes": "More."},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        item.refresh_from_db()
+        self.assertEqual(item.title, "First (renamed)")
+        self.assertEqual(item.notes, "More.")
+        self.assertEqual(item.content, "First (renamed)\n\nMore.")
 
     def test_group_member_can_list_meeting_items(self):
         meeting = self.create_default_meeting()

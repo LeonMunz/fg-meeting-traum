@@ -2748,43 +2748,109 @@ updated_at
 `position` is unique within a Section. Items are ordered by
 `position`, then `id`.
 
-### Markdown content — transitional persistence (implemented)
+### Markdown content — canonical content writes (implemented)
 
-`MeetingItem.content` (API: `content`) is a full-length Markdown
-field: it stores Markdown SOURCE, never rendered HTML, and it is
-unbounded — the 255-character limit applies to `title`, NOT to
-`content`.
+`MeetingItem.content` (API: `content`) is the canonical full-length
+Markdown field for an agenda item: it stores Markdown SOURCE, never
+rendered HTML, and it is unbounded — the 255-character limit applies
+to `title`, NOT to `content`.
 
-Transition rules (migration `meetings/0021`):
+**Write contract (authoritative).** The item create and PATCH
+endpoints each accept exactly ONE of two mutually exclusive write
+contracts; a request that supplies both is rejected with an explicit
+`400` validation error and no partial modification:
 
-- **Backfill:** every existing row is backfilled from its stored
-  legacy pair — `content` is the `title`, followed by the `notes`
-  separated by a single blank line when the notes are present
-  (whitespace-only notes count as absent). The stored `title` and
-  `notes` values are NEVER rewritten by the backfill; multiline
-  notes are preserved verbatim, so existing records remain readable
-  and no title or notes data is lost.
-- **Transitional synchronization:** every supported creation and
-  update (`create_meeting_item` and `update_meeting_item`, including
-  the follow-up target-item creation) re-derives `content` from the
-  effective `(title, notes)` pair, so the persisted Markdown stays
-  synchronized with the legacy fields and no second source of truth
-  can drift.
-- **`content` is NOT yet the authoritative write field.** The legacy
-  `title` / `notes` write contract remains authoritative: the item
-  API accepts `title` / `notes` exactly as before, reports
-  `content` read-only in the existing MeetingItem representation,
-  and rejects a client-supplied `content` on item create/update with
-  `400`. Explicit Markdown-content writing is a later
-  API/domain slice, and no automatic title derivation from Markdown
-  content exists yet.
-- The existing semantics of `title` and `notes` are unchanged
-  everywhere: follow-up creation and follow-up pristine detection,
-  work-item conversion, audit event payloads, Meeting execution,
-  topic ordering, and ownership.
-- The read representation gains `content` alongside the unchanged
-  `title`, `contextNotes`, and the MeetingNote `notes` stream; no
-  authorization or lifecycle rule changes.
+- **Content contract** — the request supplies `content`. `content`
+  is AUTHORITATIVE: the submitted Markdown source is stored
+  verbatim (no truncation, no normalization, no transport-level
+  trimming), the `title` is DERIVED from it (below), and `notes`
+  takes the empty compatibility value. The client does not supply
+  `title` or `notes`.
+- **Legacy contract** — the request supplies only `title` and/or
+  `notes` (no `content`). The existing legacy write behavior is
+  preserved unchanged: `title` is required on create (non-blank,
+  max 255), `notes` is optional, and `content` is re-derived from
+  the effective `(title, notes)` pair — the title, followed by the
+  notes separated by a single blank line when the notes are present
+  (whitespace-only notes count as absent).
+
+**Content validation.** Empty and whitespace-only `content` is
+rejected with an explicit `400`. Content from which no title can be
+derived (below) is also rejected with an explicit `400` rather than
+silently inventing a label.
+
+**Title derivation (compatibility representation).** For a content
+write, the stored `title` is derived deterministically from the
+Markdown source so the legacy `title` field keeps a human-readable,
+non-empty value:
+
+- The first line that carries meaningful visible text is used; the
+  derivation strips the basic line-level syntax (ATX heading
+  markers incl. the closing sequence, list markers, task-list
+  checkboxes, blockquote prefixes, fence delimiters) and the basic
+  inline syntax (images/links keep their visible text, code spans
+  keep their text, bold/italic/strikethrough markers are removed).
+- The derived value is truncated to the 255-character title limit
+  (trailing whitespace is rstripped after truncation). The canonical
+  `content` is NEVER truncated.
+- Lines that carry no meaningful text (blank lines, horizontal
+  rules, setext underlines, bare heading markers) are skipped, and
+  lines inside fenced code blocks never yield a title. If no line
+  yields text, the write is rejected.
+- The derivation is a pure function of the content: repeated writes
+  of the same content derive the same title (no drift).
+
+**Notes compatibility value.** A content write stores `notes` as the
+empty string; the read representation's `contextNotes` therefore
+reports empty for content-authored items. This is a compatibility
+projection for existing consumers, NOT a second copy of the
+document: the canonical Markdown content is the only place where the
+full text (including all formatting) lives. No Markdown formatting is
+ever irreversibly removed from `content`.
+
+**Content-authored items and the legacy write path.** An item whose
+stored `content` is NOT exactly the derivation from its stored
+`title` / `notes` pair is a *content-authored* item: the legacy pair
+is then a lossy compatibility projection of the canonical Markdown.
+
+- A legacy `title` / `notes` UPDATE against a content-authored item
+  is REJECTED explicitly (`400`, no partial modification):
+  re-deriving `content` from the lossy pair would destroy Markdown
+  information, and silent content loss is not allowed.
+- Legacy writes against a legacy-consistent item (stored `content`
+  equals the derivation from its stored pair — including a
+  single-plain-line content item whose document is exactly one
+  line) remain lossless and keep the existing re-derivation
+  behavior.
+- Legacy CREATE is unchanged (a create can never target an existing
+  item).
+
+**Follow-up content preservation.** When a content-authored source
+item is scheduled for follow-up, the generated target item copies
+the source's canonical `content` VERBATIM (its derived title equals
+the source's stored title; its `notes` are the empty compatibility
+value), so the original Markdown survives the follow-up. A
+legacy-consistent source keeps the existing behavior: the target
+carries the source title only. The follow-up pristine-detection
+check additionally requires the target's stored content to equal the
+content a freshly scheduled target would carry (see §18a), so an
+edited target content is drift — the target is preserved, never
+silently deleted.
+
+**Backfill (migration `meetings/0021`, historical).** Every existing
+row was backfilled from its stored legacy pair — the title, followed
+by the notes separated by a single blank line when the notes are
+present (whitespace-only notes count as absent). The stored `title`
+and `notes` values were NEVER rewritten by the backfill; multiline
+notes are preserved verbatim, so existing records remain readable
+and no title or notes data was lost.
+
+The read representation carries `content` alongside the unchanged
+`title`, `contextNotes`, and the MeetingNote `notes` stream; the
+separate MeetingNote entry stream is unchanged. Authorization and
+lifecycle rules are unchanged, and the legacy API fields keep their
+existing meaning, so existing clients that create or edit legacy
+items continue functioning as before.
 
 ### Current item and outcome (implemented)
 
@@ -2890,7 +2956,9 @@ in the current model:
 - `decision_markdown`,
 - a linked `Topic`.
 
-Creating an item requires only a title (plus its Section).
+Creating an item requires its Section plus exactly one of the two
+write contracts described above: the legacy `title` (plus optional
+`notes`) or the canonical Markdown `content`.
 
 ---
 
@@ -2986,8 +3054,14 @@ later `not_discussed` item in canonical agenda order, across Section boundaries
 and skipping `done` / `follow_up` items. With no later open item, current becomes
 `null`; the search never wraps. Scheduling a non-current source leaves current
 unchanged. The target Meeting's current pointer is never changed. The new target
-item carries the source title, starts as `not_discussed`, and does not copy item
-Notes, discussion Notes, linked Work Items, decisions, or other history.
+item starts as `not_discussed` and does not copy item Notes,
+discussion Notes, linked Work Items, decisions, or other history.
+Its title and content follow the content-write contract
+(section 17): a content-authored source copies its canonical
+`content` VERBATIM into the target item (the derived title equals
+the source's stored title); a legacy-consistent source keeps the
+existing behavior, and the target carries the source title only
+(no notes).
 
 An identical retry for the same source, target Meeting, and target Section
 returns the existing active schedule without creating another target item or
@@ -3071,6 +3145,11 @@ provably untouched when **all** of the following hold:
 - the target item's ``outcome`` is still ``not_discussed``;
 - the target item's ``title`` still equals the source item's title;
 - the target item's ``notes`` field is empty;
+- the target item's ``content`` still equals the content a
+  freshly scheduled target would carry: the source's canonical
+  ``content`` verbatim for a content-authored source, or the
+  source title alone for a legacy-consistent source (editing the
+  target's Markdown is drift); and
 - the target item has no ``MeetingNote`` records;
 - the target item has no ``MeetingItemWorkItem`` links;
 - the target item is still in the ``MeetingSection`` recorded on the

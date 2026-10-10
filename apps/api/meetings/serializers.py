@@ -780,10 +780,10 @@ class MeetingItemSerializer(serializers.ModelSerializer):
         read_only=True,
         allow_blank=True,
     )
-    # Transitional Markdown content (read-only for now): the legacy
-    # title/notes write contract remains authoritative, and explicit
-    # Markdown-content writing is a later API/domain slice, so this
-    # representation field is never writable here.
+    # Canonical Markdown content. The create and PATCH item
+    # serializers own the write contract (``content`` alone, or the
+    # legacy ``title`` / ``notes`` pair — never both); this read
+    # representation reports the persisted Markdown verbatim.
     content = serializers.CharField(
         read_only=True,
         allow_blank=True,
@@ -888,19 +888,100 @@ class MeetingItemSerializer(serializers.ModelSerializer):
         return MeetingItemFollowUpSerializer(schedule).data
 
 
-class MeetingItemCreateSerializer(serializers.Serializer):
+# The two MeetingItem write contracts are mutually exclusive
+# (docs/domain/meetings.md §17): a request either supplies the
+# canonical Markdown ``content`` or the legacy ``title`` / ``notes``
+# pair — never both. The cross-field rules shared by the create and
+# PATCH serializers live here.
+#
+# ``content`` uses a verbatim CharField: DRF's CharField trims
+# leading/trailing whitespace in ``to_internal_value``, which would
+# silently normalize the canonical Markdown source. The content
+# contract stores the submitted source EXACTLY, so the field
+# performs no trimming; emptiness is validated explicitly by the
+# write-contract checks.
+class VerbatimCharField(serializers.CharField):
+    def to_internal_value(self, data):
+        # We are lenient with allowing basic numerics to be coerced
+        # into strings (mirroring DRF's CharField), but we do NOT
+        # trim the result.
+        if isinstance(data, bool) or not isinstance(
+            data,
+            (str, int, float),
+        ):
+            self.fail("invalid")
+        return str(data)
+
+
+class _MeetingItemWriteContractMixin:
+    def validate(self, attrs):
+        initial = (
+            self.initial_data
+            if isinstance(self.initial_data, dict)
+            else {}
+        )
+        supplied_content = "content" in initial
+        supplied_legacy = "title" in initial or "notes" in initial
+
+        if supplied_content and supplied_legacy:
+            raise serializers.ValidationError(
+                {
+                    "content": (
+                        "content cannot be combined with the legacy "
+                        "title or notes fields."
+                    )
+                }
+            )
+
+        # Field-level validation already rejected non-string or
+        # missing content; this catches the empty / whitespace-only
+        # value explicitly.
+        if supplied_content and "content" in attrs:
+            if not attrs["content"].strip():
+                raise serializers.ValidationError(
+                    {"content": "content must not be empty."}
+                )
+
+        return attrs
+
+
+class MeetingItemCreateSerializer(
+    _MeetingItemWriteContractMixin,
+    serializers.Serializer,
+):
     meetingSectionId = serializers.IntegerField(min_value=1)
     title = serializers.CharField(
         max_length=255,
         allow_blank=False,
+        required=False,
     )
     notes = serializers.CharField(
         required=False,
         allow_blank=True,
     )
+    content = VerbatimCharField(
+        required=False,
+        allow_blank=True,
+    )
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        initial = (
+            self.initial_data
+            if isinstance(self.initial_data, dict)
+            else {}
+        )
+        if "content" not in initial and "title" not in initial:
+            raise serializers.ValidationError(
+                {"title": "Either title or content is required."}
+            )
+        return attrs
 
 
-class MeetingItemPatchSerializer(serializers.Serializer):
+class MeetingItemPatchSerializer(
+    _MeetingItemWriteContractMixin,
+    serializers.Serializer,
+):
     # ``outcome`` is intentionally NOT part of the generic PATCH
     # contract: Live MeetingItem outcomes are driven exclusively by
     # the canonical domain actions (start / focus / done / follow-up).
@@ -910,6 +991,10 @@ class MeetingItemPatchSerializer(serializers.Serializer):
         required=False,
     )
     notes = serializers.CharField(
+        required=False,
+        allow_blank=True,
+    )
+    content = VerbatimCharField(
         required=False,
         allow_blank=True,
     )

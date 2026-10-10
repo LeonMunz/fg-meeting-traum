@@ -151,6 +151,52 @@ class ScheduleMeetingItemFollowUpTest(TestCase):
         )
         self.assertEqual(follow_up.created_by, self.actor)
 
+    def test_content_authored_source_content_survives_follow_up(self):
+        # A content-authored source (canonical Markdown beyond the
+        # legacy pair) copies its content verbatim into the target
+        # item, so the original Markdown survives the follow-up.
+        self.source_item = create_meeting_item(
+            meeting=self.source_meeting,
+            meeting_section=self.source_section,
+            actor=self.actor,
+            content=(
+                "## Continue the experiment\n"
+                "\n"
+                "Long **markdown** body with a\n"
+                "- bullet list\n"
+                "and a [link](https://example.org)."
+            ),
+        )
+        self.assertEqual(self.source_item.title, "Continue the experiment")
+
+        follow_up = self._schedule()
+
+        target_item = follow_up.target_meeting_item
+        self.assertEqual(target_item.meeting, self.target_meeting)
+        self.assertEqual(target_item.meeting_section, self.target_section)
+        self.assertEqual(target_item.title, self.source_item.title)
+        self.assertEqual(target_item.notes, "")
+        self.assertEqual(
+            target_item.content,
+            self.source_item.content,
+        )
+        self.assertEqual(
+            target_item.outcome,
+            MeetingItem.Outcome.NOT_DISCUSSED,
+        )
+        self.assertTrue(follow_up.target_pristine)
+
+    def test_legacy_source_follow_up_target_keeps_title_only_content(self):
+        # A legacy-consistent source keeps the existing behavior:
+        # the target carries the source title only (no notes), so
+        # its content is the derivation from that pair.
+        follow_up = self._schedule()
+
+        target_item = follow_up.target_meeting_item
+        self.assertEqual(target_item.title, self.source_item.title)
+        self.assertEqual(target_item.notes, "")
+        self.assertEqual(target_item.content, self.source_item.title)
+
     def test_scheduling_current_advances_across_sections_and_skips_resolved(self):
         later_source_item = create_meeting_item(
             meeting=self.source_meeting,
