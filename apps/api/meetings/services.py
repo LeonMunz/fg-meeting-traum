@@ -2622,6 +2622,23 @@ def add_meeting_participant(
     )
 
 
+def meeting_item_content_from_legacy(title, notes):
+    """Transitional MeetingItem Markdown content from legacy fields.
+
+    While the legacy ``title`` / ``notes`` write contract remains
+    authoritative (docs/domain/meetings.md §17), the persisted
+    Markdown ``content`` is derived from the stored pair: the title,
+    followed by the notes separated by a single blank line when the
+    notes are present (whitespace-only notes count as absent). The
+    rule only builds the derived value — it never rewrites the stored
+    ``title`` / ``notes`` columns themselves.
+    """
+    notes = (notes or "").strip()
+    if not notes:
+        return title
+    return f"{title}\n\n{notes}"
+
+
 @transaction.atomic
 def create_meeting_item(
     *,
@@ -2675,6 +2692,10 @@ def create_meeting_item(
         meeting_section=meeting_section,
         title=title,
         notes=notes.strip(),
+        # Transitional Markdown persistence: content is derived from
+        # the legacy pair; the legacy write contract stays
+        # authoritative (see meeting_item_content_from_legacy).
+        content=meeting_item_content_from_legacy(title, notes),
         position=position,
         created_by=actor,
     )
@@ -3521,6 +3542,14 @@ def update_meeting_item(
         update_fields.append("notes")
 
     if update_fields:
+        # Transitional sync: while the legacy title/notes write
+        # contract remains authoritative, content is re-derived from
+        # the effective (title, notes) pair on every supported write.
+        meeting_item.content = meeting_item_content_from_legacy(
+            meeting_item.title,
+            meeting_item.notes,
+        )
+        update_fields.append("content")
         update_fields.append("updated_at")
         meeting_item.save(
             update_fields=update_fields,

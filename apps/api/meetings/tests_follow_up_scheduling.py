@@ -124,6 +124,13 @@ class ScheduleMeetingItemFollowUpTest(TestCase):
             MeetingItem.Outcome.NOT_DISCUSSED,
         )
         self.assertEqual(target_item.notes, "")
+        # The follow-up creation path initializes the target item's
+        # transitional Markdown content from the copied (title,
+        # notes) pair: title only, since the target carries no notes.
+        self.assertEqual(
+            target_item.content,
+            "Continue the experiment",
+        )
         self.assertFalse(target_item.note_relations.exists())
         self.assertFalse(target_item.work_item_relations.exists())
         self.assertEqual(

@@ -1330,13 +1330,15 @@ class MigrationMappingTest(TransactionTestCase):
                 cursor.execute(
                     "INSERT INTO meetings_item (title, notes, position,"
                     " outcome, status, created_at, updated_at,"
-                    " meeting_id, meeting_section_id, created_by_id)"
+                    " meeting_id, meeting_section_id, created_by_id,"
+                    " content)"
                     " VALUES (%s, '', %s, 'not_discussed', %s, %s, %s,"
-                    " %s, %s, %s)",
+                    " %s, %s, %s, %s)",
                     [
                         title, position, legacy_status,
                         now.isoformat(), now.isoformat(),
                         meeting.pk, section.pk, alex.pk,
+                        title,
                     ],
                 )
         pks = {}

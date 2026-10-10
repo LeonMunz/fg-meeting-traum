@@ -694,19 +694,21 @@ class LegacyMigrationTest(TransactionTestCase):
                 cursor.execute(
                     "INSERT INTO meetings_item (title, notes, position,"
                     " outcome, created_at, updated_at, meeting_id,"
-                    " meeting_section_id, created_by_id) VALUES"
-                    " (%s, '', %s, 'not_discussed', %s, %s, %s, NULL, %s)",
+                    " meeting_section_id, created_by_id, content) VALUES"
+                    " (%s, '', %s, 'not_discussed', %s, %s, %s, NULL, %s,"
+                    " %s)",
                     [title, position, now.isoformat(), now.isoformat(),
-                     meeting_a.pk, alex.pk],
+                     meeting_a.pk, alex.pk, title],
                 )
             for position, title in enumerate(["Orphan item B1", "Orphan item B2"]):
                 cursor.execute(
                     "INSERT INTO meetings_item (title, notes, position,"
                     " outcome, created_at, updated_at, meeting_id,"
-                    " meeting_section_id, created_by_id) VALUES"
-                    " (%s, '', %s, 'not_discussed', %s, %s, %s, NULL, %s)",
+                    " meeting_section_id, created_by_id, content) VALUES"
+                    " (%s, '', %s, 'not_discussed', %s, %s, %s, NULL, %s,"
+                    " %s)",
                     [title, position, now.isoformat(), now.isoformat(),
-                     meeting_b.pk, alex.pk],
+                     meeting_b.pk, alex.pk, title],
                 )
         return meeting_a, meeting_b
 

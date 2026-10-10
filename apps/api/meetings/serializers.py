@@ -780,6 +780,14 @@ class MeetingItemSerializer(serializers.ModelSerializer):
         read_only=True,
         allow_blank=True,
     )
+    # Transitional Markdown content (read-only for now): the legacy
+    # title/notes write contract remains authoritative, and explicit
+    # Markdown-content writing is a later API/domain slice, so this
+    # representation field is never writable here.
+    content = serializers.CharField(
+        read_only=True,
+        allow_blank=True,
+    )
     workItemIds = serializers.SerializerMethodField()
     followUpSchedule = serializers.SerializerMethodField()
     notes = MeetingNoteSerializer(
@@ -808,6 +816,7 @@ class MeetingItemSerializer(serializers.ModelSerializer):
             "meetingSectionId",
             "title",
             "contextNotes",
+            "content",
             "position",
             "outcome",
             "followUpSchedule",

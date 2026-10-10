@@ -386,3 +386,210 @@ class MeetingDomainTest(TestCase):
             item.notes,
             "Reviewed by the group.",
         )
+        # Transitional Markdown persistence: the update re-derives
+        # content from the effective (title, notes) pair.
+        self.assertEqual(
+            item.content,
+            "Discussion\n\nReviewed by the group.",
+        )
+
+
+class MeetingItemContentPersistenceTest(TestCase):
+    """Transitional Markdown ``content`` persistence for MeetingItem.
+
+    While the legacy title/notes write contract remains authoritative,
+    every supported creation and update initializes/synchronizes the
+    persisted Markdown ``content`` from the effective (title, notes)
+    pair: the title, followed by the notes separated by a single
+    blank line when the notes are present (docs/domain/meetings.md
+    §17). ``title`` / ``notes`` keep their existing semantics.
+    """
+
+    def setUp(self):
+        self.alex = User.objects.create_user(
+            username="alex-content",
+            password="Pass1!",
+        )
+        self.chris = User.objects.create_user(
+            username="chris-content",
+            password="Pass1!",
+        )
+
+        self.group = ResearchGroup.objects.create(
+            name="Content Research Group",
+            created_by=self.alex,
+        )
+        ResearchGroupMembership.objects.create(
+            research_group=self.group,
+            user=self.alex,
+            role=ResearchGroupMembership.Role.ADMIN,
+        )
+        ResearchGroupMembership.objects.create(
+            research_group=self.group,
+            user=self.chris,
+            role=ResearchGroupMembership.Role.MEMBER,
+        )
+        self.scheduled_at = (
+            timezone.now() + timedelta(days=1)
+        )
+
+    def create_default_meeting(self):
+        return create_meeting(
+            research_group=self.group,
+            actor=self.alex,
+            title="FG Weekly",
+            scheduled_at=self.scheduled_at,
+        )
+
+    def create_item(self, **kwargs):
+        return create_meeting_item(
+            meeting=self.meeting,
+            meeting_section=MeetingSection.objects.get(
+                meeting=self.meeting,
+            ),
+            actor=self.alex,
+            **kwargs,
+        )
+
+    def test_created_item_without_notes_carries_title_as_content(self):
+        self.meeting = self.create_default_meeting()
+
+        item = self.create_item(title="GPU procurement")
+
+        self.assertEqual(item.title, "GPU procurement")
+        self.assertEqual(item.notes, "")
+        self.assertEqual(item.content, "GPU procurement")
+
+    def test_created_item_with_notes_derives_content(self):
+        self.meeting = self.create_default_meeting()
+
+        item = self.create_item(
+            title="GPU procurement",
+            notes="Discuss scope.",
+        )
+
+        self.assertEqual(item.title, "GPU procurement")
+        self.assertEqual(item.notes, "Discuss scope.")
+        self.assertEqual(
+            item.content,
+            "GPU procurement\n\nDiscuss scope.",
+        )
+
+    def test_created_item_preserves_multiline_notes_in_content(self):
+        self.meeting = self.create_default_meeting()
+
+        notes = "line one\nline two\nline three"
+        item = self.create_item(
+            title="Multiline",
+            notes=notes,
+        )
+
+        self.assertEqual(item.notes, notes)
+        self.assertEqual(
+            item.content,
+            "Multiline\n\nline one\nline two\nline three",
+        )
+
+    def test_content_is_not_limited_to_the_title_length(self):
+        self.meeting = self.create_default_meeting()
+
+        long_notes = "x" * 500
+        item = self.create_item(
+            title="Long item",
+            notes=long_notes,
+        )
+
+        self.assertGreater(len(item.content), 255)
+        self.assertEqual(
+            item.content,
+            "Long item\n\n" + long_notes,
+        )
+
+    def test_update_title_rederives_content(self):
+        self.meeting = self.create_default_meeting()
+        item = self.create_item(
+            title="Old title",
+            notes="Context.",
+        )
+
+        update_meeting_item(
+            meeting_item=item,
+            actor=self.alex,
+            title="New title",
+        )
+        item.refresh_from_db()
+
+        self.assertEqual(item.title, "New title")
+        self.assertEqual(item.notes, "Context.")
+        self.assertEqual(item.content, "New title\n\nContext.")
+
+    def test_update_notes_rederives_content(self):
+        self.meeting = self.create_default_meeting()
+        item = self.create_item(
+            title="Title",
+            notes="First note.",
+        )
+
+        update_meeting_item(
+            meeting_item=item,
+            actor=self.alex,
+            notes="Second note.",
+        )
+        item.refresh_from_db()
+
+        self.assertEqual(item.title, "Title")
+        self.assertEqual(item.notes, "Second note.")
+        self.assertEqual(item.content, "Title\n\nSecond note.")
+
+    def test_update_clearing_notes_drops_the_separator(self):
+        self.meeting = self.create_default_meeting()
+        item = self.create_item(
+            title="Title",
+            notes="Some context.",
+        )
+
+        update_meeting_item(
+            meeting_item=item,
+            actor=self.alex,
+            notes="",
+        )
+        item.refresh_from_db()
+
+        self.assertEqual(item.notes, "")
+        self.assertEqual(item.content, "Title")
+
+    def test_update_whitespace_only_notes_counts_as_absent(self):
+        self.meeting = self.create_default_meeting()
+        item = self.create_item(title="Title")
+
+        update_meeting_item(
+            meeting_item=item,
+            actor=self.alex,
+            notes="   ",
+        )
+        item.refresh_from_db()
+
+        self.assertEqual(item.notes, "")
+        self.assertEqual(item.content, "Title")
+
+    def test_update_touching_only_one_field_keeps_the_other(self):
+        self.meeting = self.create_default_meeting()
+        item = self.create_item(
+            title="Original title",
+            notes="Original notes.",
+        )
+
+        update_meeting_item(
+            meeting_item=item,
+            actor=self.alex,
+            title="Renamed title",
+            notes="Renamed notes.",
+        )
+        item.refresh_from_db()
+
+        self.assertEqual(item.title, "Renamed title")
+        self.assertEqual(item.notes, "Renamed notes.")
+        self.assertEqual(
+            item.content,
+            "Renamed title\n\nRenamed notes.",
+        )

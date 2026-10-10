@@ -2737,6 +2737,7 @@ meeting_id
 meeting_section_id NOT NULL
 title
 notes
+content
 position
 outcome
 created_by_id
@@ -2746,6 +2747,44 @@ updated_at
 
 `position` is unique within a Section. Items are ordered by
 `position`, then `id`.
+
+### Markdown content — transitional persistence (implemented)
+
+`MeetingItem.content` (API: `content`) is a full-length Markdown
+field: it stores Markdown SOURCE, never rendered HTML, and it is
+unbounded — the 255-character limit applies to `title`, NOT to
+`content`.
+
+Transition rules (migration `meetings/0021`):
+
+- **Backfill:** every existing row is backfilled from its stored
+  legacy pair — `content` is the `title`, followed by the `notes`
+  separated by a single blank line when the notes are present
+  (whitespace-only notes count as absent). The stored `title` and
+  `notes` values are NEVER rewritten by the backfill; multiline
+  notes are preserved verbatim, so existing records remain readable
+  and no title or notes data is lost.
+- **Transitional synchronization:** every supported creation and
+  update (`create_meeting_item` and `update_meeting_item`, including
+  the follow-up target-item creation) re-derives `content` from the
+  effective `(title, notes)` pair, so the persisted Markdown stays
+  synchronized with the legacy fields and no second source of truth
+  can drift.
+- **`content` is NOT yet the authoritative write field.** The legacy
+  `title` / `notes` write contract remains authoritative: the item
+  API accepts `title` / `notes` exactly as before, reports
+  `content` read-only in the existing MeetingItem representation,
+  and rejects a client-supplied `content` on item create/update with
+  `400`. Explicit Markdown-content writing is a later
+  API/domain slice, and no automatic title derivation from Markdown
+  content exists yet.
+- The existing semantics of `title` and `notes` are unchanged
+  everywhere: follow-up creation and follow-up pristine detection,
+  work-item conversion, audit event payloads, Meeting execution,
+  topic ordering, and ownership.
+- The read representation gains `content` alongside the unchanged
+  `title`, `contextNotes`, and the MeetingNote `notes` stream; no
+  authorization or lifecycle rule changes.
 
 ### Current item and outcome (implemented)
 
