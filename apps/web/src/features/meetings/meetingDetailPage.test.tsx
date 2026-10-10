@@ -222,9 +222,10 @@ describe('MeetingDetailPage Live Meeting shell', () => {
     expect(MEETING_DETAIL_SOURCE).toContain(
       'sortedSections.map((section) => {',
     )
-    // Empty Sections stay visible with a quiet placeholder.
-    expect(MEETING_DETAIL_SOURCE).toContain(
-      'No items',
+    // Empty Sections stay visible (the muted label), without
+    // any placeholder text.
+    expect(MEETING_DETAIL_SOURCE).not.toContain(
+      '"No items"',
     )
     expect(MEETING_DETAIL_SOURCE).toContain(
       'sectionItems.map((item) => {',
@@ -379,18 +380,19 @@ describe('MeetingDetailPage Live visual polish', () => {
     expect(MEETING_DETAIL_SOURCE).toContain('"participants"')
   })
 
-  it('renders End meeting as a calm Danger secondary action', () => {
-    // End meeting keeps its behavior (handleEndMeeting) but uses a
-    // quiet bordered treatment that only takes on Danger in hover,
-    // instead of a filled destructive control.
+  it('renders End meeting as the subtle Stitch secondary action', () => {
+    // End meeting keeps its behavior (handleEndMeeting) and is
+    // offered to lifecycle managers with the approved subtle
+    // Stitch treatment: quiet bordered, neutral text, a quiet
+    // surface lift on hover — no persistent Danger fill.
     expect(MEETING_DETAIL_SOURCE).toContain(
       'void handleEndMeeting()',
     )
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'hover:bg-danger-subtle',
+      'canManageLifecycle && (',
     )
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'hover:text-danger',
+      'inline-flex h-8 items-center rounded-[6px] border border-white/[0.06] bg-transparent px-3 text-[13px] leading-[18px] font-medium text-[#A3A3A3] outline-none transition hover:bg-[#222222] hover:text-[#E6E6E6] focus-visible:ring-2 focus-visible:ring-[#6898F0] focus-visible:ring-offset-2 focus-visible:ring-offset-canvas disabled:opacity-60',
     )
   })
 
@@ -494,50 +496,52 @@ describe('MeetingDetailPage Live visual polish', () => {
 
   it('keeps the Live quick-add composer a quiet inline agenda row', () => {
     // The opened composer reads as a temporarily editable agenda
-    // row: a 32px field on a semantic quiet surface with a
-    // subtle frame (never a control-strength outline), agenda-row
-    // typography, and a compact horizontal layout.
+    // row: a 32px field on the Stitch quiet canvas surface with a
+    // low-contrast frame (never a control-strength outline),
+    // agenda-row typography, and a compact horizontal layout.
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'mt-1.5 flex items-center gap-1.5 pl-3 pr-2',
+      'mt-1.5 flex items-center gap-1.5 pl-2 pr-2',
     )
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'h-8 min-w-0 flex-1 rounded-md border border-border-subtle bg-surface-quiet px-2 text-sm leading-5 text-text outline-none placeholder:text-text-muted focus:border-focus focus:ring-2 focus:ring-focus',
+      'h-8 min-w-0 flex-1 rounded-[6px] border border-white/[0.06] bg-[#121212] px-2 text-[13px] leading-5 text-[#E6E6E6] outline-none placeholder:text-[#8A8A8A] focus:border-[#6898F0] focus:ring-1 focus:ring-[#6898F0]',
     )
-    // Keyboard focus stays on the established focus token.
+    // Keyboard focus stays on the approved Stitch accent ring.
     expect(MEETING_DETAIL_SOURCE).not.toContain(
       'focus:ring-white',
     )
-    // The Add action is a small quiet text action with canonical
-    // focus, not a filled dominant button.
+    // The Add action is a small quiet text action with the
+    // approved focus ring, not a filled dominant button.
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'inline-flex h-8 items-center rounded-md px-2 text-xs font-medium text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus disabled:opacity-45',
+      'inline-flex h-8 items-center rounded-[6px] px-2.5 text-[13px] font-medium text-[#A3A3A3] outline-none transition hover:bg-[#222222] hover:text-[#E6E6E6] focus-visible:ring-2 focus-visible:ring-[#6898F0] disabled:opacity-45',
     )
   })
 
   it('keeps an Accent treatment for the current Agenda row only', () => {
-    // Current (persisted) is the primary chromatic state: an accent
-    // left indicator over a subtle accent surface.
+    // Current (persisted) is the primary chromatic state: the 2px
+    // accent left indicator over the quiet row surface (the
+    // approved Stitch treatment) plus the accent Current label.
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'border-l-2 border-accent bg-accent-subtle',
+      'absolute inset-y-0 left-0 w-[2px] bg-[#6E9BF5]',
     )
     expect(MEETING_DETAIL_SOURCE).toContain(
       'item.id === meeting.currentMeetingItemId',
+    )
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'shrink-0 text-[11px] font-medium leading-none text-[#6E9BF5]',
     )
   })
 
   it('keeps Selected (viewing) rows neutral, never Accent', () => {
     // Selected != Current is local navigation: a quiet neutral
-    // surface (the established hover-strength fill) with no
-    // border and no accent classes. It must stay clearly
-    // quieter than the Current row's Indigo treatment.
+    // surface (the quiet Stitch row fill, the same as hover)
+    // with no accent treatment of any kind. The accent bar and
+    // Current label exist only on the current row.
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'border-l-2 border-transparent bg-surface-hover',
+      'isCurrent || isSelected ? "bg-[#222222]" : "hover:bg-[#222222]"',
     )
     // The selected row is a quiet surface, not a strong/disabled
-    // navigation block: no stronger neutral fill and no border.
-    expect(MEETING_DETAIL_SOURCE).not.toContain(
-      'border-l-2 border-transparent bg-surface-muted',
-    )
+    // navigation block: no accent surface and no visible
+    // "Selected" label.
     expect(MEETING_DETAIL_SOURCE).not.toContain(
       'bg-accent-selected',
     )
@@ -699,16 +703,20 @@ describe('MeetingDetailPage shared header color semantics', () => {
     expect(start).toContain('focus-visible:ring-[#6898F0]')
   })
 
-  it('classifies End meeting as a Danger hover treatment', () => {
+  it('classifies End meeting with the approved subtle Stitch treatment', () => {
+    // The Live header's End meeting is a subtle quiet secondary
+    // control (Stitch): low-contrast border, muted text, a quiet
+    // surface lift on hover, and the approved accent focus ring.
     const end = classNameOf(MEETING_DETAIL_SOURCE, 'End meeting', 'handleEndMeeting')
-    expect(end).toContain('border-border-subtle')
-    expect(end).toContain('hover:bg-danger-subtle')
-    expect(end).toContain('hover:text-danger')
+    expect(end).toContain('border-white/[0.06]')
+    expect(end).toContain('text-[#A3A3A3]')
+    expect(end).toContain('hover:bg-[#222222]')
+    expect(end).toContain('hover:text-[#E6E6E6]')
     expect(end).toContain('focus-visible:ring-2')
-    expect(end).toContain('focus-visible:ring-focus')
-    // The idle state stays neutral; no persistent Danger fill.
-    expect(end).not.toContain('bg-danger ')
-    expect(end).not.toContain('bg-danger"')
+    expect(end).toContain('focus-visible:ring-[#6898F0]')
+    // The idle state stays quiet; no persistent Danger fill.
+    expect(end).not.toContain('bg-danger')
+    expect(end).not.toContain('text-danger')
   })
 
   it('classifies Reopen meeting as a neutral secondary action', () => {
@@ -722,17 +730,26 @@ describe('MeetingDetailPage shared header color semantics', () => {
     expect(reopen).not.toContain('bg-success')
   })
 
-  it('keeps the header meta, title, and Live indicator neutral', () => {
+  it('keeps the header meta and title neutral, and the Live indicator a compact pill', () => {
+    // The Completed / cancelled fallback header keeps the
+    // neutral title + meta treatment.
     expect(fileSource).toContain(
       'text-3xl font-semibold tracking-tight text-text',
     )
     expect(fileSource).toContain(
       'mt-2 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm text-text-muted',
     )
-    // The Live indicator stays a small Accent-text state, never a
-    // broad indigo header treatment.
+    // The Live indicator is a compact Stitch pill: quiet surface,
+    // low-contrast border, pulsing accent dot, muted "Live"
+    // label — never a broad accent header treatment.
     expect(fileSource).toContain(
-      'text-sm font-medium text-accent-text" role="status"',
+      'rounded-[6px] border border-white/[0.06] bg-[#1A1A1A] px-2 py-0.5',
+    )
+    expect(fileSource).toContain(
+      'animate-pulse text-[14px] text-[#6E9BF5]',
+    )
+    expect(fileSource).toContain(
+      'text-[13px] leading-[18px] text-[#A3A3A3]',
     )
   })
 
@@ -764,5 +781,96 @@ describe('MeetingDetailPage shared header color semantics', () => {
     // Live-detail dividers then rendered near-white in Dark.
     expect(fileSource).not.toMatch(/(^|\s)border-subtle(\s|"|')/)
     expect(fileSource).not.toContain('hover:border-subtle')
+  })
+})
+
+describe('MeetingDetailPage Live header (approved Stitch composition)', () => {
+  let fileSource = ''
+
+  beforeAll(async () => {
+    const mod = await import('./MeetingDetailPage.tsx?raw')
+    fileSource = (mod as { default: string }).default
+  })
+
+  it('renders the breadcrumb: Meetings / Group or Project / Title', () => {
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      '"aria-label": "Breadcrumb"',
+    )
+    // The scope segment is derived (group name or project name).
+    expect(MEETING_DETAIL_SOURCE).toContain('liveScopeName')
+    expect(fileSource).toContain('Project Meeting')
+    expect(fileSource).toContain('Research Group Meeting')
+    // The Meeting title keeps the compact breadcrumb-title
+    // treatment as the page's single level-1 heading.
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'min-w-0 truncate text-[15px] font-semibold leading-[18px] text-[#E6E6E6]',
+    )
+  })
+
+  it('shows the compact Live pill with the elapsed timer from startedAt', () => {
+    // The pill labels the state and derives the elapsed time from
+    // the Meeting's persisted startedAt (gracefully absent when
+    // null).
+    expect(MEETING_DETAIL_SOURCE).toContain('LiveElapsedTimer')
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'startedAt: meeting.startedAt',
+    )
+  })
+
+  it('shows the participant avatar stack with an overflow indicator', () => {
+    // Four avatars maximum; the remainder collapse into a
+    // +N overflow chip (actual participants only).
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'sortedParticipants.slice(0, 4)',
+    )
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'participants.length > 4',
+    )
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'rounded-full bg-[#2A2A2A] text-[11px] font-medium text-[#E6E6E6]',
+    )
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'rounded-full bg-[#1C1C1C] text-[10px] font-medium text-[#8A8A8A]',
+    )
+  })
+
+  it('retains the administrator Meeting actions menu in the Live header', () => {
+    // The Meeting actions menu trigger stays offered (unchanged)
+    // inside the Live header branch.
+    const liveHeader =
+      MEETING_DETAIL_SOURCE.indexOf('liveScopeName')
+    const adminMenu = MEETING_DETAIL_SOURCE.indexOf(
+      'Meeting actions',
+      liveHeader,
+    )
+    expect(liveHeader).toBeGreaterThan(-1)
+    expect(adminMenu).toBeGreaterThan(liveHeader)
+  })
+
+  it('keeps the elapsed timer in a leaf component (isolated re-render)', () => {
+    // The 1-second interval lives inside the leaf timer
+    // component (module scope, before the page), so the tick
+    // re-renders the label only — never the Meeting page.
+    expect(fileSource).toContain('function LiveElapsedTimer')
+    expect(fileSource).toContain('function formatLiveElapsed')
+    const timerDef = fileSource.indexOf(
+      'function LiveElapsedTimer',
+    )
+    const pageDef = fileSource.indexOf(
+      'export function MeetingDetailPage',
+    )
+    const interval = fileSource.indexOf(
+      'window.setInterval',
+      timerDef,
+    )
+    expect(timerDef).toBeGreaterThan(-1)
+    expect(interval).toBeGreaterThan(timerDef)
+    expect(interval).toBeLessThan(pageDef)
+  })
+
+  it('hides the timer gracefully when startedAt is missing', () => {
+    expect(fileSource).toContain(
+      'if (startedAt == null)',
+    )
   })
 })

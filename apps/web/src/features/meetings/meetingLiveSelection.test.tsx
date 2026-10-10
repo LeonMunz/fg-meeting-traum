@@ -572,7 +572,7 @@ describe('Live Meeting selection (decoupled from current)', () => {
     expect(title).toHaveClass('mt-3', 'text-2xl')
     expect(
       screen.getByRole('button', { name: 'End meeting' }),
-    ).toHaveClass('h-9', 'text-sm')
+    ).toHaveClass('h-8', 'text-[13px]')
   })
 
   it('Make current on a non-current item invokes the canonical Focus action once and converges selection and current', async () => {
@@ -1550,12 +1550,16 @@ describe('Live Meeting selection (decoupled from current)', () => {
     renderLivePage(fake)
     await waitForLive()
 
-    // The current row keeps its Indigo hierarchy: an accent bar
-    // over the accent surface.
-    expect(selectRow('Beta')).toHaveClass(
-      'border-accent',
-      'bg-accent-subtle',
-    )
+    // The current row keeps its accent hierarchy: the quiet row
+    // surface plus the 2px accent left indicator (and the
+    // accent "Current" label).
+    expect(selectRow('Beta')).toHaveClass('bg-[#222222]')
+    expect(
+      selectRow('Beta').querySelector(
+        '.w-\\[2px\\].bg-\\[\\#6E9BF5\\]',
+      ),
+    ).not.toBeNull()
+    expect(rowCurrent('Beta')).toBeTruthy()
 
     // Select the non-current item Alpha.
     fireEvent.click(selectRow('Alpha'))
@@ -1565,13 +1569,26 @@ describe('Live Meeting selection (decoupled from current)', () => {
       ).toHaveTextContent('Alpha')
     })
 
-    // Selected-only: the quiet neutral surface (the established
-    // hover-strength fill) with no border and no Accent
-    // treatment of any kind.
-    expect(selectRow('Alpha')).toHaveClass(
-      'bg-surface-hover',
-      'border-transparent',
-    )
+    // Selected-only: the same quiet row surface, but NO accent
+    // treatment of any kind — no left indicator, no Current
+    // label, no accent classes.
+    expect(selectRow('Alpha')).toHaveClass('bg-[#222222]')
+    expect(
+      selectRow('Alpha').querySelector(
+        '.w-\\[2px\\].bg-\\[\\#6E9BF5\\]',
+      ),
+    ).toBeNull()
+    expect(
+      selectRow('Alpha').querySelector(
+        '.text-\\[\\#6E9BF5\\]',
+      ),
+    ).toBeNull()
+    expect(
+      within(selectRow('Alpha')).queryByText(
+        'Current',
+        { exact: true },
+      ),
+    ).toBeNull()
     expect(selectRow('Alpha')).not.toHaveClass(
       'bg-accent-subtle',
       'border-accent',
@@ -1579,17 +1596,20 @@ describe('Live Meeting selection (decoupled from current)', () => {
     )
 
     // Selecting never promotes a row to Current treatment:
-    // Current keeps its Indigo hierarchy on Beta.
-    expect(selectRow('Beta')).toHaveClass(
-      'border-accent',
-      'bg-accent-subtle',
-    )
-    expect(selectRow('Beta')).not.toHaveClass('bg-surface-hover')
+    // Current keeps its accent hierarchy on Beta.
+    expect(selectRow('Beta')).toHaveClass('bg-[#222222]')
+    expect(
+      selectRow('Beta').querySelector(
+        '.w-\\[2px\\].bg-\\[\\#6E9BF5\\]',
+      ),
+    ).not.toBeNull()
+    expect(rowCurrent('Beta')).toBeTruthy()
 
-    // Unselected rows stay transparent (only the quiet hover lift).
-    expect(selectRow('Omega')).not.toHaveClass(
-      'bg-surface-hover',
-      'bg-surface-muted',
+    // Unselected rows stay surfaceless (only the quiet hover
+    // lift).
+    expect(selectRow('Omega')).not.toHaveClass('bg-[#222222]')
+    expect(selectRow('Omega')).toHaveClass(
+      'hover:bg-[#222222]',
     )
   })
 

@@ -583,7 +583,61 @@ function QuickAddSectionSelect({
           ))}
         </div>
       )}
-    </div>
+      </div>
+    )
+}
+
+// ── Live Meeting header: elapsed timer ─────────────────────────
+// Compact "mm:ss" (or "h:mm:ss" beyond one hour) elapsed-time
+// label derived from the Meeting's persisted startedAt.
+function formatLiveElapsed(elapsedMs: number): string {
+  const totalSeconds = Math.max(0, Math.floor(elapsedMs / 1000))
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+  const paddedMinutes = String(minutes).padStart(2, '0')
+  const paddedSeconds = String(seconds).padStart(2, '0')
+
+  return hours > 0
+    ? `${hours}:${paddedMinutes}:${paddedSeconds}`
+    : `${paddedMinutes}:${paddedSeconds}`
+}
+
+// The ticking elapsed time lives in this leaf component ONLY: the
+// 1-second interval re-render touches the label, never the Meeting
+// page. A missing/invalid startedAt renders nothing (the pill then
+// shows "Live" without a time).
+function LiveElapsedTimer({
+  startedAt,
+}: {
+  startedAt: string | null
+}) {
+  const [now, setNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    const id = window.setInterval(
+      () => setNow(Date.now()),
+      1000,
+    )
+
+    return () => window.clearInterval(id)
+  }, [])
+
+  if (startedAt == null) {
+    return null
+  }
+
+  const startedMs = new Date(startedAt).getTime()
+
+  if (Number.isNaN(startedMs)) {
+    return null
+  }
+
+  return (
+    <span aria-hidden="true">
+      {' · '}
+      {formatLiveElapsed(now - startedMs)}
+    </span>
   )
 }
 
@@ -1448,6 +1502,13 @@ export function MeetingDetailPage() {
     section: ApiMeetingSection,
     content: string,
   ) => {
+    // Client-side mirror of the server's authoritative Meeting
+    // write check: never submit an unauthorized create, even if a
+    // stale render left a composer open.
+    if (!canManageLifecycle) {
+      return
+    }
+
     if (meetingId == null) {
       return
     }
@@ -2806,6 +2867,15 @@ export function MeetingDetailPage() {
   const canPrepare = isUpcoming && canManageLifecycle
   const canEditParticipants = canPrepare
 
+  // Breadcrumb scope segment for the Live header: the Research
+  // Group name for group Meetings, the Project name for Project
+  // Meetings (user-facing terminology fallback while the Project
+  // is still loading or when it cannot be read).
+  const liveScopeName =
+    meeting.scope === 'project'
+      ? (project?.name ?? 'Project Meeting')
+      : (activeResearchGroup?.name ?? 'Research Group Meeting')
+
   // Preparation-view section list: a user who may prepare
   // manages the full occurrence structure, including hidden
   // Sections (marked as such, so they stay unhidable-reachable);
@@ -3051,11 +3121,16 @@ export function MeetingDetailPage() {
               : undefined
         }
       >
-      {/* Header — the Upcoming preparation view carries the
+      {/* Header — the Upcoming preparation view carries its
           approved Stitch composition (breadcrumb, title row with
           the lifecycle actions, metadata row with the
-          compact participant stack, and the Quick Add bar); Live
-          and Completed keep the shared header below. */}
+          compact participant stack, and the Quick Add bar); the
+          Live Meeting carries the approved compact Stitch
+          composition in its own branch (breadcrumb
+          Meetings / Group or Project / Title, the Live pill
+          with the elapsed timer, the participant avatar stack,
+          and the lifecycle / admin actions); Completed (and
+          cancelled) keep the shared header. */}
       {isUpcoming ? (
         <div className="flex flex-col">
           {/* Breadcrumb */}
@@ -3243,6 +3318,138 @@ export function MeetingDetailPage() {
             </div>
           )}
         </div>
+      ) : isLive ? (
+      <header className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-2">
+          <nav
+            aria-label="Breadcrumb"
+            className="flex min-w-0 select-none items-center gap-1.5 text-[13px] leading-[18px] text-[#8A8A8A]"
+          >
+            <button
+              type="button"
+              onClick={() => navigate('/meetings')}
+              className="-mx-1 shrink-0 rounded px-1 outline-none transition hover:text-[#E6E6E6] focus-visible:ring-2 focus-visible:ring-[#6898F0]"
+            >
+              Meetings
+            </button>
+
+            <span aria-hidden="true">/</span>
+
+            <span className="max-w-44 truncate">
+              {liveScopeName}
+            </span>
+
+            <span aria-hidden="true">/</span>
+
+            {/* The Meeting title stays the page's single level-1
+                heading (page heading contract) while carrying the
+                compact Stitch breadcrumb-title treatment. */}
+            <h1 className="min-w-0 truncate text-[15px] font-semibold leading-[18px] text-[#E6E6E6]">
+              {meeting.title}
+            </h1>
+          </nav>
+
+          <span
+            aria-hidden="true"
+            className="hidden h-3.5 w-[1px] shrink-0 bg-white/10 sm:block"
+          />
+
+          {/* Compact Live indicator + elapsed timer from the
+              persisted startedAt (graceful when missing). */}
+          <span
+            role="status"
+            className="flex shrink-0 items-center gap-1.5 rounded-[6px] border border-white/[0.06] bg-[#1A1A1A] px-2 py-0.5"
+          >
+            <span
+              aria-hidden="true"
+              className="material-symbols-outlined animate-pulse text-[14px] text-[#6E9BF5]"
+            >
+              radio_button_checked
+            </span>
+
+            <span className="text-[13px] leading-[18px] text-[#A3A3A3]">
+              Live
+              <LiveElapsedTimer
+                startedAt={meeting.startedAt}
+              />
+            </span>
+          </span>
+
+          {participants.length > 0 && (
+            <>
+              <span
+                aria-hidden="true"
+                className="hidden h-3.5 w-[1px] shrink-0 bg-white/10 sm:block"
+              />
+
+              {/* Participant avatar stack (actual participants)
+                  with an overflow indicator. */}
+              <div
+                role="group"
+                aria-label="Participants"
+                className="flex shrink-0 items-center -space-x-1"
+              >
+                {sortedParticipants.slice(0, 4).map(
+                  (participant) => (
+                    <span
+                      key={participant.id}
+                      title={getPersonName(participant.user)}
+                      className="flex h-6 w-6 select-none items-center justify-center rounded-full bg-[#2A2A2A] text-[11px] font-medium text-[#E6E6E6] ring-2 ring-canvas"
+                    >
+                      {getInitials(participant.user)}
+                    </span>
+                  ),
+                )}
+
+                {participants.length > 4 && (
+                  <span
+                    title={sortedParticipants
+                      .slice(4)
+                      .map((participant) =>
+                        getPersonName(participant.user),
+                      )
+                      .join(', ')}
+                    className="flex h-6 w-6 select-none items-center justify-center rounded-full bg-[#1C1C1C] text-[10px] font-medium text-[#8A8A8A] ring-2 ring-canvas"
+                  >
+                    +{participants.length - 4}
+                  </span>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+
+        <div className="flex shrink-0 items-center gap-2.5">
+          {canManageLifecycle && (
+            <button
+              type="button"
+              disabled={updatingMeeting}
+              onClick={() => void handleEndMeeting()}
+              className="inline-flex h-8 items-center rounded-[6px] border border-white/[0.06] bg-transparent px-3 text-[13px] leading-[18px] font-medium text-[#A3A3A3] outline-none transition hover:bg-[#222222] hover:text-[#E6E6E6] focus-visible:ring-2 focus-visible:ring-[#6898F0] focus-visible:ring-offset-2 focus-visible:ring-offset-canvas disabled:opacity-60"
+            >
+              End meeting
+            </button>
+          )}
+
+          {canAdministerMeeting && (
+            <MenuTrigger label="Meeting actions">
+              {(_, close) => (
+                <>
+                  <MenuItem
+                    label="Delete meeting"
+                    icon="delete"
+                    danger
+                    onClick={() => {
+                      setDeleteDialogOpen(true)
+                      close()
+                    }}
+                  />
+                </>
+              )}
+            </MenuTrigger>
+          )}
+        </div>
+      </header>
       ) : (
         <>
       <nav>
@@ -3311,15 +3518,9 @@ export function MeetingDetailPage() {
         </div>
 
         <div className={`flex shrink-0 items-center ${isCompleted ? 'gap-2' : 'gap-2.5'}`}>
-          {isLive && (
-            <span className="inline-flex items-center gap-1.5 text-sm font-medium text-accent-text" role="status">
-              <span aria-hidden="true" className="material-symbols-outlined animate-pulse text-[18px]">
-                fiber_manual_record
-              </span>
-              Live
-            </span>
-          )}
-
+          {/* The Live indicator and End meeting action live in
+              the dedicated Live header branch above; this branch
+              serves Completed (and cancelled) Meetings. */}
           {isCompleted && canManageLifecycle && (
             <button
               type="button"
@@ -3331,20 +3532,6 @@ export function MeetingDetailPage() {
                 replay
               </span>
               Reopen meeting
-            </button>
-          )}
-
-          {isLive && canManageLifecycle && (
-            <button
-              type="button"
-              disabled={updatingMeeting}
-              onClick={() => void handleEndMeeting()}
-              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-border-subtle bg-surface px-3 text-sm font-medium text-text outline-none transition hover:border-danger-subtle hover:bg-danger-subtle hover:text-danger focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-60"
-            >
-              <span aria-hidden="true" className="material-symbols-outlined text-[18px]">
-                stop
-              </span>
-              End meeting
             </button>
           )}
 
@@ -3518,23 +3705,21 @@ export function MeetingDetailPage() {
       {isLive ? (
         <div
           data-live-shell
-          className="mt-6 flex flex-col gap-6 lg:flex-row lg:items-start lg:gap-x-12"
+          className="mt-8 flex flex-col gap-6 lg:flex-row lg:items-start lg:gap-x-8"
         >
-          {/* LEFT: Agenda rail — narrow, visually secondary, always readable. */}
+          {/* LEFT: Agenda navigation — the approved Stitch
+              composition: quiet section labels over compact 32px
+              topic rows in a ~280px column. */}
           <nav
             aria-label="Agenda"
-            className="w-full shrink-0 lg:sticky lg:top-8 lg:w-72 lg:self-start lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto lg:pr-1"
+            className="w-full shrink-0 lg:sticky lg:top-8 lg:w-[280px] lg:self-start lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto lg:pr-1"
           >
-            <h2 className="text-xs font-semibold uppercase tracking-wide text-text-muted">
-              Agenda
-            </h2>
-
             {sortedSections.length === 0 ? (
-              <p className="mt-3 text-sm text-text-muted">
+              <p className="px-2.5 text-[13px] leading-[18px] text-[#8A8A8A]">
                 No agenda items yet.
               </p>
             ) : (
-              <div className="mt-2 space-y-7">
+              <div className="flex flex-col gap-4">
                 {sortedSections.map((section) => {
                   const sectionItems =
                     itemsBySection.get(section.id) ?? []
@@ -3542,23 +3727,28 @@ export function MeetingDetailPage() {
                   return (
                     <div
                       key={section.id}
-                      className={[
-                        '',
+                      className={
                         !section.isVisible
                           ? 'opacity-50'
-                          : '',
-                      ].join(' ')}
+                          : undefined
+                      }
                     >
-                      <h3 className="px-2.5 pb-1 pt-0.5 text-[13px] font-semibold tracking-tight text-text">
+                      {/* Quiet section label: full-contrast only
+                          while the Section carries topics; empty
+                          Sections stay visible with the muted
+                          label and no placeholder text. */}
+                      <h3
+                        className={
+                          sectionItems.length > 0
+                            ? 'px-2.5 pb-1 text-[13px] font-semibold leading-[18px] text-[#A3A3A3]'
+                            : 'px-2.5 text-[13px] leading-[18px] text-[#8A8A8A]'
+                        }
+                      >
                         {section.name}
                       </h3>
 
-                      {sectionItems.length === 0 ? (
-                        <p className="mt-1 px-2.5 text-[11px] text-text-muted">
-                          No items
-                        </p>
-                      ) : (
-                        <ul className="mt-1 space-y-0.5">
+                      {sectionItems.length > 0 && (
+                        <ul className="mt-1 flex flex-col gap-0.5">
                           {sectionItems.map((item) => {
                             const statusMeta =
                               agendaStatusMeta(item.outcome)
@@ -3569,25 +3759,25 @@ export function MeetingDetailPage() {
                             const isSelected =
                               item.id === selectedItemId
 
-                            // Outcome symbol color is a small, independent
-                            // semantic signal: Done uses Success, Follow-up
-                            // and Open stay neutral. When the Open item IS
-                            // current, the Current Accent signal wins.
+                            // Outcome symbol color is a small,
+                            // independent semantic signal: Done
+                            // uses Success, Follow-up and Open
+                            // stay neutral. When the Open item IS
+                            // current, the Current accent signal
+                            // wins.
                             const symbolClass = isCurrent &&
                             item.outcome ===
                               'not_discussed'
-                              ? 'text-accent'
+                              ? 'text-[#6E9BF5]'
                               : item.outcome === 'done'
-                                ? 'text-success'
-                                : 'text-text-muted'
+                                ? 'text-success-text'
+                                : 'text-[#8A8A8A]'
 
                             const rowClass = [
-                              'flex w-full items-start gap-2 rounded-md py-1.5 pl-2.5 pr-2 text-left outline-none transition',
-                              isCurrent
-                                ? 'border-l-2 border-accent bg-accent-subtle'
-                                : isSelected
-                                  ? 'border-l-2 border-transparent bg-surface-hover'
-                                  : 'border-l-2 border-transparent hover:bg-surface-hover',
+                              'relative flex h-8 w-full items-center gap-2 overflow-hidden rounded-[6px] pl-2.5 pr-2 text-left outline-none transition',
+                              isCurrent || isSelected
+                                ? 'bg-[#222222]'
+                                : 'hover:bg-[#222222]',
                             ].join(' ')
 
                             return (
@@ -3603,21 +3793,35 @@ export function MeetingDetailPage() {
                                       ? `View current item ${item.title}`
                                       : `View item ${item.title}`
                                   }
-                                  className={`${rowClass} flex-1 focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-inset`}
+                                  className={`${rowClass} focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#6898F0]`}
                                 >
+                                  {/* Current (persisted) marker:
+                                      the 2px accent left
+                                      indicator. Selected stays
+                                      neutral — accent is reserved
+                                      for Current. */}
+                                  {isCurrent && (
+                                    <span
+                                      aria-hidden="true"
+                                      className="absolute inset-y-0 left-0 w-[2px] bg-[#6E9BF5]"
+                                    />
+                                  )}
+
                                   <span
                                     aria-hidden="true"
-                                    className={`mt-px w-4 shrink-0 pl-0.5 text-center text-[13px] leading-5 ${symbolClass}`}
+                                    className={`w-4 shrink-0 pl-0.5 text-center text-[14px] leading-none ${symbolClass}`}
                                   >
                                     {statusMeta.symbol}
                                   </span>
 
-                                  <span className={`min-w-0 flex-1 break-words text-sm leading-5 ${isSelected ? 'font-medium' : 'font-normal'} text-text`}>
+                                  <span
+                                    className={`min-w-0 flex-1 truncate text-[13px] leading-[18px] ${item.outcome === 'done' ? 'text-[#A3A3A3]' : 'text-[#E6E6E6]'} ${isCurrent ? 'font-medium' : ''}`}
+                                  >
                                     {item.title}
                                   </span>
 
                                   {isCurrent && (
-                                    <span className="shrink-0 text-[11px] font-medium text-accent-text">
+                                    <span className="shrink-0 text-[11px] font-medium leading-none text-[#6E9BF5]">
                                       Current
                                     </span>
                                   )}
@@ -3633,93 +3837,96 @@ export function MeetingDetailPage() {
                         </ul>
                       )}
 
-                      {/* Existing Live quick-add survives: the
-                          inline composer stays available under
-                          every Section. */}
-                      {creatingSectionId === section.id ? (
-                        <form
-                          data-quick-add-form={section.id}
-                          onSubmit={(e) => {
-                            e.preventDefault()
-                            void handleCreateItemInSection(
-                              section,
-                              (
-                                sectionItemTitle[section.id] ??
-                                ''
-                              ).trim(),
-                            ).catch((error) => {
-                              setActionError(
-                                getErrorMessage(
-                                  error,
-                                  'Agenda item could not be created.',
-                                ),
-                              )
-                            })
-                          }}
-                          className="mt-1.5 flex items-center gap-1.5 pl-3 pr-2"
-                        >
-                          <input
-                            ref={quickAddInputRef}
-                            type="text"
-                            value={
-                              sectionItemTitle[section.id] ?? ''
-                            }
-                            onChange={(e) =>
-                              setSectionItemTitle(
-                                (current) => ({
-                                  ...current,
-                                  [section.id]:
-                                    e.target.value,
-                                }),
-                              )
-                            }
-                            onKeyDown={(e) => {
-                              if (e.key === 'Escape') {
-                                e.preventDefault()
-                                setCreatingSectionId(null)
-                                setSectionItemTitle((current) => ({
-                                  ...current,
-                                  [section.id]: '',
-                                }))
-                              }
+                      {/* Existing Live quick-add survives,
+                          restyled into the navigation vocabulary
+                          and shown only to Meeting collaborators
+                          (the server remains authoritative). */}
+                      {canManageLifecycle && (
+                        creatingSectionId === section.id ? (
+                          <form
+                            data-quick-add-form={section.id}
+                            onSubmit={(e) => {
+                              e.preventDefault()
+                              void handleCreateItemInSection(
+                                section,
+                                (
+                                  sectionItemTitle[section.id] ??
+                                  ''
+                                ).trim(),
+                              ).catch((error) => {
+                                setActionError(
+                                  getErrorMessage(
+                                    error,
+                                    'Agenda item could not be created.',
+                                  ),
+                                )
+                              })
                             }}
-                            placeholder="Agenda item title"
-                            aria-label={`Add item to ${section.name}`}
-                            className="h-8 min-w-0 flex-1 rounded-md border border-border-subtle bg-surface-quiet px-2 text-sm leading-5 text-text outline-none placeholder:text-text-muted focus:border-focus focus:ring-2 focus:ring-focus"
-                          />
-
-                          <button
-                            type="submit"
-                            disabled={
-                              !(
-                                sectionItemTitle[section.id] ??
-                                ''
-                              ).trim()
-                            }
-                            className="inline-flex h-8 items-center rounded-md px-2 text-xs font-medium text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus disabled:opacity-45"
+                            className="mt-1.5 flex items-center gap-1.5 pl-2 pr-2"
                           >
-                            Add
+                            <input
+                              ref={quickAddInputRef}
+                              type="text"
+                              value={
+                                sectionItemTitle[section.id] ?? ''
+                              }
+                              onChange={(e) =>
+                                setSectionItemTitle(
+                                  (current) => ({
+                                    ...current,
+                                    [section.id]:
+                                      e.target.value,
+                                  }),
+                                )
+                              }
+                              onKeyDown={(e) => {
+                                if (e.key === 'Escape') {
+                                  e.preventDefault()
+                                  setCreatingSectionId(null)
+                                  setSectionItemTitle((current) => ({
+                                    ...current,
+                                    [section.id]: '',
+                                  }))
+                                }
+                              }}
+                              placeholder="Agenda item title"
+                              aria-label={`Add item to ${section.name}`}
+                              className="h-8 min-w-0 flex-1 rounded-[6px] border border-white/[0.06] bg-[#121212] px-2 text-[13px] leading-5 text-[#E6E6E6] outline-none placeholder:text-[#8A8A8A] focus:border-[#6898F0] focus:ring-1 focus:ring-[#6898F0]"
+                            />
+
+                            <button
+                              type="submit"
+                              disabled={
+                                !(
+                                  sectionItemTitle[section.id] ??
+                                  ''
+                                ).trim()
+                              }
+                              className="inline-flex h-8 items-center rounded-[6px] px-2.5 text-[13px] font-medium text-[#A3A3A3] outline-none transition hover:bg-[#222222] hover:text-[#E6E6E6] focus-visible:ring-2 focus-visible:ring-[#6898F0] disabled:opacity-45"
+                            >
+                              Add
+                            </button>
+                          </form>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setCreatingSectionId(section.id)
+                              setSectionItemTitle((current) => ({
+                                ...current,
+                                [section.id]: '',
+                              }))
+                            }}
+                            className="mt-1.5 inline-flex h-7 items-center gap-1.5 rounded-[6px] px-2.5 text-[13px] leading-[18px] text-[#A3A3A3] outline-none transition hover:bg-[#1A1A1A] hover:text-[#E6E6E6] focus-visible:ring-2 focus-visible:ring-[#6898F0]"
+                          >
+                            <span aria-hidden="true" className="material-symbols-outlined text-[14px]">
+                              add
+                            </span>
+                            {sectionItems.length === 0
+                              ? 'Add first item'
+                              : 'Add item'}
                           </button>
-                        </form>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setCreatingSectionId(section.id)
-                            setSectionItemTitle((current) => ({
-                              ...current,
-                              [section.id]: '',
-                            }))
-                          }}
-                          className="mt-1 inline-flex h-7 items-center gap-1 pl-1 pr-2 text-xs font-medium text-text-muted outline-none transition hover:text-text focus-visible:ring-2 focus-visible:ring-focus rounded-md"
-                        >
-                          <span aria-hidden="true" className="material-symbols-outlined text-[14px]">
-                            add
-                          </span>
-                          {sectionItems.length === 0
-                            ? 'Add first item'
-                            : 'Add item'}
-                        </button>
+                        )
                       )}
                     </div>
                   )
