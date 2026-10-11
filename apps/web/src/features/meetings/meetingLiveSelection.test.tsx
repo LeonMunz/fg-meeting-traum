@@ -93,13 +93,16 @@ const MEETING_ID = 11
 function makeItem(
   overrides: Partial<ApiMeetingItem> = {},
 ): ApiMeetingItem {
+  // The canonical document drives the derived title: unless a
+  // test overrides one of the two explicitly, they stay in sync.
+  const title = overrides.title ?? 'Alpha'
   return {
     id: 1,
     meetingId: MEETING_ID,
     meetingSectionId: 1,
-    title: 'Alpha',
+    title,
     contextNotes: '',
-    content: 'Alpha',
+    content: overrides.content ?? title,
     position: 0,
     outcome: 'not_discussed',
     followUpSchedule: null,
@@ -502,7 +505,7 @@ describe('Live Meeting selection (decoupled from current)', () => {
     fireEvent.click(selectRow('Alpha'))
     await waitFor(() => {
       expect(
-        workspace().getByRole('heading', { name: 'Alpha' }),
+        workspace().getByText('Alpha', { exact: true }),
       ).toBeVisible()
     })
 
@@ -512,15 +515,12 @@ describe('Live Meeting selection (decoupled from current)', () => {
     const makeCurrent = workspace().getByRole('button', {
       name: 'Make Alpha current',
     })
-    const title = workspace().getByRole('heading', {
-      name: 'Alpha',
-    })
     const actionsWrapper = returnToCurrent.parentElement as HTMLElement
 
     // Both quiet actions live in the same horizontal context row
     // (right-aligned), not on a separate row between context and
-    // title: the wrapper is a flex row sibling of the "x of y"
-    // context text, and the title heading comes after it.
+    // content: the wrapper is a flex row sibling of the "x of y"
+    // context text, and the topic document follows the row.
     expect(actionsWrapper).toHaveClass('ml-auto', 'flex', 'shrink-0')
     expect(returnToCurrent.parentElement).toBe(actionsWrapper)
     expect(makeCurrent.parentElement).toBe(actionsWrapper)
@@ -528,11 +528,25 @@ describe('Live Meeting selection (decoupled from current)', () => {
     expect(contextText.tagName).toBe('P')
     expect(contextText.textContent).toContain('of')
 
+    // No standalone derived-title heading: the canonical
+    // Markdown document follows the context row (after the quiet
+    // contributor line) and carries the item's opening line.
+    expect(
+      workspace().queryByRole('heading', { name: 'Alpha' }),
+    ).toBeNull()
+    const contextRow = actionsWrapper.parentElement as HTMLElement
+    const contributorRow =
+      contextRow.nextElementSibling as HTMLElement
+    const documentBlock =
+      contributorRow.nextElementSibling as HTMLElement
+    expect(documentBlock).toHaveClass('mt-4', 'min-w-0')
+    expect(documentBlock.textContent).toContain('Alpha')
+
     // Quiet secondary treatment: compact, muted, not a dominant CTA.
     expect(returnToCurrent).toHaveClass(
       'h-7',
-      'gap-1',
-      'rounded-md',
+      'gap-1.5',
+      'rounded',
       'px-2',
       'text-xs',
       'font-medium',
@@ -543,8 +557,8 @@ describe('Live Meeting selection (decoupled from current)', () => {
     )
     expect(makeCurrent).toHaveClass(
       'h-7',
-      'gap-1',
-      'rounded-md',
+      'gap-1.5',
+      'rounded',
       'border-accent',
       'px-2',
       'text-xs',
@@ -565,14 +579,16 @@ describe('Live Meeting selection (decoupled from current)', () => {
       returnToCurrent.querySelector(
         '.material-symbols-outlined',
       ),
-    ).toHaveClass('text-[13px]')
+    ).toHaveClass('text-[14px]')
     expect(
       makeCurrent.querySelector('.material-symbols-outlined'),
-    ).toHaveClass('text-[13px]')
-    expect(title).toHaveClass('mt-3', 'text-2xl')
+    ).toHaveClass('text-[14px]')
+    // The document block (not a standalone title heading)
+    // carries the topic content right below the context row.
+    expect(documentBlock).toHaveClass('mt-4')
     expect(
       screen.getByRole('button', { name: 'End meeting' }),
-    ).toHaveClass('h-8', 'text-[13px]')
+    ).toHaveClass('h-7', 'text-xs')
   })
 
   it('Make current on a non-current item invokes the canonical Focus action once and converges selection and current', async () => {
@@ -1410,7 +1426,7 @@ describe('Live Meeting selection (decoupled from current)', () => {
     // Current cleared, but local Selected remains on the source.
     await waitFor(() => {
       expect(
-        screen.getByRole('heading', { name: 'Only' }),
+        workspace().getByText('Only', { exact: true }),
       ).toBeVisible()
     })
     expect(
@@ -1487,9 +1503,7 @@ describe('Live Meeting selection (decoupled from current)', () => {
     fireEvent.click(selectRow('Beta'))
     await waitFor(() => {
       expect(
-        screen.getByRole('heading', {
-          name: 'Beta',
-        }),
+        workspace().getByText('Beta', { exact: true }),
       ).toBeVisible()
     })
 
@@ -1553,10 +1567,10 @@ describe('Live Meeting selection (decoupled from current)', () => {
     // The current row keeps its accent hierarchy: the quiet row
     // surface plus the 2px accent left indicator (and the
     // accent "Current" label).
-    expect(selectRow('Beta')).toHaveClass('bg-[#222222]')
+    expect(selectRow('Beta')).toHaveClass('bg-surface-hover')
     expect(
       selectRow('Beta').querySelector(
-        '.w-\\[2px\\].bg-\\[\\#6E9BF5\\]',
+        '.w-\\[2px\\].bg-accent',
       ),
     ).not.toBeNull()
     expect(rowCurrent('Beta')).toBeTruthy()
@@ -1572,15 +1586,15 @@ describe('Live Meeting selection (decoupled from current)', () => {
     // Selected-only: the same quiet row surface, but NO accent
     // treatment of any kind — no left indicator, no Current
     // label, no accent classes.
-    expect(selectRow('Alpha')).toHaveClass('bg-[#222222]')
+    expect(selectRow('Alpha')).toHaveClass('bg-surface-hover')
     expect(
       selectRow('Alpha').querySelector(
-        '.w-\\[2px\\].bg-\\[\\#6E9BF5\\]',
+        '.w-\\[2px\\].bg-accent',
       ),
     ).toBeNull()
     expect(
       selectRow('Alpha').querySelector(
-        '.text-\\[\\#6E9BF5\\]',
+        '.text-accent-text',
       ),
     ).toBeNull()
     expect(
@@ -1597,19 +1611,19 @@ describe('Live Meeting selection (decoupled from current)', () => {
 
     // Selecting never promotes a row to Current treatment:
     // Current keeps its accent hierarchy on Beta.
-    expect(selectRow('Beta')).toHaveClass('bg-[#222222]')
+    expect(selectRow('Beta')).toHaveClass('bg-surface-hover')
     expect(
       selectRow('Beta').querySelector(
-        '.w-\\[2px\\].bg-\\[\\#6E9BF5\\]',
+        '.w-\\[2px\\].bg-accent',
       ),
     ).not.toBeNull()
     expect(rowCurrent('Beta')).toBeTruthy()
 
     // Unselected rows stay surfaceless (only the quiet hover
     // lift).
-    expect(selectRow('Omega')).not.toHaveClass('bg-[#222222]')
+    expect(selectRow('Omega')).not.toHaveClass('bg-surface-hover')
     expect(selectRow('Omega')).toHaveClass(
-      'hover:bg-[#222222]',
+      'hover:bg-surface-hover',
     )
   })
 
@@ -1642,11 +1656,36 @@ describe('Live Meeting selection (decoupled from current)', () => {
     await waitForLive()
 
     // Open the composer under the Agenda section.
-    fireEvent.click(
-      screen.getByRole('button', { name: 'Add item' }),
+    const addItem = screen.getByRole('button', {
+      name: 'Add item',
+    })
+    expect(addItem).toHaveClass(
+      'fg-live-agenda-add-action',
+      'min-h-7',
+      'gap-1',
+      'px-1.5',
+      'text-text-tertiary',
+      'bg-transparent',
     )
+    expect(addItem).not.toHaveClass(
+      'fg-type-nav-secondary',
+      'border',
+      'font-medium',
+    )
+    expect(
+      addItem.querySelector('.material-symbols-outlined'),
+    ).toHaveClass('fg-live-agenda-add-icon')
+
+    fireEvent.click(addItem)
     const input = screen.getByLabelText('Add item to Agenda')
     await waitFor(() => expect(input).toBeVisible())
+    expect(
+      screen.getByRole('button', { name: 'Add' }),
+    ).toHaveClass(
+      'fg-live-agenda-add-action',
+      'min-h-7',
+      'text-text-tertiary',
+    )
 
     // An invalid (empty) item never submits, even via Enter.
     fireEvent.submit(input.closest('form')!)
@@ -1684,11 +1723,107 @@ describe('Live Meeting selection (decoupled from current)', () => {
     ).toBeTruthy()
     expect(screen.queryByLabelText('Add item to Agenda')).toBeNull()
   })
+
+  it('renders one identical quick-add trigger for default, populated, and empty sections', async () => {
+    const sections = [
+      makeSection(),
+      makeSection({ id: 2, name: 'Decisions', position: 1 }),
+      makeSection({ id: 3, name: 'Parking lot', position: 2 }),
+    ]
+    const items = [
+      makeItem({
+        id: 1,
+        title: 'Default topic',
+        meetingSectionId: 1,
+        position: 0,
+      }),
+      makeItem({
+        id: 2,
+        title: 'Deferred topic',
+        meetingSectionId: 3,
+        position: 0,
+      }),
+    ]
+    const fake = new FakeLiveMeeting(
+      makeMeeting({ currentMeetingItemId: 1 }),
+      items,
+    )
+    vi.mocked(meetingsApi.createMeetingItem).mockImplementation(
+      async (
+        _meetingId: number,
+        payload: {
+          meetingSectionId: number
+          content: string
+        },
+      ) =>
+        makeItem({
+          id: 9,
+          title: payload.content,
+          content: payload.content,
+          meetingSectionId: payload.meetingSectionId,
+          position: 0,
+        }),
+    )
+
+    renderLivePage(fake, sections)
+    await waitForLive()
+
+    const populatedActions = screen.getAllByRole('button', {
+      name: 'Add item',
+    })
+    const emptyAction = screen.getByRole('button', {
+      name: 'Add first item',
+    })
+    const actions = [...populatedActions, emptyAction]
+
+    expect(populatedActions).toHaveLength(2)
+    expect(actions).toHaveLength(3)
+
+    const referenceClassName = actions[0].className
+    const referenceIconClassName = actions[0].querySelector(
+      '.material-symbols-outlined',
+    )?.className
+
+    for (const action of actions) {
+      expect(action.className).toBe(referenceClassName)
+      expect(action).toHaveClass(
+        'fg-live-agenda-add-action',
+        'min-h-7',
+        'gap-1',
+        'px-1.5',
+        'text-text-tertiary',
+        'bg-transparent',
+      )
+      expect(
+        action.querySelector('.material-symbols-outlined')?.className,
+      ).toBe(referenceIconClassName)
+      expect(
+        action.querySelector('.material-symbols-outlined'),
+      ).toHaveClass('fg-live-agenda-add-icon')
+    }
+
+    fireEvent.click(emptyAction)
+    const input = screen.getByLabelText('Add item to Decisions')
+    fireEvent.change(input, {
+      target: { value: 'Decision topic' },
+    })
+    fireEvent.submit(input.closest('form')!)
+
+    await waitFor(() => {
+      expect(meetingsApi.createMeetingItem).toHaveBeenCalledWith(
+        MEETING_ID,
+        {
+          meetingSectionId: 2,
+          content: 'Decision topic',
+        },
+      )
+    })
+  })
 describe('Live Meeting resolution controls follow the current outcome', () => {
   function expectOutcomeIcon(
     control: HTMLElement,
     iconName: 'check' | 'refresh' | 'event_repeat',
-    iconSize: 'text-[16px]' | 'text-[15px]' = 'text-[16px]',
+    iconSize: 'text-[14px]' = 'text-[14px]',
   ) {
     const icon = control.querySelector<HTMLElement>(
       '.material-symbols-outlined[aria-hidden="true"]',
@@ -1717,8 +1852,8 @@ describe('Live Meeting resolution controls follow the current outcome', () => {
     })
     expect(doneAction).toBeTruthy()
     expect(followUpAction).toBeTruthy()
-    expectOutcomeIcon(doneAction, 'check', 'text-[15px]')
-    expectOutcomeIcon(followUpAction, 'event_repeat', 'text-[15px]')
+    expectOutcomeIcon(doneAction, 'check')
+    expectOutcomeIcon(followUpAction, 'event_repeat')
     expect(
       screen.queryByRole('button', {
         name: 'Change Beta to follow-up',
@@ -1746,7 +1881,10 @@ describe('Live Meeting resolution controls follow the current outcome', () => {
     const reopenAction = screen.getByRole('button', {
       name: 'Reopen Alpha',
     })
-    expect(reopenAction).toHaveClass('border-default', 'bg-surface')
+    expect(reopenAction).toHaveClass(
+      'border-default',
+      'bg-transparent',
+    )
     expect(reopenAction).not.toHaveClass('bg-success')
     expect(
       screen.queryByRole('button', { name: 'Mark Alpha as done' }),
@@ -1797,7 +1935,7 @@ describe('Live Meeting resolution controls follow the current outcome', () => {
       name: 'Change Omega to done',
     })
     expect(changeToDone).toBeTruthy()
-    expectOutcomeIcon(changeToDone, 'check', 'text-[15px]')
+    expectOutcomeIcon(changeToDone, 'check')
     expect(
       screen.getByRole('button', {
         name: 'Schedule follow-up for Omega',
@@ -2160,7 +2298,7 @@ describe('Live Meeting duplicate-load robustness', () => {
     fireEvent.click(selectRow('Alpha'))
     await waitFor(() => {
       expect(
-        screen.getByRole('heading', { name: 'Alpha' }),
+        within(main()).getByText('Alpha', { exact: true }),
       ).toBeVisible()
     })
     expect(main()).toHaveTextContent('Scheduled for FG Weekly')
@@ -2181,7 +2319,7 @@ describe('Live Meeting duplicate-load robustness', () => {
     // selection survived and the page never switched to the stale
     // data.
     expect(
-      screen.getByRole('heading', { name: 'Alpha' }),
+      within(main()).getByText('Alpha', { exact: true }),
     ).toBeVisible()
     expect(main()).toHaveTextContent('Scheduled for FG Weekly')
     expect(main()).not.toHaveTextContent('No current item')

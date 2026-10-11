@@ -2303,11 +2303,17 @@ describe('Sidebar compact visual contract', () => {
       'text-[11px]',
       'font-normal',
     )
+    expect(screen.getByText('Quick Access')).toHaveClass(
+      'fg-type-nav-section-label',
+    )
+    expect(screen.getByText('Research Groups')).toHaveClass(
+      'fg-type-nav-section-label',
+    )
     expect(home).toHaveClass(
       'h-7',
       'gap-2.5',
       'px-2',
-      'text-[13px]',
+      'fg-type-nav-primary',
     )
     expect(homeIcon).toHaveClass(
       'h-3.5',
@@ -2321,7 +2327,7 @@ describe('Sidebar compact visual contract', () => {
       'h-7',
       'gap-2',
       'px-2',
-      'text-[13px]',
+      'fg-type-nav-primary',
       'font-medium',
       'text-text',
     )
@@ -2343,7 +2349,7 @@ describe('Sidebar compact visual contract', () => {
       'h-[26px]',
       'gap-2',
       'px-2',
-      'text-xs',
+      'fg-type-nav-secondary',
       'font-medium',
       'text-text',
     )
@@ -2363,7 +2369,10 @@ describe('Sidebar compact visual contract', () => {
 
     const groupLabel = labelFor('Bravo Group')
     const groupChevron = chevronFor('Bravo Group')
-    expect(groupLabel).toHaveClass('h-7', 'text-xs')
+    expect(groupLabel).toHaveClass(
+      'h-7',
+      'fg-type-nav-secondary',
+    )
     expect(groupChevron.querySelector('svg')).toHaveClass(
       'h-3',
       'w-3',
@@ -2375,7 +2384,7 @@ describe('Sidebar compact visual contract', () => {
     expect(createGroup).toHaveClass(
       'h-7',
       'whitespace-nowrap',
-      'text-xs',
+      'fg-type-nav-secondary',
     )
     expect(createGroup.querySelector('svg')).toHaveClass(
       'h-3.5',
@@ -2406,7 +2415,7 @@ describe('Sidebar compact visual contract', () => {
     })
     expect(notifications).toHaveClass(
       'h-7',
-      'text-xs',
+      'fg-type-nav-secondary',
     )
     expect(
       notifications.querySelector('svg'),

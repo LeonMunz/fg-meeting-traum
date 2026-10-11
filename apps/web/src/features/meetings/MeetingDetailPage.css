@@ -1,0 +1,20 @@
+/*
+ * Live Agenda creation typography crosses two unlayered global rules:
+ * the form-control reset's `font: inherit` and Google Fonts' 24px
+ * `.material-symbols-outlined` default. Tailwind utilities are emitted in
+ * the utilities cascade layer, so they cannot override either rule.
+ *
+ * Keep the correction local to this feature. The icon selector includes
+ * both classes so its specificity remains higher even if the external
+ * Material Symbols stylesheet finishes loading after this stylesheet.
+ */
+.fg-live-agenda-add-action {
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 400;
+}
+
+.fg-live-agenda-add-icon.material-symbols-outlined {
+  font-size: 12px;
+  line-height: 1;
+}

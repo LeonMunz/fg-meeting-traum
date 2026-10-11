@@ -86,13 +86,16 @@ const MEETING_ID = 9
 function makeItem(
   overrides: Partial<ApiMeetingItem> = {},
 ): ApiMeetingItem {
+  // The canonical document drives the derived title: unless a
+  // test overrides one of the two explicitly, they stay in sync.
+  const title = overrides.title ?? 'Alpha'
   return {
     id: 1,
     meetingId: MEETING_ID,
     meetingSectionId: 1,
-    title: 'Alpha',
+    title,
     contextNotes: '',
-    content: 'Alpha',
+    content: overrides.content ?? title,
     position: 0,
     outcome: 'not_discussed',
     followUpSchedule: null,

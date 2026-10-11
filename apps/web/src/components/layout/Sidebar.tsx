@@ -205,7 +205,7 @@ const secondaryNavigation: Array<{
 
 function navClasses(isActive: boolean) {
   return [
-    'flex h-7 items-center gap-2.5 rounded px-2 text-[13px] transition-colors',
+    'flex h-7 items-center gap-2.5 rounded px-2 fg-type-nav-primary transition-colors',
     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface-subtle',
     isActive
       ? 'font-medium text-text'
@@ -215,7 +215,7 @@ function navClasses(isActive: boolean) {
 
 function childNavClasses(isActive: boolean) {
   return [
-    'flex h-[26px] items-center gap-2 rounded px-2 text-xs transition-colors',
+    'flex h-[26px] items-center gap-2 rounded px-2 fg-type-nav-secondary transition-colors',
     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
     isActive
       ? 'font-medium text-text'
@@ -231,7 +231,7 @@ function childNavClasses(isActive: boolean) {
  */
 function projectShortcutClasses(isActive: boolean) {
   return [
-    'flex h-7 w-full items-center gap-2 rounded px-2 text-[13px] transition-colors',
+    'flex h-7 w-full items-center gap-2 rounded px-2 fg-type-nav-primary transition-colors',
     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
     isActive
       ? 'font-medium text-text'
@@ -247,7 +247,7 @@ function projectShortcutClasses(isActive: boolean) {
  */
 function sectionLabel(text: string) {
   return (
-    <div className="mb-1 px-2 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+    <div className="mb-1 px-2 fg-type-nav-section-label text-text-muted">
       {text}
     </div>
   )
@@ -868,7 +868,7 @@ export function Sidebar() {
           className="flex flex-col gap-0.5"
         >
           {quickAccessError !== null ? (
-            <div className="flex min-h-7 items-center gap-2 rounded px-2 text-xs text-text-muted">
+            <div className="flex min-h-7 items-center gap-2 rounded px-2 fg-type-nav-secondary text-text-muted">
               <span className="min-w-0 flex-1 truncate">
                 {quickAccessError}
               </span>
@@ -887,7 +887,7 @@ export function Sidebar() {
             <div
               role="status"
               aria-label="Loading quick access"
-              className="flex h-7 items-center gap-2 px-2 text-xs text-text-muted"
+              className="flex h-7 items-center gap-2 px-2 fg-type-nav-secondary text-text-muted"
             >
               <SidebarIcon
                 name="loading"
@@ -899,7 +899,7 @@ export function Sidebar() {
               </span>
             </div>
           ) : quickAccessRows.length === 0 ? (
-            <div className="flex min-h-7 items-center px-2 text-xs text-text-muted">
+            <div className="flex min-h-7 items-center px-2 fg-type-nav-secondary text-text-muted">
               No quick access projects.
             </div>
           ) : (
@@ -942,7 +942,7 @@ export function Sidebar() {
 
           <div>
             {treeLoading ? (
-              <div className="flex h-7 items-center gap-2 px-2 text-xs text-text-muted">
+              <div className="flex h-7 items-center gap-2 px-2 fg-type-nav-secondary text-text-muted">
                 <SidebarIcon
                   name="loading"
                   className="h-3.5 w-3.5 animate-spin"
@@ -1004,7 +1004,7 @@ export function Sidebar() {
                                 ? 'true'
                                 : undefined
                             }
-                            className={`flex h-7 min-w-0 flex-1 items-center truncate rounded text-left text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus ${groupActive ? 'font-medium text-text' : 'text-text-muted hover:text-text'}`}
+                            className={`flex h-7 min-w-0 flex-1 items-center truncate rounded text-left fg-type-nav-secondary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus ${groupActive ? 'font-medium text-text' : 'text-text-muted hover:text-text'}`}
                           >
                             {group.name}
                           </button>
@@ -1084,7 +1084,7 @@ export function Sidebar() {
           <button
             type="button"
             onClick={() => setCreateDialogOpen(true)}
-            className="flex h-7 w-full items-center gap-2 whitespace-nowrap rounded px-2 text-left text-xs font-normal text-text-muted transition-colors hover:bg-surface-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface-subtle"
+            className="flex h-7 w-full items-center gap-2 whitespace-nowrap rounded px-2 text-left fg-type-nav-secondary text-text-muted transition-colors hover:bg-surface-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface-subtle"
           >
             <SidebarIcon name="plus" />
 
@@ -1102,7 +1102,7 @@ export function Sidebar() {
             viewTransition
             className={({ isActive }) =>
               [
-                'flex h-7 items-center gap-2 rounded px-2 text-xs transition-colors',
+                'flex h-7 items-center gap-2 rounded px-2 fg-type-nav-secondary transition-colors',
                 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface-subtle',
                 isActive
                   ? 'font-medium text-text'

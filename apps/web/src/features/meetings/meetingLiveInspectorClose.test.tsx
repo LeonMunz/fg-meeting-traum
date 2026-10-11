@@ -20,6 +20,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from '@testing-library/react'
 
 import { MemoryRouter, Route, Routes } from 'react-router'
@@ -436,11 +437,12 @@ describe('Live Meeting linked Work Item inspector outside-click close', () => {
 
     await openInspectorFor(LINKED_A.title)
 
-    // The current item's title heading (in the Live workspace)
-    // is a genuine outside surface.
-    const outside = screen.getByRole('heading', {
-      name: 'Budget review',
-    })
+    // The current item's canonical Markdown document (in the
+    // Live focus pane) is a genuine outside surface.
+    const outside = within(liveWorkspace()).getByText(
+      'Budget review',
+      { exact: true },
+    )
     fireEvent.click(outside)
 
     await waitFor(() => {

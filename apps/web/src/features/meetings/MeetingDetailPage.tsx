@@ -107,6 +107,34 @@ import type {
 } from '../../api/types'
 import { useSyncResearchGroupContext } from '../research-group/useSyncResearchGroupContext'
 
+import './MeetingDetailPage.css'
+
+// Live Meeting chrome uses one compact control family. Variants change
+// hierarchy and meaning without changing the 28px navigation-scale anatomy.
+const LIVE_CONTROL_BASE =
+  'inline-flex h-7 items-center gap-1.5 rounded px-2.5 text-xs leading-[18px] font-medium outline-none transition focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-not-allowed disabled:opacity-60'
+const LIVE_CONTROL_TERTIARY =
+  `${LIVE_CONTROL_BASE} border border-transparent bg-transparent text-text-muted hover:bg-surface-hover hover:text-text`
+const LIVE_CONTROL_SECONDARY =
+  `${LIVE_CONTROL_BASE} border border-default bg-transparent text-text-muted hover:bg-surface-hover hover:text-text`
+const LIVE_CONTROL_PRIMARY =
+  `${LIVE_CONTROL_BASE} border border-transparent bg-accent text-text-inverse hover:bg-accent-hover`
+const LIVE_CONTROL_SUCCESS =
+  `${LIVE_CONTROL_BASE} border border-transparent bg-success text-text-inverse hover:brightness-110`
+const LIVE_CONTROL_DANGER =
+  `${LIVE_CONTROL_BASE} border border-default bg-transparent text-danger hover:bg-danger-bg hover:border-danger hover:text-danger`
+const LIVE_CONTROL_ICON =
+  'material-symbols-outlined text-[14px] leading-none'
+
+// Agenda creation is tertiary navigation chrome, visually quieter
+// than a topic row while retaining a practical 28px minimum target.
+// Keep this local: the shared navigation roles and wider Live control
+// family intentionally remain unchanged.
+const LIVE_AGENDA_ADD_ACTION =
+  'fg-live-agenda-add-action inline-flex min-h-7 items-center gap-1 rounded bg-transparent px-1.5 text-left text-text-tertiary outline-none transition-colors hover:bg-surface-hover hover:text-text-muted focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-not-allowed disabled:opacity-60'
+const LIVE_AGENDA_ADD_ICON =
+  'material-symbols-outlined fg-live-agenda-add-icon'
+
 function getErrorMessage(
   error: unknown,
   fallback: string,
@@ -408,8 +436,8 @@ function MenuTrigger({
         className={
           compact
             ? [
-                'flex h-7 w-7 items-center justify-center rounded-md text-[#c8c6c5] outline-none transition hover:bg-[#222222] hover:text-[#E6E6E6] focus-visible:ring-2 focus-visible:ring-[#6898F0]',
-                open ? 'bg-[#222222] text-[#E6E6E6]' : '',
+                'flex h-7 w-7 items-center justify-center rounded text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus',
+                open ? 'bg-surface-hover text-text' : '',
               ].join(' ')
             : [
                 'flex h-8 w-8 items-center justify-center rounded-lg text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface',
@@ -2942,7 +2970,7 @@ export function MeetingDetailPage() {
       onClick={() =>
         setSectionComposerOpen(true)
       }
-      className="flex h-7 w-full items-center gap-2 rounded-md px-2 text-left text-[13px] leading-[18px] text-[#A3A3A3] outline-none transition hover:bg-[#222222] hover:text-[#E6E6E6] focus-visible:ring-2 focus-visible:ring-[#6898F0]"
+      className="flex h-7 w-full items-center gap-2 rounded-md px-2 text-left text-xs leading-[18px] text-[#A3A3A3] outline-none transition hover:bg-[#222222] hover:text-[#E6E6E6] focus-visible:ring-2 focus-visible:ring-[#6898F0]"
     >
       <span>+ Add section</span>
     </button>
@@ -3000,6 +3028,16 @@ export function MeetingDetailPage() {
         ) + 1
       : 0
 
+  // Topic contributor: the item's creator resolved to a Meeting
+  // participant's user (the API carries createdById only). Null
+  // when the creator is not among the visible participants.
+  const liveSelectedAuthor =
+    liveSelectedItem != null
+      ? participantUserById.get(
+          liveSelectedItem.createdById,
+        ) ?? null
+      : null
+
   // True while the detail pane shows the Meeting's actual current
   // item (i.e., the user is "on" current). Lifecycle controls
   // (Done / Follow-up) only act on the current item, so they render
@@ -3008,10 +3046,6 @@ export function MeetingDetailPage() {
     liveSelectedItem != null &&
     liveCurrentItem != null &&
     liveSelectedItem.id === liveCurrentItem.id
-
-  const showLiveContextActions =
-    !liveSelectionIsCurrent &&
-    (liveCurrentItem != null || canManageLifecycle)
 
   const liveOpenItemCount = sortedItems.filter(
     (item) => item.outcome === 'not_discussed',
@@ -3323,12 +3357,12 @@ export function MeetingDetailPage() {
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-2">
           <nav
             aria-label="Breadcrumb"
-            className="flex min-w-0 select-none items-center gap-1.5 text-[13px] leading-[18px] text-[#8A8A8A]"
+            className="flex min-w-0 select-none items-center gap-1.5 text-[13px] leading-[18px] text-text-tertiary"
           >
             <button
               type="button"
               onClick={() => navigate('/meetings')}
-              className="-mx-1 shrink-0 rounded px-1 outline-none transition hover:text-[#E6E6E6] focus-visible:ring-2 focus-visible:ring-[#6898F0]"
+              className="-mx-1 shrink-0 rounded px-1 outline-none transition hover:text-text focus-visible:ring-2 focus-visible:ring-focus"
             >
               Meetings
             </button>
@@ -3344,30 +3378,30 @@ export function MeetingDetailPage() {
             {/* The Meeting title stays the page's single level-1
                 heading (page heading contract) while carrying the
                 compact Stitch breadcrumb-title treatment. */}
-            <h1 className="min-w-0 truncate text-[15px] font-semibold leading-[18px] text-[#E6E6E6]">
+            <h1 className="min-w-0 truncate text-[15px] font-semibold leading-[18px] text-text">
               {meeting.title}
             </h1>
           </nav>
 
           <span
             aria-hidden="true"
-            className="hidden h-3.5 w-[1px] shrink-0 bg-white/10 sm:block"
+            className="hidden h-3.5 w-[1px] shrink-0 bg-border-subtle sm:block"
           />
 
           {/* Compact Live indicator + elapsed timer from the
               persisted startedAt (graceful when missing). */}
           <span
             role="status"
-            className="flex shrink-0 items-center gap-1.5 rounded-[6px] border border-white/[0.06] bg-[#1A1A1A] px-2 py-0.5"
+            className="flex shrink-0 items-center gap-1.5 rounded border border-border-subtle bg-surface-subtle px-2 py-0.5"
           >
             <span
               aria-hidden="true"
-              className="material-symbols-outlined animate-pulse text-[14px] text-[#6E9BF5]"
+              className="material-symbols-outlined animate-pulse text-[14px] text-accent-text"
             >
               radio_button_checked
             </span>
 
-            <span className="text-[13px] leading-[18px] text-[#A3A3A3]">
+            <span className="text-[13px] leading-[18px] text-text-muted">
               Live
               <LiveElapsedTimer
                 startedAt={meeting.startedAt}
@@ -3394,7 +3428,7 @@ export function MeetingDetailPage() {
                     <span
                       key={participant.id}
                       title={getPersonName(participant.user)}
-                      className="flex h-6 w-6 select-none items-center justify-center rounded-full bg-[#2A2A2A] text-[11px] font-medium text-[#E6E6E6] ring-2 ring-canvas"
+                      className="flex h-6 w-6 select-none items-center justify-center rounded-full bg-surface-muted text-[11px] font-medium text-text ring-2 ring-canvas"
                     >
                       {getInitials(participant.user)}
                     </span>
@@ -3409,7 +3443,7 @@ export function MeetingDetailPage() {
                         getPersonName(participant.user),
                       )
                       .join(', ')}
-                    className="flex h-6 w-6 select-none items-center justify-center rounded-full bg-[#1C1C1C] text-[10px] font-medium text-[#8A8A8A] ring-2 ring-canvas"
+                    className="flex h-6 w-6 select-none items-center justify-center rounded-full bg-surface-subtle text-[10px] font-medium text-text-tertiary ring-2 ring-canvas"
                   >
                     +{participants.length - 4}
                   </span>
@@ -3425,7 +3459,7 @@ export function MeetingDetailPage() {
               type="button"
               disabled={updatingMeeting}
               onClick={() => void handleEndMeeting()}
-              className="inline-flex h-8 items-center rounded-[6px] border border-white/[0.06] bg-transparent px-3 text-[13px] leading-[18px] font-medium text-[#A3A3A3] outline-none transition hover:bg-[#222222] hover:text-[#E6E6E6] focus-visible:ring-2 focus-visible:ring-[#6898F0] focus-visible:ring-offset-2 focus-visible:ring-offset-canvas disabled:opacity-60"
+              className={LIVE_CONTROL_DANGER}
             >
               End meeting
             </button>
@@ -3715,7 +3749,7 @@ export function MeetingDetailPage() {
             className="w-full shrink-0 lg:sticky lg:top-8 lg:w-[280px] lg:self-start lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto lg:pr-1"
           >
             {sortedSections.length === 0 ? (
-              <p className="px-2.5 text-[13px] leading-[18px] text-[#8A8A8A]">
+              <p className="px-2 fg-type-nav-secondary text-text-muted">
                 No agenda items yet.
               </p>
             ) : (
@@ -3737,18 +3771,23 @@ export function MeetingDetailPage() {
                           while the Section carries topics; empty
                           Sections stay visible with the muted
                           label and no placeholder text. */}
+                      {/* Section label on the frozen Sidebar chrome
+                          scale (10px / 600 / uppercase / wider
+                          tracking), matching the global workspace
+                          navigation; full vs empty Sections keep
+                          their two-tone distinction. */}
                       <h3
                         className={
                           sectionItems.length > 0
-                            ? 'px-2.5 pb-1 text-[13px] font-semibold leading-[18px] text-[#A3A3A3]'
-                            : 'px-2.5 text-[13px] leading-[18px] text-[#8A8A8A]'
+                            ? 'mb-1 px-2 fg-type-nav-section-label text-text-muted'
+                            : 'px-2 fg-type-nav-section-label text-text-tertiary'
                         }
                       >
                         {section.name}
                       </h3>
 
                       {sectionItems.length > 0 && (
-                        <ul className="mt-1 flex flex-col gap-0.5">
+                        <ul className="flex flex-col gap-0.5">
                           {sectionItems.map((item) => {
                             const statusMeta =
                               agendaStatusMeta(item.outcome)
@@ -3768,16 +3807,16 @@ export function MeetingDetailPage() {
                             const symbolClass = isCurrent &&
                             item.outcome ===
                               'not_discussed'
-                              ? 'text-[#6E9BF5]'
+                              ? 'text-accent-text'
                               : item.outcome === 'done'
                                 ? 'text-success-text'
-                                : 'text-[#8A8A8A]'
+                                : 'text-text-tertiary'
 
                             const rowClass = [
-                              'relative flex h-8 w-full items-center gap-2 overflow-hidden rounded-[6px] pl-2.5 pr-2 text-left outline-none transition',
+                              'relative flex h-7 w-full items-center gap-2 overflow-hidden rounded px-2 text-left outline-none transition-colors',
                               isCurrent || isSelected
-                                ? 'bg-[#222222]'
-                                : 'hover:bg-[#222222]',
+                                ? 'bg-surface-hover'
+                                : 'hover:bg-surface-hover',
                             ].join(' ')
 
                             return (
@@ -3793,7 +3832,7 @@ export function MeetingDetailPage() {
                                       ? `View current item ${item.title}`
                                       : `View item ${item.title}`
                                   }
-                                  className={`${rowClass} focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#6898F0]`}
+                                  className={`${rowClass} focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus`}
                                 >
                                   {/* Current (persisted) marker:
                                       the 2px accent left
@@ -3803,25 +3842,25 @@ export function MeetingDetailPage() {
                                   {isCurrent && (
                                     <span
                                       aria-hidden="true"
-                                      className="absolute inset-y-0 left-0 w-[2px] bg-[#6E9BF5]"
+                                      className="absolute inset-y-0 left-0 w-[2px] bg-accent"
                                     />
                                   )}
 
                                   <span
                                     aria-hidden="true"
-                                    className={`w-4 shrink-0 pl-0.5 text-center text-[14px] leading-none ${symbolClass}`}
+                                    className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center text-[14px] leading-none ${symbolClass}`}
                                   >
                                     {statusMeta.symbol}
                                   </span>
 
                                   <span
-                                    className={`min-w-0 flex-1 truncate text-[13px] leading-[18px] ${item.outcome === 'done' ? 'text-[#A3A3A3]' : 'text-[#E6E6E6]'} ${isCurrent ? 'font-medium' : ''}`}
+                                    className={`min-w-0 flex-1 truncate fg-type-nav-secondary ${item.outcome === 'done' ? 'text-text-muted' : isCurrent || isSelected ? 'text-text' : 'text-text-muted'} ${isSelected ? 'font-medium' : ''}`}
                                   >
                                     {item.title}
                                   </span>
 
                                   {isCurrent && (
-                                    <span className="shrink-0 text-[11px] font-medium leading-none text-[#6E9BF5]">
+                                    <span className="shrink-0 text-[11px] font-medium leading-none text-accent-text">
                                       Current
                                     </span>
                                   )}
@@ -3891,7 +3930,7 @@ export function MeetingDetailPage() {
                               }}
                               placeholder="Agenda item title"
                               aria-label={`Add item to ${section.name}`}
-                              className="h-8 min-w-0 flex-1 rounded-[6px] border border-white/[0.06] bg-[#121212] px-2 text-[13px] leading-5 text-[#E6E6E6] outline-none placeholder:text-[#8A8A8A] focus:border-[#6898F0] focus:ring-1 focus:ring-[#6898F0]"
+                              className="h-7 min-w-0 flex-1 rounded border border-default bg-surface px-2 text-[13px] leading-[18px] text-text outline-none placeholder:text-text-tertiary focus:border-accent focus:ring-1 focus:ring-focus"
                             />
 
                             <button
@@ -3902,7 +3941,7 @@ export function MeetingDetailPage() {
                                   ''
                                 ).trim()
                               }
-                              className="inline-flex h-8 items-center rounded-[6px] px-2.5 text-[13px] font-medium text-[#A3A3A3] outline-none transition hover:bg-[#222222] hover:text-[#E6E6E6] focus-visible:ring-2 focus-visible:ring-[#6898F0] disabled:opacity-45"
+                              className={LIVE_AGENDA_ADD_ACTION}
                             >
                               Add
                             </button>
@@ -3917,9 +3956,9 @@ export function MeetingDetailPage() {
                                 [section.id]: '',
                               }))
                             }}
-                            className="mt-1.5 inline-flex h-7 items-center gap-1.5 rounded-[6px] px-2.5 text-[13px] leading-[18px] text-[#A3A3A3] outline-none transition hover:bg-[#1A1A1A] hover:text-[#E6E6E6] focus-visible:ring-2 focus-visible:ring-[#6898F0]"
+                            className={`${LIVE_AGENDA_ADD_ACTION} mt-1.5`}
                           >
-                            <span aria-hidden="true" className="material-symbols-outlined text-[14px]">
+                            <span aria-hidden="true" className={LIVE_AGENDA_ADD_ICON}>
                               add
                             </span>
                             {sectionItems.length === 0
@@ -3935,20 +3974,30 @@ export function MeetingDetailPage() {
             )}
           </nav>
 
-          {/* RIGHT: Current Item workspace. */}
+          {/* RIGHT: the approved Stitch focus pane — the quiet
+              #1A1A1A container (low-contrast border, 8px radius,
+              24px padding, ~460px minimum height) carrying the
+              topic context, the canonical Markdown document, the
+              item Notes, and the execution actions. The pane
+              grows with long documents: no internal scroll
+              region, no clamping. */}
           <main
             aria-label="Agenda item"
             className="min-w-0 flex-1"
           >
+            <section
+              data-live-focus-pane
+              className="flex min-h-[460px] min-w-0 flex-col rounded-[8px] border border-border-subtle bg-surface-subtle p-6"
+            >
             {liveSelectedItem != null ? (
-              <div>
+              <>
                 {/* Context row: "Section · x of y" (left) and the quiet
                     Make-current / return actions (right, only while the
                     viewed item is not the Meeting's current item).
                     Keeping them in the same row preserves the reading
-                    order Context -> Title -> Notes. */}
+                    order Context -> Document -> Notes. */}
                 <div className="flex min-w-0 items-center gap-3">
-                  <p className="truncate text-sm font-medium text-text-muted">
+                  <p className="min-w-0 truncate text-[13px] leading-[18px] text-text-tertiary">
                     {liveSelectedSection?.name ?? ''}
                     {liveSelectedPosition > 0 && (
                       <>
@@ -3969,11 +4018,11 @@ export function MeetingDetailPage() {
                         <button
                           type="button"
                           onClick={handleReturnToCurrent}
-                          className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs font-medium text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus"
+                          className={`${LIVE_CONTROL_TERTIARY} px-2`}
                         >
                           <span
                             aria-hidden="true"
-                            className="material-symbols-outlined text-[13px]"
+                            className={LIVE_CONTROL_ICON}
                           >
                             arrow_back
                           </span>
@@ -3995,20 +4044,20 @@ export function MeetingDetailPage() {
                           }
                           aria-label={`Make ${liveSelectedItem!.title} current`}
                           title="Make this item the meeting's current item"
-                          className="inline-flex h-7 items-center gap-1 rounded-md border border-accent px-2 text-xs font-medium text-accent-text outline-none transition hover:bg-accent-subtle focus-visible:ring-2 focus-visible:ring-focus disabled:opacity-60"
+                          className={`${LIVE_CONTROL_SECONDARY} border-accent px-2 text-accent-text hover:bg-accent-subtle hover:text-accent-text`}
                         >
                           {updatingItemId ===
                           liveSelectedItem!.id ? (
                             <span
                               aria-hidden="true"
-                              className="material-symbols-outlined animate-spin text-[13px]"
+                              className={`${LIVE_CONTROL_ICON} animate-spin`}
                             >
                               refresh
                             </span>
                           ) : (
                             <span
                               aria-hidden="true"
-                              className="material-symbols-outlined text-[13px]"
+                              className={LIVE_CONTROL_ICON}
                             >
                               center_focus_strong
                             </span>
@@ -4028,13 +4077,48 @@ export function MeetingDetailPage() {
                   ) : null}
                 </div>
 
+                {/* Topic contributor: avatar/initials + name with
+                    the relative creation time; degrades to the
+                    time alone when the creator is not a visible
+                    participant. */}
+                <div className="mt-2.5 flex min-w-0 items-center gap-2 text-[13px] leading-[18px] text-text-tertiary">
+                  {liveSelectedAuthor != null && (
+                    <span
+                      aria-hidden="true"
+                      className="flex h-5 w-5 shrink-0 select-none items-center justify-center rounded-full bg-surface-muted text-[10px] font-medium text-text-muted"
+                    >
+                      {getInitials(liveSelectedAuthor)}
+                    </span>
+                  )}
+                  <span className="min-w-0 truncate">
+                    {liveSelectedAuthor != null
+                      ? `${getPersonName(liveSelectedAuthor)} · ${formatItemRelativeTime(liveSelectedItem.createdAt)}`
+                      : formatItemRelativeTime(
+                          liveSelectedItem.createdAt,
+                        )}
+                  </span>
+                </div>
+
+                {/* The canonical Markdown document — the topic
+                    itself, rendered in full through the
+                    established read-only renderer (no truncation,
+                    no clamp, no internal scroll, no redundant
+                    derived title above its own document). */}
+                <div className="mt-4 min-w-0">
+                  <TopicMarkdownDisplay
+                    content={
+                      liveSelectedItem.content
+                    }
+                  />
+                </div>
+
                 {/* Informational feedback after a cancellation that
                     preserved an edited target; cleared by selection
                     changes and the next full load. */}
                 {preservedFollowUpNotice != null && (
                   <div
                     role="status"
-                    className="mt-3 flex items-start gap-2 rounded-lg bg-surface-muted px-3 py-2 text-sm text-text"
+                    className="mt-5 flex items-start gap-2 rounded-lg bg-surface-muted px-3 py-2 text-sm text-text"
                   >
                     <span
                       aria-hidden="true"
@@ -4057,27 +4141,13 @@ export function MeetingDetailPage() {
                   </div>
                 )}
 
-                {/* Current item title — strongest heading. */}
-                <h2
-                  data-current-item-title
-                  className={`${showLiveContextActions ? 'mt-3' : 'mt-1'} break-words text-2xl font-semibold tracking-tight text-text`}
-                >
-                  {liveSelectedItem.title}
-                </h2>
-
-                {liveSelectedItem.contextNotes && (
-                  <p className="mt-2 whitespace-pre-wrap text-sm text-text-muted">
-                    {liveSelectedItem.contextNotes}
-                  </p>
-                )}
-
                 {/* Existing persistent Meeting Notes: content,
                     authoring, and Note -> Work Item all stay
                     exactly as before, scoped to THIS item. The
-                    column is left-aligned and width-constrained
-                    for readability on wide screens. */}
-                <div className="mt-5 w-full max-w-[740px]">
-                  <p className="text-xs font-semibold text-text-muted">
+                    column sits below the topic document inside
+                    the pane (the pane constrains the width). */}
+                <div className="mt-5 w-full">
+                  <p className="text-[13px] font-semibold leading-[18px] text-text-muted">
                     Notes
                   </p>
                   {(liveSelectedItem.notes ?? []).length >
@@ -4088,7 +4158,7 @@ export function MeetingDetailPage() {
                           (note) => (
                             <li
                               key={note.id}
-                              className="group/note relative rounded-lg px-2 py-1 transition hover:bg-surface-subtle"
+                              className="group/note relative rounded px-2 py-1 transition hover:bg-surface-hover"
                             >
                               {editingNoteId ===
                               note.id ? (
@@ -4125,7 +4195,7 @@ export function MeetingDetailPage() {
                                       onClick={
                                         cancelEditingNote
                                       }
-                                      className="h-7 rounded-md px-2 text-xs font-medium text-text-muted outline-none transition hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus"
+                                      className={`${LIVE_CONTROL_TERTIARY} px-2`}
                                     >
                                       Cancel
                                     </button>
@@ -4142,13 +4212,13 @@ export function MeetingDetailPage() {
                                             note,
                                           )
                                       }
-                                      className="inline-flex h-7 items-center gap-1 rounded-md bg-accent px-2 text-xs font-semibold text-white outline-none transition hover:bg-accent-hover focus-visible:ring-2 focus-visible:ring-focus disabled:opacity-45"
+                                      className={`${LIVE_CONTROL_PRIMARY} px-2`}
                                     >
                                       {savingNoteId ===
                                       note.id && (
                                         <span
                                           aria-hidden="true"
-                                          className="material-symbols-outlined animate-spin text-[13px]"
+                                          className={`${LIVE_CONTROL_ICON} animate-spin`}
                                         >
                                           refresh
                                         </span>
@@ -4326,7 +4396,7 @@ export function MeetingDetailPage() {
                                 liveSelectedItem,
                               )
                           }
-                          className="h-8 rounded-lg px-2 text-xs font-medium text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-not-allowed disabled:opacity-45"
+                          className={`${LIVE_CONTROL_SECONDARY} px-2`}
                         >
                           Create work item
                         </button>
@@ -4341,13 +4411,13 @@ export function MeetingDetailPage() {
                               liveSelectedItem,
                             )
                           }
-                          className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-accent px-3 text-sm font-semibold text-white outline-none transition hover:bg-accent-hover focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-not-allowed disabled:opacity-45"
+                          className={LIVE_CONTROL_PRIMARY}
                         >
                           {creatingNoteItemId ===
                           liveSelectedItem.id && (
                             <span
                               aria-hidden="true"
-                              className="material-symbols-outlined animate-spin text-[15px]"
+                              className={`${LIVE_CONTROL_ICON} animate-spin`}
                             >
                               refresh
                             </span>
@@ -4361,7 +4431,7 @@ export function MeetingDetailPage() {
                         <button
                           type="button"
                           onClick={cancelNoteComposer}
-                          className="ml-auto h-8 rounded-lg px-2 text-sm font-medium text-text-muted outline-none transition hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus"
+                          className={`${LIVE_CONTROL_TERTIARY} ml-auto px-2`}
                         >
                           Cancel
                         </button></div>
@@ -4376,9 +4446,9 @@ export function MeetingDetailPage() {
                       onClick={() =>
                         openNoteComposer(liveSelectedItem)
                       }
-                      className={`${(liveSelectedItem.notes ?? []).length > 0 ? 'mt-6' : 'mt-2'} inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-xs font-medium text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus`}
+                      className={`${LIVE_CONTROL_TERTIARY} ${(liveSelectedItem.notes ?? []).length > 0 ? 'mt-6' : 'mt-2'} px-2`}
                     >
-                      <span aria-hidden="true" className="material-symbols-outlined text-[14px]">
+                      <span aria-hidden="true" className={LIVE_CONTROL_ICON}>
                         add
                       </span>
                       {(liveSelectedItem.notes ?? []).length >
@@ -4419,9 +4489,9 @@ export function MeetingDetailPage() {
                         }
                         aria-label={`Cancel follow-up for ${liveSelectedItem.title}`}
                         title="Cancel follow-up"
-                        className="mt-3 ml-7 inline-flex h-8 items-center gap-1.5 rounded-lg border border-default bg-surface px-3 text-xs font-medium text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-60"
+                        className={`${LIVE_CONTROL_SECONDARY} mt-3 ml-7`}
                       >
-                        <span aria-hidden="true" className="material-symbols-outlined text-[15px] text-text-muted">
+                        <span aria-hidden="true" className={`${LIVE_CONTROL_ICON} text-text-tertiary`}>
                           event_busy
                         </span>
                         Cancel follow-up
@@ -4456,13 +4526,13 @@ export function MeetingDetailPage() {
                   const statusNode = (
                     <span
                       className={[
-                        'inline-flex h-9 items-center gap-1.5 rounded-lg px-1 text-sm font-medium',
+                        'inline-flex h-7 items-center gap-1.5 rounded px-1 text-xs font-medium',
                         selectedOutcome === 'done'
                           ? 'text-success'
                           : 'text-text-muted',
                       ].join(' ')}
                     >
-                      <span aria-hidden="true" className="material-symbols-outlined text-[16px]">
+                      <span aria-hidden="true" className={LIVE_CONTROL_ICON}>
                         {selectedOutcome === 'done' ? 'check' : 'refresh'}
                       </span>
                       {statusMeta.label}
@@ -4471,7 +4541,7 @@ export function MeetingDetailPage() {
 
                   if (canReopenSelected) {
                     return (
-                      <div className="mt-7 flex flex-wrap items-center gap-3 border-t border-border-subtle pt-4">
+                      <div className="mt-7 flex flex-wrap items-center gap-2 border-t border-border-subtle pt-4">
                         {statusNode}
                         <button
                           type="button"
@@ -4481,7 +4551,7 @@ export function MeetingDetailPage() {
                           }
                           aria-label={`Reopen ${liveSelectedItem.title}`}
                           title="Reopen"
-                          className="inline-flex h-9 items-center rounded-lg border border-default bg-surface px-3 text-sm font-medium text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-60"
+                          className={LIVE_CONTROL_SECONDARY}
                         >
                           {busy ? 'Reopening…' : 'Reopen'}
                         </button>
@@ -4495,9 +4565,9 @@ export function MeetingDetailPage() {
                             }
                             aria-label={`Schedule follow-up for ${liveCurrentItem.title}`}
                             title="Schedule follow-up"
-                            className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-default bg-surface px-3 text-sm font-medium text-text-muted outline-none transition hover:border-control hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-60"
+                            className={LIVE_CONTROL_SECONDARY}
                           >
-                            <span aria-hidden="true" className="material-symbols-outlined text-[16px] text-text-muted">
+                            <span aria-hidden="true" className={`${LIVE_CONTROL_ICON} text-text-tertiary`}>
                               event_repeat
                             </span>
                             Schedule follow-up
@@ -4522,9 +4592,9 @@ export function MeetingDetailPage() {
                       }
                       aria-label={`Schedule follow-up for ${liveCurrentItem.title}`}
                       title="Schedule follow-up"
-                      className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-default bg-surface px-2.5 text-sm font-medium text-text-muted outline-none transition hover:border-control hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-60"
+                      className={LIVE_CONTROL_SECONDARY}
                     >
-                      <span aria-hidden="true" className="material-symbols-outlined text-[15px] text-text-muted">
+                      <span aria-hidden="true" className={`${LIVE_CONTROL_ICON} text-text-tertiary`}>
                         event_repeat
                       </span>
                       Schedule follow-up
@@ -4532,7 +4602,7 @@ export function MeetingDetailPage() {
                   )
 
                   return (
-                    <div className="mt-7 flex flex-wrap items-center gap-3 border-t border-border-subtle pt-4">
+                    <div className="mt-7 flex flex-wrap items-center gap-2 border-t border-border-subtle pt-4">
                       {currentOutcome === 'follow_up' ? (
                         <>
                           {statusNode}
@@ -4542,9 +4612,9 @@ export function MeetingDetailPage() {
                               type="button"
                               disabled
                               aria-label={`Changing ${liveCurrentItem.title} outcome`}
-                              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-default bg-surface px-2.5 text-sm font-medium text-text-muted"
+                              className={LIVE_CONTROL_SECONDARY}
                             >
-                              <span aria-hidden="true" className="material-symbols-outlined animate-spin text-[15px]">
+                              <span aria-hidden="true" className={`${LIVE_CONTROL_ICON} animate-spin`}>
                                 refresh
                               </span>
                               Saving…
@@ -4557,9 +4627,9 @@ export function MeetingDetailPage() {
                               }
                               aria-label={`Change ${liveCurrentItem.title} to done`}
                               title="Change to Done"
-                              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-default bg-surface px-2.5 text-sm font-medium text-text outline-none transition hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-60"
+                              className={`${LIVE_CONTROL_SECONDARY} text-text`}
                             >
-                              <span aria-hidden="true" className="material-symbols-outlined text-[15px] text-text-muted">
+                              <span aria-hidden="true" className={`${LIVE_CONTROL_ICON} text-text-tertiary`}>
                                 check
                               </span>
                               Change to Done
@@ -4579,14 +4649,14 @@ export function MeetingDetailPage() {
                             }
                             aria-label={`Mark ${liveCurrentItem.title} as done`}
                             title="Done"
-                            className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-success px-2.5 text-sm font-semibold text-white outline-none transition hover:brightness-110 focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-60"
+                            className={LIVE_CONTROL_SUCCESS}
                           >
                             {busy ? (
-                              <span aria-hidden="true" className="material-symbols-outlined animate-spin text-[15px]">
+                              <span aria-hidden="true" className={`${LIVE_CONTROL_ICON} animate-spin`}>
                                 refresh
                               </span>
                             ) : (
-                              <span aria-hidden="true" className="material-symbols-outlined text-[15px]">
+                              <span aria-hidden="true" className={LIVE_CONTROL_ICON}>
                                 check
                               </span>
                             )}
@@ -4599,7 +4669,7 @@ export function MeetingDetailPage() {
                     </div>
                   )
                 })()}
-              </div>
+              </>
             ) : (
               <div className="py-10">
                 <p className="text-sm font-medium text-text">
@@ -4614,6 +4684,7 @@ export function MeetingDetailPage() {
                 )}
               </div>
             )}
+            </section>
           </main>
         </div>
       ) : isCompleted ? (

@@ -354,9 +354,51 @@ describe('MeetingDetailPage Live Meeting shell', () => {
     expect(MEETING_DETAIL_SOURCE).toContain(
       '"Live"',
     )
-    // The only current-item title is the workspace heading.
+    // The Live focus pane renders the canonical Markdown
+    // document itself — no separate derived-title heading above
+    // it (that would repeat the document's opening line).
     expect(MEETING_DETAIL_SOURCE).toContain(
+      'TopicMarkdownDisplay',
+    )
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'content: liveSelectedItem.content',
+    )
+    expect(MEETING_DETAIL_SOURCE).not.toContain(
       'data-current-item-title',
+    )
+  })
+
+  it('renders the approved Stitch focus pane container', () => {
+    // The Live right column is one quiet semantic surface with a
+    // low-contrast border, 8px radius, 24px padding, ~460px minimum
+    // height, and no shadow.
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      '"data-live-focus-pane": true',
+    )
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'flex min-h-[460px] min-w-0 flex-col rounded-[8px] border border-border-subtle bg-surface-subtle p-6',
+    )
+    // The pane must never introduce an internal scroll region or
+    // decorative shadow (the document grows the pane instead).
+    const paneClass =
+      'flex min-h-[460px] min-w-0 flex-col rounded-[8px] border border-border-subtle bg-surface-subtle p-6'
+    expect(paneClass).not.toContain('shadow')
+    expect(paneClass).not.toContain('overflow')
+  })
+
+  it('resolves the topic contributor from the Meeting participants', () => {
+    // The API carries createdById only; the creator is resolved
+    // against the visible participants and shown with the
+    // relative creation time (graceful fallback to the time
+    // alone when unresolved).
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'liveSelectedAuthor',
+    )
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'getInitials(liveSelectedAuthor)',
+    )
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'formatItemRelativeTime(liveSelectedItem.createdAt)',
     )
   })
 })
@@ -380,11 +422,10 @@ describe('MeetingDetailPage Live visual polish', () => {
     expect(MEETING_DETAIL_SOURCE).toContain('"participants"')
   })
 
-  it('renders End meeting as the subtle Stitch secondary action', () => {
+  it('renders End meeting as a restrained destructive action', () => {
     // End meeting keeps its behavior (handleEndMeeting) and is
-    // offered to lifecycle managers with the approved subtle
-    // Stitch treatment: quiet bordered, neutral text, a quiet
-    // surface lift on hover — no persistent Danger fill.
+    // offered to lifecycle managers through the shared compact
+    // family: quiet bordered, semantic Danger text, and no fill.
     expect(MEETING_DETAIL_SOURCE).toContain(
       'void handleEndMeeting()',
     )
@@ -392,7 +433,7 @@ describe('MeetingDetailPage Live visual polish', () => {
       'canManageLifecycle && (',
     )
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'inline-flex h-8 items-center rounded-[6px] border border-white/[0.06] bg-transparent px-3 text-[13px] leading-[18px] font-medium text-[#A3A3A3] outline-none transition hover:bg-[#222222] hover:text-[#E6E6E6] focus-visible:ring-2 focus-visible:ring-[#6898F0] focus-visible:ring-offset-2 focus-visible:ring-offset-canvas disabled:opacity-60',
+      'className: LIVE_CONTROL_DANGER',
     )
   })
 
@@ -496,14 +537,15 @@ describe('MeetingDetailPage Live visual polish', () => {
 
   it('keeps the Live quick-add composer a quiet inline agenda row', () => {
     // The opened composer reads as a temporarily editable agenda
-    // row: a 32px field on the Stitch quiet canvas surface with a
+    // row: a 28px field on the Stitch quiet canvas surface with a
     // low-contrast frame (never a control-strength outline),
     // agenda-row typography, and a compact horizontal layout.
+    // The compact (h-7) control keeps the Stitch quiet palette.
     expect(MEETING_DETAIL_SOURCE).toContain(
       'mt-1.5 flex items-center gap-1.5 pl-2 pr-2',
     )
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'h-8 min-w-0 flex-1 rounded-[6px] border border-white/[0.06] bg-[#121212] px-2 text-[13px] leading-5 text-[#E6E6E6] outline-none placeholder:text-[#8A8A8A] focus:border-[#6898F0] focus:ring-1 focus:ring-[#6898F0]',
+      'h-7 min-w-0 flex-1 rounded border border-default bg-surface px-2 text-[13px] leading-[18px] text-text outline-none placeholder:text-text-tertiary focus:border-accent focus:ring-1 focus:ring-focus',
     )
     // Keyboard focus stays on the approved Stitch accent ring.
     expect(MEETING_DETAIL_SOURCE).not.toContain(
@@ -512,7 +554,38 @@ describe('MeetingDetailPage Live visual polish', () => {
     // The Add action is a small quiet text action with the
     // approved focus ring, not a filled dominant button.
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'inline-flex h-8 items-center rounded-[6px] px-2.5 text-[13px] font-medium text-[#A3A3A3] outline-none transition hover:bg-[#222222] hover:text-[#E6E6E6] focus-visible:ring-2 focus-visible:ring-[#6898F0] disabled:opacity-45',
+      'LIVE_AGENDA_ADD_ACTION',
+    )
+  })
+
+  it('shares the approved Sidebar typography with the Agenda navigation', () => {
+    // Topics and empty navigation copy use the Sidebar child-navigation
+    // role (12/16, normal); selected topics add medium weight without
+    // changing size. Add-item actions deliberately sit one step below.
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'px-2 fg-type-nav-secondary text-text-muted',
+    )
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'min-w-0 flex-1 truncate fg-type-nav-secondary',
+    )
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'isSelected ? "font-medium" : ""',
+    )
+    expect(MEETING_DETAIL_SOURCE).toContain('LIVE_AGENDA_ADD_ACTION')
+
+    // Both populated and empty section headings use the shared
+    // 10px semibold uppercase navigation-section role.
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'mb-1 px-2 fg-type-nav-section-label text-text-muted',
+    )
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'px-2 fg-type-nav-section-label text-text-tertiary',
+    )
+
+    // Add-item icons use their own smaller, leading-none role; the
+    // wider Live control icon family remains unchanged.
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'className: LIVE_AGENDA_ADD_ICON',
     )
   })
 
@@ -521,13 +594,13 @@ describe('MeetingDetailPage Live visual polish', () => {
     // accent left indicator over the quiet row surface (the
     // approved Stitch treatment) plus the accent Current label.
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'absolute inset-y-0 left-0 w-[2px] bg-[#6E9BF5]',
+      'absolute inset-y-0 left-0 w-[2px] bg-accent',
     )
     expect(MEETING_DETAIL_SOURCE).toContain(
       'item.id === meeting.currentMeetingItemId',
     )
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'shrink-0 text-[11px] font-medium leading-none text-[#6E9BF5]',
+      'shrink-0 text-[11px] font-medium leading-none text-accent-text',
     )
   })
 
@@ -537,7 +610,7 @@ describe('MeetingDetailPage Live visual polish', () => {
     // with no accent treatment of any kind. The accent bar and
     // Current label exist only on the current row.
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'isCurrent || isSelected ? "bg-[#222222]" : "hover:bg-[#222222]"',
+      'isCurrent || isSelected ? "bg-surface-hover" : "hover:bg-surface-hover"',
     )
     // The selected row is a quiet surface, not a strong/disabled
     // navigation block: no accent surface and no visible
@@ -579,26 +652,23 @@ describe('MeetingDetailPage Live visual polish', () => {
     expect(MEETING_DETAIL_SOURCE).toContain(
       'Change ${liveCurrentItem.title} to done',
     )
-    // Compact (h-8) controls: Done carries the Success
+    // Compact (h-7) controls: Done carries the Success
     // semantic with a slight clarity lift on hover; scheduling is
-    // the quietest control in the row (muted text, control-border
-    // hover), clearly secondary to Done.
+    // the quietest control in the row (muted text on the pane's
+    // quiet border), clearly secondary to Done.
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'h-8 items-center gap-1.5 rounded-lg bg-success px-2.5 text-sm font-semibold text-white outline-none transition hover:brightness-110',
+      'className: LIVE_CONTROL_SUCCESS',
     )
-    // The Schedule-follow-up control (h-8 resolve row and h-9
-    // reopen row) stays a neutral secondary: default border, muted
-    // text, surface hover with a control-border lift.
+    // The Schedule-follow-up control (h-7 resolve row and h-7
+    // reopen row) stays a neutral secondary: quiet pane border,
+    // muted text, quiet surface hover.
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'h-8 items-center gap-1.5 rounded-lg border border-default bg-surface px-2.5 text-sm font-medium text-text-muted outline-none transition hover:border-control hover:bg-surface-hover',
-    )
-    expect(MEETING_DETAIL_SOURCE).toContain(
-      'h-9 items-center gap-1.5 rounded-lg border border-default bg-surface px-3 text-sm font-medium text-text-muted outline-none transition hover:border-control hover:bg-surface-hover',
+      'className: LIVE_CONTROL_SECONDARY',
     )
     // The Outcome-zone dividers sit on the semantic border-subtle
     // token (Dark #363A3F), with the calibrated mt-7 / pt-4 rhythm.
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'mt-7 flex flex-wrap items-center gap-3 border-t border-border-subtle pt-4',
+      'mt-7 flex flex-wrap items-center gap-2 border-t border-border-subtle pt-4',
     )
     expect(MEETING_DETAIL_SOURCE).toContain(
       'mt-7 border-t border-border-subtle pt-4',
@@ -703,20 +773,14 @@ describe('MeetingDetailPage shared header color semantics', () => {
     expect(start).toContain('focus-visible:ring-[#6898F0]')
   })
 
-  it('classifies End meeting with the approved subtle Stitch treatment', () => {
-    // The Live header's End meeting is a subtle quiet secondary
-    // control (Stitch): low-contrast border, muted text, a quiet
-    // surface lift on hover, and the approved accent focus ring.
-    const end = classNameOf(MEETING_DETAIL_SOURCE, 'End meeting', 'handleEndMeeting')
-    expect(end).toContain('border-white/[0.06]')
-    expect(end).toContain('text-[#A3A3A3]')
-    expect(end).toContain('hover:bg-[#222222]')
-    expect(end).toContain('hover:text-[#E6E6E6]')
-    expect(end).toContain('focus-visible:ring-2')
-    expect(end).toContain('focus-visible:ring-[#6898F0]')
-    // The idle state stays quiet; no persistent Danger fill.
-    expect(end).not.toContain('bg-danger')
-    expect(end).not.toContain('text-danger')
+  it('classifies End meeting as a restrained destructive action', () => {
+    expect(fileSource).toContain('className={LIVE_CONTROL_DANGER}')
+    expect(fileSource).toContain(
+      'border border-default bg-transparent text-danger hover:bg-danger-bg hover:border-danger hover:text-danger',
+    )
+    expect(fileSource).not.toContain(
+      'LIVE_CONTROL_DANGER} bg-danger',
+    )
   })
 
   it('classifies Reopen meeting as a neutral secondary action', () => {
@@ -743,13 +807,13 @@ describe('MeetingDetailPage shared header color semantics', () => {
     // low-contrast border, pulsing accent dot, muted "Live"
     // label — never a broad accent header treatment.
     expect(fileSource).toContain(
-      'rounded-[6px] border border-white/[0.06] bg-[#1A1A1A] px-2 py-0.5',
+      'rounded border border-border-subtle bg-surface-subtle px-2 py-0.5',
     )
     expect(fileSource).toContain(
-      'animate-pulse text-[14px] text-[#6E9BF5]',
+      'animate-pulse text-[14px] text-accent-text',
     )
     expect(fileSource).toContain(
-      'text-[13px] leading-[18px] text-[#A3A3A3]',
+      'text-[13px] leading-[18px] text-text-muted',
     )
   })
 
@@ -803,7 +867,7 @@ describe('MeetingDetailPage Live header (approved Stitch composition)', () => {
     // The Meeting title keeps the compact breadcrumb-title
     // treatment as the page's single level-1 heading.
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'min-w-0 truncate text-[15px] font-semibold leading-[18px] text-[#E6E6E6]',
+      'min-w-0 truncate text-[15px] font-semibold leading-[18px] text-text',
     )
   })
 
@@ -827,10 +891,10 @@ describe('MeetingDetailPage Live header (approved Stitch composition)', () => {
       'participants.length > 4',
     )
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'rounded-full bg-[#2A2A2A] text-[11px] font-medium text-[#E6E6E6]',
+      'rounded-full bg-surface-muted text-[11px] font-medium text-text',
     )
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'rounded-full bg-[#1C1C1C] text-[10px] font-medium text-[#8A8A8A]',
+      'rounded-full bg-surface-subtle text-[10px] font-medium text-text-tertiary',
     )
   })
 

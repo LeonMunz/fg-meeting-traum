@@ -8,8 +8,10 @@ by manual host-browser visual acceptance on 2026-10-06 (see §2).
 Documentation only — no production source, test, token, Tailwind,
 radius, border, or spacing change is introduced by this document.
 
-**Revision:** v2 (2026-10-06) — v1 was the one-off audit report
-(recovered from Git history if needed); v2 is the durable contract.
+**Revision:** v3 (2026-10-10) — v3 promotes the approved Sidebar
+navigation scale into shared semantic roles and applies its secondary
+navigation role to the Live Meeting Agenda. v2 established the durable
+content contract; v1 was the one-off audit report.
 Baseline of all measurements: `4453f5e`.
 
 **Scope:** semantic typography roles for Workspace content pages +
@@ -57,13 +59,25 @@ They are size/line/weight contracts — not yet theme tokens (no
 | `meta` | 12 / 16 | 400 | Secondary record line, attendee text, timestamps, toast sub, state rows |
 | `micro` | 11 / 16 | 500 | Column headers, mobile inline column labels, badges, counters |
 
-**Sidebar chrome exceptions (already frozen — no change).** The
-Sidebar keeps its frozen scale, defined in
-`workspace-sidebar/IMPLEMENTATION_CONTRACT.md` §3.4: primary nav
-**13px**, child nav **12px**, section label **10px** (600, uppercase,
-`tracking-wider`), brand block 14/600 + 11/400. The 10px label is the
-only sanctioned value below `micro`; content pages must not go smaller
-than 11px. Content must not simply inherit Sidebar sizing.
+### 1.1 Shared navigation typography (SETTLED)
+
+These roles preserve the approved Sidebar rendering and are shared by
+navigation-like product rails. All use Inter (`font-sans`) with normal
+letter spacing unless stated otherwise.
+
+| FG role | Size / line | Weight | Use |
+|---|---|---|---|
+| `nav-primary` | 13 / 19.5 (1.5) | 400; 500 when active | Sidebar Home / My Work / Notes and Quick Access rows |
+| `nav-secondary` | 12 / 16 | 400; 500 when selected | Sidebar Projects / Meetings child rows and Live Agenda topics/actions |
+| `nav-section-label` | 10 / 15 (1.5) | 600, uppercase, `tracking-wider` | Sidebar and Live Agenda section labels |
+
+The primary line height records the Sidebar's existing inherited 1.5
+rendering exactly; it is not rounded to the reference export's approximate
+18px measurement. The 10px section label remains the only sanctioned value
+below `micro`. Content pages must not inherit navigation sizing; a product
+surface may consume these roles only when it acts as navigation, as the Live
+Agenda rail does. The Sidebar brand block remains a scoped exception at
+14/600 + 11/400.
 
 **Exception — record weight.** `record-title` keeps 600 even though
 `primary-content` is 400: both accepted pages use 600 for the record

@@ -542,17 +542,17 @@ button {
 }
 
 /* ── Workspace typography roles ─────────────────────────────────
- * Semantic typography roles for FG Workspace content pages — the
- * SETTLED roles of docs/design/workspace-typography-density.md §1.
+ * Semantic typography roles for FG Workspace content and navigation —
+ * the SETTLED roles of docs/design/workspace-typography-density.md §1.
  * Size / line-height / weight expressions only: color, radius, and
  * spacing stay per-element Tailwind utilities, and no @theme token is
  * introduced (tokenization is a separate architecture decision).
- * Allowed weights are 400 / 500 / 600. The frozen Sidebar keeps its
- * own scale (workspace-sidebar/IMPLEMENTATION_CONTRACT.md §3.4) and
- * does not use these classes. Where one usage deviates from the role
- * weight (e.g. search input text at 400 inside the 500-weight
- * control role), a per-element utility overrides this class
- * (utilities layer beats components layer).
+ * Allowed weights are 400 / 500 / 600. Navigation roles preserve the
+ * approved Sidebar scale (workspace-sidebar/IMPLEMENTATION_CONTRACT.md
+ * §3.4) and can be reused by navigation-like product rails. Where one
+ * usage deviates from the role weight (e.g. selected navigation at 500),
+ * a per-element utility overrides this class (utilities layer beats the
+ * components layer).
  */
 @layer components {
   .fg-type-page-title {
@@ -581,6 +581,18 @@ button {
 
   .fg-type-micro {
     @apply text-[11px] leading-4 font-medium;
+  }
+
+  .fg-type-nav-primary {
+    @apply font-sans text-[13px] leading-[1.5] font-normal tracking-normal;
+  }
+
+  .fg-type-nav-secondary {
+    @apply font-sans text-xs leading-4 font-normal tracking-normal;
+  }
+
+  .fg-type-nav-section-label {
+    @apply font-sans text-[10px] leading-[1.5] font-semibold uppercase tracking-wider;
   }
 }
 

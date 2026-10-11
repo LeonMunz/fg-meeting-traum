@@ -19,6 +19,13 @@ const indexCss = readFileSync(
   resolve(dirname(fileURLToPath(import.meta.url)), '../src/index.css'),
   'utf-8',
 )
+const meetingDetailCss = readFileSync(
+  resolve(
+    dirname(fileURLToPath(import.meta.url)),
+    '../src/features/meetings/MeetingDetailPage.css',
+  ),
+  'utf-8',
+)
 
 const roleBlocks = new Map<string, string>()
 
@@ -35,12 +42,30 @@ const expectRole = (role: string, utilities: string[]) => {
   ).toBe(`@apply ${utilities.join(' ')}`)
 }
 
+const declarationsFor = (css: string, selector: string) => {
+  const escapedSelector = selector.replace(
+    /[.*+?^${}()|[\]\\]/g,
+    '\\$&',
+  )
+  const match = css.match(
+    new RegExp(`${escapedSelector}\\s*\\{([^}]*)\\}`),
+  )
+
+  return match?.[1]
+    .split(';')
+    .map((declaration) => declaration.trim())
+    .filter(Boolean)
+}
+
 describe('workspace typography roles (src/index.css)', () => {
-  it('defines exactly the seven settled roles', () => {
+  it('defines exactly the ten settled roles', () => {
     expect([...roleBlocks.keys()].sort()).toEqual([
       'control',
       'meta',
       'micro',
+      'nav-primary',
+      'nav-secondary',
+      'nav-section-label',
       'page-title',
       'primary-content',
       'record-title',
@@ -99,5 +124,60 @@ describe('workspace typography roles (src/index.css)', () => {
       'leading-4',
       'font-medium',
     ])
+  })
+
+  it('nav-primary: Inter 13/19.5, 400, normal tracking', () => {
+    expectRole('nav-primary', [
+      'font-sans',
+      'text-[13px]',
+      'leading-[1.5]',
+      'font-normal',
+      'tracking-normal',
+    ])
+  })
+
+  it('nav-secondary: Inter 12/16, 400, normal tracking', () => {
+    expectRole('nav-secondary', [
+      'font-sans',
+      'text-xs',
+      'leading-4',
+      'font-normal',
+      'tracking-normal',
+    ])
+  })
+
+  it('nav-section-label: Inter 10/15, 600, uppercase, tracking-wider', () => {
+    expectRole('nav-section-label', [
+      'font-sans',
+      'text-[10px]',
+      'leading-[1.5]',
+      'font-semibold',
+      'uppercase',
+      'tracking-wider',
+    ])
+  })
+})
+
+describe('Live Agenda Add typography cascade contract', () => {
+  it('pins Add labels to 11px/16px at normal weight', () => {
+    expect(
+      declarationsFor(
+        meetingDetailCss,
+        '.fg-live-agenda-add-action',
+      ),
+    ).toEqual([
+      'font-size: 11px',
+      'line-height: 16px',
+      'font-weight: 400',
+    ])
+  })
+
+  it('overrides the Material Symbols 24px default with a 12px icon', () => {
+    expect(
+      declarationsFor(
+        meetingDetailCss,
+        '.fg-live-agenda-add-icon.material-symbols-outlined',
+      ),
+    ).toEqual(['font-size: 12px', 'line-height: 1'])
   })
 })
