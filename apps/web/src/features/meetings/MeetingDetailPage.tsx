@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   lazy,
+  useLayoutEffect,
   useMemo,
   Suspense,
   useRef,
@@ -117,8 +118,6 @@ const LIVE_CONTROL_TERTIARY =
   `${LIVE_CONTROL_BASE} border border-transparent bg-transparent text-text-muted hover:bg-surface-hover hover:text-text`
 const LIVE_CONTROL_SECONDARY =
   `${LIVE_CONTROL_BASE} border border-default bg-transparent text-text-muted hover:bg-surface-hover hover:text-text`
-const LIVE_CONTROL_PRIMARY =
-  `${LIVE_CONTROL_BASE} border border-transparent bg-accent text-text-inverse hover:bg-accent-hover`
 const LIVE_CONTROL_SUCCESS =
   `${LIVE_CONTROL_BASE} border border-transparent bg-success text-text-inverse hover:brightness-110`
 const LIVE_CONTROL_DANGER =
@@ -467,6 +466,156 @@ function MenuTrigger({
           className="z-50 w-52 rounded-xl border border-border-subtle bg-surface p-1 shadow-lg"
         >
           {children(open, toggle)}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Seamless MeetingNote editor, shared by the new-Note composer and
+// existing-Note editing: the displayed Note (or a blank writing
+// surface) is replaced by a borderless, transparent, auto-growing
+// textarea in the SAME position (no padding of its own, so the text
+// stays put; the approved Note typography text-sm/leading-6/text-
+// text is reused verbatim). There is no input box, card, or panel:
+// the quiet keyboard-focus indication is a 1px accent underline
+// under the text (a full transparent bottom border reserves the
+// space, so nothing shifts).
+//
+// Persistence is AUTOMATIC and there are no visible Save/Cancel
+// controls: focus-leave commits the draft (the caller decides
+// create / update / no-op), Escape discards it (the suppress flag
+// keeps the resulting blur or unmount from committing), and save
+// feedback is a quiet one-line status inside the editor (while
+// pending or on failure) — never a toolbar. In the composer, the
+// quiet "Create work item" action sits below the writing surface.
+// The outcome of one MeetingNote persistence (save or create).
+// `ok` gates the Done transition (a failed persistence must not
+// complete the topic); the post-settle surface state tells the
+// Done flow whether the editor/composer legitimately stayed open
+// (a failed commit keeps its draft; a save keeps the editor open
+// when a NEWER draft was typed while it was in flight) so it can
+// re-commit instead of re-reading stale render state.
+type NoteCommitResult = {
+  ok: boolean
+  kind: 'save' | 'create'
+  editorStillOpen: boolean
+  composerStillOpen: boolean
+}
+
+function NoteInlineEditor({
+  value,
+  placeholder,
+  ariaLabel,
+  savingLabel,
+  error,
+  onValueChange,
+  onCommitDraft,
+  onEscape,
+  workItemAction,
+}: {
+  value: string
+  placeholder?: string
+  ariaLabel: string
+  savingLabel: string | null
+  error: string | null
+  onValueChange: (value: string) => void
+  onCommitDraft: () => void
+  onEscape: () => void
+  workItemAction?: {
+    label: string
+    disabled: boolean
+    onClick: () => void
+  } | null
+}) {
+  const textareaRef = useRef<
+    HTMLTextAreaElement
+  >(null)
+  // Escape must not commit through the focus-leave (or unmount)
+  // that follows.
+  const suppressCommitRef = useRef(false)
+
+  // Auto-expand with the content (the established
+  // TopicMarkdownComposer pattern): no fixed height, no internal
+  // scrolling, no clipping. A single-line Note opens at one line;
+  // new line breaks grow the field. The effect only touches
+  // layout height — never focus or selection.
+  useLayoutEffect(() => {
+    const el = textareaRef.current
+
+    if (el == null) {
+      return
+    }
+
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight}px`
+  }, [value])
+
+  const handleBlur = () => {
+    if (suppressCommitRef.current) {
+      suppressCommitRef.current = false
+      return
+    }
+
+    onCommitDraft()
+  }
+
+  return (
+    <div>
+      <textarea
+        ref={textareaRef}
+        value={value}
+        placeholder={placeholder}
+        onChange={(event) =>
+          onValueChange(event.target.value)
+        }
+        onBlur={handleBlur}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault()
+            suppressCommitRef.current = true
+            onEscape()
+          }
+        }}
+        autoFocus
+        rows={1}
+        aria-label={ariaLabel}
+        className="block w-full resize-none overflow-hidden whitespace-pre-wrap border-b border-transparent bg-transparent p-0 text-sm leading-6 text-text outline-none focus:border-accent"
+      />
+
+      {error != null ? (
+        <p
+          role="alert"
+          className="mt-1 text-[11px] leading-[16px] text-danger"
+        >
+          {error}
+        </p>
+      ) : savingLabel != null ? (
+        <p
+          role="status"
+          className="mt-1 text-[11px] leading-[16px] text-text-tertiary"
+        >
+          {savingLabel}
+        </p>
+      ) : null}
+
+      {workItemAction != null && (
+        <div className="mt-1 flex items-center">
+          <button
+            type="button"
+            disabled={
+              workItemAction.disabled
+            }
+            onClick={
+              workItemAction.onClick
+            }
+            aria-label={
+              workItemAction.label
+            }
+            className="rounded px-0.5 text-[11px] leading-[16px] text-text-tertiary outline-none transition hover:text-text focus-visible:ring-1 focus-visible:ring-focus disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {workItemAction.label}
+          </button>
         </div>
       )}
     </div>
@@ -865,6 +1014,20 @@ export function MeetingDetailPage() {
     creatingNoteItemId,
     setCreatingNoteItemId,
   ] = useState<number | null>(null)
+  // Synchronous in-flight guard for the composer's create: React
+  // state is batched, so a blur + a "Create work item" click within
+  // one tick must both observe the same create as in flight.
+  const composerCreateInFlightRef =
+    useRef(false)
+  // The item whose composer create should open the Work Item
+  // dialog once it succeeds (set by the quiet "Create work item"
+  // affordance; read on the in-flight create's resolve).
+  const composerWorkItemIntentRef =
+    useRef<number | null>(null)
+  // Quiet inline error for the active Note editor (new or
+  // existing); shown inside the editor, never in a toolbar.
+  const [noteError, setNoteError] =
+    useState<string | null>(null)
   const [
     editingNoteId,
     setEditingNoteId,
@@ -873,6 +1036,79 @@ export function MeetingDetailPage() {
     noteEditContent,
     setNoteEditContent,
   ] = useState('')
+  // Always-fresh mirror of the edit draft: an in-flight save's
+  // resolve must compare against the CURRENT draft (keystrokes
+  // typed while the save is pending) to avoid closing the editor
+  // and discarding a newer edit.
+  const noteEditContentRef = useRef(noteEditContent)
+  noteEditContentRef.current = noteEditContent
+  // The Done activation captured on the Done button's pointerdown.
+  // It fires BEFORE the focus-out autosave, so the autosave can
+  // defer to the combined commit + Done flow instead of running
+  // ahead of it: its "Saving…"/"Adding…" status line would
+  // otherwise land in the flow above the action row between
+  // mousedown and mouseup, shift the Done button out from under
+  // the cursor, and make the browser deliver the click to the row
+  // instead of the button (first click lost, second required).
+  const doneIntentRef = useRef<
+    ApiMeetingItem | null
+  >(null)
+  // The single Note persistence in flight for the Live item (a
+  // save or a create) so the Done flow can AWAIT it instead of
+  // starting a duplicate. The result carries the post-settle
+  // surface state (the editor/composer may legitimately stay
+  // open: a failed commit keeps its draft, and a save keeps the
+  // editor open when a NEWER draft was typed while it was in
+  // flight). The ref (unlike React state) is current inside
+  // awaited continuations, so commit guards read it, not the
+  // per-render `savingNoteId`/`creatingNoteItemId` state.
+  const noteCommitInFlightRef = useRef<{
+    itemId: number
+    kind: 'save' | 'create'
+    promise: Promise<NoteCommitResult>
+  } | null>(null)
+  // Synchronous guard for the combined Done flow: React state is
+  // batched, so the ref is the only guard that observes a
+  // repeated activation within one tick.
+  const doneFlowInFlightRef = useRef(false)
+  // Always-fresh entry for the pointercancel fallback: a system-
+  // cancelled Done gesture must still run the focus-leave
+  // autosave that was deferred for it (the listener is attached
+  // once, so it resolves the CURRENT render's handlers through
+  // this ref).
+  const noteSurfaceAutosaveRef = useRef<(
+    item: ApiMeetingItem,
+  ) => void>(() => {})
+  noteSurfaceAutosaveRef.current = (item) => {
+    const editingId =
+      editingNoteIdRef.current
+    if (editingId != null) {
+      const note = (item.notes ?? []).find(
+        (candidate) =>
+          candidate.id === editingId,
+      )
+      if (note != null) {
+        handleNoteEditBlur(item, note)
+        return
+      }
+    }
+    if (noteComposerItemIdRef.current === item.id) {
+      handleComposerBlur(item)
+    }
+  }
+  // Always-fresh mirrors for the Done flow: after an awaited
+  // commit the flow's render closure is stale, but these
+  // per-render mirrors (and the synchronous refs above) are
+  // current.
+  const noteDraftContentRef = useRef(noteDraftContent)
+  noteDraftContentRef.current = noteDraftContent
+  const editingNoteIdRef = useRef(editingNoteId)
+  editingNoteIdRef.current = editingNoteId
+  const noteComposerItemIdRef =
+    useRef(noteComposerItemId)
+  noteComposerItemIdRef.current = noteComposerItemId
+  const itemsRef = useRef(items)
+  itemsRef.current = items
   const [
     savingNoteId,
     setSavingNoteId,
@@ -885,6 +1121,22 @@ export function MeetingDetailPage() {
     pendingDeleteNote,
     setPendingDeleteNote,
   ] = useState<ApiMeetingNote | null>(null)
+
+  // Focus management for the note-delete confirmation: the dialog
+  // container (Tab trap), the Delete confirmation (initial focus)
+  // and the trigger that opened the dialog (focus restoration).
+  // The synchronous in-flight ref guards a repeated Enter within
+  // one tick — React state is batched, so `deletingNoteId` alone
+  // would not yet observe the in-flight delete (same race as the
+  // composer create).
+  const noteDeleteDialogRef =
+    useRef<HTMLDivElement>(null)
+  const noteDeleteConfirmRef =
+    useRef<HTMLButtonElement>(null)
+  const noteDeleteReturnFocusRef =
+    useRef<HTMLButtonElement | null>(null)
+  const noteDeleteInFlightRef =
+    useRef(false)
   // The exact persisted MeetingNote the Work Item dialog is anchored
   // to (null for the plain MeetingItem flow).
   const [
@@ -1958,26 +2210,259 @@ export function MeetingDetailPage() {
     }
   }
 
+  // Resolves the item's pending MeetingNote state BEFORE a Done
+  // transition: it settles an in-flight save/create (started by
+  // the focus-leave autosave) and persists any open
+  // editor/composer draft through the single commit paths — the
+  // topic is never marked Done with unsaved Note changes behind
+  // it. A failed persistence returns false (the draft and the
+  // inline error stay in the editor; the topic must not be
+  // completed). The first pass reads the per-render mirrors
+  // (fresh: no await has run yet); later passes trust the
+  // post-settle surface state carried by the commit results,
+  // because the flow's render closure (and mirrors) are stale
+  // after an awaited settle.
+  const ensureItemNotesPersisted =
+    async (item: ApiMeetingItem):
+      Promise<boolean> => {
+      let editor:
+        'unknown' | 'closed' | 'advanced' =
+        'unknown'
+      let composer:
+        'unknown' | 'closed' = 'unknown'
+      let firstPassNote:
+        ApiMeetingNote | null = null
+
+      // Bounded: one round per settled commit, plus follow-up
+      // rounds for drafts that advanced while a save was in
+      // flight.
+      for (
+        let round = 0;
+        round < 8;
+        round++
+      ) {
+        const inFlight =
+          noteCommitInFlightRef.current
+        if (
+          inFlight != null &&
+          inFlight.itemId === item.id
+        ) {
+          const result = await inFlight.promise
+          if (!result.ok) return false
+          if (result.kind === 'save') {
+            editor =
+              result.editorStillOpen
+                ? 'advanced'
+                : 'closed'
+          } else {
+            // A settled create closed the composer (a failure
+            // would have returned false above).
+            composer = 'closed'
+          }
+          continue
+        }
+
+        const itemNotes = item.notes ?? []
+        let startedCommit = false
+
+        if (editor === 'advanced') {
+          // A NEWER draft was typed while the previous save was
+          // in flight: re-commit it (the mirror holds the newer
+          // content; the note id is stable).
+          const note =
+            firstPassNote ??
+            itemNotes.find(
+              (candidate) =>
+                candidate.id ===
+                editingNoteIdRef.current,
+            )
+          if (note != null) {
+            void saveNoteEdit(item, note)
+            startedCommit = true
+          } else {
+            editor = 'closed'
+          }
+        } else if (editor === 'unknown') {
+          const editingId =
+            editingNoteIdRef.current
+          if (
+            editingId != null &&
+            itemNotes.some(
+              (note) => note.id === editingId,
+            )
+          ) {
+            const note = itemNotes.find(
+              (candidate) =>
+                candidate.id === editingId,
+            )!
+            firstPassNote = note
+            const draft =
+              noteEditContentRef.current
+            if (
+              draft.trim() === '' ||
+              draft === note.content
+            ) {
+              // Nothing to persist (an empty draft is never
+              // PATCHed; an unchanged draft sends nothing):
+              // close the editor and let the transition
+              // proceed.
+              cancelEditingNote()
+              editor = 'closed'
+            } else {
+              // The single commit path; the next round settles
+              // it.
+              void saveNoteEdit(item, note)
+              startedCommit = true
+            }
+          } else {
+            editor = 'closed'
+          }
+        }
+
+        if (composer === 'unknown') {
+          if (
+            noteComposerItemIdRef.current ===
+            item.id
+          ) {
+            const draft =
+              noteDraftContentRef.current
+            if (draft.trim() === '') {
+              cancelNoteComposer()
+              composer = 'closed'
+            } else {
+              void submitNoteComposer(item)
+              startedCommit = true
+            }
+          } else {
+            composer = 'closed'
+          }
+        }
+
+        if (!startedCommit) {
+          return true
+        }
+      }
+
+      // Pathological (drafts keep advancing while saves settle):
+      // keep the drafts in the editor and do NOT complete the
+      // topic.
+      return false
+    }
+
   const handleDoneItem = async (item: ApiMeetingItem) => {
-    if (updatingItemId != null) return
-    const sourceWasCurrent =
-      meeting?.currentMeetingItemId === item.id
-    setUpdatingItemId(item.id)
+    if (
+      updatingItemId != null ||
+      doneFlowInFlightRef.current
+    ) {
+      return
+    }
+
+    doneFlowInFlightRef.current = true
     setActionError(null)
+
     try {
-      await markMeetingItemDone(item.id)
-      await refreshAfterResolvingCurrent(
-        item.id,
-        sourceWasCurrent,
-      )
-    } catch (error) {
-      setActionError(
-        getErrorMessage(error, 'Agenda item could not be marked done.'),
-      )
+      // A Done activation persists the item's MeetingNote state
+      // FIRST (an in-flight save or an open editor/composer
+      // draft); a failed persistence leaves the draft + the
+      // inline error and does NOT complete the topic.
+      const persisted =
+        await ensureItemNotesPersisted(item)
+      if (!persisted) {
+        return
+      }
+
+      const sourceWasCurrent =
+        meeting?.currentMeetingItemId === item.id
+      // The Done button's "Saving…" busy state represents the
+      // Done mutation itself; the Note persistence phase above
+      // shows its own editor feedback (the button must keep its
+      // geometry and label until the press is released).
+      setUpdatingItemId(item.id)
+      try {
+        await markMeetingItemDone(item.id)
+        await refreshAfterResolvingCurrent(
+          item.id,
+          sourceWasCurrent,
+        )
+      } catch (error) {
+        setActionError(
+          getErrorMessage(
+            error,
+            'Agenda item could not be marked done.',
+          ),
+        )
+      }
     } finally {
+      doneFlowInFlightRef.current = false
       setUpdatingItemId(null)
     }
   }
+
+  // Always-fresh flow entry for the stable document listener
+  // below (the listener is attached once; the ref tracks the
+  // current render's closure).
+  const doneFlowRef = useRef<(
+    item: ApiMeetingItem,
+  ) => void>(() => {})
+  doneFlowRef.current = (item) => {
+    void handleDoneItem(item)
+  }
+
+  // The pointer release that ends a Done activation runs the
+  // captured intent — wherever the release lands. A release off
+  // the button (the action row moved between mousedown and
+  // mouseup, or the pointer was dragged away) delivers no click
+  // to the button, and a release on a shifted button may lose
+  // its click to the row: the flow must not depend on the click
+  // at all. The ensuing pointer click (detail > 0) is then a
+  // leftover of the same activation — the button's onClick skips
+  // it; keyboard activations (detail 0) still run the flow from
+  // the click.
+  useEffect(() => {
+    const onPointerUp = () => {
+      const intent =
+        doneIntentRef.current
+      if (intent == null) {
+        return
+      }
+
+      doneIntentRef.current = null
+      doneFlowRef.current(intent)
+    }
+
+    const onPointerCancel = () => {
+      // The gesture was cancelled by the system: the focus-out
+      // autosave was deferred for it — run it now, exactly as a
+      // plain focus-leave would have (the draft is never silently
+      // dropped).
+      const intent =
+        doneIntentRef.current
+      if (intent == null) {
+        return
+      }
+      doneIntentRef.current = null
+      noteSurfaceAutosaveRef.current(intent)
+    }
+
+    document.addEventListener(
+      'pointerup',
+      onPointerUp,
+    )
+    document.addEventListener(
+      'pointercancel',
+      onPointerCancel,
+    )
+    return () => {
+      document.removeEventListener(
+        'pointerup',
+        onPointerUp,
+      )
+      document.removeEventListener(
+        'pointercancel',
+        onPointerCancel,
+      )
+    }
+  }, [])
 
   const handleReopenItem = async (item: ApiMeetingItem) => {
     if (updatingItemId != null) return
@@ -2162,106 +2647,478 @@ export function MeetingDetailPage() {
     // composer is simply discarded (never submitted).
     setNoteComposerItemId(item.id)
     setNoteDraftContent('')
+    setNoteError(null)
   }
 
-  const submitNoteComposer = async (
+  // Single persistence path for the composer draft. The
+  // SYNCHRONOUS in-flight ref (not the batched state) is what
+  // prevents a repeated blur — or the blur + "Create work item"
+  // click pair within one tick — from issuing a second create for
+  // the same draft. Resolves true when the content is persisted
+  // (or there was nothing to persist), false on failure (the
+  // draft and the inline error stay in the composer). The draft is
+  // read from the always-fresh mirror so an awaited re-commit
+  // (the Done flow) never resubmits a stale draft.
+  const submitNoteComposer = (
     item: ApiMeetingItem,
-  ) => {
-    const trimmed = noteDraftContent.trim()
-    if (!trimmed || creatingNoteItemId != null) {
-      return
+  ): Promise<NoteCommitResult> => {
+    const trimmed =
+      noteDraftContentRef.current.trim()
+    if (
+      !trimmed ||
+      composerCreateInFlightRef.current
+    ) {
+      return Promise.resolve({
+        ok: true,
+        kind: 'create',
+        editorStillOpen: false,
+        composerStillOpen:
+          noteComposerItemIdRef.current ===
+          item.id,
+      })
     }
 
+    composerCreateInFlightRef.current = true
     setCreatingNoteItemId(item.id)
-    setActionError(null)
+    setNoteError(null)
 
-    try {
-      const created = await createMeetingNote(
-        item.id,
-        { content: trimmed },
-      )
-      updateItemNotes(
-        item.id,
-        [...(item.notes ?? []), created],
-      )
-      setNoteComposerItemId(null)
-      setNoteDraftContent('')
-    } catch (error) {
-      // Preserve the draft so the user can retry without re-typing.
-      setActionError(
-        getErrorMessage(
-          error,
-          'Note could not be added.',
-        ),
-      )
-    } finally {
-      setCreatingNoteItemId(null)
-    }
+    const promise = (async ():
+      Promise<NoteCommitResult> => {
+      try {
+        const created = await createMeetingNote(
+          item.id,
+          { content: trimmed },
+        )
+        updateItemNotes(
+          item.id,
+          [...(item.notes ?? []), created],
+        )
+        setNoteComposerItemId(null)
+        setNoteDraftContent('')
+        // The quiet "Create work item" affordance recorded its
+        // intent synchronously; only the successfully persisted
+        // Note becomes the Work Item source (the canonical
+        // sequence).
+        if (
+          composerWorkItemIntentRef.current ===
+          item.id
+        ) {
+          composerWorkItemIntentRef.current = null
+          openNoteWorkItem(item, created)
+        }
+        return {
+          ok: true,
+          kind: 'create',
+          editorStillOpen: false,
+          composerStillOpen: false,
+        }
+      } catch (error) {
+        // Preserve the draft so the next focus-leave retries
+        // without re-typing; the Work Item dialog needs a
+        // persisted Note, so this attempt's intent is dropped.
+        composerWorkItemIntentRef.current = null
+        setNoteError(
+          getErrorMessage(
+            error,
+            'Note could not be added.',
+          ),
+        )
+        return {
+          ok: false,
+          kind: 'create',
+          editorStillOpen: false,
+          composerStillOpen: true,
+        }
+      } finally {
+        composerCreateInFlightRef.current = false
+        setCreatingNoteItemId(null)
+      }
+    })()
+
+    noteCommitInFlightRef.current =
+      {
+        itemId: item.id,
+        kind: 'create',
+        promise,
+      }
+    void promise.finally(() => {
+      if (
+        noteCommitInFlightRef.current
+          ?.itemId === item.id
+      ) {
+        noteCommitInFlightRef.current = null
+      }
+    })
+
+    return promise
   }
 
   const cancelNoteComposer = () => {
+    composerWorkItemIntentRef.current = null
     setNoteComposerItemId(null)
     setNoteDraftContent('')
+    setNoteError(null)
+  }
+
+  // True while a Done activation is in progress for this item:
+  // the Done button's pointerdown captured the intent BEFORE this
+  // focus-out, so the combined commit + Done flow owns the draft.
+  // The autosave must NOT run ahead of it: its status line would
+  // land in the flow above the action row between mousedown and
+  // mouseup and shift the Done button out from under the cursor
+  // (the browser then delivers the click to the row, not the
+  // button). The intent exists only during the live pointer
+  // gesture: pointerdown captures it, and the gesture ALWAYS ends
+  // with a pointerup or pointercancel (both consume/clear it), so
+  // a captured intent can never be "stale" at blur time — and it
+  // must not be tested against document.activeElement, which only
+  // switches to the button AFTER the editor's blur has dispatched.
+  const isDoneActivationFor = (
+    item: ApiMeetingItem,
+  ): boolean => {
+    const intent = doneIntentRef.current
+    return (
+      intent != null &&
+      intent.id === item.id
+    )
+  }
+
+  // Autosave on focus-leave: a non-blank draft persists through the
+  // existing create API and then displays in place; a whitespace-
+  // only draft closes the composer without creating a record. A
+  // create already in flight is never duplicated. A Done
+  // activation DEFERS the commit to the Done flow (no state
+  // update runs in the mousedown task, so the action row keeps its
+  // geometry until after the click).
+  const handleComposerBlur = (
+    item: ApiMeetingItem,
+  ) => {
+    if (noteComposerItemId !== item.id) {
+      return
+    }
+
+    if (composerCreateInFlightRef.current) {
+      return
+    }
+
+    if (isDoneActivationFor(item)) {
+      return
+    }
+
+    const trimmed = noteDraftContent.trim()
+    if (trimmed === '') {
+      cancelNoteComposer()
+      return
+    }
+
+    void submitNoteComposer(item)
+  }
+
+  const handleComposerEscape = () => {
+    cancelNoteComposer()
+  }
+
+  // Quiet "Create work item" below the writing surface: records the
+  // intent synchronously and persists the Note FIRST through the
+  // single composer path. If the focus-leave autosave already
+  // started the create, the in-flight resolve opens the dialog via
+  // the intent — the Note is created exactly once either way.
+  const handleComposerWorkItem = (
+    item: ApiMeetingItem,
+  ) => {
+    if (noteComposerItemId !== item.id) {
+      return
+    }
+    if (noteDraftContent.trim() === '') {
+      return
+    }
+
+    composerWorkItemIntentRef.current =
+      item.id
+
+    if (!composerCreateInFlightRef.current) {
+      void submitNoteComposer(item)
+    }
   }
 
   const startEditingNote = (
     note: ApiMeetingNote,
   ) => {
+    // Only one Note enters edit mode at a time: an open editor's
+    // draft is resolved (autosaved on focus-leave, or discarded
+    // with Escape) before another Note can open, so a draft is
+    // never silently overwritten.
+    if (
+      editingNoteId != null &&
+      editingNoteId !== note.id
+    ) {
+      return
+    }
+
     setEditingNoteId(note.id)
     setNoteEditContent(note.content)
+    setNoteError(null)
   }
 
   const cancelEditingNote = () => {
     setEditingNoteId(null)
     setNoteEditContent('')
+    setNoteError(null)
   }
 
-  const saveNoteEdit = async (
+  // Single persistence path for an edited Note. The result
+  // carries whether the content was persisted AND whether the
+  // editor stays open afterwards (a failure, or a NEWER draft
+  // typed while the save was in flight) so the Done flow can
+  // re-commit without a stale re-render. The draft is read from
+  // the always-fresh mirror so an awaited re-commit never
+  // resubmits a stale draft.
+  const saveNoteEdit = (
     item: ApiMeetingItem,
     note: ApiMeetingNote,
-  ) => {
-    const trimmed = noteEditContent.trim()
-    if (!trimmed || savingNoteId != null) {
-      return
+  ): Promise<NoteCommitResult> => {
+    const trimmed =
+      noteEditContentRef.current.trim()
+    // The in-flight check reads the synchronous ref, NOT the
+    // `savingNoteId` state: right after an awaited commit
+    // settles, this render closure's state still shows the save
+    // as in flight, and the stale guard would swallow the
+    // re-commit of a newer draft (the topic would stall with the
+    // editor still open).
+    const inFlight =
+      noteCommitInFlightRef.current
+    if (
+      !trimmed ||
+      (inFlight != null &&
+        inFlight.itemId === item.id &&
+        inFlight.kind === 'save')
+    ) {
+      return Promise.resolve({
+        ok: true,
+        kind: 'save',
+        editorStillOpen:
+          editingNoteIdRef.current ===
+          note.id,
+        composerStillOpen: false,
+      })
     }
 
     setSavingNoteId(note.id)
-    setActionError(null)
+    setNoteError(null)
 
-    try {
-      const updated = await updateMeetingNote(
-        note.id,
-        { content: trimmed },
+    const promise = (async ():
+      Promise<NoteCommitResult> => {
+      try {
+        const updated = await updateMeetingNote(
+          note.id,
+          { content: trimmed },
+        )
+        updateItemNotes(
+          item.id,
+          (item.notes ?? []).map((candidate) =>
+            candidate.id === updated.id
+              ? updated
+              : candidate,
+          ),
+        )
+        // Keystrokes typed while this save was in flight keep the
+        // editor open with the NEWER draft (the just-saved content
+        // is already in the list); a stale result never discards
+        // it.
+        if (
+          noteEditContentRef.current.trim() ===
+          trimmed
+        ) {
+          setEditingNoteId(null)
+          setNoteEditContent('')
+        }
+        return {
+          ok: true,
+          kind: 'save',
+          editorStillOpen:
+            noteEditContentRef.current.trim() !==
+            trimmed,
+          composerStillOpen: false,
+        }
+      } catch (error) {
+        // Keep the edited draft open with a quiet inline error;
+        // the next focus-leave retries without re-typing.
+        setNoteError(
+          getErrorMessage(
+            error,
+            'Note could not be updated.',
+          ),
+        )
+        return {
+          ok: false,
+          kind: 'save',
+          editorStillOpen: true,
+          composerStillOpen: false,
+        }
+      } finally {
+        setSavingNoteId(null)
+      }
+    })()
+
+    noteCommitInFlightRef.current =
+      {
+        itemId: item.id,
+        kind: 'save',
+        promise,
+      }
+    void promise.finally(() => {
+      if (
+        noteCommitInFlightRef.current
+          ?.itemId === item.id
+      ) {
+        noteCommitInFlightRef.current = null
+      }
+    })
+
+    return promise
+  }
+
+  // Autosave on focus-leave: changed content persists through the
+  // existing update API; unchanged content sends nothing and
+  // returns to display mode; a whitespace-only draft never
+  // PATCHes (the API rejects empty Notes) and is NOT turned into a
+  // delete — the editor stays open with a quiet error. A Done
+  // activation DEFERS the commit to the Done flow (no state
+  // update runs in the mousedown task, so the action row keeps its
+  // geometry until after the click).
+  const handleNoteEditBlur = (
+    item: ApiMeetingItem,
+    note: ApiMeetingNote,
+  ) => {
+    if (editingNoteId !== note.id) {
+      return
+    }
+
+    if (savingNoteId != null) {
+      return
+    }
+
+    if (isDoneActivationFor(item)) {
+      return
+    }
+
+    const draft = noteEditContent
+    const trimmed = draft.trim()
+
+    if (trimmed === '') {
+      setNoteError(
+        'Note content must not be empty.',
       )
-      updateItemNotes(
-        item.id,
-        (item.notes ?? []).map((candidate) =>
-          candidate.id === updated.id ? updated : candidate,
-        ),
-      )
-      setEditingNoteId(null)
-      setNoteEditContent('')
-    } catch (error) {
-      // Keep the edited draft visible so it is not lost.
-      setActionError(
-        getErrorMessage(
-          error,
-          'Note could not be updated.',
-        ),
-      )
-    } finally {
-      setSavingNoteId(null)
+      return
+    }
+
+    if (draft === note.content) {
+      cancelEditingNote()
+      return
+    }
+
+    void saveNoteEdit(item, note)
+  }
+
+  const handleNoteEditEscape = () => {
+    cancelEditingNote()
+  }
+
+  // Closes the delete confirmation and restores focus to the
+  // trigger that opened it (a no-op if the trigger unmounted
+  // with a successfully deleted Note).
+  const closeNoteDeleteDialog = () => {
+    setPendingDeleteNote(null)
+    queueMicrotask(() => {
+      noteDeleteReturnFocusRef.current?.focus()
+    })
+  }
+
+  // While the delete confirmation is open: focus the Delete
+  // confirmation (the user invoked a deliberate destructive
+  // action — Enter confirms immediately), and Escape cancels
+  // without deleting. No global Enter handling: Enter activates
+  // whichever dialog button holds focus (native button behavior).
+  useEffect(() => {
+    if (pendingDeleteNote == null) {
+      return
+    }
+
+    noteDeleteConfirmRef.current?.focus()
+
+    const handleKeyDown = (
+      event: KeyboardEvent,
+    ) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setPendingDeleteNote(null)
+        queueMicrotask(() => {
+          noteDeleteReturnFocusRef.current?.focus()
+        })
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [pendingDeleteNote])
+
+  // Tab / Shift+Tab containment for the two dialog buttons.
+  const handleNoteDeleteTabTrap = (
+    event: React.KeyboardEvent,
+  ) => {
+    if (
+      event.key !== 'Tab' ||
+      noteDeleteDialogRef.current == null
+    ) {
+      return
+    }
+
+    const focusable = Array.from(
+      noteDeleteDialogRef.current.querySelectorAll<HTMLElement>(
+        'button:not([disabled])',
+      ),
+    )
+    if (focusable.length === 0) {
+      return
+    }
+
+    const first = focusable[0]!
+    const last = focusable[focusable.length - 1]!
+    const active =
+      document.activeElement as HTMLElement | null
+
+    if (event.shiftKey) {
+      if (
+        active === first ||
+        !noteDeleteDialogRef.current.contains(active)
+      ) {
+        event.preventDefault()
+        last.focus()
+      }
+    } else if (
+      active === last ||
+      !noteDeleteDialogRef.current.contains(active)
+    ) {
+      event.preventDefault()
+      first.focus()
     }
   }
 
   const confirmDeleteNote = () => {
-    if (pendingDeleteNote == null || deletingNoteId != null) {
+    if (
+      pendingDeleteNote == null ||
+      deletingNoteId != null ||
+      noteDeleteInFlightRef.current
+    ) {
       return
     }
 
     const note = pendingDeleteNote
-    setPendingDeleteNote(null)
+    closeNoteDeleteDialog()
 
+    noteDeleteInFlightRef.current = true
     setDeletingNoteId(note.id)
     setActionError(null)
 
@@ -2284,6 +3141,9 @@ export function MeetingDetailPage() {
           setEditingNoteId(null)
           setNoteEditContent('')
         }
+        if (noteError != null) {
+          setNoteError(null)
+        }
       } catch (error) {
         setActionError(
           getErrorMessage(
@@ -2292,6 +3152,7 @@ export function MeetingDetailPage() {
           ),
         )
       } finally {
+        noteDeleteInFlightRef.current = false
         setDeletingNoteId(null)
       }
     })()
@@ -2307,47 +3168,9 @@ export function MeetingDetailPage() {
   ) => {
     setNoteComposerItemId(null)
     setNoteDraftContent('')
+    setNoteError(null)
     setNoteWorkItemNote(note)
     setWorkItemSource(item)
-  }
-
-  // "Create work item" inside the inline composer: persist the Note
-  // FIRST. Only a successfully persisted Note becomes the Work Item
-  // source; on failure the draft stays in the composer with a local
-  // error and no dialog opens.
-  const submitNoteThenCreateWorkItem = async (
-    item: ApiMeetingItem,
-  ) => {
-    const trimmed = noteDraftContent.trim()
-    if (!trimmed || creatingNoteItemId != null) {
-      return
-    }
-
-    setCreatingNoteItemId(item.id)
-    setActionError(null)
-
-    try {
-      const created = await createMeetingNote(
-        item.id,
-        { content: trimmed },
-      )
-
-      updateItemNotes(
-        item.id,
-        [...(item.notes ?? []), created],
-      )
-      openNoteWorkItem(item, created)
-    } catch (error) {
-      // Preserve the draft so the user can retry without re-typing.
-      setActionError(
-        getErrorMessage(
-          error,
-          'Note could not be added.',
-        ),
-      )
-    } finally {
-      setCreatingNoteItemId(null)
-    }
   }
 
   const handleNoteWorkItemCreated = (
@@ -4158,81 +4981,86 @@ export function MeetingDetailPage() {
                           (note) => (
                             <li
                               key={note.id}
-                              className="group/note relative rounded px-2 py-1 transition hover:bg-surface-hover"
+                              // While editing, the Note sits directly
+                              // on the Focus Pane surface (no gray
+                              // hover panel around the editor); the
+                              // subtle row hover stays available in
+                              // the resting state.
+                              className={
+                                editingNoteId ===
+                                note.id
+                                  ? 'group/note relative px-2 py-1'
+                                  : 'group/note relative rounded px-2 py-1 transition hover:bg-surface-hover'
+                              }
                             >
                               {editingNoteId ===
                               note.id ? (
-                                <div>
-                                  <textarea
-                                    value={noteEditContent}
-                                    onChange={(
-                                      event,
-                                    ) =>
-                                      setNoteEditContent(
-                                        event.target.value,
-                                      )
-                                    }
-                                    onKeyDown={
-                                      (event) => {
-                                        if (
-                                          event.key ===
-                                            'Escape'
-                                        ) {
-                                          event.preventDefault()
-                                          cancelEditingNote()
-                                        }
-                                      }
-                                    }
-                                    autoFocus
-                                    rows={2}
-                                    aria-label={`Edit note on ${liveSelectedItem.title}`}
-                                    className="w-full resize-y rounded-lg border border-default bg-surface px-2 py-1.5 text-sm text-text outline-none focus:border-accent"
-                                  />
-
-                                  <div className="mt-1.5 flex items-center justify-end gap-2">
-                                    <button
-                                      type="button"
-                                      onClick={
-                                        cancelEditingNote
-                                      }
-                                      className={`${LIVE_CONTROL_TERTIARY} px-2`}
-                                    >
-                                      Cancel
-                                    </button>
-
-                                    <button
-                                      type="button"
-                                      disabled={
-                                        !noteEditContent.trim()
-                                      }
-                                      onClick={
-                                        () =>
-                                          void saveNoteEdit(
-                                            liveSelectedItem,
-                                            note,
-                                          )
-                                      }
-                                      className={`${LIVE_CONTROL_PRIMARY} px-2`}
-                                    >
-                                      {savingNoteId ===
-                                      note.id && (
-                                        <span
-                                          aria-hidden="true"
-                                          className={`${LIVE_CONTROL_ICON} animate-spin`}
-                                        >
-                                          refresh
-                                        </span>
-                                      )}
-                                      {savingNoteId ===
-                                      note.id
-                                        ? 'Saving…'
-                                        : 'Save'}
-                                    </button>
-                                  </div>
-                                </div>
+                                <NoteInlineEditor
+                                  value={noteEditContent}
+                                  ariaLabel={`Edit note on ${liveSelectedItem.title}`}
+                                  savingLabel={
+                                    savingNoteId === note.id
+                                      ? 'Saving…'
+                                      : null
+                                  }
+                                  error={noteError}
+                                  onValueChange={
+                                    setNoteEditContent
+                                  }
+                                  onCommitDraft={() =>
+                                    handleNoteEditBlur(
+                                      liveSelectedItem,
+                                      note,
+                                    )
+                                  }
+                                  onEscape={
+                                    handleNoteEditEscape
+                                  }
+                                />
                               ) : (
                                 <>
-                                  <p className="whitespace-pre-wrap pr-16 text-sm leading-6 text-text">
+                                  {/* The persisted content itself is
+                                      the editing entry point (the
+                                      same direct-interaction
+                                      philosophy as Meeting
+                                      Preparation): click or
+                                      keyboard activation opens the
+                                      existing inline editor in
+                                      place. The element stays a
+                                      plain <p> — no form control —
+                                      so the approved resting
+                                      typography (size, leading,
+                                      color, wrapping, menu
+                                      clearance) is untouched by
+                                      the global button font reset.
+                                      Hover discovery is the
+                                      existing row highlight plus
+                                      the text cursor; keyboard
+                                      focus gets the Live focus
+                                      ring. The hover icons, the
+                                      attribution line, and the
+                                      linked Work Item card stay
+                                      independent controls. */}
+                                  <p
+                                    role="button"
+                                    tabIndex={0}
+                                    aria-label={`Edit note on ${liveSelectedItem.title}: ${note.content}`}
+                                    onClick={() =>
+                                      startEditingNote(note)
+                                    }
+                                    onKeyDown={(
+                                      event,
+                                    ) => {
+                                      if (
+                                        event.key === 'Enter' ||
+                                        event.key === ' '
+                                      ) {
+                                        event.preventDefault()
+                                        startEditingNote(note)
+                                      }
+                                    }}
+                                    className="whitespace-pre-wrap cursor-text rounded-md pr-16 text-sm leading-6 text-text outline-none transition focus-visible:ring-2 focus-visible:ring-focus"
+                                  >
                                     {note.content}
                                   </p>
 
@@ -4276,11 +5104,38 @@ export function MeetingDetailPage() {
                                     </div>
                                   )}
 
+                                  {/* Note actions: compact
+                                      hover/focus-only icons (no
+                                      three-dot menu). Editing is
+                                      the content itself; the row
+                                      reveals a quiet Work Item
+                                      icon (where permitted and not
+                                      yet linked) and — in a Live
+                                      Meeting — a small delete icon
+                                      that keeps the existing
+                                      confirmation flow.
+
+                                      Both actions share one quiet
+                                      icon-button geometry (the
+                                      compact MenuTrigger treatment:
+                                      28px, 4px radius, neutral
+                                      hover surface) with 16px
+                                      outline artwork. The artwork
+                                      size is pinned by the local
+                                      .fg-live-note-action-icon rule
+                                      (MeetingDetailPage.css) — the
+                                      external 24px
+                                      .material-symbols-outlined
+                                      default is unlayered and beats
+                                      the Tailwind utilities layer.
+                                      The group (top-0.5) centers
+                                      on the Note's 24px first text
+                                      line. */}
                                   {(isLive ||
                                   (canCreateWorkFromNote &&
                                   note.linkedWorkItem ==
                                   null)) && (
-                                    <div className="absolute right-2 top-1 flex items-center justify-end gap-1 opacity-0 transition group-hover/note:opacity-100 focus-within:opacity-100">
+                                    <div className="absolute right-2 top-0.5 flex items-center gap-0.5 opacity-0 transition group-hover/note:opacity-100 focus-within:opacity-100">
                                       {canCreateWorkFromNote &&
                                       note.linkedWorkItem ==
                                         null && (
@@ -4294,54 +5149,32 @@ export function MeetingDetailPage() {
                                           }
                                           aria-label={`Create work item from note: ${note.content}`}
                                           title="Create work item"
-                                          className="rounded-md p-1 text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus"
+                                          className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus"
                                         >
-                                          <span aria-hidden="true" className="material-symbols-outlined text-[15px]">
-                                            add_task
+                                          <span aria-hidden="true" className="fg-live-note-action-icon material-symbols-outlined text-[16px]">
+                                            playlist_add
                                           </span>
                                         </button>
                                       )}
 
                                       {isLive && (
-                                      <MenuTrigger
-                                        label={`Note actions for ${note.content}`}
-                                      >
-                                        {(_, close) => (
-                                          <>
-                                            <MenuItem
-                                              label="Edit note"
-                                              icon="edit"
-                                              onClick={
-                                                () => {
-                                                  startEditingNote(
-                                                    note,
-                                                  )
-                                                  close()
-                                                }
-                                              }
-                                            />
-
-                                            <span
-                                              role="none"
-                                              className="my-1 border-t border-border-subtle"
-                                            />
-
-                                            <MenuItem
-                                              label="Delete note"
-                                              icon="delete"
-                                              danger
-                                              onClick={
-                                                () => {
-                                                  close()
-                                                  setPendingDeleteNote(
-                                                    note,
-                                                  )
-                                                }
-                                              }
-                                            />
-                                          </>
-                                        )}
-                                      </MenuTrigger>
+                                        <button
+                                          type="button"
+                                          onClick={(event) => {
+                                            noteDeleteReturnFocusRef.current =
+                                              event.currentTarget
+                                            setPendingDeleteNote(
+                                              note,
+                                            )
+                                          }}
+                                          aria-label={`Delete note: ${note.content}`}
+                                          title="Delete note"
+                                          className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-text-muted outline-none transition hover:bg-surface-hover hover:text-danger focus-visible:ring-2 focus-visible:ring-focus"
+                                        >
+                                          <span aria-hidden="true" className="fg-live-note-action-icon material-symbols-outlined text-[16px]">
+                                            delete
+                                          </span>
+                                        </button>
                                       )}
                                     </div>
                                   )}
@@ -4364,77 +5197,49 @@ export function MeetingDetailPage() {
                           : 'mt-2'
                       }
                     >
-                      <textarea
+                      {/* The SAME seamless editor as existing-Note
+                          editing: a blank writing surface below the
+                          persisted Notes. Focus-leave autosaves the
+                          draft (whitespace-only drafts close without
+                          creating); Escape discards; the quiet
+                          "Create work item" action persists the Note
+                          first and then opens the Work Item dialog. */}
+                      <NoteInlineEditor
                         value={noteDraftContent}
-                        onChange={(event) =>
-                          setNoteDraftContent(
-                            event.target.value,
-                          )
-                        }
-                        onKeyDown={(event) => {
-                          if (event.key === 'Escape') {
-                            event.preventDefault()
-                            cancelNoteComposer()
-                          }
-                        }}
-                        autoFocus
-                        rows={2}
                         placeholder="Add what came up during the discussion…"
-                        aria-label={`Add note to ${liveSelectedItem.title}`}
-                        className="w-full resize-y rounded-lg border border-default bg-surface px-3 py-2 text-sm text-text outline-none focus:border-accent focus:ring-2 focus:ring-focus"
-                      />
-
-                      <div className="mt-2 flex items-center gap-2">
-                        <button
-                          type="button"
-                          disabled={
-                            !noteDraftContent.trim()
-                          }
-                          onClick={() =>
-                            void
-                              submitNoteThenCreateWorkItem(
-                                liveSelectedItem,
-                              )
-                          }
-                          className={`${LIVE_CONTROL_SECONDARY} px-2`}
-                        >
-                          Create work item
-                        </button>
-
-                        <button
-                          type="button"
-                          disabled={
-                            !noteDraftContent.trim()
-                          }
-                          onClick={() =>
-                            void submitNoteComposer(
-                              liveSelectedItem,
-                            )
-                          }
-                          className={LIVE_CONTROL_PRIMARY}
-                        >
-                          {creatingNoteItemId ===
-                          liveSelectedItem.id && (
-                            <span
-                              aria-hidden="true"
-                              className={`${LIVE_CONTROL_ICON} animate-spin`}
-                            >
-                              refresh
-                            </span>
-                          )}
-                          {creatingNoteItemId ===
+                        ariaLabel={`Add note to ${liveSelectedItem.title}`}
+                        savingLabel={
+                          creatingNoteItemId ===
                           liveSelectedItem.id
                             ? 'Adding…'
-                            : 'Add note'}
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={cancelNoteComposer}
-                          className={`${LIVE_CONTROL_TERTIARY} ml-auto px-2`}
-                        >
-                          Cancel
-                        </button></div>
+                            : null
+                        }
+                        error={noteError}
+                        onValueChange={
+                          setNoteDraftContent
+                        }
+                        onCommitDraft={() =>
+                          handleComposerBlur(
+                            liveSelectedItem,
+                          )
+                        }
+                        onEscape={
+                          handleComposerEscape
+                        }
+                        workItemAction={{
+                          label:
+                            'Create work item',
+                          disabled:
+                            noteDraftContent.trim() ===
+                              '' ||
+                            creatingNoteItemId !==
+                              null,
+                          onClick: () =>
+                            handleComposerWorkItem(
+                              liveSelectedItem,
+                            ),
+                        }}
+                      />
                     </div>
                   ) : null}
 
@@ -4525,6 +5330,7 @@ export function MeetingDetailPage() {
                   const statusMeta = AGENDA_STATUS_META[selectedOutcome]
                   const statusNode = (
                     <span
+                      key="status"
                       className={[
                         'inline-flex h-7 items-center gap-1.5 rounded px-1 text-xs font-medium',
                         selectedOutcome === 'done'
@@ -4544,6 +5350,7 @@ export function MeetingDetailPage() {
                       <div className="mt-7 flex flex-wrap items-center gap-2 border-t border-border-subtle pt-4">
                         {statusNode}
                         <button
+                          key="reopen"
                           type="button"
                           disabled={busy}
                           onClick={() =>
@@ -4557,6 +5364,7 @@ export function MeetingDetailPage() {
                         </button>
                         {canResolveCurrent && liveCurrentItem != null && (
                           <button
+                            key="schedule"
                             ref={followUpTriggerRef}
                             type="button"
                             disabled={busy}
@@ -4582,8 +5390,18 @@ export function MeetingDetailPage() {
                   }
 
                   const currentOutcome = liveCurrentItem.outcome
+                  // Stable keys: the row swaps whole control
+                  // sets per outcome (Done <-> Reopen <->
+                  // Change to Done). Keying by identity makes
+                  // React UNMOUNT a button whose action changes
+                  // (a release-leftover click on the old Done
+                  // node must not hit a repurposed Reopen node)
+                  // and keeps genuinely continuous controls
+                  // ("Schedule follow-up", the status label)
+                  // mounted across the swap.
                   const scheduleAction = (
                     <button
+                      key="schedule"
                       ref={followUpTriggerRef}
                       type="button"
                       disabled={busy}
@@ -4609,6 +5427,7 @@ export function MeetingDetailPage() {
                           {scheduleAction}
                           {busy ? (
                             <button
+                              key="changing"
                               type="button"
                               disabled
                               aria-label={`Changing ${liveCurrentItem.title} outcome`}
@@ -4621,10 +5440,40 @@ export function MeetingDetailPage() {
                             </button>
                           ) : (
                             <button
+                              key="change-to-done"
                               type="button"
-                              onClick={() =>
-                                void handleDoneItem(liveCurrentItem)
-                              }
+                              onPointerDown={() => {
+                                doneIntentRef.current =
+                                  liveCurrentItem
+                              }}
+                              onClick={(
+                                event,
+                              ) => {
+                                // Click fallback: the pointer
+                                // flow already ran from the
+                                // release; this click carries
+                                // the activation only for a
+                                // keyboard press (detail 0) or a
+                                // lost pointerup (intent still
+                                // set). A detail > 0 leftover is
+                                // skipped (exactly once).
+                                const intent =
+                                  doneIntentRef.current
+                                if (intent != null) {
+                                  doneIntentRef.current = null
+                                  void
+                                    handleDoneItem(
+                                      liveCurrentItem,
+                                    )
+                                  return
+                                }
+                                if (event.detail === 0) {
+                                  void
+                                    handleDoneItem(
+                                      liveCurrentItem,
+                                    )
+                                }
+                              }}
                               aria-label={`Change ${liveCurrentItem.title} to done`}
                               title="Change to Done"
                               className={`${LIVE_CONTROL_SECONDARY} text-text`}
@@ -4640,13 +5489,41 @@ export function MeetingDetailPage() {
                         <>
                           {scheduleAction}
                           <button
+                            key="done"
                             type="button"
                             disabled={busy}
-                            onClick={() =>
-                              void handleDoneItem(
-                                liveCurrentItem,
-                              )
-                            }
+                            onPointerDown={() => {
+                              doneIntentRef.current =
+                                liveCurrentItem
+                            }}
+                            onClick={(
+                              event,
+                            ) => {
+                              // Click fallback: the pointer
+                              // flow already ran from the
+                              // release; this click carries the
+                              // activation only for a keyboard
+                              // press (detail 0) or a lost
+                              // pointerup (intent still set). A
+                              // detail > 0 leftover is skipped
+                              // (exactly once).
+                              const intent =
+                                doneIntentRef.current
+                              if (intent != null) {
+                                doneIntentRef.current = null
+                                void
+                                  handleDoneItem(
+                                    liveCurrentItem,
+                                  )
+                                return
+                              }
+                              if (event.detail === 0) {
+                                void
+                                  handleDoneItem(
+                                    liveCurrentItem,
+                                  )
+                              }
+                            }}
                             aria-label={`Mark ${liveCurrentItem.title} as done`}
                             title="Done"
                             className={LIVE_CONTROL_SUCCESS}
@@ -5246,31 +6123,37 @@ export function MeetingDetailPage() {
 
       {pendingDeleteNote != null && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-on-surface/25 px-4 py-8 backdrop-blur-[2px]"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-overlay-scrim px-4 py-8 backdrop-blur-[2px]"
           onMouseDown={(event) => {
             if (
               event.target === event.currentTarget &&
               deletingNoteId == null
             ) {
-              setPendingDeleteNote(null)
+              closeNoteDeleteDialog()
             }
           }}
         >
           <div
+            ref={noteDeleteDialogRef}
             role="dialog"
             aria-modal="true"
             aria-labelledby="note-delete-title"
-            className="w-full max-w-md overflow-hidden rounded-2xl border border-outline-variant bg-surface-container-lowest shadow-xl"
+            aria-describedby="note-delete-description"
+            onKeyDown={handleNoteDeleteTabTrap}
+            className="w-full max-w-md overflow-hidden rounded-2xl border border-border-structural bg-surface shadow-xl"
           >
             <div className="px-6 py-5">
               <h2
                 id="note-delete-title"
-                className="text-lg font-semibold tracking-tight text-on-surface"
+                className="text-lg font-semibold tracking-tight text-text"
               >
                 Delete note?
               </h2>
 
-              <p className="mt-2 text-sm text-on-surface-variant">
+              <p
+                id="note-delete-description"
+                className="mt-2 text-sm text-text-muted"
+              >
                 This permanently deletes the note. The agenda item
                 and any linked Work Items are not affected.
               </p>
@@ -5278,28 +6161,29 @@ export function MeetingDetailPage() {
               {actionError && (
                 <p
                   role="alert"
-                  className="mt-3 rounded-lg bg-error-container px-3 py-2 text-sm text-error"
+                  className="mt-3 rounded-lg bg-danger-bg px-3 py-2 text-sm text-danger"
                 >
                   {actionError}
                 </p>
               )}
             </div>
 
-            <div className="flex justify-end gap-2 border-t border-outline-variant px-6 py-4">
+            <div className="flex justify-end gap-2 border-t border-border-subtle px-6 py-4">
               <button
                 type="button"
                 disabled={deletingNoteId != null}
-                onClick={() => setPendingDeleteNote(null)}
-                className="inline-flex h-9 items-center rounded-lg px-3.5 text-sm font-medium text-on-surface-variant outline-none transition hover:bg-surface-container-high focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-60"
+                onClick={closeNoteDeleteDialog}
+                className="inline-flex h-9 items-center rounded-lg px-3.5 text-sm font-medium text-text-muted outline-none transition hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus/40 disabled:opacity-60"
               >
                 Cancel
               </button>
 
               <button
+                ref={noteDeleteConfirmRef}
                 type="button"
                 disabled={deletingNoteId != null}
                 onClick={() => void confirmDeleteNote()}
-                className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-error-container px-3.5 text-sm font-semibold text-on-error-container outline-none transition hover:bg-error-container/80 focus-visible:ring-2 focus-visible:ring-error focus-visible:ring-offset-2 disabled:opacity-60"
+                className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-danger px-3.5 text-sm font-semibold text-text-inverse outline-none transition hover:bg-danger/80 focus-visible:ring-2 focus-visible:ring-danger focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-60"
               >
                 {deletingNoteId != null && (
                   <span

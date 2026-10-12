@@ -18,3 +18,18 @@
   font-size: 12px;
   line-height: 1;
 }
+
+/*
+ * Live MeetingNote hover actions (Create Work Item + Delete): the
+ * same cascade trap as the agenda add action above. The Tailwind
+ * 16px utility lives in the utilities cascade layer, so the
+ * external unlayered 24px default still wins; pin the artwork size
+ * locally. The two-class selector keeps its (0,2,0) specificity
+ * above the external single-class rule (0,1,0) regardless of
+ * stylesheet load order. Both action icons share this rule so
+ * their optical size and stroke weight stay identical.
+ */
+.fg-live-note-action-icon.material-symbols-outlined {
+  font-size: 16px;
+  line-height: 1;
+}

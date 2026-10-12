@@ -158,6 +158,19 @@ describe('MeetingDetailPage persistent Meeting Notes', () => {
       'createMeetingNote',
     )
   })
+
+  it('edits Notes through the shared seamless inline editor (no input box)', () => {
+    // The Live Note edit mode renders the shared borderless,
+    // auto-growing NoteInlineEditor…
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'NoteInlineEditor',
+    )
+    // …and the old boxed editor (border + panel background +
+    // input padding) is gone from the Note branch.
+    expect(MEETING_DETAIL_SOURCE).not.toContain(
+      'bg-surface px-2 py-1.5 text-sm',
+    )
+  })
 })
 
 describe('MeetingDetailPage Live Meeting shell', () => {
@@ -471,7 +484,7 @@ describe('MeetingDetailPage Live visual polish', () => {
       'className: "mt-1 text-[11px] text-text-tertiary"',
     )
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'absolute right-2 top-1',
+      'absolute right-2 top-0.5',
     )
     expect(MEETING_DETAIL_SOURCE).toContain(
       '? "mt-6"',
@@ -481,37 +494,84 @@ describe('MeetingDetailPage Live visual polish', () => {
     )
   })
 
-  it('keeps Create work item and Add note wired in the composer', () => {
+  it('uses compact hover note actions (no note menu, no edit action)', () => {
+    // The note-level three-dot menu is gone…
+    expect(MEETING_DETAIL_SOURCE).not.toContain(
+      'Note actions for',
+    )
+    expect(MEETING_DETAIL_SOURCE).not.toContain(
+      'label: "Edit note"',
+    )
+    // …the row reveals a quiet delete icon wired to the
+    // existing confirmation flow…
     expect(MEETING_DETAIL_SOURCE).toContain(
-      'submitNoteThenCreateWorkItem(',
+      'Delete note: ${note.content}',
+    )
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'setPendingDeleteNote(',
+    )
+    // …and the hover icons stay small: 16px outline artwork in a
+    // 28px quiet button, revealed on row hover / focus. The
+    // artwork size is pinned by the local .fg-live-note-action-icon
+    // rule against the external 24px Material Symbols default
+    // (unlayered vs. utilities layer).
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'group-hover/note:opacity-100',
+    )
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'focus-within:opacity-100',
+    )
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'fg-live-note-action-icon',
+    )
+  })
+
+  it('keeps the quiet Work Item affordance wired to the composer', () => {
+    // The in-editor "Create work item" affordance records its
+    // intent and persists through the single composer path.
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'handleComposerWorkItem(',
     )
     expect(MEETING_DETAIL_SOURCE).toContain(
       'void submitNoteComposer(',
     )
+    // The affordance only appears on the NEW-Note composer
+    // (the editing surface has no Work Item action).
+    const editEditor =
+      MEETING_DETAIL_SOURCE.indexOf(
+        'onCommitDraft: () => handleNoteEditBlur(',
+      )
+    expect(editEditor).toBeGreaterThan(-1)
+    expect(
+      MEETING_DETAIL_SOURCE
+        .slice(editEditor, editEditor + 200)
+        .includes('workItemAction'),
+    ).toBe(false)
   })
 
-  it('reorders composer actions with Add note as primary', () => {
-    // In the open composer, "Create work item" (secondary text)
-    // precedes "Add note" (primary), and Cancel is the last action.
-    const row = MEETING_DETAIL_SOURCE.indexOf(
+  it('autosaves the composer and Note edits on focus-leave', () => {
+    // Both editors commit the draft on focus-leave (the
+    // autosave model) and discard it on Escape.
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'onCommitDraft: () => handleComposerBlur(',
+    )
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'onCommitDraft: () => handleNoteEditBlur(',
+    )
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'onEscape: handleComposerEscape',
+    )
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'onEscape: handleNoteEditEscape',
+    )
+    // The old boxed composer row (input padding + focus ring)
+    // is gone.
+    expect(MEETING_DETAIL_SOURCE).not.toContain(
+      'px-3 py-2 text-sm text-text outline-none focus:border-accent focus:ring-2',
+    )
+    expect(MEETING_DETAIL_SOURCE).not.toContain(
       'mt-2 flex items-center gap-2',
     )
-    expect(row).toBeGreaterThan(-1)
-    const createWork = MEETING_DETAIL_SOURCE.indexOf(
-      'Create work item',
-      row,
-    )
-    const addNote = MEETING_DETAIL_SOURCE.indexOf(
-      'Add note',
-      row,
-    )
-    const cancel = MEETING_DETAIL_SOURCE.indexOf(
-      'Cancel',
-      row,
-    )
-    expect(createWork).toBeGreaterThan(row)
-    expect(addNote).toBeGreaterThan(createWork)
-    expect(cancel).toBeGreaterThan(addNote)
   })
 
   it('collapses the Agenda quick-add composer after a successful create', () => {
