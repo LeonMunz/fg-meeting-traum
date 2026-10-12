@@ -36,6 +36,7 @@ import {
   type CreateMeetingInput,
 } from './CreateMeetingDialog'
 import { MeetingSeriesList } from './MeetingSeriesList'
+import { PastMeetingsList } from './PastMeetings'
 import {
   MeetingSeriesTerminateConfirmDialog,
 } from './MeetingSeriesTerminateConfirmDialog'
@@ -46,6 +47,10 @@ import {
   upcomingRequestWindow,
   type UpcomingMeeting,
 } from './upcomingModel'
+import {
+  groupPastByDate,
+  selectPastMeetings,
+} from './pastModel'
 import {
   formatUpcomingDate,
   formatUpcomingTime,
@@ -89,38 +94,6 @@ function getErrorMessage(
   }
 
   return fallback
-}
-
-/**
- * Clearly intentional placeholder shell for the tab that this
- * checkpoint does not implement yet (Past). No data is requested
- * and no product behavior is simulated. (The Series tab is a
- * functional read-only overview — see `MeetingSeriesList`.)
- */
-function ComingSoonPanel({
-  icon,
-  title,
-  description,
-}: {
-  icon: string
-  title: string
-  description: string
-}) {
-  return (
-    <div className="flex min-h-64 flex-col items-center justify-center rounded-[10px] border border-dashed border-border-default bg-surface-quiet px-6 py-12 text-center">
-      <span className="material-symbols-outlined text-[24px] text-text-muted">
-        {icon}
-      </span>
-
-      <h2 className="mt-3 fg-type-section-heading text-text">
-        {title}
-      </h2>
-
-      <p className="mt-1 max-w-md fg-type-primary-content text-text-muted">
-        {description}
-      </p>
-    </div>
-  )
 }
 
 /**
@@ -451,6 +424,21 @@ export function MeetingListPage() {
       ),
     )
   }, [meetings, occurrences, requestWindow])
+
+  // The Past archive is a pure projection of the SAME canonical
+  // concrete Meeting list the page already owns (no separate Past
+  // request, no recurrence-feed dependency): exactly the Meetings
+  // whose lifecycle explicitly reached `completed`, most recently
+  // scheduled first, grouped by local calendar date descending.
+  const pastGroups = useMemo(() => {
+    if (meetings == null) {
+      return null
+    }
+
+    return groupPastByDate(
+      selectPastMeetings(meetings),
+    )
+  }, [meetings])
 
   const handleCreateMeeting = async (
     input: CreateMeetingInput,
@@ -1315,11 +1303,40 @@ export function MeetingListPage() {
         )}
 
         {activeTab === 'past' && (
-          <ComingSoonPanel
-            icon="history"
-            title="Past view is coming soon"
-            description="Completed meetings will appear here so you can review what happened."
-          />
+          pageError ? (
+            <PastMeetingsList
+              groups={pastGroups ?? []}
+              loading={false}
+              error={pageError}
+              onRetry={() => {
+                // Past renders from the canonical Meetings list
+                // directly — Retry repeats only that request (the
+                // recurrence feed is not needed for Past).
+                void loadMeetings()
+              }}
+              onOpenMeeting={(meetingId) =>
+                navigate(`/meetings/${meetingId}`)
+              }
+            />
+          ) : groupUnavailable ? (
+            <div className="rounded-[10px] border border-dashed border-border-default bg-surface-quiet px-6 py-12 text-center">
+              <p className="fg-type-primary-content text-text-muted">
+                No research group is currently available.
+              </p>
+            </div>
+          ) : (
+            <PastMeetingsList
+              groups={pastGroups ?? []}
+              loading={listLoading}
+              error={null}
+              onRetry={() => {
+                void loadMeetings()
+              }}
+              onOpenMeeting={(meetingId) =>
+                navigate(`/meetings/${meetingId}`)
+              }
+            />
+          )
         )}
       </div>
 

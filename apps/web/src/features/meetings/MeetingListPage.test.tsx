@@ -451,25 +451,6 @@ describe('MeetingListPage — shell (header + tabs)', () => {
     await screen.findByText('Templates overview page')
   })
 
-  it('keeps Past as an explicit coming-soon shell without fetching its data', async () => {
-    renderPage()
-
-    fireEvent.click(screen.getByRole('tab', { name: 'Past' }))
-    expect(
-      screen.getByText('Past view is coming soon'),
-    ).toBeVisible()
-
-    // No Past data implementation leaked in. (The Series tab is a
-    // functional read-only overview — its behavior is pinned in
-    // the Series overview tests below.)
-    expect(
-      meetingsApi.listMeetingSeries,
-    ).not.toHaveBeenCalled()
-    expect(
-      meetingsApi.listMeetingRecurrences,
-    ).not.toHaveBeenCalled()
-  })
-
   it('renders the complete page inside one shared constrained workspace frame', async () => {
     const { container } = renderPage()
 
@@ -516,6 +497,532 @@ describe('MeetingListPage — shell (header + tabs)', () => {
       name: /^Open Team Sync /,
     })
     expect(frame.contains(row)).toBe(true)
+  })
+})
+
+describe('MeetingListPage — Past tab', () => {
+  /**
+   * Unambiguous Past group label expectation: weekday + short
+   * month + day + explicit year, computed from the same LOCAL
+   * date parts as the fixtures (so the assertion holds in every
+   * time zone, like the rest of this suite).
+   */
+  function expectedPastLabel(
+    year: number,
+    month: number,
+    day: number,
+  ): string {
+    return new Intl.DateTimeFormat(
+      'en',
+      {
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      },
+    ).format(new Date(year, month - 1, day))
+  }
+
+  function openPastTab() {
+    fireEvent.click(
+      screen.getByRole('tab', { name: 'Past' }),
+    )
+  }
+
+  it('lists completed one-time and materialized recurring Meetings exactly once, most recent first', async () => {
+    vi.mocked(meetingsApi.listMeetings).mockResolvedValue([
+      makeMeeting({
+        id: 1,
+        title: 'Old completed sync',
+        scheduledAt: localIso(2025, 11, 14, 10, 0),
+        status: 'completed',
+      }),
+      makeMeeting({
+        id: 2,
+        title: 'Morning completed sync',
+        scheduledAt: localIso(2026, 9, 20, 9, 0),
+        status: 'completed',
+        participantIds: [1, 2],
+      }),
+      // Completed MATERIALIZED recurring occurrence: it appears
+      // in the feed too — Past must ignore the feed and render
+      // the concrete Meeting exactly once.
+      makeMeeting({
+        id: 3,
+        title: 'Afternoon completed sync',
+        scheduledAt: localIso(2026, 9, 20, 16, 0),
+        status: 'completed',
+      }),
+      makeMeeting({
+        id: 4,
+        title: 'Still upcoming',
+        scheduledAt: localIso(2026, 9, 25, 10, 0),
+      }),
+    ])
+    vi.mocked(
+      meetingsApi.listPersonalMeetingRecurrenceOccurrences,
+    ).mockResolvedValue([
+      makeOccurrence({
+        occurrenceId: 'occ-p1',
+        title: 'Afternoon completed sync',
+        originalScheduledAt: localIso(2026, 9, 20, 16, 0),
+        scheduledAt: localIso(2026, 9, 20, 16, 0),
+        materialized: true,
+        meetingId: 3,
+      }),
+    ])
+
+    renderPage()
+    openPastTab()
+
+    const section = await screen.findByRole(
+      'region',
+      { name: 'Completed meetings' },
+    )
+
+    // Each completed Meeting appears exactly once (the
+    // materialized recurring one never duplicates through the
+    // feed), and the non-completed one is absent.
+    expect(
+      screen.getAllByText('Afternoon completed sync'),
+    ).toHaveLength(1)
+    expect(
+      screen.getAllByText('Morning completed sync'),
+    ).toHaveLength(1)
+    expect(
+      screen.getAllByText('Old completed sync'),
+    ).toHaveLength(1)
+    expect(
+      screen.queryByText('Still upcoming'),
+    ).not.toBeInTheDocument()
+
+    // Groups: local calendar date descending, labels carry the
+    // explicit year (Past spans arbitrary history).
+    expect(
+      within(section)
+        .getAllByRole('heading')
+        .map((heading) => heading.textContent),
+    ).toEqual([
+      expectedPastLabel(2026, 9, 20),
+      expectedPastLabel(2025, 11, 14),
+    ])
+
+    // Rows: scheduledAt descending, the participant count
+    // rendered where available.
+    const rows = within(section).getAllByRole('button')
+    expect(rows).toHaveLength(3)
+    expect(rows[0].getAttribute('aria-label')).toBe(
+      `Open Afternoon completed sync on ${expectedPastLabel(2026, 9, 20)} at 16:00`,
+    )
+    expect(rows[1].getAttribute('aria-label')).toBe(
+      `Open Morning completed sync on ${expectedPastLabel(2026, 9, 20)} at 09:00`,
+    )
+    expect(rows[2].getAttribute('aria-label')).toBe(
+      `Open Old completed sync on ${expectedPastLabel(2025, 11, 14)} at 10:00`,
+    )
+    // The people count appears in exactly the two responsive
+    // copies (secondary metadata + the desktop People track) —
+    // the same convention as the Upcoming rows — and is never
+    // fabricated on rows without participants.
+    expect(
+      within(rows[1]).getAllByText('2 people'),
+    ).toHaveLength(2)
+    expect(
+      within(rows[0]).queryAllByText(/person/),
+    ).toHaveLength(0)
+  })
+
+  it('renders a single participant as "1 person" (never "1 people")', async () => {
+    vi.mocked(meetingsApi.listMeetings).mockResolvedValue([
+      makeMeeting({
+        id: 1,
+        title: 'Solo completed sync',
+        scheduledAt: localIso(2026, 9, 20, 11, 0),
+        status: 'completed',
+        participantIds: [1],
+      }),
+    ])
+
+    renderPage()
+    openPastTab()
+
+    const section = await screen.findByRole(
+      'region',
+      { name: 'Completed meetings' },
+    )
+    const row = within(section).getByRole('button', {
+      name: `Open Solo completed sync on ${expectedPastLabel(2026, 9, 20)} at 11:00`,
+    })
+    // Both responsive copies (the secondary metadata line and
+    // the desktop People track) use the shared `peopleLabel`
+    // grammar — singular for one participant, exactly like the
+    // Upcoming rows.
+    expect(
+      within(row).getAllByText('1 person'),
+    ).toHaveLength(2)
+    expect(
+      within(row).queryByText('1 people'),
+    ).not.toBeInTheDocument()
+  })
+
+  it('deterministically tie-breaks identical scheduled times by Meeting id', async () => {
+    const instant = localIso(2026, 9, 18, 10, 0)
+    vi.mocked(meetingsApi.listMeetings).mockResolvedValue([
+      makeMeeting({
+        id: 9,
+        title: 'Tie higher id',
+        scheduledAt: instant,
+        status: 'completed',
+      }),
+      makeMeeting({
+        id: 4,
+        title: 'Tie lower id',
+        scheduledAt: instant,
+        status: 'completed',
+      }),
+    ])
+
+    renderPage()
+    openPastTab()
+
+    const section = await screen.findByRole(
+      'region',
+      { name: 'Completed meetings' },
+    )
+    const rows = within(section).getAllByRole('button')
+    expect(rows.map((row) => row.getAttribute('aria-label'))).toEqual([
+      expect.stringContaining('Tie lower id'),
+      expect.stringContaining('Tie higher id'),
+    ])
+  })
+
+  it('excludes upcoming, live, and cancelled Meetings even when their scheduled date has passed', async () => {
+    vi.mocked(meetingsApi.listMeetings).mockResolvedValue([
+      makeMeeting({
+        id: 1,
+        title: 'Yesterday upcoming',
+        scheduledAt: localIso(2026, 9, 22, 10, 0),
+        status: 'upcoming',
+      }),
+      makeMeeting({
+        id: 2,
+        title: 'Yesterday live',
+        scheduledAt: localIso(2026, 9, 22, 9, 0),
+        status: 'live',
+      }),
+      makeMeeting({
+        id: 3,
+        title: 'Yesterday cancelled',
+        scheduledAt: localIso(2026, 9, 22, 8, 0),
+        status: 'cancelled',
+      }),
+      makeMeeting({
+        id: 4,
+        title: 'Yesterday completed',
+        scheduledAt: localIso(2026, 9, 22, 7, 0),
+        status: 'completed',
+      }),
+    ])
+
+    renderPage()
+    openPastTab()
+
+    await screen.findByText('Yesterday completed')
+    expect(
+      screen.queryByText('Yesterday upcoming'),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByText('Yesterday live'),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByText('Yesterday cancelled'),
+    ).not.toBeInTheDocument()
+  })
+
+  it('keeps completed Meetings outside the 42-day Upcoming window visible', async () => {
+    vi.mocked(meetingsApi.listMeetings).mockResolvedValue([
+      makeMeeting({
+        id: 1,
+        title: 'Archive keeper',
+        scheduledAt: localIso(2025, 1, 10, 9, 0),
+        status: 'completed',
+      }),
+    ])
+
+    renderPage()
+    openPastTab()
+
+    const section = await screen.findByRole(
+      'region',
+      { name: 'Completed meetings' },
+    )
+    expect(screen.getByText('Archive keeper')).toBeVisible()
+    expect(
+      within(section).getByRole('heading').textContent,
+    ).toBe(expectedPastLabel(2025, 1, 10))
+  })
+
+  it('opens the existing Meeting detail by canonical id on pointer activation, without any write', async () => {
+    vi.mocked(meetingsApi.listMeetings).mockResolvedValue([
+      makeMeeting({
+        id: 42,
+        title: 'Openable completed',
+        scheduledAt: localIso(2026, 9, 19, 11, 0),
+        status: 'completed',
+      }),
+    ])
+
+    renderPage()
+    openPastTab()
+
+    const row = await screen.findByRole('button', {
+      name: /^Open Openable completed /,
+    })
+    fireEvent.click(row)
+
+    await screen.findByText('Meeting detail: 42')
+
+    // Opening a Past row is a pure navigation: no mutation of
+    // any kind, no materialization of anything.
+    expect(meetingsApi.deleteMeeting).not.toHaveBeenCalled()
+    expect(meetingsApi.updateMeeting).not.toHaveBeenCalled()
+    expect(
+      meetingsApi.cancelMeetingRecurrenceOccurrence,
+    ).not.toHaveBeenCalled()
+    expect(
+      meetingsApi.materializeMeetingRecurrenceOccurrence,
+    ).not.toHaveBeenCalled()
+    expect(
+      meetingsApi.excludeMeetingRecurrenceOccurrence,
+    ).not.toHaveBeenCalled()
+  })
+
+  it('activates a Past row with Enter and Space', async () => {
+    vi.mocked(meetingsApi.listMeetings).mockResolvedValue([
+      makeMeeting({
+        id: 7,
+        title: 'Keyboard completed',
+        scheduledAt: localIso(2026, 9, 19, 12, 0),
+        status: 'completed',
+      }),
+    ])
+
+    renderPage()
+    openPastTab()
+    const enterRow = await screen.findByRole('button', {
+      name: /^Open Keyboard completed /,
+    })
+    enterRow.focus()
+    fireEvent.keyDown(enterRow, { key: 'Enter' })
+
+    await screen.findByText('Meeting detail: 7')
+
+    // Space on a fresh render of the same row.
+    cleanup()
+    renderPage()
+    openPastTab()
+    const spaceRow = await screen.findByRole('button', {
+      name: /^Open Keyboard completed /,
+    })
+    spaceRow.focus()
+    fireEvent.keyDown(spaceRow, { key: ' ' })
+
+    await screen.findByText('Meeting detail: 7')
+  })
+
+  it('never exposes Upcoming row actions on Past rows', async () => {
+    vi.mocked(meetingsApi.listMeetings).mockResolvedValue([
+      makeMeeting({
+        id: 1,
+        title: 'Fully actionable completed',
+        scheduledAt: localIso(2026, 9, 19, 13, 0),
+        status: 'completed',
+        actionPermissions: {
+          canEdit: true,
+          canDelete: true,
+          canCancel: true,
+        },
+      }),
+    ])
+
+    renderPage()
+    openPastTab()
+
+    const section = await screen.findByRole(
+      'region',
+      { name: 'Completed meetings' },
+    )
+    // The row itself is the only button in the archive: every
+    // interactive element is an open affordance — no Edit /
+    // Delete / Cancel actions, no menus.
+    const buttons = within(section).getAllByRole('button')
+    expect(buttons).toHaveLength(1)
+    expect(buttons[0].getAttribute('aria-label')).toMatch(
+      /^Open Fully actionable completed /,
+    )
+  })
+
+  it('introduces no additional requests when Past is activated', async () => {
+    vi.mocked(meetingsApi.listMeetings).mockResolvedValue([
+      makeMeeting({
+        id: 1,
+        title: 'Completed for counts',
+        scheduledAt: localIso(2026, 9, 19, 14, 0),
+        status: 'completed',
+      }),
+      makeMeeting({
+        id: 2,
+        title: 'Upcoming for counts',
+        scheduledAt: localIso(2026, 9, 25, 10, 0),
+      }),
+    ])
+
+    renderPage()
+    // Wait until the page's canonical load (Meetings list +
+    // occurrence feed) has settled on the Upcoming tab.
+    await waitFor(() => {
+      expect(headerNewMeetingButton()).toBeEnabled()
+    })
+
+    openPastTab()
+    await screen.findByText('Completed for counts')
+
+    // Exactly the page's existing load behavior — no Past fetch,
+    // no recurrence/overview request of any kind.
+    expect(meetingsApi.listMeetings).toHaveBeenCalledTimes(1)
+    expect(
+      meetingsApi.listPersonalMeetingRecurrenceOccurrences,
+    ).toHaveBeenCalledTimes(1)
+    expect(meetingsApi.listMeetingRecurrences).not.toHaveBeenCalled()
+    expect(meetingsApi.listMeetingSeries).not.toHaveBeenCalled()
+    expect(meetingsApi.getMeetingSeries).not.toHaveBeenCalled()
+  })
+
+  it('shows the honest empty state when no Meeting is completed', async () => {
+    vi.mocked(meetingsApi.listMeetings).mockResolvedValue([
+      makeMeeting({
+        id: 1,
+        title: 'Only upcoming here',
+        scheduledAt: localIso(2026, 9, 25, 10, 0),
+      }),
+    ])
+
+    renderPage()
+    openPastTab()
+
+    const empty = await screen.findByRole(
+      'heading',
+      { name: 'No completed meetings yet' },
+    )
+    expect(empty).toBeVisible()
+
+    // The empty archive must not claim a load failure.
+    expect(
+      screen.queryByText(/couldn't be loaded/i),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('alert'),
+    ).not.toBeInTheDocument()
+  })
+
+  it('shows row skeletons while the canonical Meetings list is still loading', async () => {
+    let resolveMeetings!: (value: ApiMeeting[]) => void
+    vi.mocked(meetingsApi.listMeetings).mockReturnValue(
+      new Promise((resolve) => {
+        resolveMeetings = resolve
+      }),
+    )
+
+    renderPage()
+    openPastTab()
+
+    expect(
+      screen.getByRole('region', {
+        name: 'Loading completed meetings',
+      }),
+    ).toBeVisible()
+
+    resolveMeetings([
+      makeMeeting({
+        id: 1,
+        title: 'Settled completed',
+        scheduledAt: localIso(2026, 9, 19, 15, 0),
+        status: 'completed',
+      }),
+    ])
+
+    await screen.findByText('Settled completed')
+  })
+
+  it('shows an actionable error with Retry that repeats only the Meetings request', async () => {
+    vi.mocked(meetingsApi.listMeetings)
+      .mockRejectedValueOnce(
+        new ApiError(500, { error: 'past list down' }),
+      )
+      .mockResolvedValueOnce([
+        makeMeeting({
+          id: 1,
+          title: 'Recovered completed',
+          scheduledAt: localIso(2026, 9, 19, 16, 0),
+          status: 'completed',
+        }),
+      ])
+
+    renderPage()
+    openPastTab()
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('past list down')
+    expect(
+      within(alert).queryByText('No completed meetings yet'),
+    ).not.toBeInTheDocument()
+
+    fireEvent.click(
+      within(alert).getByRole('button', {
+        name: /Try again/,
+      }),
+    )
+
+    await screen.findByText('Recovered completed')
+    expect(meetingsApi.listMeetings).toHaveBeenCalledTimes(2)
+    // The Retry never drags in the recurrence feed or the Series
+    // overview.
+    expect(
+      meetingsApi.listPersonalMeetingRecurrenceOccurrences,
+    ).toHaveBeenCalledTimes(1)
+    expect(
+      meetingsApi.listMeetingRecurrences,
+    ).not.toHaveBeenCalled()
+  })
+
+  it("shows only the active Research Group's completed Meetings", async () => {
+    vi.mocked(useResearchGroupListScope).mockReturnValue({
+      activeResearchGroupId: 2,
+      activeResearchGroup: {
+        id: 2,
+        name: 'Other FG',
+        role: 'admin',
+      },
+      loading: false,
+      error: null,
+    })
+    vi.mocked(meetingsApi.listMeetings).mockResolvedValue([
+      makeMeeting({
+        id: 1,
+        title: 'Group two completed',
+        researchGroupId: 2,
+        scheduledAt: localIso(2026, 9, 19, 17, 0),
+        status: 'completed',
+      }),
+    ])
+
+    renderPage()
+    openPastTab()
+
+    await screen.findByText('Group two completed')
+    expect(
+      meetingsApi.listMeetings,
+    ).toHaveBeenCalledWith(2)
   })
 })
 

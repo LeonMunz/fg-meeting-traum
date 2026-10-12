@@ -1129,9 +1129,34 @@ Research Group fetch), mirroring the Meetings page research-group
 context gate. It renders one read-only row per kept record in the
 backend's ordering and exposes no row navigation, actions, or
 client-side re-sorting (see the checkpoint entry "Meetings Series
-overview tab"); `Past` remains an explicit coming-soon shell (the
-backend Series overview read contract IS implemented — see "Series
-overview read API (implemented)" below).
+overview tab). `Past` is a functional read-only archive: a pure
+frontend projection over the SAME canonical concrete Meeting list
+the page already loads (`GET /api/research-groups/{groupId}/meetings/`
+— no additional request, no dependency on the recurring-occurrence
+feed): exactly the concrete Meetings whose status is exactly
+`completed` — one-time, Template-created, and materialized recurring
+Meetings, each shown exactly once; `upcoming` / `live` / terminal
+`cancelled` are excluded. A Meeting whose scheduled time has passed
+is NOT thereby qualified — completion is the explicit lifecycle
+transition (`upcoming → live → completed`), never elapsed time. Past
+is ordered by the concrete Meeting's `scheduledAt` DESCENDING
+(deterministic Meeting-id tie-breaker) and grouped by LOCAL calendar
+date, also descending, with unambiguous date headers INCLUDING the
+year. The rows (one shared list surface, restrained dividers,
+compact date headers, semantic typography, the ~68px minimum row
+geometry of the Upcoming / Series visual language) show the
+scheduled time, the Meeting title, and the participant count where
+available (never fabricated); the Past tab already communicates the
+completed state, so rows carry no Completed badge and NONE of
+Upcoming's row actions. Row activation (pointer or keyboard)
+navigates directly by canonical id to the existing
+`/meetings/{meetingId}` detail — no write request, no
+materialization, no additional Meeting or recurrence request. The
+tab renders honest loading, empty ("No completed meetings yet"),
+and error-with-Retry states; there is NO 42-day window or other
+arbitrary history cutoff. (The backend Series overview read
+contract IS implemented — see "Series overview read API
+(implemented)" below.)
 
 ### Series overview read API (implemented)
 
