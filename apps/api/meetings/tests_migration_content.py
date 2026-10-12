@@ -20,6 +20,7 @@ from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.db import connection
 from django.db.migrations.executor import MigrationExecutor
+from django.db.migrations.loader import MigrationLoader
 from django.test import TestCase, TransactionTestCase
 from django.utils import timezone
 
@@ -202,7 +203,15 @@ class MeetingItemContentMigrationRoundTripTest(TransactionTestCase):
         MigrationExecutor(connection).migrate([PREV])
 
     def tearDown(self):
-        MigrationExecutor(connection).migrate([TARGET])
+        # Restore the meetings app to its CURRENT leaf migration
+        # (not merely TARGET): the app may have gained further
+        # migrations after 0021 (e.g. 0022), and every later test in
+        # the run expects the complete current schema. Migrating the
+        # whole graph to its leaf nodes is exactly what
+        # ``manage.py migrate`` does.
+        MigrationExecutor(connection).migrate(
+            MigrationLoader(connection).graph.leaf_nodes(),
+        )
         super().tearDown()
 
     def _legacy_apps(self):

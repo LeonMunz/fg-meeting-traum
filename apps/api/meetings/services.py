@@ -961,6 +961,16 @@ def expand_effective_meeting_recurrence_occurrences(
       does not extend);
     - siblings keep their identities, original starts, and order.
 
+    A whole-series TERMINATION is an additional, independent filter,
+    also applied AFTER rule generation: once
+    ``meeting_recurrence.terminated_at`` is set, NO occurrence whose
+    original start lies at or after that immutable instant is part of
+    the effective set (the raw rule still produces it, and its stable
+    identity is unchanged). The suppression is a single column read —
+    it generates NO exclusion records, so an open-ended terminated
+    recurrence is suppressed without an unbounded exclusion
+    collection.
+
     ``excluded_starts`` is an OPTIONAL preloaded set of excluded
     original scheduled starts (timezone-aware instants) for THIS
     recurrence within the requested window. Supplying it lets a
@@ -998,14 +1008,27 @@ def expand_effective_meeting_recurrence_occurrences(
                 ],
             ).values_list("original_scheduled_at", flat=True)
         )
-    if not excluded_starts:
-        return occurrences
+    if excluded_starts:
+        occurrences = [
+            occurrence
+            for occurrence in occurrences
+            if occurrence.original_start not in excluded_starts
+        ]
 
-    return [
-        occurrence
-        for occurrence in occurrences
-        if occurrence.original_start not in excluded_starts
-    ]
+    # Whole-series termination: from the immutable termination
+    # instant on, no occurrence of this recurrence is part of the
+    # effective set. A single column read — NO exclusion records are
+    # generated (an open-ended recurrence stays suppressed without an
+    # unbounded exclusion collection).
+    if meeting_recurrence.terminated_at is not None:
+        terminated_at = meeting_recurrence.terminated_at
+        occurrences = [
+            occurrence
+            for occurrence in occurrences
+            if occurrence.original_start < terminated_at
+        ]
+
+    return occurrences
 
 
 def _current_instant() -> dt_datetime:
@@ -1017,6 +1040,20 @@ def _current_instant() -> dt_datetime:
     occurrence selection) derives from this single observation, and
     tests freeze this one function (the repository's clock-observation
     convention).
+    """
+    return timezone.now()
+
+
+def _termination_instant() -> dt_datetime:
+    """Observe the current application time EXACTLY ONCE per whole-
+    series termination.
+
+    ``terminate_meeting_recurrence`` calls this single function once,
+    before any locking, and uses the observed instant consistently for
+    the whole operation: the Meeting cancellation cutoff, the persisted
+    ``terminated_at`` value, and (read-side) the effective-occurrence
+    future cutoff. Tests freeze this one function (the repository's
+    clock-observation convention).
     """
     return timezone.now()
 
@@ -1092,6 +1129,14 @@ def next_effective_meeting_recurrence_occurrence(
       does not grow); a CANCELLED materialized occurrence carries the
       exclusion its cancellation persisted, so it is absent exactly
       like an excluded virtual occurrence;
+    - a whole-series TERMINATION removes every VIRTUAL occurrence at
+      or after the immutable ``terminated_at`` instant from the
+      effective set (the same filter the effective expansion applies);
+      a TERMINATED schedule whose window start has reached the
+      termination instant has no further virtual candidate, so the
+      search stops and only a still-active materialized Meeting can
+      remain (a terminated schedule's future materialized Meetings
+      were cancelled by the termination, so normally none remain);
     - a MATERIALIZED occurrence's effective time is its concrete
       Meeting's own ``scheduled_at``: a rescheduled Meeting reports
       its moved time (which may be earlier or later than its sibling
@@ -1141,6 +1186,12 @@ def next_effective_meeting_recurrence_occurrence(
             "The next-occurrence instant must be timezone-aware."
         )
 
+    # The immutable whole-series termination instant (None while the
+    # schedule is active): virtual candidates at or after it are not
+    # part of the effective set, and a window that has reached it
+    # contains no eligible virtual candidate.
+    terminated_at = meeting_recurrence.terminated_at
+
     if excluded_starts is None:
         excluded_starts = set(
             MeetingRecurrenceExclusion.objects
@@ -1177,6 +1228,13 @@ def next_effective_meeting_recurrence_occurrence(
 
     window_start = now
     while True:
+        # A terminated schedule has no virtual candidate at or after
+        # its immutable termination instant: the window has reached
+        # (or passed) it, so only a still-active materialized Meeting
+        # can remain.
+        if terminated_at is not None and window_start >= terminated_at:
+            return best_materialized
+
         occurrences = expand_meeting_recurrence_occurrences(
             meeting_recurrence=meeting_recurrence,
             range_start=window_start,
@@ -1197,6 +1255,14 @@ def next_effective_meeting_recurrence_occurrence(
         best_virtual = None
         for occurrence in occurrences:
             if occurrence.original_start in excluded_starts:
+                continue
+            if (
+                terminated_at is not None
+                and occurrence.original_start >= terminated_at
+            ):
+                # At or after the immutable termination instant: not
+                # part of the effective set (suppressed, like an
+                # excluded occurrence — no replacement is generated).
                 continue
             if occurrence.original_start in materialized_meetings:
                 # Materialized: its effective time is the Meeting's
@@ -1269,6 +1335,13 @@ def list_personal_meeting_recurrence_overviews(*, user):
     ``distinct``, and ``(recurrence, user)`` participant rows are
     database-unique.
 
+    An EXPLICITLY TERMINATED recurrence (``terminated_at`` set) is
+    never part of the personal overview: termination removes the
+    schedule from the overview entirely, while a schedule that ended
+    NATURALLY (end date passed / count consumed) but was not
+    terminated keeps its existing behavior — it still appears, with
+    the derived ``ended`` status and a null next occurrence.
+
     Read efficiency (constant in BOTH the number of relevant
     recurrences and the number of generated occurrence dates — the
     canonical expansion's Python iteration is bounded by the sliding
@@ -1295,6 +1368,11 @@ def list_personal_meeting_recurrence_overviews(*, user):
         .filter(
             Q(created_by=user)
             | Q(participant_relations__user=user),
+            # Explicitly terminated recurrences no longer appear in
+            # the personal Series overview at all (a naturally ended
+            # but NOT terminated schedule keeps its existing overview
+            # behavior and is reported ``ended`` as before).
+            terminated_at__isnull=True,
         )
         .select_related("created_by")
         .prefetch_related(Prefetch("participant_relations"))
@@ -1624,6 +1702,23 @@ def materialize_meeting_recurrence_occurrence(
                 no_key=True,
             ).get(pk=recurrence.pk)
 
+            # A TERMINATED recurrence cannot materialize a still-
+            # virtual occurrence at or after its immutable termination
+            # instant: the occurrence is permanently outside the
+            # effective set, and no repeated or racing request can
+            # recreate it. (An ALREADY-materialized occurrence was
+            # returned above, before the lock, exactly like an
+            # idempotent replay.)
+            if (
+                locked_recurrence.terminated_at is not None
+                and occurrence.original_start
+                >= locked_recurrence.terminated_at
+            ):
+                raise MeetingDomainError(
+                    "This recurrence is terminated: a future "
+                    "occurrence cannot be materialized."
+                )
+
             # The recurrence's canonical Template is the ONLY content
             # source of a new occurrence. A recurrence without a
             # Template — a legacy row from before the Template linkage,
@@ -1788,6 +1883,18 @@ def reschedule_meeting_recurrence_occurrence(
     materialization) plus one ``meeting.rescheduled`` event (from the
     move); a no-op move of a virtual occurrence produces the
     ``meeting.created`` event only.
+
+    The move is additionally coordinated with whole-series
+    termination (inside ``_apply_meeting_update``): under the
+    canonical Meeting → Recurrence row locks, a move to the
+    recurrence's immutable termination instant or later is REJECTED
+    once the series is terminated — the Meeting and its audit
+    history stay unchanged, and a virtual-occurrence reschedule
+    rolls the first-time materialization back as well (no orphaned
+    Meeting). A move that commits first (racing termination) is
+    caught by termination's under-lock re-query, which cancels the
+    moved Meeting: a terminated series never regains a future
+    upcoming Meeting.
     """
     if recurrence.pk is None:
         raise MeetingDomainError(
@@ -1956,9 +2063,28 @@ def exclude_meeting_recurrence_occurrence(
             # serializes the two domain writers without deadlocking
             # against an in-flight raw Meeting insert's deferred FK
             # check.
-            MeetingRecurrence.objects.select_for_update(no_key=True).get(
-                pk=recurrence.pk
+            locked_recurrence = (
+                MeetingRecurrence.objects
+                .select_for_update(no_key=True)
+                .get(pk=recurrence.pk)
             )
+            # A TERMINATED recurrence accepts no new exclusion for an
+            # occurrence at or after its immutable termination
+            # instant: that occurrence is already outside the
+            # effective set (suppressed by the termination itself),
+            # so persisting an exclusion for it would only write
+            # redundant state onto a terminal schedule. (An
+            # exclusion persisted BEFORE the termination is still
+            # returned above, idempotently, before the lock.)
+            if (
+                locked_recurrence.terminated_at is not None
+                and occurrence.original_start
+                >= locked_recurrence.terminated_at
+            ):
+                raise MeetingDomainError(
+                    "This recurrence is terminated: a future "
+                    "occurrence cannot be excluded."
+                )
             if Meeting.objects.filter(
                 recurrence=recurrence,
                 original_scheduled_at=occurrence.original_start,
@@ -2170,6 +2296,303 @@ def cancel_meeting_recurrence_occurrence(
 
     caller_meeting.refresh_from_db()
     return caller_meeting
+
+
+# ── Whole-series termination ─────────────────────────────────────
+
+
+class _RecurrenceTerminationAttemptAborted(Exception):
+    """INTERNAL retry signal (never escapes the service).
+
+    Raised inside one termination attempt when the candidate Meeting
+    set GREW during the attempt (a concurrent materialization
+    committed a new row between the candidate lock and the
+    recurrence row lock). The attempt's transaction is rolled back —
+    releasing every lock — and the operation retries with the SAME
+    observed termination instant.
+    """
+
+
+def _cancel_meeting_for_termination(*, meeting, recurrence, actor):
+    """Cancel ONE upcoming materialized occurrence while terminating
+    its whole series, reusing the canonical single-occurrence
+    cancellation invariants (see
+    ``cancel_meeting_recurrence_occurrence``).
+
+    The caller holds BOTH row locks for the meeting — the Meeting
+    ``FOR UPDATE`` lock and the recurrence ``FOR NO KEY UPDATE``
+    lock — and has verified the Meeting is still ``upcoming`` under
+    those locks, so no concurrent lifecycle transition, cancellation,
+    or deletion can interleave. The Meeting row (primary key,
+    recurrence FK, immutable ``original_scheduled_at``, current
+    ``scheduled_at``, title, Sections, agenda items, notes,
+    participants, Work Item links, audit history) is preserved; only
+    ``status`` becomes ``cancelled``.
+
+    Exactly ONE ``MeetingRecurrenceExclusion`` is persisted for
+    ``(recurrence, original_scheduled_at)`` — or the pre-existing one
+    is REUSED (inconsistent-pair repair, the same semantics as the
+    single-occurrence cancellation): a moved occurrence is excluded
+    by its ORIGINAL identity, and a concurrent single-occurrence
+    exclusion cannot duplicate the row because it needs the very
+    recurrence row lock the caller already holds.
+
+    Exactly ONE ``meeting.cancelled`` audit event is recorded, with
+    the SAME structured data shape as the single-occurrence
+    cancellation.
+    """
+    exclusion = MeetingRecurrenceExclusion.objects.filter(
+        recurrence=recurrence,
+        original_scheduled_at=meeting.original_scheduled_at,
+    ).first()
+    if exclusion is None:
+        exclusion = MeetingRecurrenceExclusion.objects.create(
+            recurrence=recurrence,
+            original_scheduled_at=meeting.original_scheduled_at,
+            created_by=actor,
+        )
+
+    meeting.status = Meeting.Status.CANCELLED
+    meeting.save(update_fields=["status", "updated_at"])
+
+    record_audit_event(
+        research_group=meeting.research_group,
+        actor=actor,
+        event_type=MeetingAuditEventType.CANCELLED,
+        project=meeting.project,
+        meeting=meeting,
+        data={
+            "changes": {
+                "originalScheduledAt": _iso8601_utc(
+                    meeting.original_scheduled_at,
+                ),
+                "scheduledAt": _iso8601_utc(meeting.scheduled_at),
+            }
+        },
+    )
+
+
+def terminate_meeting_recurrence(*, recurrence, actor):
+    """Permanently terminate ONE whole MeetingRecurrence.
+
+    The canonical whole-series termination: one atomic domain
+    operation that (1) persists the terminal recurrence state,
+    (2) suppresses every future VIRTUAL occurrence, and (3) cancels
+    — without deleting — every future UPCOMING materialized Meeting.
+
+    **Authorization:** the canonical scoped Meeting write rule of the
+    Recurrence's scope, re-checked here in the domain service exactly
+    like creation / materialization / exclusion (group scope → any
+    current Research Group member; project scope → Project
+    owner/member with ``PROJECT_WORK``, non-archived Projects only).
+    A Project viewer, a revoked member, an outsider, or an archived
+    Project is denied.
+
+    **Terminal persisted state:** ``recurrence.terminated_at`` is set
+    to the observed termination instant — the ONLY writer of a
+    non-NULL value, and the value is IMMUTABLE thereafter (no
+    restore / reactivation in V1). The recurrence rule, its stable
+    occurrence identities, its Template reference, and its
+    participant intent are never rewritten. No hard deletion of any
+    record (recurrence, Meeting, or content) ever happens.
+
+    **One observed instant:** the termination instant is observed
+    EXACTLY ONCE (``_termination_instant``, the repository's
+    clock-observation convention), before any locking, and used
+    consistently for the whole operation — the Meeting cancellation
+    cutoff, the persisted ``terminated_at``, and (read-side) the
+    effective-occurrence future cutoff.
+
+    **Future virtual occurrences:** after termination, no virtual
+    occurrence with an original start at or after the instant is
+    part of the effective occurrence set — the canonical effective
+    expansion, the next-effective-occurrence search, and the
+    bounded read APIs filter it out from the single persisted
+    column (the raw rule is unchanged; NO exclusion records are
+    generated, so an open-ended recurrence is suppressed without an
+    unbounded exclusion collection). Materializing or excluding such
+    an occurrence is rejected under the recurrence row lock
+    (repeated or racing requests included).
+
+    **Future materialized Meetings:** inside the SAME transaction,
+    every Meeting of this recurrence with status ``upcoming`` and an
+    EFFECTIVE ``scheduled_at`` at or after the instant is cancelled
+    through the canonical single-occurrence cancellation invariants:
+    the row, primary key, recurrence FK, immutable
+    ``original_scheduled_at``, current ``scheduled_at``, title,
+    Sections, agenda items, notes, participants, Work Item links,
+    and audit history are PRESERVED (never deleted or recreated);
+    exactly one exclusion keyed by the ORIGINAL occurrence identity
+    is persisted (a moved occurrence is excluded by its original
+    identity); exactly one ``meeting.cancelled`` event per first
+    cancellation. ``live`` and ``completed`` Meetings — and Meetings
+    already ``cancelled`` — are left completely unchanged, as is
+    every Meeting whose effective time lies before the instant
+    (including an occurrence moved earlier than the instant).
+
+    **Atomicity / locking:** one ``transaction.atomic()`` — partial
+    termination is not a valid final state. Lock order: the
+    candidate Meeting rows are locked FIRST (``SELECT … FOR UPDATE``,
+    deterministic pk order) and the ``MeetingRecurrence`` row lock
+    (``FOR NO KEY UPDATE``, the Slice-6 mode) is taken ONLY AFTER
+    every Meeting lock — the SAME Meeting → recurrence order as the
+    single-occurrence cancellation, so no opposite lock order
+    (hence no deadlock) exists between termination and concurrent
+    cancellation / lifecycle start / materialization:
+
+    - a concurrent single-occurrence cancellation holds its Meeting
+      lock and wants the recurrence lock: termination is still
+      acquiring Meeting locks (not holding the recurrence lock yet),
+      so the cancellation wins the free recurrence lock first and
+      commits; the termination then re-queries under the lock and
+      simply does not cancel the already-cancelled Meeting;
+    - a concurrent materialization holds the recurrence lock and
+      creates a NEW row: termination waits for the free Meeting
+      locks (the insert never conflicts with them), then takes the
+      recurrence lock and — because the new row is committed — the
+      under-lock re-query catches it and cancels it too;
+    - a concurrent lifecycle start holds the Meeting lock:
+      termination waits, then the re-query sees the ``live`` status
+      and preserves the Meeting.
+
+    The recurrence lock is therefore NEVER held while waiting for a
+    Meeting lock. The under-lock re-query is the convergence check:
+    if the candidate set GREW (a new materialized row committed
+    during the attempt), the attempt is aborted and retried with the
+    SAME observed instant (bounded; a persistent retry storm is an
+    explicit domain error rather than an unsafe final state).
+
+    **Idempotent:** repeating the operation for an already-
+    terminated recurrence returns the persisted terminal state and
+    changes nothing: the same ``terminated_at``, no new exclusion
+    rows, no duplicate ``meeting.cancelled`` events, no content
+    mutation. Two racing terminations serialize on the locks: one
+    performs the termination, the other observes the committed
+    ``terminated_at`` under the lock and returns idempotently.
+
+    **Not part of this operation:** no restoration / reactivation,
+    no recurrence editing, no HTTP endpoint, and no UI — the
+    operation is domain-only.
+    """
+    if recurrence.pk is None:
+        raise MeetingDomainError(
+            "Only persisted recurrences can be terminated: stable "
+            "occurrence identities require a schedule id."
+        )
+
+    _require_scoped_write_access(
+        research_group=recurrence.research_group,
+        scope=recurrence.scope,
+        project=recurrence.project,
+        user=actor,
+    )
+
+    # Observed ONCE, before any locking: the instant every judgment
+    # of this operation (and its read-side effect) is based on.
+    terminated_at = _termination_instant()
+
+    caller = recurrence
+    for _attempt in range(3):
+        try:
+            with transaction.atomic():
+                # Lock the candidate Meeting rows FIRST, in
+                # deterministic pk order. Only ``upcoming`` Meetings
+                # whose EFFECTIVE scheduled time lies at or after the
+                # observed instant are candidates — live / completed
+                # / already-cancelled Meetings are never locked or
+                # touched, and neither are Meetings whose effective
+                # time lies before the instant.
+                candidates = list(
+                    Meeting.objects
+                    .filter(
+                        recurrence=recurrence,
+                        status=Meeting.Status.UPCOMING,
+                        scheduled_at__gte=terminated_at,
+                    )
+                    .order_by("pk")
+                    .select_for_update()
+                )
+                candidate_pks = {
+                    meeting.pk for meeting in candidates
+                }
+
+                # Then — and only after EVERY Meeting lock is held —
+                # the Slice-6 recurrence row lock. The same
+                # Meeting → recurrence order as the single-occurrence
+                # cancellation: the recurrence lock is never held
+                # while waiting for a Meeting lock (no opposite lock
+                # order, no deadlock).
+                locked_recurrence = (
+                    MeetingRecurrence.objects
+                    .select_for_update(no_key=True)
+                    .get(pk=recurrence.pk)
+                )
+
+                # Idempotent replay: a concurrent (or earlier)
+                # termination already committed the terminal state.
+                if locked_recurrence.terminated_at is not None:
+                    caller.refresh_from_db()
+                    return caller
+
+                # Convergence re-check UNDER the recurrence lock: a
+                # concurrent materialization cannot commit a new row
+                # while the lock is held, so the re-queried set is
+                # final. It may SHRINK (a concurrent cancellation /
+                # lifecycle transition settled a candidate) — those
+                # Meetings are then simply not cancelled — but if it
+                # GREW (a new row committed during this attempt),
+                # abort and retry with the same observed instant.
+                active_pks = set(
+                    Meeting.objects
+                    .filter(
+                        recurrence=recurrence,
+                        status=Meeting.Status.UPCOMING,
+                        scheduled_at__gte=terminated_at,
+                    )
+                    .values_list("pk", flat=True)
+                )
+                if not active_pks <= candidate_pks:
+                    raise _RecurrenceTerminationAttemptAborted()
+
+                # Cancel every still-candidate Meeting (all already
+                # row-locked; a shrink leaves the rest untouched).
+                candidates_by_pk = {
+                    meeting.pk: meeting for meeting in candidates
+                }
+                for pk in sorted(active_pks):
+                    meeting = candidates_by_pk[pk]
+                    # Authoritative state under the held row lock
+                    # (an unlocked Meeting update cannot have
+                    # interleaved a committed status change — but
+                    # the audit event must carry the current
+                    # effective time).
+                    meeting.refresh_from_db()
+                    _cancel_meeting_for_termination(
+                        meeting=meeting,
+                        recurrence=locked_recurrence,
+                        actor=actor,
+                    )
+
+                # Persist the terminal state LAST: the recurrence is
+                # terminated only once every future upcoming Meeting
+                # is already cancelled in the same transaction — a
+                # rollback leaves neither the timestamp nor any
+                # partial cancellation behind.
+                locked_recurrence.terminated_at = terminated_at
+                locked_recurrence.save(
+                    update_fields=["terminated_at", "updated_at"],
+                )
+
+            caller.refresh_from_db()
+            return caller
+        except _RecurrenceTerminationAttemptAborted:
+            continue
+
+    raise MeetingDomainError(
+        "Termination could not be completed: the recurrence's "
+        "upcoming Meetings kept changing while it was being "
+        "terminated. Retry the operation."
+    )
 
 
 # ── MeetingSeriesSection ─────────────────────────────────────────
@@ -3515,24 +3938,61 @@ def reorder_meeting_sections(
 
 
 @transaction.atomic
-def _apply_meeting_update(
+def _guard_recurrence_time_move(*, meeting, new_scheduled_at):
+    """Coordinate a time move of a Meeting that belongs to a
+    Recurrence with whole-series termination.
+
+    Canonical Meeting → Recurrence acquisition order — the SAME
+    order as the single-occurrence cancellation and the termination
+    itself: the Meeting row lock FIRST (``SELECT … FOR UPDATE``),
+    then the ``MeetingRecurrence`` row lock (``FOR NO KEY UPDATE``,
+    the Slice-6 mode). The recurrence lock is never held while
+    waiting for a Meeting lock, so no opposite lock order (hence no
+    deadlock) exists between a time move and a concurrent
+    termination, cancellation, materialization, or lifecycle
+    transition.
+
+    Under BOTH locks the terminal state is re-checked: a Meeting of
+    a TERMINATED recurrence can never be moved to a time at or
+    after the immutable termination instant — that would place it
+    back into the terminated future. Because the locks are held in
+    the caller's transaction, a racing termination either committed
+    BEFORE the lock (the check sees the terminal state and rejects
+    the move) or can only commit AFTER this move commits (in which
+    case termination's under-lock re-query sees the moved Meeting
+    and cancels it through the bounded-retry convergence). The
+    caller applies the mutation inside the SAME transaction, so a
+    rejected move leaves neither a time change nor an event behind.
+    """
+    meeting = Meeting.objects.select_for_update().get(pk=meeting.pk)
+    recurrence = MeetingRecurrence.objects.select_for_update(
+        no_key=True,
+    ).get(pk=meeting.recurrence_id)
+    if (
+        recurrence.terminated_at is not None
+        and new_scheduled_at >= recurrence.terminated_at
+    ):
+        raise MeetingDomainError(
+            "This recurrence is terminated: the meeting cannot be "
+            "rescheduled to the termination instant or later.",
+        )
+    return meeting
+
+
+def _mutate_meeting_update_fields(
     *,
     meeting,
     actor,
-    title=None,
-    scheduled_at=None,
+    title,
+    scheduled_at,
+    previous_scheduled_at,
 ):
-    """Apply editable Meeting metadata (title / scheduled time).
+    """Apply the editable fields (title / scheduled time), persist,
+    and record the ``meeting.rescheduled`` event for a real change.
 
-    Unauthenticated core of :func:`update_meeting`; the caller is
-    responsible for authorization. Lifecycle transitions are not
-    part of this update. A real date-time change records exactly one
-    structured ``meeting.rescheduled`` event inside the caller's
-    transaction; a title-only or no-op update records no Meeting
-    Activity event.
+    Called from :func:`_apply_meeting_update`; the caller owns the
+    transaction (and, for recurring Meetings, the row locks).
     """
-    previous_scheduled_at = meeting.scheduled_at
-
     update_fields = []
 
     if title is not None:
@@ -3579,6 +4039,56 @@ def _apply_meeting_update(
             },
         )
 
+
+def _apply_meeting_update(
+    *,
+    meeting,
+    actor,
+    title=None,
+    scheduled_at=None,
+):
+    """Apply editable Meeting metadata (title / scheduled time).
+
+    Unauthenticated core of :func:`update_meeting`; the caller is
+    responsible for authorization. Lifecycle transitions are not
+    part of this update. A real date-time change records exactly one
+    structured ``meeting.rescheduled`` event; a title-only or no-op
+    update records no Meeting Activity event.
+
+    A time move of a Meeting that belongs to a Recurrence is
+    coordinated with whole-series termination inside ONE
+    transaction — the canonical Meeting → Recurrence row locks and
+    the terminal-state guard (see
+    :func:`_guard_recurrence_time_move`) run FIRST, then the
+    mutation and its event: a rejected move leaves neither a time
+    change nor an event behind. Title-only updates and standalone
+    Meetings (no recurrence) keep the existing behavior exactly.
+    """
+    previous_scheduled_at = meeting.scheduled_at
+
+    if scheduled_at is not None and meeting.recurrence_id is not None:
+        with transaction.atomic():
+            meeting = _guard_recurrence_time_move(
+                meeting=meeting,
+                new_scheduled_at=scheduled_at,
+            )
+            previous_scheduled_at = meeting.scheduled_at
+            _mutate_meeting_update_fields(
+                meeting=meeting,
+                actor=actor,
+                title=title,
+                scheduled_at=scheduled_at,
+                previous_scheduled_at=previous_scheduled_at,
+            )
+            return meeting
+
+    _mutate_meeting_update_fields(
+        meeting=meeting,
+        actor=actor,
+        title=title,
+        scheduled_at=scheduled_at,
+        previous_scheduled_at=previous_scheduled_at,
+    )
     return meeting
 
 
@@ -3599,6 +4109,12 @@ def update_meeting(
     A real date-time change records exactly one structured
     ``meeting.rescheduled`` event inside this transaction; a title-only
     or no-op update records no Meeting Activity event.
+
+    For a Meeting that belongs to a Recurrence, a scheduled-time
+    move is additionally guarded against whole-series termination
+    (see ``_apply_meeting_update``): moving it to the recurrence's
+    immutable termination instant or later is rejected — with no
+    time change and no event — once the series is terminated.
     """
     _require_meeting_write_access(meeting=meeting, user=actor)
 

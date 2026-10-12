@@ -436,10 +436,13 @@ API"), one explicit idempotent HTTP materialization action (see
 action (see "Single-occurrence reschedule" below), and one persistent
 single-occurrence exclusion operation that removes ONE virtual
 occurrence from the effective occurrence set without materializing a
-Meeting (see "Single-occurrence exclusion" below). Recurrence
-creation/editing remain domain-only operations, and there is no
-Recurrence UI. Occurrence Meetings are never auto-created outside the
-explicit materialization operation.
+Meeting (see "Single-occurrence exclusion" below), and one canonical
+whole-series TERMINATION operation that permanently ends the schedule
+and its future occurrences (see "Whole-series termination" below —
+domain-only: there is no HTTP termination endpoint or UI yet).
+Recurrence creation/editing remain domain-only operations, and there
+is no Recurrence UI. Occurrence Meetings are never auto-created
+outside the explicit materialization operation.
 
 A Recurrence owns four persisted values: the recurrence RULE, the
 canonical title of the recurring SERIES, the canonical MEETING
@@ -527,6 +530,11 @@ timezone_name            IANA timezone (e.g. Europe/Berlin)
 end_mode                 no_end | end_date | count
 end_date NULLABLE        inclusive; end_date mode only
 occurrence_count NULLABLE total incl. first; count mode only
+terminated_at NULLABLE   immutable whole-series termination instant;
+                         NULL while active; set exactly once by the
+                         canonical termination operation and never
+                         cleared (migration meetings/0022; see
+                         "Whole-series termination" below)
 created_by_id            (RESTRICT)
 created_at / updated_at
 ```
@@ -1556,6 +1564,19 @@ occurrence:
   `meeting.created` event (from the materialization) plus one
   `meeting.rescheduled` event (from the move); a no-op move of a
   virtual occurrence produces the `meeting.created` event only.
+- **Termination-aware:** a move is coordinated with whole-series
+  termination under the canonical Meeting → Recurrence row locks
+  (the Meeting row lock FIRST, then the Slice-6 recurrence row
+  lock — the same order as cancellation and termination, so no
+  opposite lock order and no deadlock): once the series is
+  TERMINATED, moving the concrete Meeting to the termination
+  instant or later is rejected with no change and no event (a
+  virtual-occurrence reschedule also rolls the first-time
+  materialization back — no orphaned Meeting); a move that commits
+  first (racing termination) is caught by termination's under-lock
+  re-query, which cancels the moved Meeting. The boundary is
+  exactly the immutable termination instant: a move that stays
+  before it is still allowed.
 
 The NEW planned time is NOT constrained by the recurrence rule: it may
 differ from the rule's wall-clock time, weekday, or interval (that is
@@ -1993,6 +2014,180 @@ The HTTP cancellation action above is the canonical path a client is
 forced through (instead of a destructive delete); no frontend
 cancellation UX exists yet.
 
+### Whole-series termination (implemented, domain-only)
+
+Terminating a WHOLE recurring series (the deferred "whole-
+recurrence cancellation / termination" above) is ONE canonical
+domain operation:
+`meetings.services.terminate_meeting_recurrence(recurrence, actor)`.
+It permanently terminates one `MeetingRecurrence`, suppresses all
+future virtual occurrences, and cancels — without deleting — its
+future unstarted concrete Meetings, while preserving live /
+completed Meeting history and the Template. There is NO HTTP
+termination endpoint and NO UI for it yet: the operation is
+domain-only in this slice (documented here exactly as implemented).
+
+**Persisted terminal state (migration `meetings/0022`).**
+`MeetingRecurrence` gains ONE nullable column: `terminated_at`, the
+IMMUTABLE effective termination instant.
+
+```text
+active recurrence:      terminated_at = NULL
+terminated recurrence:  terminated_at = <observed instant>   (never cleared)
+```
+
+- the column is added NULLABLE with NO data step: every existing
+  row migrates to the ACTIVE state unchanged (a naturally ended
+  schedule is NOT confused with an explicitly terminated one);
+- `terminate_meeting_recurrence` is the ONLY writer of a non-NULL
+  value, and the value is IMMUTABLE thereafter: there is no
+  restoration / reactivation in V1, so a terminated recurrence can
+  never become active again;
+- the recurrence RULE, its stable occurrence identities, its
+  canonical TITLE, its Template (`series`) reference, and its
+  participant intent are NEVER rewritten by termination;
+- no database hard deletion of any record (recurrence, Meeting, or
+  Meeting-owned content) ever happens — termination is a state
+  change plus cancellations, never a delete.
+
+**Permission rule.** The operation re-checks the canonical scoped
+Meeting write rule of the Recurrence's scope in the domain service
+(the same scope-level write rule as creation / materialization /
+exclusion):
+
+- Group scope: any CURRENT Research Group member;
+- Project scope: a current Project `owner` or `member`
+  (`PROJECT_WORK`) while the Project is NOT archived;
+- a Project `viewer`, a revoked member, an outsider, or an archived
+  Project is DENIED (denied termination changes nothing).
+
+**Future virtual occurrences.** From the termination instant on, no
+virtual occurrence whose original start lies at or after it is part
+of the recurrence's EFFECTIVE occurrence set:
+
+- the canonical effective expansion
+  (`expand_effective_meeting_recurrence_occurrences`), the
+  next-effective-occurrence search, the bounded per-recurrence
+  occurrence read API, and the personal occurrence feed all filter
+  it out — from the single persisted column, applied AFTER rule
+  generation;
+- the original recurrence rule is NOT rewritten: re-expanding it
+  RAW still produces the identical series, and the stable occurrence
+  identities are unchanged;
+- NO exclusion records are generated for the suppression: an
+  open-ended (infinite) terminated recurrence is suppressed by the
+  one persisted value, never by an unbounded exclusion collection;
+- materializing a still-virtual occurrence at or after the instant
+  is REJECTED under the recurrence row lock (a repeated or racing
+  request cannot recreate a terminated future occurrence), and
+  excluding such an occurrence is rejected as well (it is already
+  outside the effective set — writing an exclusion for it would
+  only add redundant state to a terminal schedule).
+
+**Concrete Meetings.** Inside the SAME logical termination
+transaction:
+
+- every Meeting of this recurrence with `status = upcoming` and an
+  EFFECTIVE `scheduled_at` at or after the observed instant is
+  cancelled through the canonical single-occurrence cancellation
+  invariants: the Meeting row, its primary key, its recurrence FK,
+  its immutable `original_scheduled_at`, its current `scheduled_at`,
+  its title, its Sections, agenda items, notes, participants, Work
+  Item links, and its audit history are PRESERVED (never deleted or
+  recreated) — only the status becomes `cancelled`;
+- exactly ONE `MeetingRecurrenceExclusion` keyed by the immutable
+  ORIGINAL occurrence identity is persisted per cancelled Meeting
+  (a moved occurrence is excluded by its ORIGINAL identity, exactly
+  like the single-occurrence cancellation), reusing a pre-existing
+  exclusion if one is already present;
+- exactly ONE `meeting.cancelled` audit event per first
+  cancellation (the same structured data shape as the
+  single-occurrence cancellation);
+- `live` and `completed` Meetings — and Meetings already
+  `cancelled` — are left completely unchanged, as is every Meeting
+  whose effective time lies BEFORE the instant (including an
+  occurrence that was moved earlier than the instant);
+- the generic Meeting DELETE permission is NOT broadened: a
+  recurrence-provenanced Meeting is still rejected by
+  `delete_meeting` exactly as before.
+
+**One observed instant.** The termination instant is observed
+EXACTLY ONCE (the repository's single clock-observation convention,
+`_termination_instant`), before any locking, and is used
+consistently throughout the operation: the Meeting cancellation
+cutoff, the persisted `terminated_at` value, and the read-side
+future-occurrence cutoff.
+
+**Atomicity and concurrency invariants.** The operation is ONE
+`transaction.atomic()` — partial termination is not a valid final
+state. Lock order: the candidate Meeting rows are locked FIRST
+(`SELECT … FOR UPDATE`, deterministic pk order) and the
+`MeetingRecurrence` row lock (`FOR NO KEY UPDATE`, the Slice-6 mode)
+is taken only AFTER every Meeting lock — the SAME Meeting →
+recurrence order as the single-occurrence cancellation (and the
+occurrence time move), so no opposite lock order (hence no
+deadlock) exists between termination and a concurrent
+cancellation, lifecycle start, materialization, or occurrence time
+move (reschedule / ordinary Meeting edit):
+
+- a concurrent single-occurrence cancellation holds its Meeting
+  lock and wants the recurrence lock: termination is still
+  acquiring Meeting locks (not holding the recurrence lock yet), so
+  the cancellation wins the free recurrence lock first and commits;
+  termination then re-queries under the lock and simply does not
+  cancel the already-cancelled Meeting;
+- a concurrent materialization holds the recurrence lock and
+  creates a NEW row: termination waits (the insert never conflicts
+  with the Meeting locks), then — because the new row is committed —
+  the under-lock re-query catches it and cancels it too; if a new
+  row commits during an attempt, the attempt is aborted and retried
+  with the SAME observed instant (bounded; a persistent retry storm
+  is an explicit domain error, never an unsafe final state);
+- a concurrent lifecycle start holds the Meeting lock: termination
+  waits, then the re-query sees the `live` status and preserves the
+  Meeting;
+- a concurrent occurrence time move (the single-occurrence
+  reschedule or the ordinary Meeting edit of a recurring Meeting)
+  uses the SAME Meeting → recurrence order — the Meeting row lock
+  first, then the recurrence row lock — and under both locks
+  rejects a move to the termination instant or later: either the
+  move sees the committed terminal state and is rejected (no
+  change, no event), or it commits first and the under-lock
+  re-query catches the moved Meeting (the candidate set GREW) and
+  cancels it via the bounded retry — a terminated series never
+  regains a future upcoming Meeting;
+- the recurrence lock is NEVER held while waiting for a Meeting
+  lock.
+
+**Idempotency.** Repeating termination for an already-terminated
+recurrence returns the persisted terminal state and changes
+nothing: the same `terminated_at`, no new exclusion rows, no
+duplicate `meeting.cancelled` events, no content mutation. Two
+racing terminations serialize on the locks: one performs the
+termination, the other observes the committed `terminated_at` under
+the lock and returns idempotently.
+
+**Read-model effects.**
+
+- the personal Upcoming occurrence feed and the bounded per-
+  recurrence occurrence read show no future occurrences of a
+  terminated recurrence (occurrences at or after the instant are
+  absent, exactly like excluded/cancelled ones — no replacement is
+  generated);
+- the personal Series overview excludes an EXPLICITLY terminated
+  recurrence entirely (it no longer appears), while a naturally
+  ended but NOT terminated recurrence keeps its existing overview
+  behavior (it still appears, with the derived `ended` status and a
+  null next occurrence) — the overview response shape is unchanged;
+- historical concrete Meeting read APIs keep working: a terminated
+  recurrence's Meetings (cancelled or preserved) remain fully
+  addressable by their Meeting id.
+
+**Not part of this slice:** no restoration / reactivation, no
+recurrence editing, no HTTP termination endpoint, no UI, and no
+recurrence-wide audit taxonomy (the per-Meeting
+`meeting.cancelled` events are the only events recorded).
+
 ### Not implemented (deferred)
 
 The following are intentionally out of this slice and remain
@@ -2031,11 +2226,14 @@ unimplemented:
   occurrence preview UI and the bounded-occurrence maximum window
   size.
 - restore / reactivate (unexclude) of a cancelled or excluded
-  occurrence, and whole-series (whole-recurrence) cancellation /
-  termination: the single-occurrence paths are implemented
-  (virtual: "Single-occurrence exclusion"; materialized:
-  "Single-occurrence cancellation (materialized)"), and neither is
-  reversible in V1;
+  occurrence, and restoration of a TERMINATED recurrence: the
+  single-occurrence paths are implemented (virtual: "Single-
+  occurrence exclusion"; materialized: "Single-occurrence
+  cancellation (materialized)"), whole-series TERMINATION is
+  implemented as the domain-only operation described in "Whole-
+  series termination (implemented, domain-only)" above (no HTTP
+  endpoint and no UI yet), and none of these paths is reversible in
+  V1;
 - "this and following" series semantics and whole-occurrence editing
   beyond the implemented single-occurrence reschedule (moving one
   materialized occurrence is implemented, see

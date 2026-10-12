@@ -149,6 +149,18 @@ class MeetingRecurrence(models.Model):
       final calendar date), or ``count`` (total occurrences, INCLUDING the
       first). ``end_date`` and ``occurrence_count`` are mutually exclusive,
       and each belongs to its mode only (see DB constraints).
+    - ``terminated_at`` (migration ``meetings/0022``) is the IMMUTABLE
+      effective termination instant of the whole series: ``None`` while
+      the schedule is active, a timezone-aware instant once
+      ``terminate_meeting_recurrence`` has permanently terminated it.
+      Termination is terminal (no restore / reactivate in V1): from that
+      instant on, no virtual occurrence at or after it is part of the
+      effective occurrence set, no such occurrence can be materialized,
+      and every still-``upcoming`` materialized occurrence whose
+      effective ``scheduled_at`` lies at or after it is cancelled
+      (content preserved) inside the same transaction. The rule, the
+      stable occurrence identities, the Template reference, and all
+      live / completed / already-cancelled Meetings are never rewritten.
     """
 
     class Scope(models.TextChoices):
@@ -239,6 +251,17 @@ class MeetingRecurrence(models.Model):
     end_date = models.DateField(null=True, blank=True)
     # Total occurrences INCLUDING the first; COUNT mode only.
     occurrence_count = models.PositiveIntegerField(null=True, blank=True)
+
+    # Whole-series termination (migration meetings/0022): the IMMUTABLE
+    # effective termination instant, observed ONCE by
+    # ``terminate_meeting_recurrence``. NULL while the schedule is
+    # active (every existing row migrates to this state unchanged);
+    # set exactly once, by the termination operation, and never
+    # cleared (no restoration / reactivation in V1). From this instant
+    # on, the recurrence's effective occurrence set contains no
+    # occurrence at or after it, and such occurrences can neither be
+    # materialized nor excluded (see the service docstrings).
+    terminated_at = models.DateTimeField(null=True, blank=True)
 
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
