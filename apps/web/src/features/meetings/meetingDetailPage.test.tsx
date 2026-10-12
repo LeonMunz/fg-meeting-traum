@@ -783,8 +783,12 @@ describe('MeetingDetailPage shared header color semantics', () => {
     // Both back-navigation buttons (the loaded-page <nav> and the
     // unavailable-meeting state) must be neutral with canonical
     // focus — no persistent Accent in the idle state.
+    // The completed header's back action (the last such call in
+    // the file) computes its unified return destination — the
+    // validated origin tab — through the shared navigation
+    // helper; the button and its class string are unchanged.
     const anchors = [
-      "navigate('/meetings')",
+      'navigate(meetingsReturnDestination)',
     ]
     for (const anchor of anchors) {
       const idx = fileSource.lastIndexOf(anchor)

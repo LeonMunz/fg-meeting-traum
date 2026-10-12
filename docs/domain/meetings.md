@@ -1046,8 +1046,21 @@ metadata), a virtual occurrence becomes a normal row (no fabricated
 Meeting id), and a cancelled concrete Meeting is dropped. Only the
 visual Meetings-page / Upcoming UI integration remains deferred at
 the model level — the visible Upcoming Meeting-page integration
-IS implemented (frontend-only): the Meetings page defaults to the
-`Upcoming` tab and renders one chronological list from
+IS implemented (frontend-only): the Meetings page selects its tab
+from the URL — the `?tab=` query parameter on `/meetings` is the
+authoritative source for the selected tab (no independent
+active-tab state that could drift): the BARE `/meetings` (and
+`?tab=upcoming`) selects `Upcoming`, `?tab=series` selects
+`Series`, and `?tab=past` selects `Past`; tab activation (pointer
+OR ArrowLeft/ArrowRight) updates the URL through React Router and
+pushes a history entry, so Browser Back/Forward restore the tab of
+each history entry and a direct `?tab=` link renders its tab
+immediately on load (no incorrect-tab flash, no rewrite of the
+link); an unknown or missing `tab` value selects the `Upcoming`
+fallback WITHOUT automatically redirecting (the URL is left
+untouched); the standalone Meeting Templates route
+`/meetings/series` remains separate from `/meetings?tab=series`.
+The page renders one chronological list from
 `buildUpcomingList(concreteMeetings, feedOccurrences)` — one-time
 and recurring occurrences together, grouped by LOCAL calendar date
 (`TODAY` / `TOMORROW` / `THU, SEP 24` headers, groups and rows
@@ -1150,9 +1163,23 @@ available (never fabricated); the Past tab already communicates the
 completed state, so rows carry no Completed badge and NONE of
 Upcoming's row actions. Row activation (pointer or keyboard)
 navigates directly by canonical id to the existing
-`/meetings/{meetingId}` detail — no write request, no
-materialization, no additional Meeting or recurrence request. The
-tab renders honest loading, empty ("No completed meetings yet"),
+`/meetings/{meetingId}` detail CARRYING THE VALIDATED ORIGIN
+`?from=past` (so the return restores the archive) — no write
+request, no materialization, no additional Meeting or recurrence
+request. The concrete Meeting detail treats `from` as a VALIDATED
+return origin: only the known tab identifiers are accepted and the
+value is never interpreted as a URL or navigation destination. The
+completed Meeting header's Meetings action, the error /
+unavailable-detail fallback, and the successful deletion redirect
+ALL return to the originating tab (`?from=past` →
+`/meetings?tab=past`; an explicit `?from=series` on a direct
+detail URL → `/meetings?tab=series`; missing, unknown, or
+`?from=upcoming` → the bare `/meetings`, the safe fallback), while
+a concrete row opened from Upcoming keeps the canonical bare
+`/meetings/{meetingId}` detail URL (no origin query) and the
+Upcoming and Live breadcrumbs keep their existing bare
+`/meetings` return. The tab renders honest loading, empty
+("No completed meetings yet"),
 and error-with-Retry states; there is NO 42-day window or other
 arbitrary history cutoff. (The backend Series overview read
 contract IS implemented — see "Series overview read API

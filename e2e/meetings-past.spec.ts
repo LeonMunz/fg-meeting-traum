@@ -174,11 +174,14 @@ test(
     ).toHaveCount(0)
 
     // 5) Pointer activation opens the EXISTING Meeting detail
-    //    by its canonical id — the completed detail offers
-    //    Reopen — and issues no materialization request.
+    //    by its canonical id with the validated Past origin
+    //    (?from=past) — the completed detail offers Reopen —
+    //    and issues no materialization request.
     await pastRow.click()
 
-    await expect(page).toHaveURL(/\/meetings\/\d+$/)
+    await expect(page).toHaveURL(
+      /\/meetings\/\d+\?from=past$/,
+    )
 
     await expect(
       page.getByRole('button', {
@@ -187,6 +190,33 @@ test(
     ).toBeVisible()
 
     expect(materializeRequests).toBe(0)
+
+    // 5a) The completed detail's Meetings action returns to the
+    //     ORIGIN tab: the Meetings page on the Past tab with the
+    //     completed Meeting visible in the archive again (the
+    //     list URL additionally carries the page's active
+    //     Research Group scope — parameter order is not part of
+    //     the contract).
+    await page
+      .getByRole('button', { name: 'Meetings' })
+      .click()
+
+    await expect(page).toHaveURL(
+      /\/meetings\?[^#]*tab=past/,
+    )
+
+    await expect(
+      page.getByRole('tab', { name: 'Past' }),
+    ).toHaveAttribute('aria-selected', 'true')
+
+    await expect(
+      page
+        .getByRole('region', {
+          name: 'Completed meetings',
+        })
+        .getByRole('button')
+        .filter({ hasText: title }),
+    ).toHaveCount(1)
 
     // 6) Keyboard activation: the same row opens the detail
     //    with Enter as well.
@@ -206,9 +236,34 @@ test(
     await keyboardRow.focus()
     await keyboardRow.press('Enter')
 
-    await expect(page).toHaveURL(/\/meetings\/\d+$/)
+    await expect(page).toHaveURL(
+      /\/meetings\/\d+\?from=past$/,
+    )
 
-    // 7) Across list load, tab activation, and both opens the
+    // 7) Direct URL reload: the Past tab is URL-addressable —
+    //    navigating straight to /meetings?tab=past (and reloading
+    //    it) selects the Past tab immediately, with the
+    //    completed Meeting visible, without any tab click.
+    await page.goto('/meetings?tab=past')
+    await expect(
+      page.getByRole('tab', { name: 'Past' }),
+    ).toHaveAttribute('aria-selected', 'true')
+
+    await page.reload()
+    await expect(
+      page.getByRole('tab', { name: 'Past' }),
+    ).toHaveAttribute('aria-selected', 'true')
+    await expect(
+      page
+        .getByRole('region', {
+          name: 'Completed meetings',
+        })
+        .getByRole('button')
+        .filter({ hasText: title }),
+    ).toHaveCount(1)
+
+    // 8) Across list load, tab activation, both opens, the
+    //    origin-carrying return, and the direct tab reload the
     //    Past view stayed read-only: zero materialization
     //    requests, no occurrence requests of its own.
     expect(materializeRequests).toBe(0)

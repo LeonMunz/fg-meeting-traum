@@ -5,7 +5,10 @@ import {
   useRef,
   useState,
 } from 'react'
-import { useNavigate } from 'react-router'
+import {
+  useNavigate,
+  useSearchParams,
+} from 'react-router'
 
 import { ApiError } from '../../api/client'
 import {
@@ -41,6 +44,11 @@ import {
   MeetingSeriesTerminateConfirmDialog,
 } from './MeetingSeriesTerminateConfirmDialog'
 import {
+  meetingsDetailLocation,
+  meetingsTabFromParam,
+  type MeetingsTabId,
+} from './meetingsNavigation'
+import {
   buildUpcomingList,
   selectUpcomingConcreteMeetings,
   selectUpcomingWindowRows,
@@ -62,13 +70,14 @@ import {
   type MeetingDeleteConfirmMode,
 } from './MeetingDeleteConfirmDialog'
 
-const MEETINGS_TABS = [
+const MEETINGS_TABS: ReadonlyArray<{
+  id: MeetingsTabId
+  label: string
+}> = [
   { id: 'upcoming', label: 'Upcoming' },
   { id: 'series', label: 'Series' },
   { id: 'past', label: 'Past' },
-] as const
-
-type MeetingsTabId = (typeof MEETINGS_TABS)[number]['id']
+]
 
 function getErrorMessage(
   error: unknown,
@@ -147,8 +156,53 @@ export function MeetingListPage() {
     error: researchGroupsError,
   } = useResearchGroupListScope()
 
-  const [activeTab, setActiveTab] =
-    useState<MeetingsTabId>('upcoming')
+  // The URL is the single source of truth for the selected tab:
+  // missing or unknown `tab` values fall back to Upcoming
+  // WITHOUT rewriting the URL (no automatic redirect). There is
+  // no independent active-tab state that could drift out of sync.
+  const [
+    searchParams,
+    setSearchParams,
+  ] = useSearchParams()
+
+  const activeTab = meetingsTabFromParam(
+    searchParams.get('tab'),
+  )
+
+  /**
+   * Tab activation through React Router: the `tab` query
+   * parameter is the only tab state. Upcoming is the bare
+   * /meetings (the parameter is removed, never set to
+   * `tab=upcoming`); every real switch pushes a history entry,
+   * so Browser Back/Forward restore the tab of each entry.
+   * Re-selecting the already-active tab (including a valid
+   * direct `?tab=` link) navigates nowhere.
+   */
+  const selectTab = (tab: MeetingsTabId) => {
+    if (tab === activeTab) {
+      return
+    }
+
+    const next = new URLSearchParams(
+      searchParams,
+    )
+
+    if (tab === 'upcoming') {
+      next.delete('tab')
+    } else {
+      next.set('tab', tab)
+    }
+
+    if (
+      next.toString() ===
+      searchParams.toString()
+    ) {
+      return
+    }
+
+    setSearchParams(next)
+  }
+
   const tabRefs = useRef<Map<MeetingsTabId, HTMLButtonElement>>(
     new Map(),
   )
@@ -629,7 +683,9 @@ export function MeetingListPage() {
   const handleOpenRow = useCallback(
     async (item: UpcomingMeeting) => {
       if (item.meetingId != null) {
-        navigate(`/meetings/${item.meetingId}`)
+        navigate(
+          meetingsDetailLocation(item.meetingId),
+        )
         return
       }
 
@@ -673,7 +729,7 @@ export function MeetingListPage() {
         // Land in the SAME Meeting workspace an ordinary
         // concrete Meeting uses — the id comes from the
         // materialization response, never fabricated.
-        navigate(`/meetings/${meeting.id}`)
+        navigate(meetingsDetailLocation(meeting.id))
       } catch (openRowError) {
         setOpeningRowIds((current) => {
           const next = new Set(current)
@@ -1033,7 +1089,7 @@ export function MeetingListPage() {
       ids.length
     ]
 
-    setActiveTab(nextId)
+    selectTab(nextId)
     tabRefs.current.get(nextId)?.focus()
   }
 
@@ -1120,7 +1176,7 @@ export function MeetingListPage() {
               aria-selected={selected}
               aria-controls={`meetings-panel-${tab.id}`}
               tabIndex={selected ? 0 : -1}
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => selectTab(tab.id)}
               onKeyDown={(event) =>
                 handleTabKeyDown(event, tab.id)
               }
@@ -1315,7 +1371,12 @@ export function MeetingListPage() {
                 void loadMeetings()
               }}
               onOpenMeeting={(meetingId) =>
-                navigate(`/meetings/${meetingId}`)
+                navigate(
+                  meetingsDetailLocation(
+                    meetingId,
+                    'past',
+                  ),
+                )
               }
             />
           ) : groupUnavailable ? (
@@ -1333,7 +1394,12 @@ export function MeetingListPage() {
                 void loadMeetings()
               }}
               onOpenMeeting={(meetingId) =>
-                navigate(`/meetings/${meetingId}`)
+                navigate(
+                  meetingsDetailLocation(
+                    meetingId,
+                    'past',
+                  ),
+                )
               }
             />
           )

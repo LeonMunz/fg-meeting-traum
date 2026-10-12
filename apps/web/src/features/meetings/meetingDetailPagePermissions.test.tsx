@@ -19,6 +19,7 @@ import {
   MemoryRouter,
   Route,
   Routes,
+  useLocation,
 } from 'react-router'
 
 import { ApiError } from '../../api/client'
@@ -132,6 +133,33 @@ const participant: ApiMeetingParticipant = {
 
 const emptyItem: ApiMeetingItem[] = []
 
+/**
+ * Renders the current router location (pathname + search) in a
+ * sibling probe so return-destination tests can assert the
+ * authoritative address without touching window.history.
+ */
+function UrlProbe() {
+  const location = useLocation()
+
+  return (
+    <div data-testid="url-probe">
+      {location.pathname}
+      {location.search}
+    </div>
+  )
+}
+
+function probeUrl(): URL {
+  const probe = document.querySelector(
+    '[data-testid="url-probe"]',
+  )
+
+  return new URL(
+    probe?.textContent ?? '',
+    'http://localhost',
+  )
+}
+
 function makeMeeting(
   overrides: Partial<ApiMeeting> = {},
 ): ApiMeeting {
@@ -177,6 +205,7 @@ function renderPage(
   meeting: ApiMeeting,
   project: ApiProject | null,
   sections: ApiMeetingSection[] = [section],
+  entry = '/meetings/11',
 ) {
   vi.mocked(meetingsApi.getMeeting).mockResolvedValue(meeting)
   vi.mocked(meetingsApi.listMeetingParticipants).mockResolvedValue(
@@ -193,8 +222,13 @@ function renderPage(
   )
 
   return render(
-    <MemoryRouter initialEntries={['/meetings/11']}>
+    <MemoryRouter initialEntries={[entry]}>
+      <UrlProbe />
       <Routes>
+        <Route
+          path="/meetings"
+          element={<div>Meetings list marker</div>}
+        />
         <Route
           path="/meetings/:meetingId"
           element={<MeetingDetailPage />}
@@ -733,5 +767,220 @@ describe('MeetingDetailPage inline section creation', () => {
     expect(
       screen.queryByRole('button', { name: '+ Add section' }),
     ).not.toBeInTheDocument()
+  })
+})
+
+describe('MeetingDetailPage — Meetings return destination contract', () => {
+  /**
+   * A completed Meeting the session user can administer (group
+   * member + explicit participant): the completed header renders
+   * the Meetings action and the destructive administration.
+   */
+  const completedMeeting: ApiMeeting = {
+    ...makeMeeting({
+      status: 'completed',
+      startedAt: '2026-09-28T09:00:00Z',
+      endedAt: '2026-09-28T10:00:00Z',
+      participantIds: [1, 2],
+    }),
+  }
+
+  function clickMeetingsAction() {
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Meetings' }),
+    )
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    sessionMock.user = { id: 2, username: 'chris' }
+    groupRoleMock.role = 'member'
+  })
+
+  afterEach(() => {
+    cleanup()
+  })
+
+  it('returns to Past from the completed header when the detail carries from=past', async () => {
+    renderPage(
+      completedMeeting,
+      null,
+      [section],
+      '/meetings/11?from=past',
+    )
+
+    await screen.findByText('Collab Weekly')
+    clickMeetingsAction()
+
+    await screen.findByText('Meetings list marker')
+    const url = probeUrl()
+    expect(url.pathname).toBe('/meetings')
+    expect(url.searchParams.get('tab')).toBe('past')
+  })
+
+  it('returns to the bare /meetings (Upcoming) when the detail URL carries no origin', async () => {
+    renderPage(completedMeeting, null, [section])
+
+    await screen.findByText('Collab Weekly')
+    clickMeetingsAction()
+
+    await screen.findByText('Meetings list marker')
+    const url = probeUrl()
+    expect(url.pathname).toBe('/meetings')
+    expect(url.searchParams.get('tab')).toBeNull()
+  })
+
+  it('returns to the bare /meetings for an explicit from=upcoming origin', async () => {
+    renderPage(
+      completedMeeting,
+      null,
+      [section],
+      '/meetings/11?from=upcoming',
+    )
+
+    await screen.findByText('Collab Weekly')
+    clickMeetingsAction()
+
+    await screen.findByText('Meetings list marker')
+    const url = probeUrl()
+    expect(url.pathname).toBe('/meetings')
+    expect(url.searchParams.get('tab')).toBeNull()
+  })
+
+  it('returns to the Series tab for an explicit from=series origin on a direct detail URL', async () => {
+    renderPage(
+      completedMeeting,
+      null,
+      [section],
+      '/meetings/11?from=series',
+    )
+
+    await screen.findByText('Collab Weekly')
+    clickMeetingsAction()
+
+    await screen.findByText('Meetings list marker')
+    const url = probeUrl()
+    expect(url.pathname).toBe('/meetings')
+    expect(url.searchParams.get('tab')).toBe('series')
+  })
+
+  it('falls back to /meetings for an invalid from value that looks like a foreign URL', async () => {
+    renderPage(
+      completedMeeting,
+      null,
+      [section],
+      '/meetings/11?from=https%3A%2F%2Fevil.example%2Fmeetings',
+    )
+
+    await screen.findByText('Collab Weekly')
+    clickMeetingsAction()
+
+    await screen.findByText('Meetings list marker')
+    const url = probeUrl()
+    expect(url.pathname).toBe('/meetings')
+    // Never redirected anywhere: the permitted Meetings route
+    // with no query at all.
+    expect(url.search).toBe('')
+    expect(url.hostname).toBe('localhost')
+  })
+
+  it('falls back to /meetings for an invalid from value that looks like a path traversal', async () => {
+    renderPage(
+      completedMeeting,
+      null,
+      [section],
+      '/meetings/11?from=..%2F..%2Fprojects',
+    )
+
+    await screen.findByText('Collab Weekly')
+    clickMeetingsAction()
+
+    await screen.findByText('Meetings list marker')
+    const url = probeUrl()
+    expect(url.pathname).toBe('/meetings')
+    expect(url.search).toBe('')
+  })
+
+  it('uses the same validated return contract for the error / unavailable-detail fallback', async () => {
+    // The initial detail request fails: the error fallback
+    // renders its own Meetings back action.
+    vi.mocked(meetingsApi.getMeeting).mockRejectedValueOnce(
+      new ApiError(404, { error: 'Meeting not found.' }),
+    )
+    renderPage(
+      completedMeeting,
+      null,
+      [section],
+      '/meetings/11?from=past',
+    )
+
+    const fallback = await screen.findByRole('button', {
+      // The fallback's icon span is not aria-hidden, so the
+      // accessible name carries the icon glyph text.
+      name: /Meetings/,
+    })
+    fireEvent.click(fallback)
+
+    await screen.findByText('Meetings list marker')
+    const url = probeUrl()
+    expect(url.pathname).toBe('/meetings')
+    expect(url.searchParams.get('tab')).toBe('past')
+  })
+
+  it('redirects to the same validated destination after a successful deletion', async () => {
+    renderPage(
+      completedMeeting,
+      null,
+      [section],
+      '/meetings/11?from=past',
+    )
+
+    await screen.findByText('Collab Weekly')
+
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Meeting actions',
+      }),
+    )
+    fireEvent.click(
+      await screen.findByRole('menuitem', {
+        name: 'Delete meeting',
+      }),
+    )
+
+    // Confirm in the destructive dialog (the menu has closed).
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Delete meeting',
+      }),
+    )
+
+    await waitFor(() => {
+      expect(meetingsApi.deleteMeeting).toHaveBeenCalledTimes(1)
+    })
+
+    await screen.findByText('Meetings list marker')
+    const url = probeUrl()
+    expect(url.pathname).toBe('/meetings')
+    expect(url.searchParams.get('tab')).toBe('past')
+  })
+
+  it('keeps the Upcoming breadcrumb on the existing bare /meetings behavior even with an origin in the URL', async () => {
+    renderPage(
+      makeMeeting({
+        participantIds: [1, 2],
+      }),
+      null,
+      [section],
+      '/meetings/11?from=past',
+    )
+
+    await screen.findByText('Collab Weekly')
+    clickMeetingsAction()
+
+    await screen.findByText('Meetings list marker')
+    const url = probeUrl()
+    expect(url.pathname).toBe('/meetings')
+    expect(url.searchParams.get('tab')).toBeNull()
   })
 })

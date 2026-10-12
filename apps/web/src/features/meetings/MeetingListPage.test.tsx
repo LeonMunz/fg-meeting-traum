@@ -12,6 +12,8 @@ import {
   MemoryRouter,
   Route,
   Routes,
+  useLocation,
+  useNavigate,
   useParams,
 } from 'react-router'
 import {
@@ -213,12 +215,96 @@ const createdMeeting: ApiMeeting = {
 
 function DetailMarker() {
   const { meetingId } = useParams<{ meetingId: string }>()
-  return <div>Meeting detail: {meetingId}</div>
+  const location = useLocation()
+  return (
+    <div>
+      <span>Meeting detail: {meetingId}</span>
+      <span data-testid="detail-search">{location.search}</span>
+    </div>
+  )
+}
+
+/**
+ * Renders the current router location (pathname + search) in a
+ * sibling probe so URL-contract tests can assert the
+ * authoritative address — and drive browser history — without
+ * touching window.history.
+ */
+function UrlProbe() {
+  const location = useLocation()
+
+  return (
+    <div data-testid="url-probe">
+      {location.pathname}
+      {location.search}
+    </div>
+  )
+}
+
+function HistoryProbe() {
+  const navigate = useNavigate()
+
+  return (
+    <div>
+      <button
+        type="button"
+        data-testid="history-back"
+        onClick={() => navigate(-1)}
+      >
+        probe-back
+      </button>
+      <button
+        type="button"
+        data-testid="history-forward"
+        onClick={() => navigate(1)}
+      >
+        probe-forward
+      </button>
+    </div>
+  )
+}
+
+function probeUrl(): URL {
+  const probe = document.querySelector(
+    '[data-testid="url-probe"]',
+  )
+
+  return new URL(
+    probe?.textContent ?? '',
+    'http://localhost',
+  )
 }
 
 function renderPage() {
   return render(
     <MemoryRouter initialEntries={['/meetings']}>
+      <Routes>
+        <Route
+          path="/meetings"
+          element={<MeetingListPage />}
+        />
+        <Route
+          path="/meetings/series"
+          element={<div>Templates overview page</div>}
+        />
+        <Route
+          path="/meetings/:meetingId"
+          element={<DetailMarker />}
+        />
+      </Routes>
+    </MemoryRouter>,
+  )
+}
+
+/**
+ * The same harness as `renderPage` at an explicit initial entry,
+ * with the location / history probes for URL-contract tests.
+ */
+function renderPageAt(entry: string) {
+  return render(
+    <MemoryRouter initialEntries={[entry]}>
+      <UrlProbe />
+      <HistoryProbe />
       <Routes>
         <Route
           path="/meetings"
@@ -1023,6 +1109,301 @@ describe('MeetingListPage — Past tab', () => {
     expect(
       meetingsApi.listMeetings,
     ).toHaveBeenCalledWith(2)
+  })
+})
+
+describe('MeetingListPage — URL-addressable tabs', () => {
+  function settled() {
+    return waitFor(() => {
+      expect(headerNewMeetingButton()).toBeEnabled()
+    })
+  }
+
+  it('selects Past from a direct /meetings?tab=past link and renders completed Meetings', async () => {
+    vi.mocked(meetingsApi.listMeetings).mockResolvedValue([
+      makeMeeting({
+        id: 1,
+        title: 'Done in the past',
+        scheduledAt: localIso(2026, 9, 19, 10, 0),
+        status: 'completed',
+      }),
+      makeMeeting({
+        id: 2,
+        title: 'Still upcoming',
+        scheduledAt: localIso(2026, 9, 25, 10, 0),
+      }),
+    ])
+
+    renderPageAt('/meetings?tab=past')
+
+    // The Past tab is selected from the URL on first paint —
+    // the archive renders without an Upcoming flash and the
+    // Upcoming-only Meeting is absent.
+    const section = await screen.findByRole(
+      'region',
+      { name: 'Completed meetings' },
+    )
+    expect(within(section).getByText('Done in the past')).toBeVisible()
+    expect(
+      screen.queryByText('Still upcoming'),
+    ).not.toBeInTheDocument()
+
+    expect(
+      screen.getByRole('tab', { name: 'Past' }),
+    ).toHaveAttribute('aria-selected', 'true')
+    expect(
+      screen.getByRole('tab', { name: 'Upcoming' }),
+    ).toHaveAttribute('aria-selected', 'false')
+
+    // The URL still carries the tab — the page never rewrites
+    // a valid direct link.
+    expect(probeUrl().searchParams.get('tab')).toBe('past')
+    // Past is a pure projection: no Series / feed request.
+    expect(
+      meetingsApi.listMeetingRecurrences,
+    ).not.toHaveBeenCalled()
+  })
+
+  it('selects Series from a direct /meetings?tab=series link and triggers the existing Series load', async () => {
+    vi.mocked(meetingsApi.listMeetingRecurrences).mockResolvedValue([
+      makeSeriesOverview({
+        id: 311,
+        title: 'Direct link series',
+      }),
+    ])
+
+    renderPageAt('/meetings?tab=series')
+
+    expect(
+      screen.getByRole('tab', { name: 'Series' }),
+    ).toHaveAttribute('aria-selected', 'true')
+    await screen.findByText('Direct link series')
+
+    // The direct link triggers exactly the existing lazy
+    // window-free Series load — one request.
+    expect(
+      meetingsApi.listMeetingRecurrences,
+    ).toHaveBeenCalledTimes(1)
+    expect(probeUrl().searchParams.get('tab')).toBe('series')
+  })
+
+  it('selects Upcoming for a missing tab parameter', async () => {
+    renderPageAt('/meetings')
+    await settled()
+
+    expect(
+      screen.getByRole('tab', { name: 'Upcoming' }),
+    ).toHaveAttribute('aria-selected', 'true')
+    expect(probeUrl().searchParams.get('tab')).toBeNull()
+  })
+
+  it('selects Upcoming for an explicit /meetings?tab=upcoming link', async () => {
+    renderPageAt('/meetings?tab=upcoming')
+    await settled()
+
+    expect(
+      screen.getByRole('tab', { name: 'Upcoming' }),
+    ).toHaveAttribute('aria-selected', 'true')
+    // The explicit valid link is preserved (no rewrite).
+    expect(probeUrl().searchParams.get('tab')).toBe('upcoming')
+  })
+
+  it('falls back to Upcoming for an unknown tab value without rewriting the URL', async () => {
+    renderPageAt('/meetings?tab=unknown')
+    await settled()
+
+    expect(
+      screen.getByRole('tab', { name: 'Upcoming' }),
+    ).toHaveAttribute('aria-selected', 'true')
+
+    // The invalid value renders the Upcoming fallback but is
+    // NOT automatically redirected away from.
+    const url = probeUrl()
+    expect(url.pathname).toBe('/meetings')
+    expect(url.searchParams.get('tab')).toBe('unknown')
+  })
+
+  it('updates the URL on pointer tab selection', async () => {
+    renderPageAt('/meetings')
+    await settled()
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Past' }))
+    await waitFor(() => {
+      expect(probeUrl().searchParams.get('tab')).toBe('past')
+    })
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Series' }))
+    await waitFor(() => {
+      expect(probeUrl().searchParams.get('tab')).toBe('series')
+    })
+
+    // Selecting Upcoming drops the query (bare /meetings).
+    fireEvent.click(screen.getByRole('tab', { name: 'Upcoming' }))
+    await waitFor(() => {
+      expect(probeUrl().searchParams.get('tab')).toBeNull()
+    })
+    expect(probeUrl().pathname).toBe('/meetings')
+  })
+
+  it('updates the URL on ArrowRight / ArrowLeft tab changes and keeps focus on the selected tab', async () => {
+    renderPageAt('/meetings')
+    await settled()
+
+    const upcomingTab = screen.getByRole('tab', {
+      name: 'Upcoming',
+    }) as HTMLElement
+    upcomingTab.focus()
+    fireEvent.keyDown(upcomingTab, { key: 'ArrowRight' })
+
+    await waitFor(() => {
+      expect(probeUrl().searchParams.get('tab')).toBe('series')
+    })
+    expect(
+      screen.getByRole('tab', { name: 'Series' }),
+    ).toHaveFocus()
+
+    fireEvent.keyDown(screen.getByRole('tab', { name: 'Series' }), {
+      key: 'ArrowRight',
+    })
+    await waitFor(() => {
+      expect(probeUrl().searchParams.get('tab')).toBe('past')
+    })
+    expect(
+      screen.getByRole('tab', { name: 'Past' }),
+    ).toHaveFocus()
+
+    // ArrowLeft wraps from the first tab to the last.
+    fireEvent.keyDown(screen.getByRole('tab', { name: 'Upcoming' }), {
+      key: 'ArrowLeft',
+    })
+    await waitFor(() => {
+      expect(probeUrl().searchParams.get('tab')).toBe('past')
+    })
+    expect(
+      screen.getByRole('tab', { name: 'Past' }),
+    ).toHaveFocus()
+  })
+
+  it('restores the previously selected tabs through Browser Back/Forward', async () => {
+    renderPageAt('/meetings')
+    await settled()
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Past' }))
+    await waitFor(() => {
+      expect(probeUrl().searchParams.get('tab')).toBe('past')
+    })
+    expect(
+      screen.getByRole('tab', { name: 'Past' }),
+    ).toHaveAttribute('aria-selected', 'true')
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Series' }))
+    await waitFor(() => {
+      expect(probeUrl().searchParams.get('tab')).toBe('series')
+    })
+
+    // Back: the Past history entry restores the Past tab.
+    fireEvent.click(screen.getByTestId('history-back'))
+    await waitFor(() => {
+      expect(probeUrl().searchParams.get('tab')).toBe('past')
+    })
+    expect(
+      screen.getByRole('tab', { name: 'Past' }),
+    ).toHaveAttribute('aria-selected', 'true')
+
+    // Back again: the bare /meetings entry restores Upcoming.
+    fireEvent.click(screen.getByTestId('history-back'))
+    await waitFor(() => {
+      expect(probeUrl().searchParams.get('tab')).toBeNull()
+    })
+    expect(
+      screen.getByRole('tab', { name: 'Upcoming' }),
+    ).toHaveAttribute('aria-selected', 'true')
+
+    // Forward restores the Past entry…
+    fireEvent.click(screen.getByTestId('history-forward'))
+    await waitFor(() => {
+      expect(probeUrl().searchParams.get('tab')).toBe('past')
+    })
+    expect(
+      screen.getByRole('tab', { name: 'Past' }),
+    ).toHaveAttribute('aria-selected', 'true')
+
+    // …and a second forward the Series entry.
+    fireEvent.click(screen.getByTestId('history-forward'))
+    await waitFor(() => {
+      expect(probeUrl().searchParams.get('tab')).toBe('series')
+    })
+    expect(
+      screen.getByRole('tab', { name: 'Series' }),
+    ).toHaveAttribute('aria-selected', 'true')
+  })
+
+  it('does not push a history entry when re-selecting the active tab', async () => {
+    renderPageAt('/meetings?tab=past')
+    await settled()
+
+    // Re-selecting the already-active Past tab must not rewrite
+    // the URL (a new history entry would be an unnecessary
+    // navigation for a no-op selection).
+    const before = probeUrl().toString()
+    fireEvent.click(screen.getByRole('tab', { name: 'Past' }))
+    await waitFor(() => {
+      expect(probeUrl().toString()).toBe(before)
+    })
+    expect(
+      screen.getByRole('tab', { name: 'Past' }),
+    ).toHaveAttribute('aria-selected', 'true')
+  })
+
+  it('carries the validated from=past origin when opening a completed Meeting from Past', async () => {
+    vi.mocked(meetingsApi.listMeetings).mockResolvedValue([
+      makeMeeting({
+        id: 42,
+        title: 'Origin completed',
+        scheduledAt: localIso(2026, 9, 19, 11, 0),
+        status: 'completed',
+      }),
+    ])
+
+    renderPageAt('/meetings?tab=past')
+
+    const row = await screen.findByRole('button', {
+      name: /^Open Origin completed /,
+    })
+    fireEvent.click(row)
+
+    await screen.findByText('Meeting detail: 42')
+    expect(
+      document.querySelector('[data-testid="detail-search"]'),
+    ).toHaveTextContent('?from=past')
+
+    // Still a pure navigation: no mutation, no materialization.
+    expect(meetingsApi.deleteMeeting).not.toHaveBeenCalled()
+    expect(meetingsApi.updateMeeting).not.toHaveBeenCalled()
+    expect(
+      meetingsApi.materializeMeetingRecurrenceOccurrence,
+    ).not.toHaveBeenCalled()
+  })
+
+  it('keeps the canonical bare detail URL when opening an Upcoming row', async () => {
+    vi.mocked(meetingsApi.listMeetings).mockResolvedValue([
+      makeMeeting({
+        id: 7,
+        title: 'Upcoming row',
+        scheduledAt: localIso(2026, 9, 23, 15, 0),
+      }),
+    ])
+
+    renderPageAt('/meetings')
+    const row = await screen.findByRole('button', {
+      name: /^Open Upcoming row /,
+    })
+    fireEvent.click(row)
+
+    await screen.findByText('Meeting detail: 7')
+    expect(
+      document.querySelector('[data-testid="detail-search"]'),
+    ).toHaveTextContent('')
   })
 })
 
@@ -2303,6 +2684,14 @@ describe('MeetingListPage — opening Upcoming rows', () => {
     fireEvent.click(row)
 
     await screen.findByText('Meeting detail: 555')
+
+    // The Upcoming tab keeps the canonical bare detail URL —
+    // no origin query for the default tab.
+    expect(
+      document.querySelector(
+        '[data-testid="detail-search"]',
+      ),
+    ).toHaveTextContent('')
 
     // The canonical endpoint contract: the stable occurrence
     // identity pair exactly as the feed reported it, plus the

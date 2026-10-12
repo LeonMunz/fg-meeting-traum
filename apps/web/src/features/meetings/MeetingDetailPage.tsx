@@ -13,6 +13,7 @@ import type { ReactNode } from 'react'
 import {
   useNavigate,
   useParams,
+  useSearchParams,
 } from 'react-router'
 
 import { ApiError } from '../../api/client'
@@ -61,6 +62,9 @@ import {
   type AgendaItemOutcome,
 } from './agendaStatus'
 import { CompletedMeetingRecap } from './CompletedMeetingRecap'
+import {
+  meetingsListReturnDestination,
+} from './meetingsNavigation'
 import {
   completedOutcomeCountParts,
   formatMeetingDate as sharedFormatMeetingDate,
@@ -829,6 +833,19 @@ export function MeetingDetailPage() {
     parsedMeetingId > 0
       ? parsedMeetingId
       : null
+
+  // The unified return contract for every list-return action on
+  // this page (completed header, error / unavailable-detail
+  // fallback, and the successful deletion redirect): the detail's
+  // own `from` origin, validated against the known Meetings tab
+  // identifiers. Missing or invalid origins fall back safely to
+  // /meetings — the value is never interpreted as a URL or
+  // navigation destination.
+  const [detailSearchParams] = useSearchParams()
+  const meetingsReturnDestination =
+    meetingsListReturnDestination(
+      detailSearchParams.get('from'),
+    )
 
   const [meeting, setMeeting] =
     useState<ApiMeeting | null>(null)
@@ -2621,7 +2638,7 @@ export function MeetingDetailPage() {
     try {
       await deleteMeeting(meeting.id)
       setDeleteDialogOpen(false)
-      navigate('/meetings')
+      navigate(meetingsReturnDestination)
     } catch (error) {
       setActionError(getErrorMessage(error, 'Meeting could not be deleted.'))
     } finally {
@@ -3682,7 +3699,7 @@ export function MeetingDetailPage() {
       <div className="w-full px-6 py-8 lg:px-8 lg:py-10 xl:px-10">
         <button
           type="button"
-          onClick={() => navigate('/meetings')}
+          onClick={() => navigate(meetingsReturnDestination)}
           className="inline-flex items-center gap-2 text-sm font-medium text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
         >
           <span className="material-symbols-outlined text-[18px]">
@@ -4312,7 +4329,7 @@ export function MeetingDetailPage() {
       <nav>
         <button
           type="button"
-          onClick={() => navigate('/meetings')}
+          onClick={() => navigate(meetingsReturnDestination)}
           className={`inline-flex items-center gap-1.5 rounded-lg px-2 py-1 font-medium text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface ${
             isCompleted
               ? 'text-[13px] leading-5'
