@@ -55,7 +55,9 @@ vi.mock('../../api/meetings', async (importOriginal) => {
     listMeetingParticipants: vi.fn(),
     updateMeeting: vi.fn(),
     deleteMeeting: vi.fn(),
+    deleteMeetingSeries: vi.fn(),
     cancelMeetingRecurrenceOccurrence: vi.fn(),
+    terminateMeetingRecurrence: vi.fn(),
     searchMeetingSeriesParticipantCandidates: vi.fn(),
     searchStandaloneMeetingParticipantCandidates: vi.fn(),
   }
@@ -170,6 +172,9 @@ function makeSeriesOverview(
     peopleCount: 1,
     status: 'active',
     nextOccurrenceScheduledAt: localIso(2026, 9, 29, 10, 0),
+    // Fail-closed default: the termination grant is explicit per
+    // fixture (the server's canTerminate report is authoritative).
+    canTerminate: false,
     ...overrides,
   }
 }
@@ -376,6 +381,9 @@ beforeEach(() => {
   vi.mocked(
     meetingsApi.cancelMeetingRecurrenceOccurrence,
   ).mockResolvedValue(createdMeeting)
+  vi.mocked(
+    meetingsApi.terminateMeetingRecurrence,
+  ).mockResolvedValue(undefined)
 })
 
 afterEach(() => {
@@ -2614,9 +2622,17 @@ describe('MeetingListPage — Series overview', () => {
     expect(screen.getByText('Existing series')).toBeVisible()
   })
 
-  it('keeps Series rows read-only: no navigation, no actions, nothing that looks clickable', async () => {
+  it('keeps Series rows non-navigational: the only interaction is the server-authorized termination button', async () => {
     vi.mocked(meetingsApi.listMeetingRecurrences).mockResolvedValue([
-      makeSeriesOverview({ id: 921, title: 'Zebra sync' }),
+      makeSeriesOverview({
+        id: 921,
+        title: 'Zebra sync',
+        canTerminate: true,
+      }),
+      makeSeriesOverview({
+        id: 922,
+        title: 'Read-only sync',
+      }),
     ])
 
     renderPage()
@@ -2628,20 +2644,38 @@ describe('MeetingListPage — Series overview', () => {
       name: 'Meeting series',
     })
 
-    // No interactive affordance inside the overview (no row
-    // actions menu, no links, no tab stops on the rows)…
-    expect(within(section).queryAllByRole('button')).toHaveLength(0)
+    // No links, no menus — the rows remain non-navigational
+    // (no Series detail destination is fabricated)…
     expect(within(section).queryAllByRole('link')).toHaveLength(0)
     expect(within(section).queryAllByRole('menu')).toHaveLength(0)
-    expect(section.querySelectorAll('[tabindex]')).toHaveLength(0)
 
-    // …and activation does nothing: no navigation, no detail
-    // destination is fabricated.
+    // …and the ONLY interactive descendants are the trash
+    // buttons of the server-authorized rows: exactly one for the
+    // granted row (accessible name naming the series), none for
+    // the row the server did not grant — no three-dot menu, no
+    // edit action, nothing else.
+    const buttons =
+      within(section).getAllByRole('button')
+    expect(buttons).toHaveLength(1)
+    expect(buttons[0]).toHaveAttribute(
+      'aria-label',
+      'Delete series Zebra sync',
+    )
+    expect(
+      screen.queryByRole('button', {
+        name: 'Delete series Read-only sync',
+      }),
+    ).not.toBeInTheDocument()
+
+    // Row activation does nothing: no navigation, no mutation.
     fireEvent.click(screen.getByText('Zebra sync'))
     expect(
       screen.queryByText(/Meeting detail:/),
     ).not.toBeInTheDocument()
     expect(screen.getByText('Zebra sync')).toBeVisible()
+    expect(
+      meetingsApi.terminateMeetingRecurrence,
+    ).not.toHaveBeenCalled()
   })
 
   it('shows only the active Research Group\'s Series, preserving the backend ordering', async () => {
@@ -2781,6 +2815,855 @@ describe('MeetingListPage — Series overview', () => {
     ).toBeVisible()
     expect(
       meetingsApi.listMeetingRecurrences,
+    ).not.toHaveBeenCalled()
+  })
+})
+
+describe('MeetingListPage — terminate a Series', () => {
+  /**
+   * Two server-authorized Series of the active Research Group in
+   * the backend's ordering (the middle one is the termination
+   * target), plus — where noted — a cross-group row the page
+   * filter must keep out.
+   */
+  function authorizedFixtures() {
+    const target = makeSeriesOverview({
+      id: 777,
+      title: 'Termination target',
+      canTerminate: true,
+    })
+    const first = makeSeriesOverview({
+      id: 776,
+      title: 'Kept series alpha',
+      canTerminate: true,
+    })
+    const last = makeSeriesOverview({
+      id: 778,
+      title: 'Kept series beta',
+      canTerminate: false,
+    })
+    const otherGroup = makeSeriesOverview({
+      id: 779,
+      title: 'Other group series',
+      researchGroupId: 2,
+      canTerminate: true,
+    })
+
+    return {
+      target,
+      first,
+      last,
+      otherGroup,
+      activeGroupRows: [first, target, last],
+    }
+  }
+
+  async function openSeriesTab() {
+    renderPage()
+    fireEvent.click(screen.getByRole('tab', {
+      name: 'Series',
+    }))
+    await screen.findByText('Termination target')
+  }
+
+  /**
+   * Mocks the Series overview so the FIRST response is the
+   * pre-termination state and the post-termination refetch is
+   * gated on an explicit resolve — authoritative-refetch
+   * assertions stay deterministic (no assertion can settle
+   * against the stale pre-termination render).
+   */
+  function gateRefetch(
+    before: ApiMeetingRecurrenceOverview[],
+  ): (rows: ApiMeetingRecurrenceOverview[]) => void {
+    let resolveRefetch: (
+      (rows: ApiMeetingRecurrenceOverview[]) => void
+    ) | null = null
+    vi.mocked(meetingsApi.listMeetingRecurrences)
+      .mockResolvedValueOnce(before)
+      .mockImplementation(() =>
+        new Promise<ApiMeetingRecurrenceOverview[]>(
+          (resolve) => {
+            resolveRefetch = resolve
+          },
+        ),
+      )
+    // The deferred refetch is issued only on the POST-
+    // termination call, so delegate through the captured
+    // resolver at resolve time (never return it eagerly).
+    return (rows) => {
+      resolveRefetch!(rows)
+    }
+  }
+
+  /**
+   * The authoritative overview has settled: exactly the given
+   * titles are rendered (visible) and the terminated series'
+   * title is absent.
+   */
+  async function expectOverviewSettled(
+    visibleTitles: string[],
+  ) {
+    await waitFor(() => {
+      for (const title of visibleTitles) {
+        expect(
+          screen.getByText(title),
+        ).toBeVisible()
+      }
+    })
+    expect(
+      screen.queryByText('Termination target'),
+    ).not.toBeInTheDocument()
+  }
+
+  it('renders exactly one trash action per server-authorized Series row', async () => {
+    const { activeGroupRows } =
+      authorizedFixtures()
+    vi.mocked(
+      meetingsApi.listMeetingRecurrences,
+    ).mockResolvedValue(activeGroupRows)
+
+    await openSeriesTab()
+
+    const section = screen.getByRole('region', {
+      name: 'Meeting series',
+    })
+
+    // Exactly one trash action per granted row, each naming the
+    // series — and nothing else interactive in the overview
+    // (no three-dot menu, no edit action).
+    expect(
+      screen.getByRole('button', {
+        name: 'Delete series Termination target',
+      }),
+    ).toBeVisible()
+    expect(
+      screen.getByRole('button', {
+        name: 'Delete series Kept series alpha',
+      }),
+    ).toBeVisible()
+    expect(
+      within(section).getAllByRole('button'),
+    ).toHaveLength(2)
+    expect(
+      within(section).queryAllByRole('menu'),
+    ).toHaveLength(0)
+    expect(
+      within(section).queryAllByRole('link'),
+    ).toHaveLength(0)
+  })
+
+  it('offers no destructive action when canTerminate is false or missing (never inferred)', async () => {
+    const denied = makeSeriesOverview({
+      id: 941,
+      title: 'Denied series',
+      canTerminate: false,
+    })
+    const missing = makeSeriesOverview({
+      id: 942,
+      title: 'Missing grant series',
+    })
+    delete (
+      missing as unknown as
+        Record<string, unknown>
+    ).canTerminate
+    vi.mocked(
+      meetingsApi.listMeetingRecurrences,
+    ).mockResolvedValue([denied, missing])
+
+    renderPage()
+    fireEvent.click(screen.getByRole('tab', {
+      name: 'Series',
+    }))
+    await screen.findByText('Denied series')
+
+    // A false or missing server grant never renders the
+    // destructive action (and never enables a hidden one).
+    const section = screen.getByRole('region', {
+      name: 'Meeting series',
+    })
+    expect(
+      within(section).queryAllByRole('button'),
+    ).toHaveLength(0)
+    expect(
+      screen.queryByRole('button', {
+        name: /Delete series/,
+      }),
+    ).not.toBeInTheDocument()
+    // Both rows still render their content.
+    expect(
+      screen.getByText('Denied series'),
+    ).toBeVisible()
+    expect(
+      screen.getByText('Missing grant series'),
+    ).toBeVisible()
+  })
+
+  it('keeps the active and ended Series rendering intact alongside the action', async () => {
+    vi.mocked(
+      meetingsApi.listMeetingRecurrences,
+    ).mockResolvedValue([
+      makeSeriesOverview({
+        id: 951,
+        title: 'Running series',
+        canTerminate: true,
+      }),
+      makeSeriesOverview({
+        id: 952,
+        title: 'Naturally ended series',
+        status: 'ended',
+        nextOccurrenceScheduledAt: null,
+        count: 3,
+        canTerminate: true,
+      }),
+    ])
+
+    renderPage()
+    fireEvent.click(screen.getByRole('tab', {
+      name: 'Series',
+    }))
+    await screen.findByText('Running series')
+
+    // Active row: state pill + next label + one trash action.
+    expect(screen.getByText('Active')).toBeVisible()
+    expect(
+      screen.getByRole('button', {
+        name: 'Delete series Running series',
+      }),
+    ).toBeVisible()
+    // Ended row: derived Ended state, no fabricated next
+    // meeting, and the action is still offered (a naturally
+    // ended schedule can still be terminated explicitly).
+    expect(screen.getByText('Ended')).toBeVisible()
+    const endedRow = screen
+      .getByText('Naturally ended series')
+      .parentElement!.parentElement!
+    expect(
+      within(endedRow).queryAllByText(
+        / · \d{2}:\d{2}$/,
+      ),
+    ).toHaveLength(0)
+    expect(
+      screen.getByRole('button', {
+        name: 'Delete series Naturally ended series',
+      }),
+    ).toBeVisible()
+  })
+
+  it('opens the confirmation on trash click without any network request', async () => {
+    vi.mocked(
+      meetingsApi.listMeetingRecurrences,
+    ).mockResolvedValue(
+      authorizedFixtures().activeGroupRows,
+    )
+
+    await openSeriesTab()
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Delete series Termination target',
+    }))
+
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog).toHaveAttribute('aria-modal', 'true')
+    expect(
+      screen.getByRole('heading', {
+        name: 'Delete meeting series?',
+      }),
+    ).toBeVisible()
+    // The selected series is identified by title…
+    expect(
+      screen.getByText(
+        'Stop the recurring series "Termination target"?',
+      ),
+    ).toBeVisible()
+    // …and the consequences are explained, including the
+    // Template and the no-undo warning.
+    expect(
+      screen.getByText(
+        'Future scheduled occurrences will stop.',
+      ),
+    ).toBeVisible()
+    expect(
+      screen.getByText(
+        'Already-created upcoming meetings in the future will be cancelled.',
+      ),
+    ).toBeVisible()
+    expect(
+      screen.getByText(
+        'Past and in-progress meetings and their notes remain available.',
+      ),
+    ).toBeVisible()
+    expect(
+      screen.getByText(
+        'The meeting template is not deleted.',
+      ),
+    ).toBeVisible()
+    expect(
+      screen.getByText("This can't be undone."),
+    ).toBeVisible()
+
+    // No request until explicit confirmation — the row is
+    // untouched and no related API is touched either.
+    expect(
+      meetingsApi.terminateMeetingRecurrence,
+    ).not.toHaveBeenCalled()
+    expect(
+      screen.getByText('Termination target'),
+    ).toBeVisible()
+    expect(
+      meetingsApi.listMeetingRecurrences,
+    ).toHaveBeenCalledTimes(1)
+  })
+
+  it('closes without mutation on Keep series, Escape, and the backdrop', async () => {
+    vi.mocked(
+      meetingsApi.listMeetingRecurrences,
+    ).mockResolvedValue(
+      authorizedFixtures().activeGroupRows,
+    )
+
+    await openSeriesTab()
+
+    // Keep series (the safe default-focus action).
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Delete series Termination target',
+    }))
+    await screen.findByRole('dialog')
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Keep series',
+    }))
+    expect(
+      screen.queryByRole('dialog'),
+    ).not.toBeInTheDocument()
+
+    // Escape.
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Delete series Termination target',
+    }))
+    await screen.findByRole('dialog')
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(
+      screen.queryByRole('dialog'),
+    ).not.toBeInTheDocument()
+
+    // Backdrop (the scrim itself, not the dialog surface).
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Delete series Termination target',
+    }))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.mouseDown(dialog.parentElement!)
+    expect(
+      screen.queryByRole('dialog'),
+    ).not.toBeInTheDocument()
+
+    // Nothing was mutated: no termination request, no Series
+    // refetch, the row and its action are intact.
+    expect(
+      meetingsApi.terminateMeetingRecurrence,
+    ).not.toHaveBeenCalled()
+    expect(
+      meetingsApi.listMeetingRecurrences,
+    ).toHaveBeenCalledTimes(1)
+    expect(
+      screen.getByRole('button', {
+        name: 'Delete series Termination target',
+      }),
+    ).toBeVisible()
+  })
+
+  it('terminates with exactly one POST for the selected Recurrence id', async () => {
+    vi.mocked(
+      meetingsApi.listMeetingRecurrences,
+    )
+      .mockResolvedValueOnce(
+        authorizedFixtures().activeGroupRows,
+      )
+      .mockResolvedValueOnce([
+        authorizedFixtures().first,
+        authorizedFixtures().last,
+      ])
+
+    await openSeriesTab()
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Delete series Termination target',
+    }))
+    await screen.findByRole('dialog')
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Delete series',
+    }))
+
+    await waitFor(() => {
+      expect(
+        meetingsApi.terminateMeetingRecurrence,
+      ).toHaveBeenCalledTimes(1)
+    })
+    expect(
+      meetingsApi.terminateMeetingRecurrence,
+    ).toHaveBeenCalledWith(777)
+    // The whole-series termination is its own operation: no
+    // generic Meeting delete, no Meeting Template delete, no
+    // single-occurrence cancellation / exclusion.
+    expect(
+      meetingsApi.deleteMeeting,
+    ).not.toHaveBeenCalled()
+    expect(
+      meetingsApi.deleteMeetingSeries,
+    ).not.toHaveBeenCalled()
+    expect(
+      meetingsApi.cancelMeetingRecurrenceOccurrence,
+    ).not.toHaveBeenCalled()
+    expect(
+      meetingsApi.excludeMeetingRecurrenceOccurrence,
+    ).not.toHaveBeenCalled()
+  })
+
+  it('blocks repeated destructive submissions while the request is in flight and does not allow dismissal', async () => {
+    vi.mocked(
+      meetingsApi.listMeetingRecurrences,
+    ).mockResolvedValue(
+      authorizedFixtures().activeGroupRows,
+    )
+
+    let resolveTerminate!: () => void
+    vi.mocked(
+      meetingsApi.terminateMeetingRecurrence,
+    ).mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolveTerminate = resolve
+      }),
+    )
+
+    await openSeriesTab()
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Delete series Termination target',
+    }))
+    await screen.findByRole('dialog')
+
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Delete series',
+    }))
+    await waitFor(() => {
+      expect(
+        meetingsApi.terminateMeetingRecurrence,
+      ).toHaveBeenCalledTimes(1)
+    })
+
+    // While in flight: the destructive button shows its pending
+    // state and both actions are disabled…
+    const confirmButton = screen.getByRole('button', {
+      name: 'Deleting…',
+    })
+    expect(confirmButton).toBeDisabled()
+    expect(
+      screen.getByRole('button', {
+        name: 'Keep series',
+      }),
+    ).toBeDisabled()
+    // …so a second click cannot issue a second request…
+    fireEvent.click(confirmButton)
+    expect(
+      meetingsApi.terminateMeetingRecurrence,
+    ).toHaveBeenCalledTimes(1)
+    // …and the dialog cannot be dismissed mid-write (Escape,
+    // backdrop, or the safe action are all inert).
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(
+      screen.getByRole('dialog'),
+    ).toBeVisible()
+    fireEvent.mouseDown(
+      screen.getByRole('dialog').parentElement!,
+    )
+    expect(
+      screen.getByRole('dialog'),
+    ).toBeVisible()
+
+    resolveTerminate()
+    await waitFor(() => {
+      expect(
+        screen.queryByRole('dialog'),
+      ).not.toBeInTheDocument()
+    })
+    expect(
+      meetingsApi.terminateMeetingRecurrence,
+    ).toHaveBeenCalledTimes(1)
+  })
+
+  it('removes the series only through the authoritative refetch (no optimistic removal)', async () => {
+    const {
+      target,
+      first,
+      last,
+    } = authorizedFixtures()
+    const resolveRefetch = gateRefetch([
+      first,
+      target,
+      last,
+    ])
+
+    let resolveTerminate!: () => void
+    vi.mocked(
+      meetingsApi.terminateMeetingRecurrence,
+    ).mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolveTerminate = resolve
+      }),
+    )
+
+    await openSeriesTab()
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Delete series Termination target',
+    }))
+    await screen.findByRole('dialog')
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Delete series',
+    }))
+
+    // While the request is in flight the row is PRESERVED —
+    // no optimistic client-side removal.
+    await waitFor(() => {
+      expect(
+        meetingsApi.terminateMeetingRecurrence,
+      ).toHaveBeenCalledTimes(1)
+    })
+    expect(
+      screen.getByText('Termination target'),
+    ).toBeVisible()
+
+    resolveTerminate()
+
+    // The authoritative refetch is issued only AFTER the
+    // server confirmed; gate it, then settle it with the
+    // post-termination server state (the terminated series is
+    // gone from the overview entirely).
+    await waitFor(() => {
+      expect(
+        meetingsApi.listMeetingRecurrences,
+      ).toHaveBeenCalledTimes(2)
+    })
+    resolveRefetch([first, last])
+    await expectOverviewSettled([
+      'Kept series alpha',
+      'Kept series beta',
+    ])
+    expect(
+      screen.queryByRole('dialog'),
+    ).not.toBeInTheDocument()
+  })
+
+  it('refreshes the Upcoming occurrence feed and the concrete Meetings on success', async () => {
+    const {
+      target,
+      first,
+      last,
+    } = authorizedFixtures()
+    const resolveRefetch = gateRefetch([
+      first,
+      target,
+      last,
+    ])
+
+    await openSeriesTab()
+    // The initial Upcoming loads already happened on mount.
+    expect(
+      meetingsApi.listMeetings,
+    ).toHaveBeenCalledTimes(1)
+    expect(
+      meetingsApi.listPersonalMeetingRecurrenceOccurrences,
+    ).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Delete series Termination target',
+    }))
+    await screen.findByRole('dialog')
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Delete series',
+    }))
+
+    // The server cancelled the series' future unstarted
+    // concrete Meetings: both the feed and the concrete list
+    // are refetched (alongside the Series overview) so nothing
+    // stale can remain in Upcoming.
+    await waitFor(() => {
+      expect(
+        meetingsApi.terminateMeetingRecurrence,
+      ).toHaveBeenCalledTimes(1)
+    })
+    await waitFor(() => {
+      expect(
+        meetingsApi.listPersonalMeetingRecurrenceOccurrences,
+      ).toHaveBeenCalledTimes(2)
+    })
+    await waitFor(() => {
+      expect(
+        meetingsApi.listMeetings,
+      ).toHaveBeenCalledTimes(2)
+    })
+    await waitFor(() => {
+      expect(
+        meetingsApi.listMeetingRecurrences,
+      ).toHaveBeenCalledTimes(2)
+    })
+    resolveRefetch([first, last])
+    await expectOverviewSettled([
+      'Kept series alpha',
+      'Kept series beta',
+    ])
+  })
+
+  it('keeps the dialog open with a retryable error on failure and succeeds on retry', async () => {
+    const {
+      target,
+      first,
+      last,
+    } = authorizedFixtures()
+    const resolveRefetch = gateRefetch(
+      [first, target, last],
+    )
+
+    vi.mocked(
+      meetingsApi.terminateMeetingRecurrence,
+    )
+      .mockRejectedValueOnce(
+        new ApiError(403, {
+          error: 'You do not have permission.',
+        }),
+      )
+      .mockResolvedValueOnce(undefined)
+
+    await openSeriesTab()
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Delete series Termination target',
+    }))
+    await screen.findByRole('dialog')
+
+    // First attempt fails: the row stays, the dialog stays
+    // open with the server's actionable message, and no
+    // success is reported (and no refetch is issued — a
+    // failure changes nothing authoritatively).
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Delete series',
+    }))
+    const alert = await screen.findByRole('alert')
+    expect(
+      within(alert).getByText(
+        'You do not have permission.',
+      ),
+    ).toBeVisible()
+    expect(
+      screen.getByRole('dialog'),
+    ).toBeVisible()
+    expect(
+      screen.getByText('Termination target'),
+    ).toBeVisible()
+    expect(
+      meetingsApi.terminateMeetingRecurrence,
+    ).toHaveBeenCalledTimes(1)
+    expect(
+      meetingsApi.listMeetingRecurrences,
+    ).toHaveBeenCalledTimes(1)
+
+    // Retry: one further request, then success removes the
+    // row through the authoritative refetch.
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Delete series',
+    }))
+    await waitFor(() => {
+      expect(
+        meetingsApi.terminateMeetingRecurrence,
+      ).toHaveBeenCalledTimes(2)
+    })
+    await waitFor(() => {
+      expect(
+        meetingsApi.listMeetingRecurrences,
+      ).toHaveBeenCalledTimes(2)
+    })
+    resolveRefetch([first, last])
+    await expectOverviewSettled([
+      'Kept series alpha',
+      'Kept series beta',
+    ])
+    expect(
+      screen.queryByRole('dialog'),
+    ).not.toBeInTheDocument()
+  })
+
+  it('keeps the unrelated Series in their server-defined order', async () => {
+    const {
+      target,
+      first,
+      last,
+    } = authorizedFixtures()
+    const resolveRefetch = gateRefetch([
+      first,
+      target,
+      last,
+    ])
+
+    await openSeriesTab()
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Delete series Termination target',
+    }))
+    await screen.findByRole('dialog')
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Delete series',
+    }))
+
+    // After the authoritative refetch the remaining rows
+    // keep the backend's relative order (never re-sorted
+    // client-side).
+    await waitFor(() => {
+      expect(
+        meetingsApi.listMeetingRecurrences,
+      ).toHaveBeenCalledTimes(2)
+    })
+    resolveRefetch([first, last])
+    await expectOverviewSettled([
+      'Kept series alpha',
+      'Kept series beta',
+    ])
+    const titles = screen.getAllByText(
+      /^(Kept series alpha|Kept series beta)$/,
+    )
+    expect(
+      titles.map((el) => el.textContent),
+    ).toEqual([
+      'Kept series alpha',
+      'Kept series beta',
+    ])
+  })
+
+  it('preserves the Research Group scoping across the termination', async () => {
+    const {
+      target,
+      first,
+      last,
+      otherGroup,
+    } = authorizedFixtures()
+    const resolveRefetch = gateRefetch([
+      first,
+      target,
+      last,
+      otherGroup,
+    ])
+
+    await openSeriesTab()
+
+    // The cross-group row is filtered out BEFORE the user
+    // acts (and its grant never renders an action)…
+    expect(
+      screen.queryByText('Other group series'),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', {
+        name: 'Delete series Other group series',
+      }),
+    ).not.toBeInTheDocument()
+
+    // …and stays filtered out after the termination refetch,
+    // while the active group's rows converge to the
+    // authoritative state.
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Delete series Termination target',
+    }))
+    await screen.findByRole('dialog')
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Delete series',
+    }))
+
+    await waitFor(() => {
+      expect(
+        meetingsApi.listMeetingRecurrences,
+      ).toHaveBeenCalledTimes(2)
+    })
+    // The server keeps reporting the cross-group row (the
+    // personal overview is cross-group by contract); the page
+    // filter must drop it again after the refetch.
+    resolveRefetch([first, last, otherGroup])
+    await expectOverviewSettled([
+      'Kept series alpha',
+      'Kept series beta',
+    ])
+    expect(
+      screen.queryByText('Other group series'),
+    ).not.toBeInTheDocument()
+    // The page kept requesting the same canonical window-free
+    // overview (no group parameter, no per-Series requests).
+    expect(
+      meetingsApi.listMeetingRecurrences,
+    ).toHaveBeenCalledTimes(2)
+    expect(
+      meetingsApi.listMeetingRecurrences,
+    ).toHaveBeenCalledWith()
+  })
+
+  it('holds the keyboard and accessibility contracts', async () => {
+    vi.mocked(
+      meetingsApi.listMeetingRecurrences,
+    ).mockResolvedValue(
+      authorizedFixtures().activeGroupRows,
+    )
+
+    await openSeriesTab()
+    const trashButton = screen.getByRole('button', {
+      name: 'Delete series Termination target',
+    })
+
+    // The trash action is a real button on the tab order…
+    trashButton.focus()
+    expect(trashButton).toHaveFocus()
+    // …and Enter never activates the row (no navigation, no
+    // fabricated detail destination)…
+    fireEvent.keyDown(trashButton, { key: 'Enter' })
+    expect(
+      screen.queryByText(/Meeting detail:/),
+    ).not.toBeInTheDocument()
+    // …while activation (keyboard or pointer — native button
+    // behavior) opens the confirmation.
+    fireEvent.click(trashButton)
+    const dialog = await screen.findByRole('dialog')
+
+    // Initial focus lands on the SAFE action…
+    const safeButton = screen.getByRole('button', {
+      name: 'Keep series',
+    })
+    expect(safeButton).toHaveFocus()
+    // …the dialog is labelled by its title…
+    expect(dialog).toHaveAttribute(
+      'aria-labelledby',
+      'meeting-series-terminate-confirm-title',
+    )
+    expect(
+      screen.getByRole('heading', {
+        name: 'Delete meeting series?',
+      }),
+    ).toBeVisible()
+
+    // Tab is trapped inside the dialog (the only two
+    // focusable actions): from the destructive action, Tab
+    // wraps to the safe action…
+    const destructiveButton = screen.getByRole(
+      'button',
+      { name: 'Delete series' },
+    )
+    destructiveButton.focus()
+    fireEvent.keyDown(dialog, { key: 'Tab' })
+    expect(
+      safeButton,
+    ).toHaveFocus()
+    // …and from the safe action, Shift+Tab wraps back.
+    fireEvent.keyDown(dialog, {
+      key: 'Tab',
+      shiftKey: true,
+    })
+    expect(destructiveButton).toHaveFocus()
+
+    // …and closing returns focus to the originating trigger.
+    fireEvent.click(safeButton)
+    expect(
+      screen.queryByRole('dialog'),
+    ).not.toBeInTheDocument()
+    expect(trashButton).toHaveFocus()
+    expect(
+      meetingsApi.terminateMeetingRecurrence,
     ).not.toHaveBeenCalled()
   })
 })

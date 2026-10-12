@@ -19,6 +19,7 @@ import {
   listMeetingRecurrences,
   listPersonalMeetingRecurrenceOccurrences,
   materializeMeetingRecurrenceOccurrence,
+  terminateMeetingRecurrence,
   updateMeeting,
 } from '../../api/meetings'
 import type {
@@ -35,6 +36,9 @@ import {
   type CreateMeetingInput,
 } from './CreateMeetingDialog'
 import { MeetingSeriesList } from './MeetingSeriesList'
+import {
+  MeetingSeriesTerminateConfirmDialog,
+} from './MeetingSeriesTerminateConfirmDialog'
 import {
   buildUpcomingList,
   selectUpcomingConcreteMeetings,
@@ -246,6 +250,21 @@ export function MeetingListPage() {
   } | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] =
+    useState<string | null>(null)
+
+  // Explicit whole-series termination intent for a Series
+  // overview row: the exact authoritative overview row the trash
+  // action targets (rendered ONLY for rows whose server
+  // `canTerminate` report is true). `null` = no confirmation
+  // open. The mutation state lives here — the page is the data
+  // owner for the Series overview, the occurrence feed, and the
+  // concrete Meeting list it reconciles on success.
+  const [terminateTarget, setTerminateTarget] =
+    useState<ApiMeetingRecurrenceOverview | null>(
+      null,
+    )
+  const [terminating, setTerminating] = useState(false)
+  const [terminateError, setTerminateError] =
     useState<string | null>(null)
 
   // One request window per page session: today → +42 days (local).
@@ -906,6 +925,102 @@ export function MeetingListPage() {
     }
   }, [deleteTarget, deleting, loadMeetings, loadOccurrences])
 
+  /**
+   * The explicit "terminate this whole Series" intent — fired ONLY
+   * by a Series overview row's trash action, which the list renders
+   * exclusively for rows whose server `canTerminate` report is
+   * exactly `true`. Opening the confirmation issues NO request:
+   * the termination itself is sent only on explicit confirmation.
+   */
+  const handleRequestTerminateSeries = useCallback(
+    (series: ApiMeetingRecurrenceOverview) => {
+      if (series.canTerminate !== true) {
+        return
+      }
+
+      setTerminateError(null)
+      dismissSeriesToast()
+      setTerminateTarget(series)
+    },
+    [dismissSeriesToast],
+  )
+
+  const closeTerminateDialog = useCallback(() => {
+    // Cancellation never mutates; a pending termination must not
+    // be abandoned mid-write.
+    if (terminating) {
+      return
+    }
+
+    setTerminateTarget(null)
+    setTerminateError(null)
+  }, [terminating])
+
+  /**
+   * The confirmed whole-series termination: exactly ONE
+   * `POST /api/meeting-recurrences/{id}/terminate` (no payload)
+   * for the selected Recurrence id — never a generic Meeting
+   * delete, never a Meeting Template delete.
+   *
+   * On the server's 204 the dialog closes and the page reconciles
+   * against the AUTHORITATIVE server state with one refetch per
+   * data owner: the Series overview (the terminated series no
+   * longer appears — no client-side removal is fabricated
+   * before or instead of the refetch), the Upcoming occurrence
+   * feed (the terminated series' future occurrences are absent
+   * from the effective set), and the concrete Meeting list (so
+   * the future unstarted Meetings the server cancelled cannot
+   * remain stale in Upcoming). The page's active Research Group
+   * filter is untouched: every refetch applies the same scope,
+   * and no other recurrence or Meeting Template is affected.
+   *
+   * On failure (stale permissions, an already-terminated series
+   * racing into a 404, or any other API error) the dialog stays
+   * open with the server's message, the row is preserved, and the
+   * user can retry or cancel — success is never reported falsely.
+   */
+  const handleConfirmTerminateSeries = useCallback(
+    async () => {
+      const target = terminateTarget
+
+      if (target == null || terminating) {
+        return
+      }
+
+      setTerminating(true)
+      setTerminateError(null)
+
+      try {
+        await terminateMeetingRecurrence(target.id)
+
+        setTerminateTarget(null)
+        setTerminateError(null)
+
+        // Authoritative reconciliation — one refetch per data
+        // owner, all scoped to the SAME active Research Group.
+        void loadSeries()
+        void loadOccurrences()
+        void loadMeetings()
+      } catch (terminateSeriesError) {
+        setTerminateError(
+          getErrorMessage(
+            terminateSeriesError,
+            'The meeting series could not be deleted.',
+          ),
+        )
+      } finally {
+        setTerminating(false)
+      }
+    },
+    [
+      terminateTarget,
+      terminating,
+      loadSeries,
+      loadOccurrences,
+      loadMeetings,
+    ],
+  )
+
   const handleTabKeyDown = (
     event: React.KeyboardEvent,
     current: MeetingsTabId,
@@ -1192,6 +1307,9 @@ export function MeetingListPage() {
                 void loadSeries()
               }}
               onNewMeeting={openCreateDialog}
+              onTerminateSeries={
+                handleRequestTerminateSeries
+              }
             />
           )
         )}
@@ -1254,6 +1372,18 @@ export function MeetingListPage() {
           onCancel={closeDeleteDialog}
           onConfirm={() =>
             void handleConfirmDelete()
+          }
+        />
+      )}
+
+      {terminateTarget != null && (
+        <MeetingSeriesTerminateConfirmDialog
+          seriesTitle={terminateTarget.title}
+          terminating={terminating}
+          error={terminateError}
+          onCancel={closeTerminateDialog}
+          onConfirm={() =>
+            void handleConfirmTerminateSeries()
           }
         />
       )}

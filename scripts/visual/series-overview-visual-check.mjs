@@ -161,6 +161,7 @@ const series: ApiMeetingRecurrenceOverview[] = [
     peopleCount: 7,
     status: 'active',
     nextOccurrenceScheduledAt: iso(2026, 9, 29, 10, 30),
+    canTerminate: true,
   },
   {
     id: 2,
@@ -181,6 +182,7 @@ const series: ApiMeetingRecurrenceOverview[] = [
     peopleCount: 1,
     status: 'active',
     nextOccurrenceScheduledAt: iso(2026, 10, 5, 9, 0),
+    canTerminate: true,
   },
   {
     id: 3,
@@ -201,6 +203,7 @@ const series: ApiMeetingRecurrenceOverview[] = [
     peopleCount: 4,
     status: 'active',
     nextOccurrenceScheduledAt: iso(2026, 10, 6, 10, 0),
+    canTerminate: true,
   },
   {
     id: 4,
@@ -221,6 +224,7 @@ const series: ApiMeetingRecurrenceOverview[] = [
     peopleCount: 3,
     status: 'active',
     nextOccurrenceScheduledAt: iso(2027, 1, 5, 9, 0),
+    canTerminate: true,
   },
   {
     id: 5,
@@ -241,6 +245,9 @@ const series: ApiMeetingRecurrenceOverview[] = [
     peopleCount: 2,
     status: 'ended',
     nextOccurrenceScheduledAt: null,
+    // Denied grant: the ended row keeps the empty Actions
+    // track (geometry stays stable either way).
+    canTerminate: false,
   },
 ]
 
@@ -420,6 +427,16 @@ try {
 
   const page = await browser.newPage()
 
+  // The per-row server `canTerminate` permission report, mirrored
+  // from the acceptance fixtures above: the ONLY permitted
+  // interactive descendant of a Series row is its far-right
+  // whole-series termination action, and it exists ONLY on the
+  // granted rows (naming the series). A missing/false grant must
+  // leave the row with NO interactive descendant at all.
+  const terminateGrants = Object.fromEntries(
+    series.map((s) => [s.title, s.canTerminate === true]),
+  )
+
   for (const width of VIEWPORTS) {
     await page.setViewportSize({ width, height: 1400 })
     await page.goto(`file://${htmlPath}`)
@@ -432,7 +449,7 @@ try {
       ]),
     )
 
-    const m = await page.evaluate(() => {
+    const m = await page.evaluate((terminateGrants) => {
       const section = document.querySelector(
         '[aria-label="Meeting series"]',
       )
@@ -495,6 +512,9 @@ try {
               row.querySelectorAll(
                 'button, a, [role="button"]',
               ).length,
+            interactiveLabels: Array.from(
+              row.querySelectorAll('button'),
+            ).map((b) => b.getAttribute('aria-label')),
             tabStop: row.querySelector('[tabindex]') != null,
             title: titleSpan
               ? {
@@ -511,7 +531,7 @@ try {
           }
         }),
       }
-    })
+    }, terminateGrants)
 
     const shotPath = path.join(
       OUT,
@@ -559,15 +579,28 @@ try {
 
     for (const row of m.rows) {
       const label = row.title?.text.slice(0, 24) || 'row'
-      // Read-only = no pointer affordance, no interactive
-      // descendants, no tab stop. A plain div's default
-      // `cursor: auto` is not evidence of interactivity.
+      // The row itself stays non-navigational (no pointer cursor,
+      // no tab stop ON the row). Its ONLY permitted interactive
+      // descendant is the far-right whole-series termination
+      // action — and ONLY for the rows whose server canTerminate
+      // grant is true (the fixture's per-row report): exactly one
+      // trash button naming the series; no links, no menus, no
+      // other tab stops. A denied row keeps ZERO interactive
+      // descendants.
+      const granted =
+        terminateGrants[row.title?.text] === true
+      const onlyTerminateAction =
+        row.interactiveChildren === (granted ? 1 : 0) &&
+        row.interactiveLabels.every(
+          (l) =>
+            l === `Delete series ${row.title?.text}`,
+        )
       check(
-        `${label}: read-only row (no pointer cursor, no interactive descendants, no tab stop)`,
+        `${label}: non-navigational row (no pointer cursor, no row tab stop; ${granted ? 'exactly one server-authorized termination action' : 'no interactive descendants'})`,
         row.cursor !== 'pointer' &&
-          row.interactiveChildren === 0 &&
-          !row.tabStop,
-        `cursor=${row.cursor} interactive=${row.interactiveChildren} tabStop=${row.tabStop}`,
+          !row.tabStop &&
+          onlyTerminateAction,
+        `cursor=${row.cursor} interactive=${row.interactiveChildren} labels=${JSON.stringify(row.interactiveLabels)} tabStop=${row.tabStop}`,
       )
       check(
         `${label}: no row overflow`,
@@ -622,8 +655,8 @@ try {
       for (const row of m.rows) {
         const label = row.title?.text.slice(0, 24) || 'row'
         check(
-          `${label}: three computed tracks (flex / 190 / 96)`,
-          /^[\d.]+px\s+190px\s+96px$/.test(row.columns),
+          `${label}: four computed tracks (flex / 190 / 96 / 40)`,
+          /^[\d.]+px\s+190px\s+96px\s+40px$/.test(row.columns),
           row.columns,
         )
       }
@@ -660,8 +693,8 @@ try {
       const long = byTitle('Quarterly Coordination')
       if (long) {
         check(
-          'Long title: still three tracks, people + next intact',
-          long.cells.length === 3 &&
+          'Long title: still four tracks, people + next intact',
+          long.cells.length === 4 &&
             long.cells[2].text === '1 person' &&
             nextShape.test(long.cells[1].text),
           `people="${long.cells[2].text}" next="${long.cells[1].text}"`,
@@ -706,8 +739,8 @@ try {
       for (const row of m.rows) {
         const label = row.title?.text.slice(0, 24) || 'row'
         check(
-          `${label}: two computed tracks (flex / 96)`,
-          /^[\d.]+px\s+96px$/.test(row.columns),
+          `${label}: three computed tracks (flex / 96 / 40)`,
+          /^[\d.]+px\s+96px\s+40px$/.test(row.columns),
           row.columns,
         )
         check(

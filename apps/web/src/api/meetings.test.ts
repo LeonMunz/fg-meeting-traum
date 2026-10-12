@@ -35,6 +35,7 @@ import {
   searchMeetingSeriesParticipantCandidates,
   searchStandaloneMeetingParticipantCandidates,
   updateMeetingItem,
+  terminateMeetingRecurrence,
 } from './meetings'
 
 import type {
@@ -460,6 +461,7 @@ describe('Meeting recurrence Series overview API client', () => {
     peopleCount: 4,
     status: 'active',
     nextOccurrenceScheduledAt: '2026-09-29T08:30:00Z',
+    canTerminate: true,
   }
 
   it('reads the window-free Series overview through a GET — no from/to window', async () => {
@@ -522,6 +524,27 @@ describe('Meeting recurrence Series overview API client', () => {
     const [record] = await listMeetingRecurrences()
 
     expect(record.peopleCount).toBe(4)
+  })
+
+  it('preserves the server canTerminate permission report verbatim (never inferred)', async () => {
+    vi.mocked(apiGet).mockResolvedValue([activeSeries])
+
+    const [granted] = await listMeetingRecurrences()
+
+    // The per-row permission report is the server's own decision
+    // about the whole-series termination action — the client
+    // passes it through untouched…
+    expect(granted.canTerminate).toBe(true)
+
+    // …including a denied report (false), which the UI must treat
+    // exactly like a missing grant.
+    vi.mocked(apiGet).mockResolvedValue([
+      { ...activeSeries, id: 502, canTerminate: false },
+    ])
+
+    const [denied] = await listMeetingRecurrences()
+
+    expect(denied.canTerminate).toBe(false)
   })
 
   it('preserves status: active with a non-null next occurrence', async () => {
@@ -750,6 +773,67 @@ describe('Recurrence occurrence exclusion API client', () => {
         originalScheduledAt: '2026-09-29T10:00:00Z',
       }),
     ).rejects.toMatchObject({ status: 400 })
+  })
+})
+
+describe('Recurrence whole-series termination API client', () => {
+  beforeEach(() => {
+    vi.mocked(apiGet).mockReset()
+    vi.mocked(apiPost).mockReset()
+    vi.mocked(apiDelete).mockReset()
+  })
+
+  it('POSTs the exact slashless termination endpoint with an EMPTY payload', async () => {
+    vi.mocked(apiPost).mockResolvedValue(undefined)
+
+    const result =
+      await terminateMeetingRecurrence(10)
+
+    // The canonical endpoint: one POST per recurrence against the
+    // registered Django URL EXACTLY — the `terminate` action
+    // carries NO trailing slash (the series-level counterpart of
+    // `POST /api/meetings/{id}/cancel`). The Recurrence id is the
+    // ONLY input: the request body is empty, never a payload.
+    expect(apiPost).toHaveBeenCalledTimes(1)
+    expect(apiPost).toHaveBeenCalledWith(
+      '/api/meeting-recurrences/10/terminate',
+      undefined,
+    )
+    // The server answers 204 No Content with an EMPTY body (both
+    // the first termination and an idempotent replay) — the
+    // client resolves void, never a fabricated representation.
+    expect(result).toBeUndefined()
+    expect(apiGet).not.toHaveBeenCalled()
+  })
+
+  it('never uses DELETE, the Meeting delete, or the Template delete', async () => {
+    vi.mocked(apiPost).mockResolvedValue(undefined)
+
+    await terminateMeetingRecurrence(42)
+
+    // Whole-series termination is a POST action — HTTP DELETE is
+    // a different operation (hard delete) and must never appear.
+    expect(apiDelete).not.toHaveBeenCalled()
+    expect(apiPost).toHaveBeenCalledTimes(1)
+    const calledUrl =
+      vi.mocked(apiPost).mock.calls[0]?.[0]
+    expect(calledUrl).toBe(
+      '/api/meeting-recurrences/42/terminate',
+    )
+    expect(calledUrl).not.toMatch(/\/api\/meetings\//)
+    expect(calledUrl).not.toMatch(/\/api\/meeting-series\//)
+  })
+
+  it('surfaces the client ApiError on failure', async () => {
+    vi.mocked(apiPost).mockRejectedValue(
+      new ApiError(403, {
+        error: 'You do not have permission.',
+      }),
+    )
+
+    await expect(
+      terminateMeetingRecurrence(10),
+    ).rejects.toMatchObject({ status: 403 })
   })
 })
 

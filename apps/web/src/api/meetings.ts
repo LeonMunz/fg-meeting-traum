@@ -507,6 +507,32 @@ export async function excludeMeetingRecurrenceOccurrence(
     input,
   )
 }
+
+/**
+ * Permanently terminate ONE whole recurring Series — the
+ * whole-series counterpart of the single-occurrence exclusion.
+ * The request carries NO payload: the Recurrence id is the only
+ * input (any supplied body is ignored by the server). The path
+ * matches the registered Django URL EXACTLY — deliberately
+ * WITHOUT a trailing slash (`config/urls.py` → the `terminate`
+ * action on the recurrence resource). The server enforces the
+ * canonical scoped write rule and answers a stable, idempotent
+ * 204 No Content with an EMPTY body for both the first
+ * termination and an authorized replay. This is a state change
+ * (future occurrences suppressed, future unstarted Meetings
+ * cancelled) — never a hard delete: the Meeting Template,
+ * historical Meetings, and Meeting-owned content all survive.
+ * The generic Meeting DELETE and the Meeting Template DELETE are
+ * different operations and must never be part of this one.
+ */
+export async function terminateMeetingRecurrence(
+  recurrenceId: number,
+): Promise<void> {
+  return apiPost<void>(
+    `/api/meeting-recurrences/${recurrenceId}/terminate`,
+    undefined,
+  )
+}
 /* ── Meeting Sections (occurrence structure) ───────────────────── */
 
 export async function listMeetingSections(

@@ -10,9 +10,19 @@
  * The component is presentation-only: it receives an already-fetched
  * list (the data layer lives in `MeetingListPage`) and renders rows,
  * the row-shaped loading state, the Series-local error with Retry,
- * and the empty state. Rows are NOT interactive in this slice — no
- * navigation, no row-actions menu, nothing that pretends to be
- * clickable (the Series detail is future scope).
+ * and the empty state.
+ *
+ * The row stays NON-NAVIGATIONAL — no row activation, no
+ * row-actions menu, no link (the Series detail is future scope) —
+ * and its ONLY interaction is the far-right whole-series
+ * termination action: a compact trash button, visually identical to
+ * the Upcoming row's destructive action (16px `delete` glyph,
+ * ~32×32px hit area, neutral at rest, destructive emphasis on hover
+ * and keyboard focus, revealed on hover/focus for pointer devices,
+ * always visible on touch), rendered for a row ONLY when the
+ * server's per-row `canTerminate` permission report is exactly
+ * `true`. A missing or false grant never renders the button — the
+ * permission is never inferred client-side.
  *
  * Row information hierarchy: the Series title is primary; the
  * human-readable recurrence schedule (from the structured rule
@@ -21,7 +31,9 @@
  * `peopleCount`, and the derived Active / Ended state are scannable
  * row cells. The visual language matches the Upcoming list: one
  * shared rounded list container, subtle row dividers, the same row
- * padding / min-height / responsive breakpoint contract.
+ * padding / min-height / responsive breakpoint contract (plus the
+ * far-right Actions track, which stays empty — the geometry never
+ * jumps — when the server grants no termination).
  */
 
 import { useMemo } from 'react'
@@ -74,9 +86,11 @@ function formatSeriesNextLabel(scheduledAt: string): string {
 function SeriesOverviewRow({
   series,
   locale,
+  onTerminateSeries,
 }: {
   series: ApiMeetingRecurrenceOverview
   locale: string
+  onTerminateSeries: (series: ApiMeetingRecurrenceOverview) => void
 }) {
   // The human-readable rule summary over the STRUCTURED recurrence
   // fields — no display-name inference and no recurrence
@@ -117,17 +131,21 @@ function SeriesOverviewRow({
 
   return (
     // Deliberately a plain div: no role, no tabIndex, no click /
-    // keyboard handler, no hover or focus treatment — before the
-    // Series detail exists, the row must not look actionable.
+    // keyboard handler — the row itself is NOT openable (no Series
+    // detail destination exists). `group` drives the hover/focus
+    // reveal of the row's termination action on pointer devices.
     <div
       className={[
-        'grid min-h-[68px] grid-cols-1 items-center gap-x-4 gap-y-1.5 px-4 py-3',
+        'group grid min-h-[68px] grid-cols-1 items-center gap-x-4 gap-y-1.5 px-4 py-3',
         // Same mutually-exclusive breakpoint contract as the
         // Upcoming row: tablet 768–1099px is two tracks (Meeting +
         // People; the next label folds into the secondary
-        // metadata), desktop ≥1100px adds the dedicated next track.
-        'md:max-[1100px]:grid-cols-[minmax(0,1fr)_96px]',
-        'min-[1100px]:grid-cols-[minmax(0,1fr)_190px_96px]',
+        // metadata), desktop ≥1100px adds the dedicated next track,
+        // and the far-right 40px Actions track holds the single
+        // server-authorized termination action (empty — the
+        // geometry never jumps — when the server grants none).
+        'md:max-[1100px]:grid-cols-[minmax(0,1fr)_96px_40px]',
+        'min-[1100px]:grid-cols-[minmax(0,1fr)_190px_96px_40px]',
       ].join(' ')}
     >
       <div className="min-w-0">
@@ -185,6 +203,36 @@ function SeriesOverviewRow({
       <div className="hidden whitespace-nowrap text-left text-sm tabular-nums text-text-muted md:block">
         {people}
       </div>
+
+      {/* Far-right Actions track: the single whole-series
+          termination action, rendered ONLY when the server's
+          per-row permission report grants it (`canTerminate` —
+          never inferred from creator identity or any other row
+          data). The empty track preserves the row geometry when
+          the server grants none. Same compact shape as the
+          Upcoming row's destructive action. */}
+      <div className="flex justify-end md:justify-self-end">
+        {series.canTerminate === true && (
+          <button
+            type="button"
+            aria-label={`Delete series ${series.title}`}
+            onClick={() => onTerminateSeries(series)}
+            className={[
+              'fg-upcoming-row-action flex h-8 w-8 items-center justify-center rounded-lg text-text-muted opacity-0 outline-none transition',
+              'hover:bg-danger-bg hover:text-danger',
+              'focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-danger',
+              'group-hover:opacity-100 group-focus-within:opacity-100',
+            ].join(' ')}
+          >
+            <span
+              aria-hidden="true"
+              className="fg-upcoming-row-icon material-symbols-outlined"
+            >
+              delete
+            </span>
+          </button>
+        )}
+      </div>
     </div>
   )
 }
@@ -211,9 +259,11 @@ function SeriesSkeleton() {
             className={[
               'grid min-h-[68px] grid-cols-1 items-center gap-x-4 gap-y-1.5 px-4 py-3',
               // Same mutually-exclusive breakpoint contract as the
-              // real row (see SeriesOverviewRow).
-              'md:max-[1100px]:grid-cols-[minmax(0,1fr)_96px]',
-              'min-[1100px]:grid-cols-[minmax(0,1fr)_190px_96px]',
+              // real row (see SeriesOverviewRow) — including the
+              // far-right 40px Actions track, which the skeleton
+              // leaves empty (same as the Upcoming skeleton).
+              'md:max-[1100px]:grid-cols-[minmax(0,1fr)_96px_40px]',
+              'min-[1100px]:grid-cols-[minmax(0,1fr)_190px_96px_40px]',
             ].join(' ')}
           >
             <div className="min-w-0 space-y-2">
@@ -275,19 +325,25 @@ function SeriesEmptyState({
  * loading (row-shaped skeleton), an array otherwise (rendered in the
  * backend's ordering — never re-sorted client-side). `error` shows
  * the compact Series-local error with Retry (the page wires it to
- * repeat only the Series request). All states keep the Meetings
- * header + tabs, which the page renders around this component.
+ * repeat only the Series request). `onTerminateSeries` receives the
+ * exact overview row behind a row's trash action — the row is
+ * rendered ONLY when that row's server `canTerminate` report is
+ * exactly `true`; the page opens the explicit confirmation and owns
+ * the mutation. All states keep the Meetings header + tabs, which
+ * the page renders around this component.
  */
 export function MeetingSeriesList({
   series,
   error,
   onRetry,
   onNewMeeting,
+  onTerminateSeries,
 }: {
   series: ApiMeetingRecurrenceOverview[] | null
   error: string | null
   onRetry: () => void
   onNewMeeting: () => void
+  onTerminateSeries: (series: ApiMeetingRecurrenceOverview) => void
 }) {
   const locale = useMemo(() => browserLocale(), [])
 
@@ -351,6 +407,7 @@ export function MeetingSeriesList({
             key={item.id}
             series={item}
             locale={locale}
+            onTerminateSeries={onTerminateSeries}
           />
         ))}
       </div>

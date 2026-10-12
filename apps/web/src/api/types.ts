@@ -819,6 +819,16 @@ export interface ApiMeetingRecurrenceOverview extends ApiMeetingRecurrence {
    * current instant (aware ISO-8601), or null when the series has no
    * further effective occurrence. */
   nextOccurrenceScheduledAt: string | null
+  /** The server's permission report for the whole-series termination
+   * action (`POST /api/meeting-recurrences/{id}/terminate`): the
+   * canonical scoped recurrence write rule of the series' scope
+   * (Research Group scope: any current member; Project scope:
+   * owner or member in a non-archived Project). The endpoint
+   * revalidates the rule and remains the final authority; the
+   * client never infers the permission from creator identity,
+   * membership lists, or any other data — a missing or false value
+   * never enables the termination action. */
+  canTerminate: boolean
 }
 
 /**
