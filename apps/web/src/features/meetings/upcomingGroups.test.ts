@@ -50,6 +50,7 @@ function makeItem(
     projectId: null,
     participantIds: [],
     actionPermissions: null,
+    canExclude: false,
     ...overrides,
   }
 }

@@ -10,11 +10,12 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from projects.models import ProjectMembership
+from projects.models import Project, ProjectMembership
 from work_items.views import serialize_work_item
 
 from authorization.capabilities import Capability
 from authorization.service import (
+    get_auth_context,
     has_project_capability,
     resolve_group_scope,
     resolve_meeting_scope,
@@ -2943,6 +2944,117 @@ class MeetingRecurrenceOccurrenceListView(APIView):
         )
 
 
+def _recurrence_exclusion_permissions(user, recurrences) -> dict:
+    """Batched projection of the canonical single-occurrence
+    EXCLUSION write rule for a set of recurrences (the personal
+    occurrence feed's ``canExclude`` field).
+
+    The per-recurrence rule is EXACTLY the rule the exclusion
+    endpoint enforces through ``_has_recurrence_write_access`` —
+    never inferred from creator identity or personal-feed relevance:
+
+    - canonical recurrence READ access first (group scope: any
+      CURRENT Research Group member; project scope: the canonical
+      Project-read boundary — a current ``ProjectMembership`` AND a
+      current Research Group membership in the Project's group,
+      ``PROJECT_READ`` — with the Recurrence's Project required to
+      live in the Recurrence's own Research Group);
+    - project scope additionally: a NON-ARCHIVED Project with
+      ``PROJECT_WORK`` (owner or member);
+    - group scope: the read access itself is the write access.
+
+    The membership state is loaded with a CONSTANT number of
+    queries: ONE ``ResearchGroupMembership`` query over ALL distinct
+    Research Groups, the kernel's batched ``resolve_project_scopes``
+    (constant in the Project count), and ONE ``Project`` query for
+    the archived state — never a per-recurrence or per-occurrence
+    query sequence. The rule fails CLOSED: an inactive account, a
+    missing or revoked membership, an inaccessible or inconsistent
+    scope, or any unresolved input denies. The exclusion endpoint
+    revalidates the same rule and remains the final authority; this
+    projection is only the feed's read-side permission report.
+    """
+    permissions = {
+        recurrence.pk: False for recurrence in recurrences
+    }
+
+    if not get_auth_context(user).is_active:
+        return permissions
+
+    current_group_ids = set(
+        ResearchGroupMembership.objects
+        .filter(
+            user=user,
+            research_group_id__in=[
+                recurrence.research_group_id
+                for recurrence in recurrences
+            ],
+        )
+        .values_list("research_group_id", flat=True)
+    )
+
+    project_ids = [
+        recurrence.project_id
+        for recurrence in recurrences
+        if (
+            recurrence.scope == MeetingRecurrence.Scope.PROJECT
+            and recurrence.project_id is not None
+        )
+    ]
+    project_scopes = resolve_project_scopes(user, project_ids)
+    archived_project_ids = (
+        set(
+            Project.objects
+            .filter(
+                pk__in=project_ids,
+                archived_at__isnull=False,
+            )
+            .values_list("pk", flat=True)
+        )
+        if project_ids
+        else set()
+    )
+
+    for recurrence in recurrences:
+        if recurrence.scope == MeetingRecurrence.Scope.PROJECT:
+            # Project scope: the canonical Project-read boundary
+            # (batched kernel resolution — the SAME per-Project rule
+            # as ``resolve_project_scope``), the Recurrence's Project
+            # living in its own Research Group, a non-archived
+            # Project, and PROJECT_WORK.
+            if recurrence.project_id is None:
+                continue
+            scope = project_scopes.get(recurrence.project_id)
+            if scope is None:
+                continue
+            if (
+                scope.research_group_id
+                != recurrence.research_group_id
+            ):
+                continue
+            if not scope.has(Capability.PROJECT_READ):
+                continue
+            if recurrence.project_id in archived_project_ids:
+                continue
+            if not scope.has(Capability.PROJECT_WORK):
+                continue
+        else:
+            # Group scope: any CURRENT Research Group member (the
+            # read access IS the write access); a group Recurrence
+            # must not reference a Project.
+            if recurrence.project_id is not None:
+                continue
+            if (
+                recurrence.research_group_id
+                not in current_group_ids
+            ):
+                continue
+
+        permissions[recurrence.pk] = True
+
+    return permissions
+
+
 class MeetingRecurrencePersonalOccurrenceListView(APIView):
     """GET /api/meeting-recurrences/occurrences/
 
@@ -2982,6 +3094,18 @@ class MeetingRecurrencePersonalOccurrenceListView(APIView):
     own title; a virtual occurrence reports ``materialized: false``,
     ``meetingId: null``, its original scheduled start as
     ``scheduledAt``, and the canonical series title.
+
+    Each item additionally reports ``canExclude`` — the server's
+    permission for the dedicated virtual-exclusion action of that
+    occurrence (``POST .../occurrences/exclude/``): the canonical
+    scoped Meeting write rule of the recurrence's scope, exactly the
+    rule the exclusion endpoint enforces (never inferred from creator
+    identity or feed visibility), and always ``false`` for a
+    materialized occurrence. The per-recurrence permission is
+    computed from ONE batched membership-state load (see
+    ``_recurrence_exclusion_permissions``) — a constant number of
+    queries in both the recurrence and occurrence counts; the
+    endpoint remains the final authority.
 
     The window contract is identical to the per-recurrence bounded
     occurrence read: ``from`` / ``to`` are BOTH mandatory,
@@ -3055,6 +3179,14 @@ class MeetingRecurrencePersonalOccurrenceListView(APIView):
         # EFFECTIVE expansion (raw rule expansion + the preloaded
         # exclusion set filtered out AFTER rule generation — no
         # per-occurrence or per-recurrence lookup).
+        # The per-recurrence exclusion-write permission (the
+        # ``canExclude`` report) is computed from the SAME batched
+        # load: constant query count in both the recurrence and the
+        # occurrence counts.
+        exclusion_permissions = _recurrence_exclusion_permissions(
+            user,
+            recurrences,
+        )
         entries = []
         for recurrence in recurrences:
             for occurrence in (
@@ -3135,6 +3267,12 @@ class MeetingRecurrencePersonalOccurrenceListView(APIView):
                         "meetingSeriesId": recurrence.series_id,
                         "researchGroupId": recurrence.research_group_id,
                         "projectId": recurrence.project_id,
+                        "canExclude": (
+                            materialization is None
+                            and exclusion_permissions.get(
+                                recurrence.pk, False,
+                            )
+                        ),
                     },
                 )
             )

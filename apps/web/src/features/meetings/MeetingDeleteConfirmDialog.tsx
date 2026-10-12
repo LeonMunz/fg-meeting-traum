@@ -13,10 +13,18 @@ import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
  *   server marks cancellable: the dedicated cancellation of ONLY
  *   this scheduled occurrence (the series and every other
  *   occurrence stay unchanged).
+ * - `mode: 'skip'` — a STILL-VIRTUAL recurring occurrence the
+ *   server marks excludable (feed `canExclude`): the dedicated
+ *   single-occurrence exclusion of ONLY this scheduled occurrence.
+ *   No concrete Meeting exists, so the copy deliberately does NOT
+ *   describe the action as deleting an existing Meeting — only the
+ *   scheduled occurrence is removed; the recurring series and every
+ *   other occurrence stay unchanged.
  *
  * Which mode is offered — and whether the trash action exists at
  * all — is decided by the server-derived `actionPermissions`
- * (canDelete / canCancel); this dialog only confirms the explicit
+ * (canDelete / canCancel) or the feed's `canExclude`; this dialog
+ * only confirms the explicit
  * intent it is asked to.
  *
  * Conventions (established destructive-confirmation pattern of the
@@ -30,7 +38,7 @@ import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
  * in the document).
  */
 
-export type MeetingDeleteConfirmMode = 'delete' | 'cancel'
+export type MeetingDeleteConfirmMode = 'delete' | 'cancel' | 'skip'
 
 type MeetingDeleteConfirmDialogProps = {
   mode: MeetingDeleteConfirmMode
@@ -138,6 +146,7 @@ export function MeetingDeleteConfirmDialog({
   }
 
   const isDelete = mode === 'delete'
+  const isSkip = mode === 'skip'
 
   return (
     <div
@@ -164,7 +173,9 @@ export function MeetingDeleteConfirmDialog({
           >
             {isDelete
               ? 'Delete meeting?'
-              : 'Cancel this occurrence?'}
+              : isSkip
+                ? 'Skip this occurrence?'
+                : 'Cancel this occurrence?'}
           </h2>
 
           <p
@@ -176,6 +187,10 @@ export function MeetingDeleteConfirmDialog({
                 <>
                   Permanently delete "{meetingTitle}"?
                 </>
+              ) : isSkip ? (
+                <>
+                  Skip "{meetingTitle}" on {whenLabel}?
+                </>
               ) : (
                 <>
                   Cancel "{meetingTitle}" on {whenLabel}?
@@ -186,7 +201,9 @@ export function MeetingDeleteConfirmDialog({
             <span className="mt-1 block">
               {isDelete
                 ? 'The meeting, its agenda, and its notes are removed permanently. Independently owned work items are not deleted.'
-                : 'Only this scheduled occurrence is cancelled — the recurring series and every other occurrence stay unchanged.'}
+                : isSkip
+                  ? 'Only this scheduled occurrence is removed. The recurring series and every other occurrence stay unchanged.'
+                  : 'Only this scheduled occurrence is cancelled — the recurring series and every other occurrence stay unchanged.'}
             </span>
 
             <span className="mt-1 block font-medium text-danger">
@@ -212,7 +229,11 @@ export function MeetingDeleteConfirmDialog({
             onClick={onCancel}
             className="h-9 rounded-lg px-4 text-sm font-medium text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-60"
           >
-            {isDelete ? 'Cancel' : 'Keep meeting'}
+            {isDelete
+              ? 'Cancel'
+              : isSkip
+                ? 'Keep occurrence'
+                : 'Keep meeting'}
           </button>
 
           <button
@@ -233,9 +254,13 @@ export function MeetingDeleteConfirmDialog({
               ? deleting
                 ? 'Deleting…'
                 : 'Delete'
-              : deleting
-                ? 'Cancelling…'
-                : 'Cancel occurrence'}
+              : isSkip
+                ? deleting
+                  ? 'Skipping…'
+                  : 'Skip occurrence'
+                : deleting
+                  ? 'Cancelling…'
+                  : 'Cancel occurrence'}
           </button>
         </div>
       </div>

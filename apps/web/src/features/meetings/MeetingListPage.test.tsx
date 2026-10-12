@@ -46,6 +46,7 @@ vi.mock('../../api/meetings', async (importOriginal) => {
     listPersonalMeetingRecurrenceOccurrences: vi.fn(),
     listMeetingRecurrences: vi.fn(),
     materializeMeetingRecurrenceOccurrence: vi.fn(),
+    excludeMeetingRecurrenceOccurrence: vi.fn(),
     createMeeting: vi.fn(),
     createMeetingFromSeries: vi.fn(),
     createMeetingRecurrence: vi.fn(),
@@ -135,6 +136,8 @@ function makeOccurrence(
     meetingSeriesId: 7,
     researchGroupId: 1,
     projectId: null,
+    // Fail-closed default: the fixture grant is explicit.
+    canExclude: false,
     ...overrides,
   }
 }
@@ -349,6 +352,9 @@ beforeEach(() => {
   vi.mocked(
     meetingsApi.materializeMeetingRecurrenceOccurrence,
   ).mockResolvedValue(createdMeeting)
+  vi.mocked(
+    meetingsApi.excludeMeetingRecurrenceOccurrence,
+  ).mockResolvedValue(undefined)
   vi.mocked(meetingsApi.listMeetingSeries).mockResolvedValue([
     template,
   ])
@@ -1468,7 +1474,7 @@ describe('MeetingListPage — row structure and interaction', () => {
     ).toHaveClass('truncate')
   })
 
-  it('offers the same Open meeting affordance for a virtual occurrence as for a concrete Meeting', async () => {
+  it('renders no three-dot menu for a virtual occurrence — the row itself stays the Open affordance', async () => {
     vi.mocked(
       meetingsApi.listPersonalMeetingRecurrenceOccurrences,
     ).mockResolvedValue([
@@ -1489,28 +1495,25 @@ describe('MeetingListPage — row structure and interaction', () => {
     // The row keeps its four-region track (the Meeting column is
     // NOT pulled into the Actions region)…
     expect(row.children).toHaveLength(4)
-    // …and the Actions region carries the SAME per-row overflow
-    // affordance as a concrete Meeting row.
-    const actionsRegion =
-      row.children[3] as HTMLElement
+    // …and the Actions region carries NO overflow menu — the
+    // three-dot affordance is gone from every row.
     expect(
-      within(actionsRegion).getByRole('button', {
+      screen.queryByRole('button', {
         name:
           'Meeting actions for Weekly Research Sync',
       }),
-    ).toBeVisible()
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('menu'),
+    ).not.toBeInTheDocument()
 
-    // The affordance offers the plain "Open meeting" action —
-    // never materialization terminology.
-    fireEvent.click(
-      within(actionsRegion).getByRole('button', {
-        name:
-          'Meeting actions for Weekly Research Sync',
-      }),
-    )
+    // The row itself remains the open affordance (an explicit row
+    // activation resolves the occurrence — pinned in the
+    // "opening Upcoming rows" suite).
     expect(
-      screen.getByRole('menuitem', {
-        name: 'Open meeting',
+      screen.getByRole('button', {
+        name:
+          'Open Weekly Research Sync on Thu, Sep 24 at 11:00',
       }),
     ).toBeVisible()
   })
@@ -1573,42 +1576,6 @@ describe('MeetingListPage — row structure and interaction', () => {
     expect(row.textContent).not.toMatch(
       /\d+\s+people?\b/i,
     )
-  })
-
-  it('does not trigger row navigation when the kebab is clicked', async () => {
-    // The retained three-dot affordance lives on VIRTUAL occurrence
-    // rows (concrete rows carry the direct action group and no
-    // menu).
-    vi.mocked(
-      meetingsApi.listPersonalMeetingRecurrenceOccurrences,
-    ).mockResolvedValue([
-      makeOccurrence({
-        occurrenceId: 'occ-kebab',
-        title: 'Weekly Research Sync',
-      }),
-    ])
-
-    renderPage()
-    await screen.findByRole('button', {
-      name: 'Meeting actions for Weekly Research Sync',
-    })
-
-    fireEvent.click(
-      screen.getByRole('button', {
-        name: 'Meeting actions for Weekly Research Sync',
-      }),
-    )
-
-    // The menu opens…
-    expect(
-      screen.getByRole('menuitem', {
-        name: 'Open meeting',
-      }),
-    ).toBeVisible()
-    // …but the row action (open the Meeting) did NOT fire.
-    expect(
-      screen.queryByText(/Meeting detail:/),
-    ).not.toBeInTheDocument()
   })
 
   it('renders the People count as one semantic string ("1 person")', async () => {
@@ -1697,38 +1664,6 @@ describe('MeetingListPage — row structure and interaction', () => {
     )
 
     await screen.findByText('Meeting detail: 101')
-  })
-
-  it('navigates from the row actions menu too', async () => {
-    // The retained three-dot affordance lives on VIRTUAL occurrence
-    // rows (concrete rows carry the direct action group and no
-    // menu): opening through it resolves that occurrence.
-    vi.mocked(
-      meetingsApi.listPersonalMeetingRecurrenceOccurrences,
-    ).mockResolvedValue([
-      makeOccurrence({
-        occurrenceId: 'occ-kebab',
-        title: 'Weekly Research Sync',
-      }),
-    ])
-
-    renderPage()
-    await screen.findByRole('button', {
-      name: 'Meeting actions for Weekly Research Sync',
-    })
-
-    fireEvent.click(
-      screen.getByRole('button', {
-        name: 'Meeting actions for Weekly Research Sync',
-      }),
-    )
-    fireEvent.click(screen.getByRole('menuitem', {
-      name: 'Open meeting',
-    }))
-
-    // The materialization response supplies the Meeting id the
-    // navigation targets (the default mock resolves to it).
-    await screen.findByText('Meeting detail: 11')
   })
 
   it('gives same-title same-time occurrences on different dates unique accessible names', async () => {
@@ -3185,8 +3120,8 @@ describe('MeetingListPage — edit an existing Meeting from Upcoming', () => {
     expect(
       screen.queryByRole('button', { name: 'Cancel Locked Sync' }),
     ).not.toBeInTheDocument()
-    // …and the three-dot overflow menu is ABSENT on concrete rows
-    // (it is retained for virtual occurrence rows only).
+    // …and the three-dot overflow menu is ABSENT on every
+    // Upcoming row (concrete and virtual).
     expect(
       screen.queryByRole('button', {
         name: 'Meeting actions for Locked Sync',
@@ -3200,7 +3135,7 @@ describe('MeetingListPage — edit an existing Meeting from Upcoming', () => {
     ).toBeVisible()
   })
 
-  it('renders no Edit action for a virtual occurrence (keeps its Open affordance)', async () => {
+  it('renders no Edit action for a virtual occurrence (keeps its row-open behavior)', async () => {
     vi.mocked(
       meetingsApi.listPersonalMeetingRecurrenceOccurrences,
     ).mockResolvedValue([
@@ -3218,9 +3153,24 @@ describe('MeetingListPage — edit an existing Meeting from Upcoming', () => {
         name: 'Edit Weekly Research Sync',
       }),
     ).not.toBeInTheDocument()
+    // No three-dot menu either…
+    expect(
+      screen.queryByRole('button', {
+        name: 'Meeting actions for Weekly Research Sync',
+      }),
+    ).not.toBeInTheDocument()
+    // …and no destructive action — the fixture occurrence carries
+    // no server exclusion grant.
+    expect(
+      screen.queryByRole('button', {
+        name: /Skip Weekly Research Sync/,
+      }),
+    ).not.toBeInTheDocument()
+    // The row itself remains the open affordance.
     expect(
       screen.getByRole('button', {
-        name: 'Meeting actions for Weekly Research Sync',
+        name:
+          'Open Weekly Research Sync on Thu, Sep 24 at 11:00',
       }),
     ).toBeVisible()
   })
@@ -4057,6 +4007,717 @@ describe('MeetingListPage — delete / cancel a concrete Upcoming Meeting', () =
     expect(meetingsApi.deleteMeeting).toHaveBeenCalledTimes(1)
 
     settleDelete()
+    await waitFor(() => {
+      expect(
+        screen.queryByRole('dialog'),
+      ).not.toBeInTheDocument()
+    })
+  })
+})
+
+describe('MeetingListPage — skip a virtual recurring occurrence', () => {
+  /**
+   * A virtual occurrence the server's feed marks excludable, one
+   * untouched sibling of the SAME series, and one sibling of a
+   * DIFFERENT series.
+   */
+  function skippableFixture() {
+    const target = makeOccurrence({
+      occurrenceId: 'occ-skip',
+      recurrenceId: 40,
+      title: 'Weekly Research Sync',
+      originalScheduledAt: localIso(2026, 9, 24, 11, 0),
+      scheduledAt: localIso(2026, 9, 24, 11, 0),
+      canExclude: true,
+    })
+    const sameSeriesSibling = makeOccurrence({
+      occurrenceId: 'occ-same-series',
+      recurrenceId: 40,
+      title: 'Weekly Research Sync',
+      originalScheduledAt: localIso(2026, 9, 30, 11, 0),
+      scheduledAt: localIso(2026, 9, 30, 11, 0),
+      canExclude: true,
+    })
+    const otherSeriesSibling = makeOccurrence({
+      occurrenceId: 'occ-other-series',
+      recurrenceId: 41,
+      title: 'Monday Board',
+      originalScheduledAt: localIso(2026, 9, 25, 9, 0),
+      scheduledAt: localIso(2026, 9, 25, 9, 0),
+      canExclude: true,
+    })
+
+    return {
+      target,
+      sameSeriesSibling,
+      otherSeriesSibling,
+    }
+  }
+
+  it('shows the direct trash action for an authorized virtual occurrence — no pencil, no overflow menu', async () => {
+    const { target } = skippableFixture()
+    vi.mocked(
+      meetingsApi.listPersonalMeetingRecurrenceOccurrences,
+    ).mockResolvedValue([target])
+
+    renderPage()
+    const skipButton = await screen.findByRole('button', {
+      name: 'Skip Weekly Research Sync on Thu, Sep 24',
+    })
+
+    expect(skipButton).toBeVisible()
+    // No Edit pencil for a virtual occurrence…
+    expect(
+      screen.queryByRole('button', {
+        name: 'Edit Weekly Research Sync',
+      }),
+    ).not.toBeInTheDocument()
+    // …and the three-dot menu is gone from the row.
+    expect(
+      screen.queryByRole('button', {
+        name: 'Meeting actions for Weekly Research Sync',
+      }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('shows no destructive action and no menu for an unauthorized virtual occurrence', async () => {
+    vi.mocked(
+      meetingsApi.listPersonalMeetingRecurrenceOccurrences,
+    ).mockResolvedValue([
+      makeOccurrence({
+        occurrenceId: 'occ-readonly',
+        title: 'Weekly Research Sync',
+        canExclude: false,
+      }),
+    ])
+
+    renderPage()
+    await screen.findByText('Weekly Research Sync')
+
+    expect(
+      screen.queryByRole('button', {
+        name: /Skip Weekly Research Sync/,
+      }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', {
+        name: 'Meeting actions for Weekly Research Sync',
+      }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('never interprets concrete Meeting permissions as virtual exclusion authority', async () => {
+    // A materialized occurrence whose concrete Meeting the server
+    // marks deletable: the merged row is CONCRETE, so it must never
+    // gain the virtual-exclusion affordance (the feed's canExclude
+    // is not carried onto concrete rows).
+    const meeting = makeMeeting({
+      id: 301,
+      title: 'Weekly Research Sync',
+      scheduledAt: localIso(2026, 9, 24, 11, 0),
+      actionPermissions: {
+        canEdit: true,
+        canDelete: true,
+        canCancel: false,
+      },
+    })
+    vi.mocked(meetingsApi.listMeetings).mockResolvedValue([
+      meeting,
+    ])
+    vi.mocked(
+      meetingsApi.listPersonalMeetingRecurrenceOccurrences,
+    ).mockResolvedValue([
+      makeOccurrence({
+        occurrenceId: 'occ-mat',
+        recurrenceId: 40,
+        title: 'Weekly Research Sync',
+        originalScheduledAt: localIso(2026, 9, 24, 11, 0),
+        scheduledAt: localIso(2026, 9, 24, 11, 0),
+        materialized: true,
+        meetingId: 301,
+        canExclude: true,
+      }),
+    ])
+
+    renderPage()
+    await screen.findByRole('button', {
+      name: 'Delete Weekly Research Sync',
+    })
+
+    // The concrete destructive action (server canDelete) renders…
+    expect(
+      screen.getByRole('button', {
+        name: 'Delete Weekly Research Sync',
+      }),
+    ).toBeVisible()
+    // …and no virtual-exclusion affordance leaks onto the row.
+    expect(
+      screen.queryByRole('button', {
+        name: /Skip Weekly Research Sync/,
+      }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('no Upcoming row displays a three-dot menu', async () => {
+    const { meetings, occurrences } = richFixtures()
+    vi.mocked(meetingsApi.listMeetings).mockResolvedValue(
+      meetings,
+    )
+    vi.mocked(
+      meetingsApi.listPersonalMeetingRecurrenceOccurrences,
+    ).mockResolvedValue(occurrences)
+
+    renderPage()
+    await screen.findByText('Team Sync')
+    await screen.findByText('Weekly Research Sync')
+
+    // One-time, virtual, and materialized rows are all rendered —
+    // NONE carries the overflow affordance.
+    expect(
+      screen.queryAllByRole('button', {
+        name: /Meeting actions for /,
+      }),
+    ).toHaveLength(0)
+    expect(
+      screen.queryByRole('menu'),
+    ).not.toBeInTheDocument()
+  })
+
+  it('opens the skip confirmation — not the Meeting — when the trash is clicked', async () => {
+    const { target, sameSeriesSibling } = skippableFixture()
+    vi.mocked(
+      meetingsApi.listPersonalMeetingRecurrenceOccurrences,
+    ).mockResolvedValue([
+      target,
+      sameSeriesSibling,
+    ])
+
+    renderPage()
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Skip Weekly Research Sync on Thu, Sep 24',
+      }),
+    )
+
+    // The confirmation opens with the skip copy…
+    await screen.findByRole('dialog')
+    expect(
+      screen.getByRole('heading', {
+        name: 'Skip this occurrence?',
+      }),
+    ).toBeVisible()
+    expect(
+      screen.getByText(
+        'Skip "Weekly Research Sync" on Thu, Sep 24 at 11:00?',
+      ),
+    ).toBeVisible()
+    expect(
+      screen.getByRole('button', {
+        name: 'Keep occurrence',
+      }),
+    ).toBeVisible()
+    expect(
+      screen.getByRole('button', {
+        name: 'Skip occurrence',
+      }),
+    ).toBeVisible()
+    // …and the row's open intent did NOT fire: no materialization,
+    // no navigation.
+    expect(
+      meetingsApi.materializeMeetingRecurrenceOccurrence,
+    ).not.toHaveBeenCalled()
+    expect(
+      screen.queryByText(/Meeting detail:/),
+    ).not.toBeInTheDocument()
+  })
+
+  it('keeps the trash action keyboard-accessible without materializing the occurrence', async () => {
+    const { target } = skippableFixture()
+    vi.mocked(
+      meetingsApi.listPersonalMeetingRecurrenceOccurrences,
+    ).mockResolvedValue([target])
+
+    renderPage()
+    const skipButton = await screen.findByRole('button', {
+      name: 'Skip Weekly Research Sync on Thu, Sep 24',
+    })
+
+    // The action is a real button on the tab order…
+    skipButton.focus()
+    expect(skipButton).toHaveFocus()
+    // …and Enter on it never materializes the occurrence…
+    fireEvent.keyDown(skipButton, { key: 'Enter' })
+    expect(
+      meetingsApi.materializeMeetingRecurrenceOccurrence,
+    ).not.toHaveBeenCalled()
+    expect(
+      screen.queryByText(/Meeting detail:/),
+    ).not.toBeInTheDocument()
+    // …while activation still opens the confirmation.
+    fireEvent.click(skipButton)
+    await screen.findByRole('dialog')
+  })
+
+  it('performs no mutation while the confirmation is open', async () => {
+    const { target } = skippableFixture()
+    vi.mocked(
+      meetingsApi.listPersonalMeetingRecurrenceOccurrences,
+    ).mockResolvedValue([target])
+
+    renderPage()
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Skip Weekly Research Sync on Thu, Sep 24',
+      }),
+    )
+
+    await screen.findByRole('dialog')
+    expect(
+      meetingsApi.excludeMeetingRecurrenceOccurrence,
+    ).not.toHaveBeenCalled()
+    expect(
+      meetingsApi.materializeMeetingRecurrenceOccurrence,
+    ).not.toHaveBeenCalled()
+    expect(meetingsApi.deleteMeeting).not.toHaveBeenCalled()
+    expect(
+      meetingsApi.cancelMeetingRecurrenceOccurrence,
+    ).not.toHaveBeenCalled()
+    // The row is still there.
+    expect(screen.getByText('Weekly Research Sync')).toBeVisible()
+  })
+
+  it('closes without mutation on the safe action and on Escape', async () => {
+    const { target } = skippableFixture()
+    vi.mocked(
+      meetingsApi.listPersonalMeetingRecurrenceOccurrences,
+    ).mockResolvedValue([target])
+
+    renderPage()
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Skip Weekly Research Sync on Thu, Sep 24',
+      }),
+    )
+
+    // Safe button (the "Keep occurrence" action).
+    await screen.findByRole('dialog')
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Keep occurrence' }),
+    )
+    expect(
+      screen.queryByRole('dialog'),
+    ).not.toBeInTheDocument()
+    expect(
+      meetingsApi.excludeMeetingRecurrenceOccurrence,
+    ).not.toHaveBeenCalled()
+    expect(screen.getByText('Weekly Research Sync')).toBeVisible()
+
+    // Re-open and cancel with Escape.
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Skip Weekly Research Sync on Thu, Sep 24',
+      }),
+    )
+    await screen.findByRole('dialog')
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(
+      screen.queryByRole('dialog'),
+    ).not.toBeInTheDocument()
+    expect(
+      meetingsApi.excludeMeetingRecurrenceOccurrence,
+    ).not.toHaveBeenCalled()
+    expect(screen.getByText('Weekly Research Sync')).toBeVisible()
+  })
+
+  it('confirms with exactly one exclusion POST carrying the original identity pair', async () => {
+    const { target, sameSeriesSibling } = skippableFixture()
+    vi.mocked(
+      meetingsApi.listPersonalMeetingRecurrenceOccurrences,
+    )
+      .mockResolvedValueOnce([
+        target,
+        sameSeriesSibling,
+      ])
+      .mockResolvedValueOnce([sameSeriesSibling])
+
+    renderPage()
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Skip Weekly Research Sync on Thu, Sep 24',
+      }),
+    )
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Skip occurrence',
+      }),
+    )
+
+    await waitFor(() => {
+      expect(
+        meetingsApi.excludeMeetingRecurrenceOccurrence,
+      ).toHaveBeenCalledTimes(1)
+    })
+    // EXACTLY the server-reported identity pair — no title, no
+    // Meeting id, no invented fields.
+    expect(
+      meetingsApi.excludeMeetingRecurrenceOccurrence,
+    ).toHaveBeenCalledWith(40, {
+      occurrenceId: 'occ-skip',
+      originalScheduledAt: localIso(2026, 9, 24, 11, 0),
+    })
+    // And never the materialization / deletion / cancellation
+    // endpoints.
+    expect(
+      meetingsApi.materializeMeetingRecurrenceOccurrence,
+    ).not.toHaveBeenCalled()
+    expect(meetingsApi.deleteMeeting).not.toHaveBeenCalled()
+    expect(
+      meetingsApi.cancelMeetingRecurrenceOccurrence,
+    ).not.toHaveBeenCalled()
+  })
+
+  it('removes only the selected occurrence on success, preserving every sibling', async () => {
+    const {
+      target,
+      sameSeriesSibling,
+      otherSeriesSibling,
+    } = skippableFixture()
+    vi.mocked(
+      meetingsApi.listPersonalMeetingRecurrenceOccurrences,
+    )
+      .mockResolvedValueOnce([
+        target,
+        sameSeriesSibling,
+        otherSeriesSibling,
+      ])
+      .mockResolvedValueOnce([
+        sameSeriesSibling,
+        otherSeriesSibling,
+      ])
+
+    renderPage()
+    // Before: the target + both siblings.
+    await screen.findByRole('button', {
+      name: 'Skip Weekly Research Sync on Thu, Sep 24',
+    })
+    expect(
+      screen.getByRole('button', {
+        name: 'Open Weekly Research Sync on Wed, Sep 30 at 11:00',
+      }),
+    ).toBeVisible()
+    expect(
+      screen.getByRole('button', {
+        name: 'Open Monday Board on Fri, Sep 25 at 09:00',
+      }),
+    ).toBeVisible()
+
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Skip Weekly Research Sync on Thu, Sep 24',
+      }),
+    )
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Skip occurrence',
+      }),
+    )
+
+    // After: the selected occurrence is GONE…
+    await waitFor(() => {
+      expect(
+        screen.queryByRole('button', {
+          name:
+            'Open Weekly Research Sync on Thu, Sep 24 at 11:00',
+        }),
+      ).not.toBeInTheDocument()
+    })
+    // …while BOTH siblings stay — including the occurrence of the
+    // SAME recurrence.
+    expect(
+      screen.getByRole('button', {
+        name: 'Open Weekly Research Sync on Wed, Sep 30 at 11:00',
+      }),
+    ).toBeVisible()
+    expect(
+      screen.getByRole('button', {
+        name: 'Open Monday Board on Fri, Sep 25 at 09:00',
+      }),
+    ).toBeVisible()
+    // The effective feed was refreshed (initial load + one
+    // refetch), the dialog closed, and no concrete Meeting was
+    // touched.
+    expect(
+      meetingsApi.listPersonalMeetingRecurrenceOccurrences,
+    ).toHaveBeenCalledTimes(2)
+    expect(
+      screen.queryByRole('dialog'),
+    ).not.toBeInTheDocument()
+    expect(meetingsApi.deleteMeeting).not.toHaveBeenCalled()
+  })
+
+  it('keeps the excluded occurrence absent after the server refetch', async () => {
+    const { target, sameSeriesSibling } = skippableFixture()
+    // The refetch is the server's word: the effective set omits
+    // the excluded occurrence; the client must never resurrect it
+    // from stale local state.
+    vi.mocked(
+      meetingsApi.listPersonalMeetingRecurrenceOccurrences,
+    )
+      .mockResolvedValueOnce([
+        target,
+        sameSeriesSibling,
+      ])
+      .mockResolvedValueOnce([sameSeriesSibling])
+
+    renderPage()
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Skip Weekly Research Sync on Thu, Sep 24',
+      }),
+    )
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Skip occurrence',
+      }),
+    )
+
+    await waitFor(() => {
+      expect(
+        meetingsApi.listPersonalMeetingRecurrenceOccurrences,
+      ).toHaveBeenCalledTimes(2)
+    })
+    expect(
+      screen.queryByRole('button', {
+        name:
+          'Open Weekly Research Sync on Thu, Sep 24 at 11:00',
+      }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByRole('button', {
+        name: 'Open Weekly Research Sync on Wed, Sep 30 at 11:00',
+      }),
+    ).toBeVisible()
+  })
+
+  it('preserves the occurrence and allows a retry on failure', async () => {
+    const { target, sameSeriesSibling } = skippableFixture()
+    vi.mocked(
+      meetingsApi.excludeMeetingRecurrenceOccurrence,
+    )
+      .mockRejectedValueOnce(
+        new ApiError(409, {
+          error: 'The occurrence could not be skipped.',
+        }),
+      )
+      .mockResolvedValueOnce(undefined)
+    vi.mocked(
+      meetingsApi.listPersonalMeetingRecurrenceOccurrences,
+    )
+      .mockResolvedValueOnce([
+        target,
+        sameSeriesSibling,
+      ])
+      .mockResolvedValueOnce([
+        target,
+        sameSeriesSibling,
+      ])
+      .mockResolvedValueOnce([sameSeriesSibling])
+
+    renderPage()
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Skip Weekly Research Sync on Thu, Sep 24',
+      }),
+    )
+
+    // First attempt fails: the row stays, the dialog stays open
+    // with the server's message.
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Skip occurrence',
+      }),
+    )
+    await screen.findByRole('alert')
+    expect(
+      within(screen.getByRole('alert')).getByText(
+        'The occurrence could not be skipped.',
+      ),
+    ).toBeVisible()
+    expect(screen.getByRole('dialog')).toBeVisible()
+    // The row is still there once the read-only server-truth
+    // refresh settles (the server changed nothing).
+    await screen.findByRole('button', {
+      name:
+        'Open Weekly Research Sync on Thu, Sep 24 at 11:00',
+    })
+    expect(
+      meetingsApi.excludeMeetingRecurrenceOccurrence,
+    ).toHaveBeenCalledTimes(1)
+
+    // Retry: one further request, then success removes the row.
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Skip occurrence' }),
+    )
+    await waitFor(() => {
+      expect(
+        meetingsApi.excludeMeetingRecurrenceOccurrence,
+      ).toHaveBeenCalledTimes(2)
+    })
+    expect(
+      screen.queryByRole('dialog'),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', {
+        name:
+          'Open Weekly Research Sync on Thu, Sep 24 at 11:00',
+      }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('handles a concurrent-materialization rejection without changing another Meeting', async () => {
+    const { target, sameSeriesSibling } = skippableFixture()
+    // While the confirmation was open, another client opened THIS
+    // occurrence: it is now a concrete Meeting (id 302) with its
+    // own canonical permissions (cancellable, not deletable).
+    const concreteNow = makeMeeting({
+      id: 302,
+      title: 'Weekly Research Sync',
+      scheduledAt: localIso(2026, 9, 24, 11, 0),
+      actionPermissions: {
+        canEdit: true,
+        canDelete: false,
+        canCancel: true,
+      },
+    })
+    vi.mocked(meetingsApi.listMeetings)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([concreteNow])
+    vi.mocked(
+      meetingsApi.listPersonalMeetingRecurrenceOccurrences,
+    )
+      .mockResolvedValueOnce([
+        target,
+        sameSeriesSibling,
+      ])
+      .mockResolvedValueOnce([
+        {
+          ...target,
+          materialized: true,
+          meetingId: 302,
+        },
+        sameSeriesSibling,
+      ])
+    vi.mocked(
+      meetingsApi.excludeMeetingRecurrenceOccurrence,
+    ).mockRejectedValueOnce(
+      new ApiError(400, {
+        error:
+          'This occurrence already has a concrete Meeting: excluding an already-materialized occurrence is not supported. Cancellation or deletion of the concrete Meeting is a separate operation.',
+      }),
+    )
+
+    renderPage()
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Skip Weekly Research Sync on Thu, Sep 24',
+      }),
+    )
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Skip occurrence',
+      }),
+    )
+
+    // The server's message is shown…
+    await screen.findByRole('alert')
+    expect(
+      within(screen.getByRole('alert')).getByText(
+        /This occurrence already has a concrete Meeting/,
+      ),
+    ).toBeVisible()
+    // …the dialog stays open for the user's decision…
+    expect(screen.getByRole('dialog')).toBeVisible()
+    // …and the UI converged to the server's truth: the row is now
+    // the concrete Meeting (its canonical cancellation action —
+    // NOT a virtual exclusion) and the sibling stays.
+    await waitFor(() => {
+      expect(
+        screen.getByRole('button', {
+          name: 'Cancel Weekly Research Sync',
+        }),
+      ).toBeVisible()
+    })
+    expect(
+      screen.queryByRole('button', {
+        name:
+          'Skip Weekly Research Sync on Thu, Sep 24',
+      }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByRole('button', {
+        name: 'Open Weekly Research Sync on Wed, Sep 30 at 11:00',
+      }),
+    ).toBeVisible()
+    // Exactly ONE exclusion attempt — and never a fallback to
+    // generic deletion or cancellation of any Meeting.
+    expect(
+      meetingsApi.excludeMeetingRecurrenceOccurrence,
+    ).toHaveBeenCalledTimes(1)
+    expect(meetingsApi.deleteMeeting).not.toHaveBeenCalled()
+    expect(
+      meetingsApi.cancelMeetingRecurrenceOccurrence,
+    ).not.toHaveBeenCalled()
+    expect(
+      meetingsApi.materializeMeetingRecurrenceOccurrence,
+    ).not.toHaveBeenCalled()
+  })
+
+  it('issues at most one request when the confirm button is double-activated', async () => {
+    const { target } = skippableFixture()
+    vi.mocked(
+      meetingsApi.listPersonalMeetingRecurrenceOccurrences,
+    ).mockResolvedValue([target])
+
+    let settleExclude: (value: void) => void = () => {}
+    vi.mocked(
+      meetingsApi.excludeMeetingRecurrenceOccurrence,
+    ).mockReturnValue(
+      new Promise<void>((resolve) => {
+        settleExclude = resolve
+      }),
+    )
+
+    renderPage()
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Skip Weekly Research Sync on Thu, Sep 24',
+      }),
+    )
+
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Skip occurrence',
+      }),
+    )
+    // Pending state: the confirm button is disabled…
+    await waitFor(() => {
+      expect(
+        screen.getByRole('button', {
+          name: 'Skipping…',
+        }),
+      ).toBeDisabled()
+    })
+    // …so a second activation issues no further request.
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Skipping…',
+      }),
+    )
+    expect(
+      meetingsApi.excludeMeetingRecurrenceOccurrence,
+    ).toHaveBeenCalledTimes(1)
+
+    settleExclude()
     await waitFor(() => {
       expect(
         screen.queryByRole('dialog'),

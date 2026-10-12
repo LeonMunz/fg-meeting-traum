@@ -1391,10 +1391,24 @@ class MeetingRecurrencePersonalOccurrenceSerializer(serializers.Serializer):
     the canonical Meeting Template id (``meetingSeriesId``, nullable
     for legacy template-less recurrences), ``researchGroupId``, and
     ``projectId`` (null for group scope). ``materialized`` /
-    ``meetingId`` let the future frontend merge distinguish a virtual
+    ``meetingId`` let the frontend merge distinguish a virtual
     occurrence from a materialized one without duplicating the Meeting
     payload: a materialized occurrence appears EXACTLY ONCE, here, and
     the Meeting list keeps reporting the concrete Meeting separately.
+
+    ``canExclude`` is the server's permission report for the
+    dedicated virtual-exclusion action of THIS occurrence
+    (``POST .../occurrences/exclude/``): it mirrors the canonical
+    scoped Meeting write rule of the recurrence's scope (group
+    scope: any CURRENT Research Group member; project scope:
+    ``PROJECT_WORK`` — owner or member — in a NON-ARCHIVED Project),
+    exactly the rule the exclusion endpoint enforces, and is never
+    inferred from creator identity or feed visibility. It is
+    ``false`` for a materialized occurrence (that occurrence is no
+    longer excludable here) and for every inaccessible or
+    write-unallowed scope. It is a read-side convenience only — the
+    exclusion endpoint revalidates the same rule and remains the
+    final authority.
     """
 
     occurrenceId = serializers.UUIDField()
@@ -1407,6 +1421,7 @@ class MeetingRecurrencePersonalOccurrenceSerializer(serializers.Serializer):
     meetingSeriesId = serializers.IntegerField(allow_null=True)
     researchGroupId = serializers.IntegerField()
     projectId = serializers.IntegerField(allow_null=True)
+    canExclude = serializers.BooleanField()
 
 
 class MeetingRecurrenceMaterializeSerializer(serializers.Serializer):

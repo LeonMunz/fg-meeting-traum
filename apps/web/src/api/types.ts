@@ -857,6 +857,17 @@ export interface ApiMeetingRecurrenceOccurrence {
   researchGroupId: number
   /** Owning Project id (null for group scope). */
   projectId: number | null
+  /**
+   * Server-authoritative permission for the dedicated
+   * single-occurrence EXCLUSION of this still-virtual occurrence
+   * (POST /api/meeting-recurrences/{recurrenceId}/occurrences/
+   * exclude/). The server mirrors the canonical scoped Meeting write
+   * rule of the recurrence's scope — it is never inferred from
+   * visibility, creator / participant ids, or Project roles. Always
+   * false for a materialized occurrence. The exclusion endpoint
+   * revalidates the same rule and remains the final authority.
+   */
+  canExclude: boolean
 }
 
 export interface ApiResearchGroupMembership {

@@ -22,6 +22,12 @@ from django.test.utils import CaptureQueriesContext
 from rest_framework import status
 from rest_framework.test import APIClient
 
+from projects.services import archive_project
+from research_groups.models import ResearchGroupMembership
+from projects.models import ProjectMembership
+from projects.services import remove_membership
+from research_groups.services import remove_research_group_membership
+
 from .models import (
     Meeting,
     MeetingParticipant,
@@ -750,6 +756,236 @@ class MeetingRecurrencePersonalFeedApiTest(MeetingRecurrenceBase):
         # the ONE batched materialization query do NOT grow with the
         # number of relevant recurrences — a per-recurrence exclusion
         # query would add 4 more statements here.
+        self.assertEqual(
+            len(single_ctx.captured_queries),
+            len(multi_ctx.captured_queries),
+        )
+
+    # ── canExclude: the server's exclusion-permission report ──
+
+    def test_virtual_occurrence_reports_can_exclude_for_group_member(self):
+        # The creator (a current group member) may exclude…
+        self.login(self.alex)
+        response = self._get_feed()
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        items = response.json()
+        self.assertEqual(len(items), 7)
+        for item in items:
+            self.assertFalse(item["materialized"])
+            self.assertIsNone(item["meetingId"])
+            self.assertIs(item["canExclude"], True)
+
+        # …and so may a current group MEMBER who is an intended
+        # participant (in group scope the read access IS the write
+        # access).
+        MeetingRecurrenceParticipant.objects.create(
+            recurrence=self.recurrence,
+            user=self.chris,
+        )
+        self.login(self.chris)
+        response = self._get_feed()
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        items = response.json()
+        self.assertEqual(len(items), 7)
+        for item in items:
+            self.assertIs(item["canExclude"], True)
+
+    def test_materialized_occurrence_reports_can_exclude_false(self):
+        (target,) = self._expand(
+            self.recurrence, _utc(2026, 1, 5, 0, 0), _utc(2026, 1, 6, 0, 0),
+        )
+        self._materialize(self.recurrence, target)
+
+        self.login(self.alex)
+        response = self._get_feed()
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        items = response.json()
+        materialized = [
+            item for item in items if item["materialized"]
+        ]
+        self.assertEqual(len(materialized), 1)
+        # A materialized occurrence is no longer excludable through
+        # the virtual path, even for an authorized actor…
+        for item in materialized:
+            self.assertIs(item["canExclude"], False)
+        # …while its virtual siblings stay excludable.
+        for item in items:
+            if not item["materialized"]:
+                self.assertIs(item["canExclude"], True)
+
+    def _feed_items_for(self, recurrence):
+        """This user's feed rows of one recurrence (the feed also
+        carries the other recurrences the user is personally
+        relevant to, e.g. the fixture's own series)."""
+        return [
+            item for item in self._get_feed().json()
+            if item["recurrenceId"] == recurrence.pk
+        ]
+
+    def test_project_scope_can_exclude_follows_the_project_write_boundary(self):
+        recurrence = self._create_recurrence(
+            scope="project",
+            project=self.project,
+            title="Project Sync",
+        )
+        for user in (self.chris, self.laura):
+            MeetingRecurrenceParticipant.objects.create(
+                recurrence=recurrence,
+                user=user,
+            )
+
+        # Project owner (the creator): permitted.
+        self.login(self.alex)
+        items = self._feed_items_for(recurrence)
+        self.assertEqual(
+            [item["recurrenceId"] for item in items],
+            [recurrence.pk] * 7,
+        )
+        self.assertTrue(
+            all(item["canExclude"] for item in items),
+        )
+
+        # Project member: permitted.
+        self.login(self.chris)
+        items = self._feed_items_for(recurrence)
+        self.assertEqual(len(items), 7)
+        self.assertTrue(
+            all(item["canExclude"] for item in items),
+        )
+
+        # Project viewer: reads the occurrences (feed + scope read)
+        # but the canonical write rule denies the exclusion.
+        self.login(self.laura)
+        response = self._get_feed()
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        items = [
+            item for item in response.json()
+            if item["recurrenceId"] == recurrence.pk
+        ]
+        self.assertEqual(
+            [item["recurrenceId"] for item in items],
+            [recurrence.pk] * 7,
+        )
+        self.assertFalse(
+            any(item["canExclude"] for item in items),
+        )
+
+    def test_archived_project_denies_can_exclude(self):
+        recurrence = self._create_recurrence(
+            scope="project",
+            project=self.project,
+            title="Project Sync",
+        )
+        archive_project(project=self.project, actor=self.alex)
+
+        self.login(self.alex)
+        response = self._get_feed()
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        items = [
+            item for item in response.json()
+            if item["recurrenceId"] == recurrence.pk
+        ]
+        # The owner's feed still shows the occurrences (personal
+        # relevance), but the archived Project fails the canonical
+        # exclusion rule closed.
+        self.assertEqual(len(items), 7)
+        self.assertFalse(
+            any(item["canExclude"] for item in items),
+        )
+
+    def test_revoked_group_membership_denies_can_exclude(self):
+        # laura (a current group member) creates the recurrence…
+        recurrence = self._create_recurrence(
+            actor=self.laura,
+            title="Laura Standup",
+        )
+        # …then loses the group membership (the canonical
+        # removal path: the Project membership first, then the
+        # group membership — the composite FK makes the reverse
+        # order impossible).
+        remove_membership(
+            membership=ProjectMembership.objects.get(
+                project=self.project,
+                user=self.laura,
+            ),
+            actor=self.alex,
+        )
+        remove_research_group_membership(
+            membership=ResearchGroupMembership.objects.get(
+                research_group=self.group,
+                user=self.laura,
+            ),
+            actor=self.alex,
+        )
+
+        self.login(self.laura)
+        response = self._get_feed()
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        # Creator relevance still shows the series in the feed…
+        self.assertEqual(
+            [item["recurrenceId"] for item in response.json()],
+            [recurrence.pk] * 7,
+        )
+        items = response.json()
+        # …but the revoked membership fails the canonical
+        # exclusion rule closed.
+        self.assertEqual(len(items), 7)
+        self.assertFalse(
+            any(item["canExclude"] for item in items),
+        )
+
+    def test_query_count_does_not_scale_with_mixed_scope_recurrences(self):
+        self.login(self.alex)
+        # One project-scoped recurrence (creator relevance) plus an
+        # intended participant so the batched project scope
+        # resolution has a real membership to load…
+        project_recurrence = self._create_recurrence(
+            scope="project",
+            project=self.project,
+            title="Project Sync",
+        )
+        MeetingRecurrenceParticipant.objects.create(
+            recurrence=project_recurrence,
+            user=self.chris,
+        )
+
+        params = {
+            "from": _utc(2026, 1, 5, 0, 0).isoformat(),
+            "to": _utc(2026, 1, 12, 0, 0).isoformat(),
+        }
+
+        # Warm-up request: absorbs the one-time lazy UserSession
+        # registry INSERT so both captures compare the same steady
+        # state (that statement is unrelated to occurrence expansion).
+        self.client.get(self.PATH, params)
+
+        with CaptureQueriesContext(connection) as single_ctx:
+            single_response = self.client.get(self.PATH, params)
+
+        # Four MORE relevant (group-scoped, creator-relevant)
+        # recurrences inside the window.
+        for index, extra_time in enumerate(
+            (time(11, 0), time(11, 5), time(11, 10), time(11, 15)),
+        ):
+            self._create_recurrence(
+                title=f"Extra Series {index}",
+                start_date=date(2026, 1, 5),
+                local_time=extra_time,
+            )
+
+        with CaptureQueriesContext(connection) as multi_ctx:
+            multi_response = self.client.get(self.PATH, params)
+
+        self.assertEqual(single_response.status_code, status.HTTP_200_OK)
+        # 7 fixture + 7 project-scoped occurrences.
+        self.assertEqual(len(single_response.json()), 14)
+        self.assertEqual(multi_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(multi_response.json()), 14 + 28)
+        # The batched membership-state load (ONE group-membership
+        # query, the kernel's batched project scopes, ONE
+        # archived-state query) does NOT grow with the recurrence
+        # count — a per-recurrence scope resolution would add
+        # statements here.
         self.assertEqual(
             len(single_ctx.captured_queries),
             len(multi_ctx.captured_queries),

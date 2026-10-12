@@ -476,6 +476,37 @@ export async function materializeMeetingRecurrenceOccurrence(
   )
 }
 
+/**
+ * Exclude ONE still-virtual recurring occurrence from the
+ * recurrence's effective occurrence set — the "skip this one"
+ * operation. The request carries EXACTLY the stable occurrence
+ * identity pair the bounded occurrence read reported (no title, no
+ * Meeting id, no template id): excluding a virtual occurrence never
+ * creates a Meeting, so the materialization endpoint must never be
+ * part of this operation.
+ *
+ * The path matches the registered Django URL EXACTLY — including
+ * its trailing slash (`config/urls.py` → the exclusion action on
+ * the occurrence collection). The server revalidates the pair
+ * against the recurrence rule, enforces the canonical scoped write
+ * rule, and answers a stable, idempotent 204 No Content with an
+ * EMPTY body for both the first exclusion and a replay. An
+ * occurrence that already has a concrete Meeting is REJECTED with
+ * 400 (that Meeting stays untouched — its cancellation is a
+ * separate Meeting-resource action, never a fallback here).
+ */
+export async function excludeMeetingRecurrenceOccurrence(
+  recurrenceId: number,
+  input: {
+    occurrenceId: string
+    originalScheduledAt: string
+  },
+): Promise<void> {
+  return apiPost<void>(
+    `/api/meeting-recurrences/${recurrenceId}/occurrences/exclude/`,
+    input,
+  )
+}
 /* ── Meeting Sections (occurrence structure) ───────────────────── */
 
 export async function listMeetingSections(

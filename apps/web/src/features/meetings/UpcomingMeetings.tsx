@@ -14,12 +14,6 @@
  * page's data layer).
  */
 
-import {
-  useEffect,
-  useRef,
-  useState,
-} from 'react'
-
 import type { UpcomingMeeting } from './upcomingModel'
 import {
   formatOriginallyLabel,
@@ -138,6 +132,63 @@ function RowDestructiveAction({
 }
 
 /**
+ * Direct single-occurrence exclusion affordance for a VIRTUAL
+ * recurring occurrence the server's feed marks excludable
+ * (`canExclude` — the canonical scoped write rule of the
+ * recurrence's scope; never inferred from creator identity, feed
+ * visibility, or the concrete Meeting permission set).
+ *
+ * Exactly the same compact shape as the concrete destructive
+ * action: 16px `delete` glyph, ~32×32px hit area, neutral at rest,
+ * red destructive emphasis on hover / focus, revealed with the row
+ * on pointer devices and always visible on touch devices. The
+ * accessible label names the operation and identifies the
+ * individual occurrence (title + its local date).
+ *
+ * Activation (click OR keyboard) never activates the parent row,
+ * so it can NEVER trigger Open / materialization: the owning
+ * wrapper stops pointer events at its border, and the button stops
+ * Enter/Space keydown. It renders for a virtual occurrence ONLY
+ * when `canExclude` is exactly `true`; a missing or false value
+ * never enables the destructive action.
+ */
+function RowExcludeAction({
+  item,
+  dateLabel,
+  onExcludeOccurrence,
+}: {
+  item: UpcomingMeeting
+  dateLabel: string
+  onExcludeOccurrence: (item: UpcomingMeeting) => void
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={`Skip ${item.title} on ${dateLabel}`}
+      onClick={() => onExcludeOccurrence(item)}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.stopPropagation()
+        }
+      }}
+      className={[
+        'fg-upcoming-row-action flex h-8 w-8 items-center justify-center rounded-lg text-text-muted opacity-0 outline-none transition',
+        'hover:bg-danger-bg hover:text-danger',
+        'focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-danger',
+        'group-hover:opacity-100 group-focus-within:opacity-100',
+      ].join(' ')}
+    >
+      <span
+        aria-hidden="true"
+        className="fg-upcoming-row-icon material-symbols-outlined"
+      >
+        delete
+      </span>
+    </button>
+  )
+}
+
+/**
  * The compact horizontal action group for a concrete Meeting row:
  * the Edit pencil (server `canEdit`) and the destructive trash
  * (server `canDelete` or `canCancel` — at most one of which the
@@ -188,139 +239,6 @@ function RowActionGroup({
           item={item}
           onDestructiveAction={onDestructiveAction}
         />
-      )}
-    </div>
-  )
-}
-
-/**
- * Per-row overflow affordance. V1 offers a single action — open the
- * Meeting — leaving the slot for future row actions without
- * changing the row geometry. It renders for virtual recurring
- * occurrences (opening one is the explicit intent that resolves it
- * into the concrete Meeting workspace). Concrete Meeting rows
- * carry the direct action group (Edit / destructive) and NO
- * overflow menu; virtual deletion / cancellation is a separate
- * slice and is never offered here.
- */
-function RowActionsMenu({
-  meetingTitle,
-  onOpen,
-}: {
-  meetingTitle: string
-  onOpen: () => void
-}) {
-  const [open, setOpen] = useState(false)
-  const [position, setPosition] = useState({
-    top: 0,
-    left: 0,
-  })
-  const ref = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    if (!open) {
-      return
-    }
-
-    const onOutside = (event: MouseEvent) => {
-      if (
-        ref.current &&
-        !ref.current.contains(event.target as Node)
-      ) {
-        setOpen(false)
-      }
-    }
-
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setOpen(false)
-      }
-    }
-
-    const onScroll = () => setOpen(false)
-
-    document.addEventListener('mousedown', onOutside, true)
-    document.addEventListener('keydown', onKey)
-    window.addEventListener('scroll', onScroll, true)
-
-    return () => {
-      document.removeEventListener(
-        'mousedown',
-        onOutside,
-        true,
-      )
-      document.removeEventListener('keydown', onKey)
-      window.removeEventListener('scroll', onScroll, true)
-    }
-  }, [open])
-
-  const toggle = () => {
-    if (!open && ref.current) {
-      const rect =
-        ref.current.getBoundingClientRect()
-
-      setPosition({
-        top: rect.bottom + 6,
-        left: Math.max(8, rect.right - 160),
-      })
-    }
-
-    setOpen((current) => !current)
-  }
-
-  return (
-    <div ref={ref} className="relative">
-      <button
-        type="button"
-        aria-label={`Meeting actions for ${meetingTitle}`}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        onClick={toggle}
-        className={[
-          'flex h-9 w-9 items-center justify-center rounded-lg text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus',
-          open ? 'bg-surface-hover text-text' : '',
-        ].join(' ')}
-      >
-        <span
-          aria-hidden="true"
-          className="material-symbols-outlined text-[18px]"
-        >
-          more_horiz
-        </span>
-      </button>
-
-      {open && (
-        <div
-          role="menu"
-          aria-label={`Meeting actions for ${meetingTitle}`}
-          style={{
-            position: 'fixed',
-            top: position.top,
-            left: position.left,
-          }}
-          className="z-50 w-40 rounded-lg border border-border-subtle bg-surface p-1 shadow-md"
-        >
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              setOpen(false)
-              onOpen()
-            }}
-            className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-sm text-text outline-none hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-inset"
-          >
-            <span
-              aria-hidden="true"
-              className="material-symbols-outlined text-[17px] text-text-muted"
-            >
-              event
-            </span>
-
-            <span className="truncate">
-              Open meeting
-            </span>
-          </button>
-        </div>
       )}
     </div>
   )
@@ -394,6 +312,15 @@ function UpcomingMeetingRow({
     (permissions?.canEdit === true ||
       permissions?.canDelete === true ||
       permissions?.canCancel === true)
+  // The virtual single-occurrence exclusion action appears ONLY on
+  // virtual rows, driven exclusively by the server's feed report
+  // (`canExclude` — the canonical scoped write rule of the
+  // recurrence's scope). It is never inferred from creator /
+  // participant ids, Project roles, the concrete Meeting permission
+  // set, or any other row data — a missing or false value never
+  // enables the destructive action.
+  const hasVirtualExclusion =
+    !concrete && item.recurring && item.canExclude === true
   const timeLabel = formatUpcomingTime(item.scheduledAt)
   // Accessible identity of the concrete occurrence: title + EFFECTIVE
   // local date + local time, the same naming rule for concrete and
@@ -461,8 +388,9 @@ function UpcomingMeetingRow({
         // folds into the secondary metadata); desktop ≥1100px:
         // four semantic columns. The Actions track (72px) holds the
         // compact direct action group — up to two 32px icon
-        // actions with a 4px gap — plus the retained single
-        // three-dot affordance of virtual occurrence rows.
+        // actions with a 4px gap — or the single 32px exclusion
+        // action of a virtual occurrence row the server marks
+        // excludable.
         //
         // The two templates MUST use MUTUALLY EXCLUSIVE media
         // ranges (md:max-[1100px] vs min-[1100px]). Tailwind v4
@@ -556,26 +484,32 @@ function UpcomingMeetingRow({
             />
           )
         ) : openable ? (
-          // Virtual occurrence: the retained three-dot "Open
-          // meeting" affordance (virtual deletion / cancellation is
-          // a separate slice — never invented here).
-          <div
-            onClick={(event) =>
-              event.stopPropagation()
-            }
-            onPointerDown={(event) =>
-              event.stopPropagation()
-            }
-          >
-            <RowActionsMenu
-              meetingTitle={item.title}
-              onOpen={() => {
-                if (!pending) {
-                  onOpenRow(item)
+          // Virtual occurrence: NO three-dot menu. The only row
+          // action is the direct single-occurrence exclusion, and
+          // ONLY when the server's feed report grants it
+          // (`canExclude` — never invented). The row itself stays
+          // fully openable (Open is the explicit intent that
+          // resolves the occurrence), and a virtual occurrence
+          // without the granted exclusion keeps an empty Actions
+          // region.
+          hasVirtualExclusion && (
+            <div
+              onClick={(event) =>
+                event.stopPropagation()
+              }
+              onPointerDown={(event) =>
+                event.stopPropagation()
+              }
+            >
+              <RowExcludeAction
+                item={item}
+                dateLabel={dateLabel}
+                onExcludeOccurrence={
+                  onDestructiveAction
                 }
-              }}
-            />
-          </div>
+              />
+            </div>
+          )
         ) : null}
       </div>
     </div>
@@ -665,21 +599,21 @@ function UpcomingEmptyState({
  * the page never pretends the recurrence feed succeeded.
  *
  * `onOpenRow` receives the whole row model for an EXPLICIT open
- * intent (row activation or the row's "Open meeting" action); the
- * parent decides whether that is a direct navigation (concrete
- * Meeting) or the resolution of a virtual occurrence. Rendering the
- * list never invokes it. `onEditMeeting` receives the row model for
- * an EXPLICIT edit intent (the row's direct Edit action, which
- * renders only on concrete rows with server-derived
+ * intent (row activation, pointer or keyboard); the parent decides
+ * whether that is a direct navigation (concrete Meeting) or the
+ * resolution of a virtual occurrence. Rendering the list never
+ * invokes it. `onEditMeeting` receives the row model for an
+ * EXPLICIT edit intent (the row's direct Edit action, which renders
+ * only on concrete rows with server-derived
  * `actionPermissions.canEdit`); it never fires for virtual
  * occurrences and never materializes one. `onDestructiveAction`
- * receives the row model for an EXPLICIT delete / cancel intent
- * (the row's destructive trash action, which renders only on
- * concrete rows with server-derived `actionPermissions.canDelete`
- * or `canCancel`); the parent owns the confirmation dialog and the
- * request — the list never mutates. `openingRowIds` marks the
- * rows whose open intent is still in flight (subtle per-row pending
- * state).
+ * receives the row model for an EXPLICIT destructive intent — the
+ * concrete row's trash action (server-derived
+ * `actionPermissions.canDelete` / `canCancel`) or the virtual row's
+ * single-occurrence exclusion (server feed-derived `canExclude`);
+ * the parent owns the confirmation dialog and the request — the
+ * list never mutates. `openingRowIds` marks the rows whose open
+ * intent is still in flight (subtle per-row pending state).
  */
 export function UpcomingMeetingsList({
   groups,

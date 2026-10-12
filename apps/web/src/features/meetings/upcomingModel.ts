@@ -135,6 +135,17 @@ export interface UpcomingMeeting {
    * or recurrence provenance.
    */
   actionPermissions: ApiMeetingActionPermissions | null
+  /**
+   * Server-authoritative permission to exclude THIS still-virtual
+   * occurrence from its recurrence (the dedicated single-occurrence
+   * exclusion — not a Meeting deletion). Carried verbatim from the
+   * feed's `canExclude` for virtual rows; ALWAYS false for concrete
+   * rows (a one-time Meeting or an already-materialized occurrence is
+   * never excludable through the virtual path, and the concrete
+   * `actionPermissions` must not be interpreted as such). A missing
+   * or false value never enables the destructive action.
+   */
+  canExclude: boolean
 }
 
 /**
@@ -363,6 +374,10 @@ function recurringRowFromMeeting(
     projectId: meeting.projectId,
     participantIds: [...meeting.participantIds],
     actionPermissions: meeting.actionPermissions,
+    // A materialized occurrence is a concrete Meeting: the virtual
+    // exclusion path does not apply, no matter what the feed
+    // reported.
+    canExclude: false,
   }
 }
 
@@ -382,6 +397,7 @@ function rowFromMeeting(meeting: ApiMeeting): UpcomingMeeting {
     projectId: meeting.projectId,
     participantIds: [...meeting.participantIds],
     actionPermissions: meeting.actionPermissions,
+    canExclude: false,
   }
 }
 
@@ -413,5 +429,12 @@ function rowFromOccurrence(
     // no server-derived permission result to carry: null, never a
     // fabricated positive.
     actionPermissions: null,
+    // The feed's server permission report for the virtual exclusion,
+    // consumed as-is: only an explicit `true` from the server enables
+    // the destructive action (a missing or false value never does).
+    // A materialized occurrence is never excludable through the
+    // virtual path.
+    canExclude:
+      !hasMeeting && occurrence.canExclude === true,
   }
 }

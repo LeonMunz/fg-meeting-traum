@@ -14,6 +14,7 @@ import {
   createMeetingFromSeries,
   createMeetingRecurrence,
   deleteMeeting,
+  excludeMeetingRecurrenceOccurrence,
   listMeetings,
   listMeetingRecurrences,
   listPersonalMeetingRecurrenceOccurrences,
@@ -686,44 +687,68 @@ export function MeetingListPage() {
 
   /**
    * The explicit "remove this Upcoming row" intent — fired ONLY by
-   * a concrete row's destructive trash action (rendered
-   * exclusively for rows whose server-derived
-   * `actionPermissions.canDelete` or `canCancel` is true; never
-   * for virtual occurrences). Which operation the dialog confirms
-   * is the SERVER's decision, consumed as-is: `canCancel` ⇒
-   * cancellation of THIS materialized recurring occurrence (never
-   * a hard delete), otherwise `canDelete` ⇒ standalone permanent
-   * deletion. No authorization is inferred from recurrence ids or
-   * Project roles here.
+   * a row's destructive trash action:
+   *
+   * - a CONCRETE row (rendered exclusively for rows whose
+   *   server-derived `actionPermissions.canDelete` or `canCancel`
+   *   is true): which operation the dialog confirms is the
+   *   SERVER's decision, consumed as-is — `canCancel` ⇒
+   *   cancellation of THIS materialized recurring occurrence
+   *   (never a hard delete), otherwise `canDelete` ⇒ standalone
+   *   permanent deletion.
+   * - a VIRTUAL occurrence (rendered exclusively for rows whose
+   *   server feed report `canExclude` is exactly true): the
+   *   dedicated single-occurrence exclusion of THIS virtual
+   *   occurrence only.
+   *
+   * No authorization is inferred from recurrence ids, creator /
+   * participant ids, or Project roles here — a missing or false
+   * permission never enables the destructive action.
    */
   const handleRequestDeleteAction = useCallback(
     (item: UpcomingMeeting) => {
-      if (
-        item.meetingId == null ||
-        item.actionPermissions == null
-      ) {
+      if (item.meetingId != null) {
+        if (item.actionPermissions == null) {
+          return
+        }
+
+        const mode: MeetingDeleteConfirmMode =
+          item.actionPermissions.canCancel === true
+            ? 'cancel'
+            : 'delete'
+
+        // Defensive: the trash action is only rendered for the
+        // server-granted permission the mode requires.
+        const granted =
+          mode === 'cancel'
+            ? item.actionPermissions.canCancel === true
+            : item.actionPermissions.canDelete === true
+
+        if (!granted) {
+          return
+        }
+
+        setDeleteError(null)
+        dismissSeriesToast()
+        setDeleteTarget({ item, mode })
         return
       }
 
-      const mode: MeetingDeleteConfirmMode =
-        item.actionPermissions.canCancel === true
-          ? 'cancel'
-          : 'delete'
-
-      // Defensive: the trash action is only rendered for the
-      // server-granted permission the mode requires.
-      const granted =
-        mode === 'cancel'
-          ? item.actionPermissions.canCancel === true
-          : item.actionPermissions.canDelete === true
-
-      if (!granted) {
+      // Virtual occurrence: the dedicated exclusion, granted ONLY
+      // by the server's feed report (the complete occurrence
+      // identity pair must be present to submit it).
+      if (
+        item.canExclude !== true ||
+        item.recurrenceId == null ||
+        item.occurrenceId == null ||
+        item.originalScheduledAt == null
+      ) {
         return
       }
 
       setDeleteError(null)
       dismissSeriesToast()
-      setDeleteTarget({ item, mode })
+      setDeleteTarget({ item, mode: 'skip' })
     },
     [dismissSeriesToast],
   )
@@ -742,18 +767,27 @@ export function MeetingListPage() {
   /**
    * The confirmed destructive operation:
    *
-  * - `delete` (standalone concrete Meeting): exactly ONE
-  *   `DELETE /api/meetings/{id}/`. Success removes ONLY that
-  *   concrete Meeting from Upcoming — no occurrence is created or
-  *   materialized, and every unrelated row is preserved.
-  * - `cancel` (materialized recurring occurrence): the dedicated
-  *   `POST /api/meetings/{id}/cancel` action (no trailing slash —
-  *   the registered `meeting-cancel` route) — NEVER the generic
-  *   Meeting DELETE. Success reconciles the returned canonical
-  *   Meeting (status `cancelled`) in place and refreshes the
-  *   occurrence feed, so exactly the cancelled occurrence drops
+   * - `delete` (standalone concrete Meeting): exactly ONE
+   *   `DELETE /api/meetings/{id}/`. Success removes ONLY that
+   *   concrete Meeting from Upcoming — no occurrence is created or
+   *   materialized, and every unrelated row is preserved.
+   * - `cancel` (materialized recurring occurrence): the dedicated
+   *   `POST /api/meetings/{id}/cancel` action (no trailing slash —
+   *   the registered `meeting-cancel` route) — NEVER the generic
+   *   Meeting DELETE. Success reconciles the returned canonical
+   *   Meeting (status `cancelled`) in place and refreshes the
+   *   occurrence feed, so exactly the cancelled occurrence drops
    *   out of Upcoming while its siblings and the recurrence itself
    *   stay.
+   * - `skip` (virtual recurring occurrence): exactly ONE
+   *   `POST /api/meeting-recurrences/{recurrenceId}/occurrences/
+   *   exclude/` with the occurrence identity pair — NEVER the
+   *   materialization endpoint, and NEVER the generic Meeting
+   *   DELETE or cancellation. On the server's 204 the occurrence
+   *   is removed from the local feed state (no optimistic removal
+   *   before success) and the effective occurrence feed is
+   *   refreshed, so exactly the excluded occurrence drops out of
+   *   Upcoming while its siblings and the recurrence itself stay.
    *
    * No optimistic removal: on failure the row stays available, the
    * dialog stays open with the server's message, and the user can
@@ -765,44 +799,80 @@ export function MeetingListPage() {
 
     if (
       target == null ||
-      deleting ||
-      target.item.meetingId == null
+      deleting
     ) {
       return
     }
 
-    const meetingId = target.item.meetingId
+    if (target.mode !== 'skip' && target.item.meetingId == null) {
+      return
+    }
 
     setDeleting(true)
     setDeleteError(null)
 
     try {
-      if (target.mode === 'delete') {
-        await deleteMeeting(meetingId)
+      if (target.mode === 'skip') {
+        const item = target.item
 
-        // Remove ONLY the deleted concrete Meeting; every other
-        // Meeting (concrete or occurrence) is preserved.
-        setMeetings((current) =>
+        await excludeMeetingRecurrenceOccurrence(
+          item.recurrenceId!,
+          {
+            occurrenceId: item.occurrenceId!,
+            originalScheduledAt:
+              item.originalScheduledAt!,
+          },
+        )
+
+        // Remove ONLY the excluded occurrence from the local feed
+        // state — every sibling occurrence (including other
+        // occurrences of the same recurrence) and every concrete
+        // Meeting is preserved.
+        setOccurrences((current) =>
           (current ?? []).filter(
-            (candidate) => candidate.id !== meetingId,
-          ),
-        )
-      } else {
-        const cancelled =
-          await cancelMeetingRecurrenceOccurrence(meetingId)
-
-        // Reconcile the retained canonical Meeting in place (same
-        // id — nothing is deleted or recreated)…
-        setMeetings((current) =>
-          (current ?? []).map((candidate) =>
-            candidate.id === cancelled.id ? cancelled : candidate,
+            (candidate) =>
+              !(
+                candidate.occurrenceId ===
+                item.occurrenceId &&
+                candidate.recurrenceId ===
+                item.recurrenceId
+              ),
           ),
         )
 
-        // …and refresh the occurrence feed: the cancelled
-        // occurrence is absent from the effective set while its
-        // siblings stay.
+        // Refresh the effective occurrence feed: the excluded
+        // occurrence is absent from the server's effective set.
         void loadOccurrences()
+      } else {
+        const meetingId = target.item.meetingId!
+
+        if (target.mode === 'delete') {
+          await deleteMeeting(meetingId)
+
+          // Remove ONLY the deleted concrete Meeting; every other
+          // Meeting (concrete or occurrence) is preserved.
+          setMeetings((current) =>
+            (current ?? []).filter(
+              (candidate) => candidate.id !== meetingId,
+            ),
+          )
+        } else {
+          const cancelled =
+            await cancelMeetingRecurrenceOccurrence(meetingId)
+
+          // Reconcile the retained canonical Meeting in place
+          // (same id — nothing is deleted or recreated)…
+          setMeetings((current) =>
+            (current ?? []).map((candidate) =>
+              candidate.id === cancelled.id ? cancelled : candidate,
+            ),
+          )
+
+          // …and refresh the occurrence feed: the cancelled
+          // occurrence is absent from the effective set while its
+          // siblings stay.
+          void loadOccurrences()
+        }
       }
 
       setDeleteTarget(null)
@@ -813,13 +883,28 @@ export function MeetingListPage() {
           deleteActionError,
           target.mode === 'cancel'
             ? 'The occurrence could not be cancelled.'
-            : 'The meeting could not be deleted.',
+            : target.mode === 'skip'
+              ? 'The occurrence could not be skipped.'
+              : 'The meeting could not be deleted.',
         ),
       )
+
+      if (target.mode === 'skip') {
+        // A rejected exclusion means the local row may be stale —
+        // e.g. a concurrent open materialized THIS occurrence into
+        // a concrete Meeting after the feed was fetched. Preserve
+        // the server's truth: refresh both lists (read-only) so the
+        // UI converges to what the server now reports, while the
+        // dialog stays open with the server's message. There is
+        // NEVER a fallback to generic Meeting deletion or
+        // cancellation.
+        void loadMeetings()
+        void loadOccurrences()
+      }
     } finally {
       setDeleting(false)
     }
-  }, [deleteTarget, deleting, loadOccurrences])
+  }, [deleteTarget, deleting, loadMeetings, loadOccurrences])
 
   const handleTabKeyDown = (
     event: React.KeyboardEvent,

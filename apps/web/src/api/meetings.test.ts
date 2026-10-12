@@ -21,6 +21,7 @@ import {
   createMeetingItem,
   createMeetingFromSeries,
   createMeetingRecurrence,
+  excludeMeetingRecurrenceOccurrence,
   exportMeetingSeriesAgenda,
   importMeetingSeriesAgenda,
   listMeetingRecurrences,
@@ -609,6 +610,7 @@ describe('Personal recurring-occurrence feed API client', () => {
         meetingSeriesId: 7,
         researchGroupId: 1,
         projectId: null,
+        canExclude: true,
       },
     ]
     vi.mocked(apiGet).mockResolvedValue(feed)
@@ -680,6 +682,74 @@ describe('Recurrence occurrence materialization API client', () => {
     )
     expect(apiGet).not.toHaveBeenCalled()
     expect(result).toEqual(meeting)
+  })
+})
+
+describe('Recurrence occurrence exclusion API client', () => {
+  beforeEach(() => {
+    vi.mocked(apiGet).mockReset()
+    vi.mocked(apiPost).mockReset()
+  })
+
+  it('POSTs exactly the occurrence identity pair to the registered exclusion endpoint', async () => {
+    vi.mocked(apiPost).mockResolvedValue(undefined)
+
+    const result =
+      await excludeMeetingRecurrenceOccurrence(10, {
+        occurrenceId: 'o-1',
+        originalScheduledAt: '2026-09-29T10:00:00Z',
+      })
+
+    // The canonical endpoint: one POST per recurrence against the
+    // registered Django URL EXACTLY — including the trailing
+    // slash — carrying EXACTLY the stable occurrence identity pair
+    // the bounded occurrence read reported. No title, no Meeting
+    // id, no template id: excluding a virtual occurrence never
+    // creates a Meeting.
+    expect(apiPost).toHaveBeenCalledTimes(1)
+    expect(apiPost).toHaveBeenCalledWith(
+      '/api/meeting-recurrences/10/occurrences/exclude/',
+      {
+        occurrenceId: 'o-1',
+        originalScheduledAt: '2026-09-29T10:00:00Z',
+      },
+    )
+    // The server answers 204 No Content with an EMPTY body (both
+    // the first exclusion and an idempotent replay) — the client
+    // resolves void, never a fabricated representation.
+    expect(result).toBeUndefined()
+    expect(apiGet).not.toHaveBeenCalled()
+  })
+
+  it('never uses the materialization endpoint', async () => {
+    vi.mocked(apiPost).mockResolvedValue(undefined)
+
+    await excludeMeetingRecurrenceOccurrence(10, {
+      occurrenceId: 'o-1',
+      originalScheduledAt: '2026-09-29T10:00:00Z',
+    })
+
+    expect(apiPost).toHaveBeenCalledTimes(1)
+    expect(apiPost).not.toHaveBeenCalledWith(
+      expect.stringContaining('/materialize/'),
+      expect.anything(),
+    )
+  })
+
+  it('surfaces the client ApiError on failure', async () => {
+    vi.mocked(apiPost).mockRejectedValue(
+      new ApiError(400, {
+        error:
+          'This occurrence already has a concrete Meeting.',
+      }),
+    )
+
+    await expect(
+      excludeMeetingRecurrenceOccurrence(10, {
+        occurrenceId: 'o-1',
+        originalScheduledAt: '2026-09-29T10:00:00Z',
+      }),
+    ).rejects.toMatchObject({ status: 400 })
   })
 })
 

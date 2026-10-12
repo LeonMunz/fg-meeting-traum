@@ -978,6 +978,13 @@ unchanged.
   in BOTH the number of relevant recurrences and the number of
   occurrences in the window (pinned by window-size and
   recurrence-count query-count regression tests).
+  The `canExclude` permission report is computed from the SAME
+  batched membership-state load: ONE ResearchGroupMembership query
+  over ALL distinct Research Groups, the kernel's batched
+  `resolve_project_scopes` for every distinct Project, and ONE
+  Project query for the archived state — a constant number of
+  queries in BOTH the recurrence and the occurrence counts (pinned
+  by a mixed-scope query-count regression).
 
 The response is a JSON array (the repository's list convention) of
 compact occurrence objects:
@@ -1000,6 +1007,20 @@ meetingSeriesId       canonical Meeting Template id, or null for
                       legacy template-less recurrences
 researchGroupId       Research Group id
 projectId             Project id, or null for group scope
+canExclude            bool — the server's permission for the
+                      dedicated virtual-exclusion action of THIS
+                      occurrence: the canonical scoped Meeting
+                      write rule of the recurrence's scope (group
+                      scope: any CURRENT Research Group member;
+                      project scope: PROJECT_WORK — owner or
+                      member — in a NON-ARCHIVED Project), exactly
+                      the rule the exclusion endpoint enforces.
+                      Never inferred from creator identity or
+                      feed visibility. ALWAYS false for a
+                      materialized occurrence. Read-side
+                      convenience only — the exclusion endpoint
+                      revalidates the same rule and remains the
+                      final authority.
 ```
 
 The feed is a minimal Meeting-overview contract: it is deliberately
@@ -1056,11 +1077,10 @@ badge and an optional "Originally …" line; a `live` Meeting shows
 an `In progress` badge; a concrete row opens the existing Meeting
 detail, while a virtual occurrence row is visually and
 interactively identical to a concrete row (same hover, pointer,
-keyboard, and focus behavior, plus the same row "Open meeting"
-action). **Opening a virtual occurrence for its Meeting workspace
-is a persistent-state boundary and materializes exactly that
-occurrence:** an EXPLICIT open intent — row activation (pointer or
-keyboard) or the row's "Open meeting" action — calls the canonical
+keyboard, and focus behavior). **Opening a virtual occurrence for
+its Meeting workspace is a persistent-state boundary and
+materializes exactly that occurrence:** an EXPLICIT open intent —
+row activation (pointer or keyboard) — calls the canonical
 idempotent occurrence materialization endpoint (see "Occurrence
 materialization API (implemented)") for exactly that occurrence and
 navigates to the Meeting detail the response returns — the SAME
@@ -1079,7 +1099,10 @@ Concrete rows — one-time Meetings and already-materialized
 occurrences — always navigate directly to the existing Meeting and
 never call materialization again. The implementation terms
 `virtual` / `materialized` / `materialize` never appear in
-user-facing copy (the action is "Open meeting").
+user-facing copy (opening is the row itself — its accessible name
+reads "Open <title> on <date> at <time>" — and the only other
+virtual-row affordance is the direct single-occurrence exclusion
+described above, labelled "Skip …").
 Participants render only from the concrete Meeting's
 `participantIds` (never fabricated for virtual occurrences — the
 feed carries no participant data; the asymmetric contract is a
@@ -1721,7 +1744,20 @@ virtual occurrence it is absent from the normal occurrence list,
 siblings are unchanged, no replacement occurrence is added, and the
 GET remains side-effect free. The exclusion is exposed through one
 explicit HTTP write action (see "Single-occurrence exclusion API"
-below); there is no Recurrence UI for this operation yet.
+below) and — in the Meetings page `Upcoming` view — through the
+virtual occurrence's DIRECT trash action: a virtual row the feed
+marks `canExclude` renders the same compact destructive icon as the
+concrete rows (16px `delete` glyph, 32×32px hit area, red emphasis
+on hover/focus, row-hover reveal on pointer devices), and its
+confirmation dialog reuses the established destructive-confirmation
+pattern under a narrowly scoped virtual-exclusion mode (heading
+"Skip this occurrence?", safe action "Keep occurrence", destructive
+action "Skip occurrence") that explicitly describes removing ONLY
+this scheduled occurrence — never deleting an existing Meeting,
+because none exists. The three-dot overflow menu is GONE from all
+Upcoming rows: a virtual row carries no other row action (no
+editing affordance) and a virtual occurrence WITHOUT the granted
+permission carries no destructive action at all.
 
 ### Single-occurrence exclusion API (implemented)
 
@@ -1775,7 +1811,19 @@ service, which remains the final authority.
   generated, and nothing is materialized by the GET. After exclusion,
   the materialization and reschedule endpoints reject the occurrence
   without creating a Meeting (one-way gate). There is no Recurrence
-  UI for this action yet.
+  UI outside the Meetings page `Upcoming` view (see "Single-
+  occurrence exclusion (implemented)" above): the virtual
+  occurrence's direct trash action, guarded by the feed's
+  `canExclude` report, confirms through the established
+  destructive-confirmation dialog and submits EXACTLY the
+  occurrence identity pair this endpoint validates — the
+  materialization endpoint is never part of the operation. On the
+  204 the occurrence drops out of Upcoming (siblings preserved) and
+  the effective feed is refreshed; a failure keeps the dialog and
+  the row available for retry; a materialized-boundary rejection
+  (concurrent open) preserves the server's truth (the lists
+  refresh to the concrete Meeting) with the server's message shown,
+  and NEVER falls back to generic Meeting deletion or cancellation.
 
 The "only this meeting" distinction, end to end:
 

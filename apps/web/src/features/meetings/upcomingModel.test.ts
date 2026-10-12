@@ -56,6 +56,8 @@ function makeOccurrence(
     meetingSeriesId: null,
     researchGroupId: 1,
     projectId: null,
+    // Fail-closed default: the server grant is explicit.
+    canExclude: false,
     ...overrides,
   }
 }
@@ -634,6 +636,7 @@ describe('isWithinUpcomingWindow / selectUpcomingWindowRows — the canonical vi
     projectId: null,
     participantIds: [],
     actionPermissions: null,
+    canExclude: false,
     ...overrides,
   }
 }
@@ -910,5 +913,92 @@ describe('buildUpcomingList — server-derived action permissions', () => {
     expect(rows).toHaveLength(1)
     expect(rows[0].meetingId).toBe(204)
     expect(rows[0].actionPermissions).toBeNull()
+  })
+})
+
+describe('buildUpcomingList — virtual-exclusion permission (canExclude)', () => {
+  it('propagates the feed grant onto a virtual occurrence row', () => {
+    const occurrence = makeOccurrence({
+      occurrenceId: 'v1',
+      title: 'Weekly Sync',
+      canExclude: true,
+    })
+
+    const rows = buildUpcomingList([], [occurrence])
+
+    expect(rows).toHaveLength(1)
+    expect(rows[0].meetingId).toBeNull()
+    expect(rows[0].canExclude).toBe(true)
+  })
+
+  it('never enables the action on a missing or false grant (fail-closed)', () => {
+    const denied = makeOccurrence({
+      occurrenceId: 'v1',
+      title: 'Weekly Sync',
+      canExclude: false,
+    })
+
+    const rows = buildUpcomingList([], [denied])
+
+    expect(rows).toHaveLength(1)
+    expect(rows[0].canExclude).toBe(false)
+  })
+
+  it('is always false for one-time concrete Meetings', () => {
+    const meeting = makeMeeting({
+      id: 301,
+      title: 'One-time sync',
+    })
+
+    const rows = buildUpcomingList([meeting], [])
+
+    expect(rows).toHaveLength(1)
+    expect(rows[0].canExclude).toBe(false)
+  })
+
+  it('is always false for materialized recurring rows — even when the feed grant is true', () => {
+    const meeting = makeMeeting({
+      id: 302,
+      title: 'Materialized occurrence',
+      scheduledAt: '2026-09-24T09:00:00Z',
+      actionPermissions: {
+        canEdit: true,
+        canDelete: true,
+        canCancel: false,
+      },
+    })
+    const occurrence = makeOccurrence({
+      occurrenceId: 'occ-mat',
+      title: 'Materialized occurrence',
+      originalScheduledAt: '2026-09-24T09:00:00Z',
+      scheduledAt: '2026-09-24T09:00:00Z',
+      materialized: true,
+      meetingId: 302,
+      canExclude: true,
+    })
+
+    const rows = buildUpcomingList([meeting], [occurrence])
+
+    expect(rows).toHaveLength(1)
+    // The merged row is the CONCRETE Meeting: the virtual-exclusion
+    // permission is never carried onto it, no matter what the feed
+    // reported or what the concrete actionPermissions say.
+    expect(rows[0].canExclude).toBe(false)
+  })
+
+  it('is false for a materialized occurrence whose Meeting is outside the concrete list', () => {
+    const occurrence = makeOccurrence({
+      occurrenceId: 'occ-orphan',
+      title: 'Orphan occurrence',
+      materialized: true,
+      meetingId: 999,
+      canExclude: true,
+    })
+
+    const rows = buildUpcomingList([], [occurrence])
+
+    expect(rows).toHaveLength(1)
+    expect(rows[0].meetingId).toBe(999)
+    expect(rows[0].canExclude).toBe(false)
   })
 })
