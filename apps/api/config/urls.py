@@ -107,6 +107,7 @@ from meetings.views import (
     MeetingRecurrenceOccurrenceMaterializeView,
     MeetingRecurrenceOccurrenceRescheduleView,
     MeetingRecurrencePersonalOccurrenceListView,
+    MeetingRecurrenceTerminateView,
     MeetingSectionListCreateView,
     MeetingSectionReorderView,
     MeetingSectionDetailView,
@@ -257,13 +258,15 @@ urlpatterns = [
 
     # Meeting Recurrences (personal Series overview + creation,
     # bounded occurrence read + bounded personal recurring-occurrence
-    # feed + idempotent occurrence materialization)
+    # feed + idempotent occurrence materialization + whole-series
+    # termination)
     path('api/meeting-recurrences/', MeetingRecurrenceListCreateView.as_view(), name='meeting-recurrences-list'),
     path('api/meeting-recurrences/occurrences/', MeetingRecurrencePersonalOccurrenceListView.as_view(), name='meeting-recurrence-personal-occurrences'),
     path('api/meeting-recurrences/<int:recurrence_id>/occurrences/', MeetingRecurrenceOccurrenceListView.as_view(), name='meeting-recurrence-occurrences'),
     path('api/meeting-recurrences/<int:recurrence_id>/occurrences/exclude/', MeetingRecurrenceOccurrenceExcludeView.as_view(), name='meeting-recurrence-occurrence-exclude'),
     path('api/meeting-recurrences/<int:recurrence_id>/occurrences/materialize/', MeetingRecurrenceOccurrenceMaterializeView.as_view(), name='meeting-recurrence-occurrence-materialize'),
     path('api/meeting-recurrences/<int:recurrence_id>/occurrences/reschedule/', MeetingRecurrenceOccurrenceRescheduleView.as_view(), name='meeting-recurrence-occurrence-reschedule'),
+    path('api/meeting-recurrences/<int:recurrence_id>/terminate', MeetingRecurrenceTerminateView.as_view(), name='meeting-recurrence-terminate'),
 ]
 
 # Browser-E2E-only fixture endpoints. Registered exclusively under the

@@ -119,6 +119,7 @@ from .services import (
     remove_meeting_participant,
     reschedule_meeting_recurrence_occurrence,
     start_meeting,
+    terminate_meeting_recurrence,
     update_meeting,
     update_meeting_note,
     update_meeting_section,
@@ -2696,14 +2697,16 @@ class MeetingRecurrenceListCreateView(APIView):
     per personally relevant ``MeetingRecurrence`` (never one row per
     occurrence), each carrying the canonical recurrence
     representation plus the minimal overview context (creator,
-    peopleCount, derived ``active``/``ended`` status, and the next
-    effective occurrence). Delegates ENTIRELY to the read model
+    peopleCount, derived ``active``/``ended`` status, the next
+    effective occurrence, and the per-recurrence ``canTerminate``
+    permission report). Delegates ENTIRELY to the read model
     ``list_personal_meeting_recurrence_overviews`` — personal
     relevance (creator or persisted intended participant), the
     batched read queries, the next-effective-occurrence computation,
     and the deterministic ordering all stay in the domain service;
-    the view only serializes. Strictly read-only: the GET creates no
-    Meeting rows and mutates nothing.
+    the view only serializes and reports the batched
+    termination-write permission. Strictly read-only: the GET
+    creates no Meeting rows and mutates nothing.
 
     POST — create a recurring-meeting schedule from an existing
     Meeting Template plus an explicit series title and a V1
@@ -2734,6 +2737,19 @@ class MeetingRecurrenceListCreateView(APIView):
         rows = list_personal_meeting_recurrence_overviews(
             user=request.user,
         )
+        # Per-recurrence termination-write permission (the
+        # ``canTerminate`` report): the canonical scoped recurrence
+        # write rule of each row's scope — the SAME rule the
+        # terminate action enforces through
+        # ``_has_recurrence_write_access`` — computed from ONE
+        # batched membership-state load: a constant number of
+        # queries in the number of rows (never a per-recurrence
+        # authorization query sequence). Creator identity and
+        # personal relevance alone are never sufficient.
+        terminate_permissions = _recurrence_exclusion_permissions(
+            request.user,
+            [row.recurrence for row in rows],
+        )
         return Response(
             [
                 MeetingRecurrenceOverviewSerializer(
@@ -2742,6 +2758,10 @@ class MeetingRecurrenceListCreateView(APIView):
                         "people_count": row.people_count,
                         "status": row.status,
                         "next_scheduled_at": row.next_scheduled_at,
+                        "can_terminate": terminate_permissions.get(
+                            row.recurrence.pk,
+                            False,
+                        ),
                     },
                 ).data
                 for row in rows
@@ -2945,13 +2965,15 @@ class MeetingRecurrenceOccurrenceListView(APIView):
 
 
 def _recurrence_exclusion_permissions(user, recurrences) -> dict:
-    """Batched projection of the canonical single-occurrence
-    EXCLUSION write rule for a set of recurrences (the personal
-    occurrence feed's ``canExclude`` field).
+    """Batched projection of the canonical scoped recurrence WRITE
+    rule for a set of recurrences — the permission report behind the
+    personal occurrence feed's ``canExclude`` field and the personal
+    Series overview's ``canTerminate`` field.
 
-    The per-recurrence rule is EXACTLY the rule the exclusion
-    endpoint enforces through ``_has_recurrence_write_access`` —
-    never inferred from creator identity or personal-feed relevance:
+    The per-recurrence rule is EXACTLY the rule the occurrence
+    exclusion and whole-series termination endpoints enforce
+    through ``_has_recurrence_write_access`` — never inferred from
+    creator identity or personal-feed / overview relevance:
 
     - canonical recurrence READ access first (group scope: any
       CURRENT Research Group member; project scope: the canonical
@@ -2971,8 +2993,9 @@ def _recurrence_exclusion_permissions(user, recurrences) -> dict:
     query sequence. The rule fails CLOSED: an inactive account, a
     missing or revoked membership, an inaccessible or inconsistent
     scope, or any unresolved input denies. The exclusion endpoint
-    revalidates the same rule and remains the final authority; this
-    projection is only the feed's read-side permission report.
+    and the termination endpoint revalidate the same rule and
+    remain the final authorities; this projection is only the
+    read-side permission report.
     """
     permissions = {
         recurrence.pk: False for recurrence in recurrences
@@ -3547,6 +3570,70 @@ class MeetingRecurrenceOccurrenceExcludeView(APIView):
             exclude_meeting_recurrence_occurrence(
                 recurrence=recurrence,
                 occurrence=occurrence,
+                actor=request.user,
+            )
+        except MeetingDomainError as exc:
+            return Response({"error": exc.message}, status=400)
+
+        return Response(status=204)
+
+
+class MeetingRecurrenceTerminateView(APIView):
+    """POST /api/meeting-recurrences/{recurrence_id}/terminate
+
+    Permanently terminate the WHOLE recurring series (the
+    "this and all following" path — the series-level counterpart of
+    the single-occurrence exclusion and cancellation actions): one
+    canonical domain operation
+    ``terminate_meeting_recurrence`` persists the immutable
+    ``terminated_at`` instant, suppresses every future VIRTUAL
+    occurrence, and cancels — without deleting — every future
+    UPCOMING materialized Meeting, while preserving live / completed
+    Meeting history, the Template, and all Meeting-owned content.
+
+    No request payload exists: the recurrence id IS the entire
+    input. The view resolves the recurrence through the canonical
+    recurrence read rule (unknown or inaccessible ids answer a
+    non-leaking ``404``), enforces the canonical scoped recurrence
+    write rule read-side (readable but not writable answers the
+    established ``403`` mutation response), and then delegates
+    ENTIRELY to the domain operation — terminal-state persistence,
+    the one observed termination instant, the Meeting cancellation
+    cutoff, idempotency, recurrence locking, concurrency
+    convergence, and the final authorization re-check all stay in
+    the domain service, which remains the final authority. The view
+    adds no capability and duplicates no termination or
+    cancellation logic.
+
+    The response is a stable, idempotent ``204 No Content`` for
+    BOTH the first successful termination and an authorized
+    replay: the operation persists exactly one immutable
+    ``terminated_at`` value (plus the canonical per-Meeting
+    cancellation state), so there is no resource representation to
+    return. A domain error (e.g. a persistent concurrent-change
+    retry storm) answers the established structured ``400`` error
+    contract.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, recurrence_id):
+        recurrence = _require_meeting_recurrence_access(
+            request,
+            recurrence_id,
+        )
+        if recurrence is None:
+            return Response(
+                {"error": "Meeting recurrence not found"},
+                status=404,
+            )
+
+        if not _has_recurrence_write_access(request.user, recurrence):
+            return _mutation_forbidden_response()
+
+        try:
+            terminate_meeting_recurrence(
+                recurrence=recurrence,
                 actor=request.user,
             )
         except MeetingDomainError as exc:

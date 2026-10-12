@@ -1204,12 +1204,26 @@ class MeetingRecurrenceOverviewSerializer(MeetingRecurrenceSerializer):
       timestamp; a rescheduled materialized occurrence uses its
       effective moved Meeting time), or ``null`` when the series has
       no further effective occurrence.
+    - ``canTerminate`` — the server's permission report for the
+      whole-series termination action of THIS series (``POST
+      /api/meeting-recurrences/{id}/terminate``): the canonical
+      scoped recurrence write rule of the series' scope (group
+      scope: any CURRENT Research Group member; project scope:
+      ``PROJECT_WORK`` — owner or member — in a NON-ARCHIVED
+      Project), exactly the rule the termination endpoint enforces
+      — never inferred from creator identity or personal relevance
+      (a Project viewer, an archived Project, a revoked or missing
+      membership, and a personally relevant user without sufficient
+      scope access are all ``false``). It is a read-side
+      convenience only: the termination endpoint revalidates the
+      same rule and remains the final authority.
     """
 
     creator = serializers.SerializerMethodField()
     peopleCount = serializers.SerializerMethodField()
     status = serializers.SerializerMethodField()
     nextOccurrenceScheduledAt = serializers.SerializerMethodField()
+    canTerminate = serializers.SerializerMethodField()
 
     class Meta(MeetingRecurrenceSerializer.Meta):
         fields = [
@@ -1218,6 +1232,7 @@ class MeetingRecurrenceOverviewSerializer(MeetingRecurrenceSerializer):
             "peopleCount",
             "status",
             "nextOccurrenceScheduledAt",
+            "canTerminate",
         ]
 
     def get_creator(self, obj):
@@ -1242,6 +1257,9 @@ class MeetingRecurrenceOverviewSerializer(MeetingRecurrenceSerializer):
         # Aware UTC: DRF's JSON encoder renders this as the
         # repository's ISO-8601 ``...Z`` convention.
         return value.astimezone(dt_timezone.utc)
+
+    def get_canTerminate(self, obj):
+        return bool(self.context["can_terminate"])
 
 
 class MeetingRecurrenceCreateSerializer(serializers.Serializer):

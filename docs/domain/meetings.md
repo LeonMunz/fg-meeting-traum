@@ -439,7 +439,9 @@ occurrence from the effective occurrence set without materializing a
 Meeting (see "Single-occurrence exclusion" below), and one canonical
 whole-series TERMINATION operation that permanently ends the schedule
 and its future occurrences (see "Whole-series termination" below —
-domain-only: there is no HTTP termination endpoint or UI yet).
+implemented as the canonical domain operation plus the
+`POST /api/meeting-recurrences/{recurrenceId}/terminate` HTTP
+action; no UI for it yet).
 Recurrence creation/editing remain domain-only operations, and there
 is no Recurrence UI. Occurrence Meetings are never auto-created
 outside the explicit materialization operation.
@@ -1190,6 +1192,23 @@ lies three months away still appears, with that next occurrence.
     scheduled time is >= the server's current instant (aware ISO
     timestamp), or `null` when the series has no further effective
     occurrence.
+  - `canTerminate` — the server's permission report for the
+    whole-series termination action of this series (`POST
+    /api/meeting-recurrences/{recurrenceId}/terminate`, see
+    "Whole-series termination" below): the canonical scoped
+    recurrence write rule of the series' scope — group scope: any
+    CURRENT Research Group member; project scope: `PROJECT_WORK`
+    (owner or member) in a NON-ARCHIVED Project — exactly the rule
+    the termination endpoint enforces. It is never inferred from
+    creator identity or personal relevance: a Project `viewer`, an
+    archived Project, a revoked or missing membership, and a
+    personally relevant user without sufficient scope access all
+    report `false`. The per-row report is computed from ONE
+    batched membership-state load (the same projection behind the
+    personal occurrence feed's `canExclude`), so the SQL query
+    count stays constant in the number of relevant rows; the
+    termination endpoint revalidates the rule and remains the
+    final authority.
 - **Next effective occurrence:** computed by the canonical domain
   primitive `next_effective_meeting_recurrence_occurrence` — NO
   second recurrence engine and NO arbitrary horizon (the Upcoming
@@ -1229,7 +1248,11 @@ lies three months away still appears, with that next occurrence.
   number of relevant recurrences and the number of rule-generated
   dates (pinned by a query-count regression: moving the next
   occurrence farther into the future, or deepening the rule's
-  generated history, adds no SQL statements).
+  generated history, adds no SQL statements). The per-row
+  `canTerminate` permission report is computed from its own ONE
+  batched membership-state load, which likewise adds a CONSTANT
+  number of queries in the number of rows (pinned by query-count
+  regressions for both the group- and the project-scope branch).
 - **Strictly read-only:** the GET causes ZERO mutations: no Meeting
   materialization, no exclusion or participant writes, no audit
   events, no recurrence mutation (pinned by before/after state
@@ -2014,7 +2037,7 @@ The HTTP cancellation action above is the canonical path a client is
 forced through (instead of a destructive delete); no frontend
 cancellation UX exists yet.
 
-### Whole-series termination (implemented, domain-only)
+### Whole-series termination (implemented)
 
 Terminating a WHOLE recurring series (the deferred "whole-
 recurrence cancellation / termination" above) is ONE canonical
@@ -2023,9 +2046,11 @@ domain operation:
 It permanently terminates one `MeetingRecurrence`, suppresses all
 future virtual occurrences, and cancels — without deleting — its
 future unstarted concrete Meetings, while preserving live /
-completed Meeting history and the Template. There is NO HTTP
-termination endpoint and NO UI for it yet: the operation is
-domain-only in this slice (documented here exactly as implemented).
+completed Meeting history and the Template. The canonical HTTP
+action for the operation is
+`POST /api/meeting-recurrences/{recurrenceId}/terminate` (see
+"HTTP termination action (implemented)" below); there is NO UI for
+it yet (no Series-tab trash icon, no confirmation dialog).
 
 **Persisted terminal state (migration `meetings/0022`).**
 `MeetingRecurrence` gains ONE nullable column: `terminated_at`, the
@@ -2178,15 +2203,54 @@ the lock and returns idempotently.
   recurrence entirely (it no longer appears), while a naturally
   ended but NOT terminated recurrence keeps its existing overview
   behavior (it still appears, with the derived `ended` status and a
-  null next occurrence) — the overview response shape is unchanged;
+  null next occurrence) — the overview response shape is otherwise
+  unchanged (the per-row `canTerminate` permission report is
+  documented in "Series overview read API (implemented)" above);
 - historical concrete Meeting read APIs keep working: a terminated
   recurrence's Meetings (cancelled or preserved) remain fully
   addressable by their Meeting id.
 
-**Not part of this slice:** no restoration / reactivation, no
-recurrence editing, no HTTP termination endpoint, no UI, and no
-recurrence-wide audit taxonomy (the per-Meeting
-`meeting.cancelled` events are the only events recorded).
+**HTTP termination action (implemented).**
+`POST /api/meeting-recurrences/{recurrenceId}/terminate`
+permanently terminates the WHOLE series through the domain
+operation above; the API layer resolves the recurrence, applies the
+read-side write rule, and delegates terminal-state persistence,
+the one observed termination instant, future-occurrence
+suppression, the future-Meeting cancellation cutoff, idempotency,
+locking, concurrency, and the final authorization re-check to the
+domain service, which remains the final authority.
+
+- **Route:** a Meeting-recurrence resource action on the
+  established slashless action-route convention (the series-level
+  counterpart of `POST /api/meetings/{meetingId}/cancel`); the
+  collection route, the bounded occurrence read, the personal
+  feed, and the occurrence materialize / reschedule / exclude
+  actions are all unchanged.
+- **Request:** authentication required; NO payload — the
+  recurrence id is the ONLY input (any supplied body is ignored).
+- **Resolution and authorization:** the recurrence is resolved
+  through the canonical recurrence read rule: an unknown id and an
+  inaccessible recurrence (an outsider, or a user whose
+  membership was revoked) answer the SAME non-leaking `404`. A
+  readable but not writable recurrence — a Project `viewer`, or a
+  current Project member of an ARCHIVED Project — answers the
+  established `403` mutation response before anything is
+  delegated. The domain operation re-checks the canonical scoped
+  write rule and remains the final authority; a denied
+  termination changes nothing.
+- **Response:** one stable, idempotent `204 No Content` (empty
+  body) for BOTH the first successful termination and an
+  authorized replay: the operation persists exactly one immutable
+  `terminated_at` value plus the canonical per-Meeting
+  cancellation state, so there is no resource representation to
+  return. A domain error (e.g. a persistent concurrent-change
+  retry storm) answers the established structured `400` error
+  contract.
+- **Not part of this slice:** no confirmation dialog, no
+  Series-tab trash icon, no frontend UX, no restoration /
+  reactivation, no recurrence editing, and no recurrence-wide
+  audit taxonomy (the per-Meeting `meeting.cancelled` events are
+  the only events recorded).
 
 ### Not implemented (deferred)
 
