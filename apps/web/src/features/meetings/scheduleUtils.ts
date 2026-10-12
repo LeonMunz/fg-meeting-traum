@@ -25,6 +25,17 @@ export function localDatePart(date: Date): string {
 }
 
 /**
+ * The local wall-clock time of a Date as canonical 'HH:MM' (24-hour,
+ * zero-padded). Together with `localDatePart` this is the inverse of
+ * `localScheduledAtIso` for every instant that exists in the local
+ * calendar: the canonical parts of an aware instant, rendered in
+ * local time without any locale or UTC-rounding involvement.
+ */
+export function localTimePart(date: Date): string {
+  return `${pad2(date.getHours())}:${pad2(date.getMinutes())}`
+}
+
+/**
  * True for a canonical 'YYYY-MM-DD' that names a real calendar date
  * ('2026-02-31' is rejected). Parsed explicitly from parts — never through
  * ambiguous Date.parse.

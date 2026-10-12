@@ -29,16 +29,71 @@ import {
 } from './upcomingGroups'
 
 import type { UpcomingDateGroup } from './upcomingGroups'
+import './UpcomingMeetings.css'
 
-/* ── Row actions (V1: open the concrete Meeting) ───────────────── */
+/* ── Row actions ───────────────────────────────────────────────── */
+
+/**
+ * Direct Edit affordance for a concrete Meeting row the server
+ * says the user may edit (`actionPermissions.canEdit` — never
+ * inferred client-side). A small, restrained icon action: 16px
+ * outline pencil, ~32px hit area, neutral muted default, subtle
+ * hover background and focus-visible ring. It is revealed with the
+ * row on pointer devices (group-hover / group-focus-within) and is
+ * always visible on direct-manipulation (touch) devices via the
+ * `(hover: none)` rule in `UpcomingMeetings.css`.
+ *
+ * Activation (click OR keyboard) never activates the parent row:
+ * pointer events stop at the wrapper, and Enter/Space keydown is
+ * stopped so the row's own open handler never fires.
+ */
+function RowEditAction({
+  item,
+  onEditMeeting,
+}: {
+  item: UpcomingMeeting
+  onEditMeeting: (item: UpcomingMeeting) => void
+}) {
+  return (
+    <div
+      onClick={(event) => event.stopPropagation()}
+      onPointerDown={(event) => event.stopPropagation()}
+    >
+      <button
+        type="button"
+        aria-label={`Edit ${item.title}`}
+        onClick={() => onEditMeeting(item)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.stopPropagation()
+          }
+        }}
+        className={[
+          'fg-upcoming-edit-action flex h-8 w-8 items-center justify-center rounded-lg text-text-muted opacity-0 outline-none transition',
+          'hover:bg-surface-hover hover:text-text',
+          'focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-focus',
+          'group-hover:opacity-100 group-focus-within:opacity-100',
+        ].join(' ')}
+      >
+        <span
+          aria-hidden="true"
+          className="fg-upcoming-edit-icon material-symbols-outlined"
+        >
+          edit
+        </span>
+      </button>
+    </div>
+  )
+}
 
 /**
  * Per-row overflow affordance. V1 offers a single action — open the
- * Meeting — leaving the slot for future row actions without changing
- * the row geometry. Concrete Meetings and virtual recurring
- * occurrences render the SAME affordance: opening a virtual
- * occurrence is the explicit intent that resolves it into the
- * concrete Meeting workspace.
+ * Meeting — leaving the slot for future row actions without
+ * changing the row geometry. It renders for virtual recurring
+ * occurrences (opening one is the explicit intent that resolves it
+ * into the concrete Meeting workspace) and for concrete Meeting
+ * rows the server does NOT mark editable; a concrete editable row
+ * instead carries the direct Edit action (its only row action).
  */
 function RowActionsMenu({
   meetingTitle,
@@ -197,10 +252,12 @@ function rowStatusBadge(item: UpcomingMeeting): {
 function UpcomingMeetingRow({
   item,
   onOpenRow,
+  onEditMeeting,
   pending,
 }: {
   item: UpcomingMeeting
   onOpenRow: (item: UpcomingMeeting) => void
+  onEditMeeting: (item: UpcomingMeeting) => void
   /**
    * True while this row's explicit open intent is in flight (a
    * virtual occurrence being resolved into its concrete Meeting).
@@ -215,6 +272,12 @@ function UpcomingMeetingRow({
   // Meeting opens it directly; a virtual recurring occurrence opens
   // by resolving exactly that occurrence on explicit intent.
   const openable = concrete || item.recurring
+  // The direct Edit action appears ONLY on a concrete row whose
+  // server-derived permissions mark it editable — never on a virtual
+  // occurrence (editing one would require materializing it) and
+  // never inferred from any other row data.
+  const editableConcrete =
+    concrete && item.actionPermissions?.canEdit === true
   const timeLabel = formatUpcomingTime(item.scheduledAt)
   // Accessible identity of the concrete occurrence: title + EFFECTIVE
   // local date + local time, the same naming rule for concrete and
@@ -272,7 +335,9 @@ function UpcomingMeetingRow({
           : undefined
       }
       className={[
-        'grid min-h-[68px] grid-cols-1 items-center gap-x-4 gap-y-1.5 px-4 py-3 text-left outline-none',
+        // `group` drives the row-hover reveal of the Edit action on
+        // pointer devices.
+        'group grid min-h-[68px] grid-cols-1 items-center gap-x-4 gap-y-1.5 px-4 py-3 text-left outline-none',
         openable
           ? 'cursor-pointer transition select-none hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus'
           : '',
@@ -359,7 +424,13 @@ function UpcomingMeetingRow({
             refresh
           </span>
         ) : (
-          openable && (
+          editableConcrete ? (
+            <RowEditAction
+              item={item}
+              onEditMeeting={onEditMeeting}
+            />
+          ) : (
+            openable && (
           <div
             onClick={(event) =>
               event.stopPropagation()
@@ -377,7 +448,7 @@ function UpcomingMeetingRow({
               }}
             />
           </div>
-        ))}
+            )))}
       </div>
     </div>
   )
@@ -469,8 +540,13 @@ function UpcomingEmptyState({
  * intent (row activation or the row's "Open meeting" action); the
  * parent decides whether that is a direct navigation (concrete
  * Meeting) or the resolution of a virtual occurrence. Rendering the
- * list never invokes it. `openingRowIds` marks the rows whose open
- * intent is still in flight (subtle per-row pending state).
+ * list never invokes it. `onEditMeeting` receives the row model for
+ * an EXPLICIT edit intent (the row's direct Edit action, which
+ * renders only on concrete rows with server-derived
+ * `actionPermissions.canEdit`); it never fires for virtual
+ * occurrences and never materializes one. `openingRowIds` marks the
+ * rows whose open intent is still in flight (subtle per-row pending
+ * state).
  */
 export function UpcomingMeetingsList({
   groups,
@@ -478,6 +554,7 @@ export function UpcomingMeetingsList({
   recurrenceLoading,
   onNewMeeting,
   onOpenRow,
+  onEditMeeting,
   openingRowIds,
 }: {
   groups: UpcomingDateGroup[]
@@ -485,6 +562,7 @@ export function UpcomingMeetingsList({
   recurrenceLoading: boolean
   onNewMeeting: () => void
   onOpenRow: (item: UpcomingMeeting) => void
+  onEditMeeting: (item: UpcomingMeeting) => void
   openingRowIds: ReadonlySet<string>
 }) {
   if (loading) {
@@ -529,6 +607,7 @@ export function UpcomingMeetingsList({
                 key={item.id}
                 item={item}
                 onOpenRow={onOpenRow}
+                onEditMeeting={onEditMeeting}
                 pending={openingRowIds.has(item.id)}
               />
             ))}

@@ -52,6 +52,7 @@ vi.mock('../../api/meetings', async (importOriginal) => {
     listMeetingSeries: vi.fn(),
     getMeetingSeries: vi.fn(),
     listMeetingParticipants: vi.fn(),
+    updateMeeting: vi.fn(),
     searchMeetingSeriesParticipantCandidates: vi.fn(),
     searchStandaloneMeetingParticipantCandidates: vi.fn(),
   }
@@ -1226,15 +1227,17 @@ describe('MeetingListPage — row structure and interaction', () => {
     expect(
       screen.getAllByText('2 people'),
     ).toHaveLength(2)
-    // Actions cell: the per-row overflow affordance, which lives in
+    // Actions cell: the per-row action affordance (the direct Edit
+    // action for a row the server marks editable), which lives in
     // the far-right Actions region — never inside the Meeting block.
-    const kebab = screen.getByRole('button', {
-      name: 'Meeting actions for Team Sync',
+    const editAction = screen.getByRole('button', {
+      name: 'Edit Team Sync',
     })
-    expect(kebab).toBeVisible()
+    expect(editAction).toBeVisible()
 
     // The desktop row exposes four distinct regions: Time, Meeting,
-    // People, Actions — and the kebab is inside the Actions region.
+    // People, Actions — and the row action is inside the Actions
+    // region.
     const row = screen.getByRole('button', {
       name: 'Open Team Sync on Wed, Sep 23 at 10:00',
     })
@@ -1244,7 +1247,7 @@ describe('MeetingListPage — row structure and interaction', () => {
       within(meetingBlock).queryByRole('button'),
     ).toBeNull()
     const actionsRegion = row.children[3] as HTMLElement
-    expect(actionsRegion).toContainElement(kebab)
+    expect(actionsRegion).toContainElement(editAction)
   })
 
   it('shows participant data only when truthfully available (never fabricated for virtual occurrences)', async () => {
@@ -1440,7 +1443,7 @@ describe('MeetingListPage — row structure and interaction', () => {
       within(row.children[3] as HTMLElement).getByRole(
         'button',
         {
-          name: `Meeting actions for ${longTitle}`,
+          name: `Edit ${longTitle}`,
         },
       ),
     ).toBeVisible()
@@ -1563,11 +1566,19 @@ describe('MeetingListPage — row structure and interaction', () => {
   })
 
   it('does not trigger row navigation when the kebab is clicked', async () => {
+    // A concrete row the server does NOT mark editable keeps the
+    // overflow affordance (editable rows carry the direct Edit
+    // action instead).
     vi.mocked(meetingsApi.listMeetings).mockResolvedValue([
       makeMeeting({
         id: 101,
         title: 'Team Sync',
         scheduledAt: localIso(2026, 9, 23, 10, 0),
+        actionPermissions: {
+          canEdit: false,
+          canDelete: false,
+          canCancel: false,
+        },
       }),
     ])
 
@@ -1678,11 +1689,19 @@ describe('MeetingListPage — row structure and interaction', () => {
   })
 
   it('navigates from the row actions menu too', async () => {
+    // A concrete row the server does NOT mark editable keeps the
+    // overflow affordance (editable rows carry the direct Edit
+    // action instead).
     vi.mocked(meetingsApi.listMeetings).mockResolvedValue([
       makeMeeting({
         id: 101,
         title: 'Team Sync',
         scheduledAt: localIso(2026, 9, 23, 10, 0),
+        actionPermissions: {
+          canEdit: false,
+          canDelete: false,
+          canCancel: false,
+        },
       }),
     ])
 
@@ -3083,5 +3102,274 @@ describe('MeetingListPage create dialog (unchanged behavior)', () => {
     expect(
       screen.queryByRole('status'),
     ).not.toBeInTheDocument()
+  })
+})
+
+describe('MeetingListPage — edit an existing Meeting from Upcoming', () => {
+  /** Focus a schedule field and read its canonical (editing) value. */
+  function canonicalValue(label: 'Date' | 'Time'): string {
+    const input = screen.getByLabelText(label) as HTMLInputElement
+    fireEvent.focus(input)
+    return input.value
+  }
+
+  async function openEditDialogFor(title: string) {
+    // The Upcoming list settles asynchronously; wait for the row's
+    // Edit action before activating it.
+    const editButton = await screen.findByRole('button', {
+      name: `Edit ${title}`,
+    })
+    fireEvent.click(editButton)
+    await screen.findByRole('heading', { name: 'Edit meeting' })
+  }
+
+  it('renders a direct Edit action on a concrete row the server marks editable, and no overflow menu', async () => {
+    vi.mocked(meetingsApi.listMeetings).mockResolvedValue([
+      makeMeeting({
+        id: 101,
+        title: 'Team Sync',
+        scheduledAt: localIso(2026, 9, 23, 10, 0),
+      }),
+    ])
+
+    renderPage()
+    await screen.findByRole('button', {
+      name: 'Edit Team Sync',
+    })
+
+    // The direct Edit action is present…
+    expect(
+      screen.getByRole('button', { name: 'Edit Team Sync' }),
+    ).toBeVisible()
+    // …and the three-dot overflow menu is gone for this row.
+    expect(
+      screen.queryByRole('button', {
+        name: 'Meeting actions for Team Sync',
+      }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('renders no Edit action for a concrete row the server does NOT mark editable', async () => {
+    vi.mocked(meetingsApi.listMeetings).mockResolvedValue([
+      makeMeeting({
+        id: 102,
+        title: 'Locked Sync',
+        scheduledAt: localIso(2026, 9, 23, 10, 0),
+        actionPermissions: {
+          canEdit: false,
+          canDelete: false,
+          canCancel: false,
+        },
+      }),
+    ])
+
+    renderPage()
+    await screen.findByRole('heading', { name: 'Today · Wed, Sep 23' })
+
+    expect(
+      screen.queryByRole('button', { name: 'Edit Locked Sync' }),
+    ).not.toBeInTheDocument()
+    // The row keeps its ordinary open affordance (overflow menu).
+    expect(
+      screen.getByRole('button', {
+        name: 'Meeting actions for Locked Sync',
+      }),
+    ).toBeVisible()
+  })
+
+  it('renders no Edit action for a virtual occurrence (keeps its Open affordance)', async () => {
+    vi.mocked(
+      meetingsApi.listPersonalMeetingRecurrenceOccurrences,
+    ).mockResolvedValue([
+      makeOccurrence({
+        occurrenceId: 'occ-v',
+        title: 'Weekly Research Sync',
+      }),
+    ])
+
+    renderPage()
+    await screen.findByText('Weekly Research Sync')
+
+    expect(
+      screen.queryByRole('button', {
+        name: 'Edit Weekly Research Sync',
+      }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByRole('button', {
+        name: 'Meeting actions for Weekly Research Sync',
+      }),
+    ).toBeVisible()
+  })
+
+  it('opens the reused dialog prefilled with the Meeting values and the edit heading', async () => {
+    vi.mocked(meetingsApi.listMeetings).mockResolvedValue([
+      makeMeeting({
+        id: 103,
+        title: 'Design Review',
+        scheduledAt: localIso(2026, 9, 24, 14, 30),
+      }),
+    ])
+
+    renderPage()
+    await openEditDialogFor('Design Review')
+
+    expect(
+      screen.getByRole('heading', { name: 'Edit meeting' }),
+    ).toBeVisible()
+    expect(
+      screen.getByText(
+        'Only the title and the scheduled time can be changed here.',
+      ),
+    ).toBeVisible()
+    expect(
+      (screen.getByLabelText('Title') as HTMLInputElement).value,
+    ).toBe('Design Review')
+    expect(canonicalValue('Date')).toBe('2026-09-24')
+    expect(canonicalValue('Time')).toBe('14:30')
+    expect(
+      screen.getByRole('button', { name: 'Save changes' }),
+    ).toBeVisible()
+  })
+
+  it('saves a changed title by PATCHing only the title and reconciles the row', async () => {
+    const updated = makeMeeting({
+      id: 104,
+      title: 'Renamed Review',
+      scheduledAt: localIso(2026, 9, 24, 14, 30),
+    })
+    vi.mocked(meetingsApi.listMeetings).mockResolvedValue([
+      makeMeeting({
+        id: 104,
+        title: 'Design Review',
+        scheduledAt: localIso(2026, 9, 24, 14, 30),
+      }),
+    ])
+    vi.mocked(meetingsApi.updateMeeting).mockResolvedValue(updated)
+
+    renderPage()
+    await openEditDialogFor('Design Review')
+
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Renamed Review' },
+    })
+    fireEvent.submit(
+      screen.getByLabelText('Title').closest('form')!,
+    )
+
+    await waitFor(() => {
+      expect(meetingsApi.updateMeeting).toHaveBeenCalledTimes(1)
+    })
+    // Only the changed field is sent (schedule untouched).
+    expect(meetingsApi.updateMeeting).toHaveBeenCalledWith(
+      104,
+      { title: 'Renamed Review' },
+    )
+    // Dialog closed, no second Meeting created…
+    expect(
+      screen.queryByRole('heading', { name: 'Edit meeting' }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByText(/Meeting detail:/),
+    ).not.toBeInTheDocument()
+    // …and the row reconciled to the returned title in place.
+    expect(
+      await screen.findByText('Renamed Review'),
+    ).toBeVisible()
+    expect(
+      screen.queryByText('Design Review'),
+    ).not.toBeInTheDocument()
+  })
+
+  it('saves a changed schedule by PATCHing the new instant and re-groups the row', async () => {
+    const movedTo = localIso(2026, 9, 25, 9, 0)
+    const updated = makeMeeting({
+      id: 105,
+      title: 'Board Review',
+      scheduledAt: movedTo,
+    })
+    vi.mocked(meetingsApi.listMeetings).mockResolvedValue([
+      makeMeeting({
+        id: 105,
+        title: 'Board Review',
+        scheduledAt: localIso(2026, 9, 23, 16, 0),
+      }),
+    ])
+    vi.mocked(meetingsApi.updateMeeting).mockResolvedValue(updated)
+
+    renderPage()
+    // The row starts in Today.
+    await screen.findByRole('heading', {
+      name: 'Today · Wed, Sep 23',
+    })
+    await openEditDialogFor('Board Review')
+
+    // Move it to the next day at 09:00 (canonical local entry).
+    fireEvent.change(screen.getByLabelText('Date'), {
+      target: { value: '2026-09-25' },
+    })
+    fireEvent.change(screen.getByLabelText('Time'), {
+      target: { value: '09:00' },
+    })
+    fireEvent.submit(
+      screen.getByLabelText('Title').closest('form')!,
+    )
+
+    await waitFor(() => {
+      expect(meetingsApi.updateMeeting).toHaveBeenCalledTimes(1)
+    })
+    // The title is unchanged, so ONLY scheduledAt is PATCHed.
+    expect(meetingsApi.updateMeeting).toHaveBeenCalledWith(105, {
+      scheduledAt: movedTo,
+    })
+
+    // The row now groups under the new date and shows the new time.
+    const fri = await screen.findByRole('heading', {
+      name: 'Fri, Sep 25',
+    })
+    expect(fri).toBeVisible()
+    expect(
+      screen.queryByRole('heading', { name: 'Today · Wed, Sep 23' }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('keeps the dialog open with the draft intact and a message when saving fails', async () => {
+    vi.mocked(meetingsApi.listMeetings).mockResolvedValue([
+      makeMeeting({
+        id: 106,
+        title: 'Failing Sync',
+        scheduledAt: localIso(2026, 9, 23, 10, 0),
+      }),
+    ])
+    vi.mocked(meetingsApi.updateMeeting).mockRejectedValue(
+      new ApiError(409, {
+        error: 'The meeting was changed by someone else.',
+      }),
+    )
+
+    renderPage()
+    await openEditDialogFor('Failing Sync')
+
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Draft title' },
+    })
+    fireEvent.submit(
+      screen.getByLabelText('Title').closest('form')!,
+    )
+
+    await screen.findByRole('alert')
+    expect(
+      within(screen.getByRole('alert')).getByText(
+        'The meeting was changed by someone else.',
+      ),
+    ).toBeVisible()
+    // The dialog stays open…
+    expect(
+      screen.getByRole('heading', { name: 'Edit meeting' }),
+    ).toBeVisible()
+    // …with the user's draft preserved.
+    expect(
+      (screen.getByLabelText('Title') as HTMLInputElement).value,
+    ).toBe('Draft title')
   })
 })

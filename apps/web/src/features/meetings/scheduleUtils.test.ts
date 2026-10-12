@@ -10,6 +10,7 @@ import {
   isValidDatePart,
   isValidTimePart,
   localDatePart,
+  localTimePart,
   localScheduledAtIso,
   nextHalfHourBoundary,
   parseManualTime,
@@ -21,6 +22,27 @@ describe('localDatePart', () => {
   it('formats a local date as canonical YYYY-MM-DD', () => {
     expect(localDatePart(new Date(2026, 8, 22))).toBe('2026-09-22')
     expect(localDatePart(new Date(2030, 0, 2))).toBe('2030-01-02')
+  })
+})
+
+describe('localTimePart', () => {
+  it('formats a local wall-clock time as canonical zero-padded HH:MM', () => {
+    expect(localTimePart(new Date(2026, 8, 22, 14, 30))).toBe('14:30')
+    expect(localTimePart(new Date(2026, 8, 22, 9, 5))).toBe('09:05')
+    expect(localTimePart(new Date(2026, 8, 22, 0, 0))).toBe('00:00')
+    expect(localTimePart(new Date(2026, 8, 22, 23, 59))).toBe('23:59')
+  })
+
+  it('is the local-time inverse of localScheduledAtIso (same instant, no drift)', () => {
+    const iso = localScheduledAtIso('2030-04-01', '13:47')
+    expect(iso).not.toBeNull()
+    const instant = new Date(iso!)
+    expect(localDatePart(instant)).toBe('2030-04-01')
+    expect(localTimePart(instant)).toBe('13:47')
+    // Round-tripping the parts reproduces the exact original instant.
+    expect(
+      localScheduledAtIso(localDatePart(instant), localTimePart(instant)),
+    ).toBe(iso)
   })
 })
 

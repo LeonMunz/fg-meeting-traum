@@ -628,14 +628,15 @@ describe('isWithinUpcomingWindow / selectUpcomingWindowRows — the canonical vi
       recurrenceId: null,
       recurring: false,
       occurrenceId: null,
-      originalScheduledAt: null,
-      rescheduled: false,
-      researchGroupId: 1,
-      projectId: null,
-      participantIds: [],
-      ...overrides,
-    }
+    originalScheduledAt: null,
+    rescheduled: false,
+    researchGroupId: 1,
+    projectId: null,
+    participantIds: [],
+    actionPermissions: null,
+    ...overrides,
   }
+}
 
   it('includes a Meeting today and one near the far edge of the window', () => {
     expect(
@@ -804,5 +805,110 @@ describe('isWithinUpcomingWindow / selectUpcomingWindowRows — the canonical vi
     expect(rows).toHaveLength(1)
     expect(rows[0].recurring).toBe(true)
     expect(rows[0].meetingId).toBe(901)
+  })
+})
+
+describe('buildUpcomingList — server-derived action permissions', () => {
+  it('carries the concrete Meeting actionPermissions onto one-time rows', () => {
+    const meeting = makeMeeting({
+      id: 201,
+      title: 'Editable sync',
+      actionPermissions: {
+        canEdit: true,
+        canDelete: true,
+        canCancel: false,
+      },
+    })
+
+    const rows = buildUpcomingList([meeting], [])
+
+    expect(rows).toHaveLength(1)
+    expect(rows[0].actionPermissions).toEqual({
+      canEdit: true,
+      canDelete: true,
+      canCancel: false,
+    })
+  })
+
+  it('carries a denied result through unchanged (no client-side upgrade)', () => {
+    const meeting = makeMeeting({
+      id: 202,
+      title: 'Read-only sync',
+      actionPermissions: {
+        canEdit: false,
+        canDelete: false,
+        canCancel: false,
+      },
+    })
+
+    const rows = buildUpcomingList([meeting], [])
+
+    expect(rows[0].actionPermissions).toEqual({
+      canEdit: false,
+      canDelete: false,
+      canCancel: false,
+    })
+  })
+
+  it('carries the concrete Meeting actionPermissions onto materialized recurring rows', () => {
+    const meeting = makeMeeting({
+      id: 203,
+      title: 'Materialized occurrence',
+      scheduledAt: '2026-09-24T09:00:00Z',
+      actionPermissions: {
+        canEdit: true,
+        canDelete: false,
+        canCancel: true,
+      },
+    })
+    const occurrence = makeOccurrence({
+      occurrenceId: 'occ-mat',
+      title: 'Materialized occurrence',
+      originalScheduledAt: '2026-09-24T09:00:00Z',
+      scheduledAt: '2026-09-24T09:00:00Z',
+      materialized: true,
+      meetingId: 203,
+    })
+
+    const rows = buildUpcomingList([meeting], [occurrence])
+
+    expect(rows).toHaveLength(1)
+    expect(rows[0].recurring).toBe(true)
+    expect(rows[0].actionPermissions).toEqual({
+      canEdit: true,
+      canDelete: false,
+      canCancel: true,
+    })
+  })
+
+  it('leaves actionPermissions null for a virtual occurrence (never fabricated)', () => {
+    const occurrence = makeOccurrence({
+      occurrenceId: 'occ-virt',
+      title: 'Virtual occurrence',
+    })
+
+    const rows = buildUpcomingList([], [occurrence])
+
+    expect(rows).toHaveLength(1)
+    expect(rows[0].meetingId).toBeNull()
+    expect(rows[0].actionPermissions).toBeNull()
+  })
+
+  it('leaves actionPermissions null when a materialized feed occurrence lacks its concrete Meeting in the list', () => {
+    // The feed says the occurrence is materialized, but the concrete
+    // Meeting is not part of this list: there is no concrete Meeting
+    // representation, hence no server-derived permission result.
+    const occurrence = makeOccurrence({
+      occurrenceId: 'occ-orphan',
+      title: 'Orphan materialized occurrence',
+      materialized: true,
+      meetingId: 204,
+    })
+
+    const rows = buildUpcomingList([], [occurrence])
+
+    expect(rows).toHaveLength(1)
+    expect(rows[0].meetingId).toBe(204)
+    expect(rows[0].actionPermissions).toBeNull()
   })
 })

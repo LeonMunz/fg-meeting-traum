@@ -16,6 +16,7 @@
  */
 
 import type {
+  ApiMeetingActionPermissions,
   ApiMeeting,
   ApiMeetingRecurrenceOccurrence,
   ApiMeetingStatus,
@@ -124,6 +125,16 @@ export interface UpcomingMeeting {
    * (the feed carries no participant data) — never fabricated.
    */
   participantIds: number[]
+  /**
+   * Server-authoritative action capabilities of the concrete Meeting
+   * backing this row, carried through unchanged. Null when the row has
+   * no concrete Meeting representation (a virtual occurrence, or a
+   * materialized occurrence whose concrete Meeting is not in the
+   * concrete list) — the client must NEVER infer a positive permission
+   * result from visibility, creator / participant ids, Project roles,
+   * or recurrence provenance.
+   */
+  actionPermissions: ApiMeetingActionPermissions | null
 }
 
 /**
@@ -351,6 +362,7 @@ function recurringRowFromMeeting(
     researchGroupId: meeting.researchGroupId,
     projectId: meeting.projectId,
     participantIds: [...meeting.participantIds],
+    actionPermissions: meeting.actionPermissions,
   }
 }
 
@@ -369,6 +381,7 @@ function rowFromMeeting(meeting: ApiMeeting): UpcomingMeeting {
     researchGroupId: meeting.researchGroupId,
     projectId: meeting.projectId,
     participantIds: [...meeting.participantIds],
+    actionPermissions: meeting.actionPermissions,
   }
 }
 
@@ -396,5 +409,9 @@ function rowFromOccurrence(
     researchGroupId: occurrence.researchGroupId,
     projectId: occurrence.projectId,
     participantIds: [],
+    // The feed carries no concrete Meeting representation, so there is
+    // no server-derived permission result to carry: null, never a
+    // fabricated positive.
+    actionPermissions: null,
   }
 }

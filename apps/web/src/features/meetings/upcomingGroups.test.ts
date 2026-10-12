@@ -49,6 +49,7 @@ function makeItem(
     researchGroupId: 1,
     projectId: null,
     participantIds: [],
+    actionPermissions: null,
     ...overrides,
   }
 }

@@ -37,7 +37,9 @@ import {
   formatTimePartLocale,
   isValidDatePart,
   isValidTimePart,
+  localDatePart,
   localScheduledAtIso,
+  localTimePart,
   nextHalfHourBoundary,
   parseManualTime,
   timeSuggestions,
@@ -45,10 +47,12 @@ import {
 
 import type {
   ApiCreateMeetingRecurrenceInput,
+  ApiMeeting,
   ApiMeetingScope,
   ApiMeetingParticipantCandidate,
   ApiMeetingSeries,
   ApiProject,
+  ApiUpdateMeetingInput,
 } from '../../api/types'
 
 export type CreateMeetingInput = {
@@ -75,6 +79,27 @@ type CreateMeetingDialogProps = {
    * disabled (no silent fallback to one-time creation).
    */
   onCreateSeries?: (input: ApiCreateMeetingRecurrenceInput) => void
+  /**
+   * Edit mode: the concrete Meeting whose title and scheduled
+   * date/time are being edited. Must be provided together with
+   * `onUpdate`; when both are set the dialog opens in Edit mode
+   * (prepopulated, creation-only controls hidden, submit goes
+   * through `onUpdate` with only the changed fields). All other
+   * Meeting relationships (Research Group, Project, Template,
+   * recurrence, participants) are read-only context in this mode
+   * and are NEVER submitted.
+   */
+  meeting?: ApiMeeting | null
+  /**
+   * Edit-mode submit: `PATCH /api/meetings/{id}/` with exactly the
+   * supported changed fields (title / scheduledAt). Omitted fields
+   * are left untouched server-side (an unchanged schedule is not
+   * re-serialized at all).
+   */
+  onUpdate?: (
+    meetingId: number,
+    input: ApiUpdateMeetingInput,
+  ) => void
 }
 
 function getPersonInitials(person: ApiMeetingParticipantCandidate) {
@@ -94,6 +119,8 @@ export function CreateMeetingDialog({
   onClose,
   onCreate,
   onCreateSeries,
+  meeting,
+  onUpdate,
 }: CreateMeetingDialogProps) {
   const { activeResearchGroup } = useResearchGroup()
 
@@ -102,6 +129,35 @@ export function CreateMeetingDialog({
   const researchGroupId = activeResearchGroup
     ? String(activeResearchGroup.id)
     : ''
+
+  // Edit mode is active only with an explicit Meeting + submit
+  // handler pair: the dialog never invents an edit target or a
+  // fallback mutation path.
+  const editing = meeting != null && onUpdate != null
+
+  /**
+   * Edit-mode baseline — the Meeting's current values in the
+   * dialog's canonical form: title plus the local wall-clock parts
+   * of the server's aware instant, and the ORIGINAL scheduledAt
+   * string retained verbatim. An unchanged schedule is therefore
+   * preserved exactly: it is never re-serialized, so no timezone
+   * or DST shift can be introduced through form initialization.
+   */
+  const editBaseline = useMemo(() => {
+    if (!editing || meeting == null) {
+      return null
+    }
+    const instant = new Date(meeting.scheduledAt)
+    if (Number.isNaN(instant.getTime())) {
+      return null
+    }
+    return {
+      title: meeting.title,
+      datePart: localDatePart(instant),
+      timePart: localTimePart(instant),
+      scheduledAt: meeting.scheduledAt,
+    }
+  }, [editing, meeting])
 
   const [title, setTitle] = useState('')
   // Separate canonical scheduling form state (locale-independent):
@@ -217,7 +273,27 @@ export function CreateMeetingDialog({
       setEndDateCalendarOpen(false)
       return
     }
-  }, [open])
+
+    // Edit mode: prepopulate from the selected Meeting. Canonical
+    // local wall-clock parts (locale-independent) of the server's
+    // aware instant; the ORIGINAL scheduledAt string stays in
+    // `editBaseline` so an unchanged schedule is preserved exactly.
+    // Running on `editBaseline` identity means switching the edited
+    // Meeting (or returning to create mode) re-initializes cleanly.
+    if (editBaseline != null) {
+      setTitle(editBaseline.title)
+      setDateText(editBaseline.datePart)
+      setTimeText(editBaseline.timePart)
+      setDateFocused(false)
+      setTimeFocused(false)
+      setDateTouched(false)
+      setTimeTouched(false)
+      setCalendarOpen(false)
+      setTimeListOpen(false)
+      setActiveTimeIndex(0)
+      setSubmitAttempted(false)
+    }
+  }, [open, editBaseline])
 
   // Outside mousedown closes the Time suggestions list (established
   // repository popover contract; the calendar handles its own outside
@@ -401,8 +477,11 @@ export function CreateMeetingDialog({
   }, [seriesId, dateValid, dateText])
 
   // Load the projects available for the selected research group so the
-  // Project dropdown can offer them. Only write-role projects allow
-  // Meeting creation; the server remains authoritative.
+  // Project dropdown can offer them. The full visible list is kept
+  // (it also names the Project in the Edit mode's read-only context
+  // block); the CREATE dropdown still offers only write-role
+  // projects (see `writableProjects`); the server remains
+  // authoritative.
   useEffect(() => {
     const gid = Number(researchGroupId)
     if (!open || !Number.isInteger(gid) || gid <= 0) {
@@ -424,7 +503,7 @@ export function CreateMeetingDialog({
             project.currentUserRole === 'member',
         )
 
-        setProjects(writable)
+        setProjects(nextProjects)
 
         // Reset a Project selection that no longer applies.
         setProjectId((current) =>
@@ -444,6 +523,47 @@ export function CreateMeetingDialog({
       cancelled = true
     }
   }, [open, researchGroupId])
+
+  // Creation-only options: only write-role projects allow Meeting
+  // creation. The Edit mode never offers a Project change — it only
+  // needs the owning Project's name as read-only context.
+  const writableProjects = useMemo(
+    () =>
+      projects.filter(
+        (project) =>
+          project.currentUserRole === 'owner' ||
+          project.currentUserRole === 'member',
+      ),
+    [projects],
+  )
+
+  // Edit-mode read-only context: the owning Project's name (null when
+  // the Project is not in the visible list — e.g. a failed fetch —
+  // never a fabricated name).
+  const editProjectName = useMemo(() => {
+    if (!editing || meeting == null || meeting.projectId == null) {
+      return null
+    }
+    return (
+      projects.find(
+        (project) => project.id === meeting.projectId,
+      )?.name ?? null
+    )
+  }, [editing, meeting, projects])
+
+  // Edit-mode read-only context: the originating Template's name
+  // (null while the Template list is still loading or when the
+  // Meeting has no Template provenance).
+  const editTemplateName = useMemo(() => {
+    if (!editing || meeting == null || meeting.seriesId == null) {
+      return null
+    }
+    return (
+      series.find(
+        (candidate) => candidate.id === meeting.seriesId,
+      )?.title ?? null
+    )
+  }, [editing, meeting, series])
 
   // Load meeting templates (series) scoped to the selected Research Group.
   // The dropdown filters to templates matching the current scope/project.
@@ -688,6 +808,43 @@ export function CreateMeetingDialog({
 
     const trimmedTitle = title.trim()
 
+    // Edit mode: submit ONLY the supported, actually-changed fields
+    // through the existing PATCH contract. An unchanged schedule is
+    // not re-serialized at all (the original instant is retained
+    // exactly — no timezone or DST drift); a changed one is built
+    // from the canonical local parts exactly like creation.
+    // Participants, Project, Template, and recurrence are never part
+    // of this payload.
+    if (editing && meeting != null && editBaseline != null) {
+      setSubmitAttempted(true)
+      if (!trimmedTitle || !dateValid || !timeValid) {
+        return
+      }
+
+      const input: ApiUpdateMeetingInput = {}
+
+      if (trimmedTitle !== editBaseline.title) {
+        input.title = trimmedTitle
+      }
+
+      if (
+        dateText !== editBaseline.datePart ||
+        timeText !== editBaseline.timePart
+      ) {
+        const nextScheduledAt = localScheduledAtIso(
+          dateText,
+          timeText,
+        )
+        if (!nextScheduledAt) {
+          return
+        }
+        input.scheduledAt = nextScheduledAt
+      }
+
+      onUpdate?.(meeting.id, input)
+      return
+    }
+
     if (!trimmedTitle || !researchGroupId) {
       return
     }
@@ -805,13 +962,15 @@ export function CreateMeetingDialog({
               id="create-meeting-title"
               className="text-lg font-semibold text-text"
             >
-              New meeting
+              {editing ? 'Edit meeting' : 'New meeting'}
             </h2>
 
             <p className="mt-1 text-sm text-text-muted">
-              {activeResearchGroup
-                ? `Create a meeting in ${activeResearchGroup.name}.`
-                : 'Create a meeting.'}
+              {editing
+                ? 'Only the title and the scheduled time can be changed here.'
+                : activeResearchGroup
+                  ? `Create a meeting in ${activeResearchGroup.name}.`
+                  : 'Create a meeting.'}
             </p>
           </div>
 
@@ -833,76 +992,127 @@ export function CreateMeetingDialog({
               />
             </label>
 
-            <div>
-              <label
-                htmlFor="create-meeting-project"
-                className="mb-1.5 block text-sm font-medium text-text"
-              >
-                Context
-              </label>
+            {editing ? (
+              // Read-only context in Edit mode: the Meeting's owning
+              // Research Group, Project, and Template as restrained
+              // metadata. There are NO controls here — Meeting PATCH
+              // cannot change these relationships, and the dialog
+              // must not imply otherwise.
+              <div>
+                <h3 className="mb-2 text-sm font-medium text-text">
+                  Context
+                </h3>
 
-              <select
-                id="create-meeting-project"
-                value={projectId}
-                onChange={(event) => {
-                  setProjectId(event.target.value)
-                  setSeriesId('')
-                }}
-                className="h-10 w-full rounded-lg border border-border-control bg-surface px-3 text-sm text-text outline-none focus:border-focus focus:ring-2 focus:ring-focus/15"
-              >
-                <option value="">Research group</option>
+                <dl className="space-y-1.5 text-sm">
+                  <div className="flex gap-3">
+                    <dt className="w-28 shrink-0 text-text-muted">
+                      Research group
+                    </dt>
+                    <dd className="min-w-0 truncate text-text">
+                      {activeResearchGroup?.name ?? '—'}
+                    </dd>
+                  </div>
 
-                {projects.map((project) => (
-                  <option
-                    key={project.id}
-                    value={project.id}
+                  {meeting?.projectId != null && (
+                    <div className="flex gap-3">
+                      <dt className="w-28 shrink-0 text-text-muted">
+                        Project
+                      </dt>
+                      <dd className="min-w-0 truncate text-text">
+                        {editProjectName ?? '—'}
+                      </dd>
+                    </div>
+                  )}
+
+                  {editTemplateName != null && (
+                    <div className="flex gap-3">
+                      <dt className="w-28 shrink-0 text-text-muted">
+                        Template
+                      </dt>
+                      <dd className="min-w-0 truncate text-text">
+                        {editTemplateName}
+                      </dd>
+                    </div>
+                  )}
+                </dl>
+              </div>
+            ) : (
+              <>
+                <div>
+                  <label
+                    htmlFor="create-meeting-project"
+                    className="mb-1.5 block text-sm font-medium text-text"
                   >
-                    {project.name}
-                  </option>
-                ))}
-              </select>
-            </div>
+                    Context
+                  </label>
 
-            <div>
-              <label
-                htmlFor="create-meeting-template"
-                className="mb-1.5 block text-sm font-medium text-text"
-              >
-                Meeting template
-              </label>
-
-              <select
-                id="create-meeting-template"
-                aria-describedby={
-                  seriesId !== '' ? 'create-meeting-template-help' : undefined
-                }
-                value={seriesId}
-                onChange={(event) =>
-                  setSeriesId(event.target.value)
-                }
-                className="h-10 w-full rounded-lg border border-border-control bg-surface px-3 text-sm text-text outline-none focus:border-focus focus:ring-2 focus:ring-focus/15"
-              >
-                <option value="">No template</option>
-
-                {availableSeries.map((candidate) => (
-                  <option
-                    key={candidate.id}
-                    value={candidate.id}
+                  <select
+                    id="create-meeting-project"
+                    value={projectId}
+                    onChange={(event) => {
+                      setProjectId(event.target.value)
+                      setSeriesId('')
+                    }}
+                    className="h-10 w-full rounded-lg border border-border-control bg-surface px-3 text-sm text-text outline-none focus:border-focus focus:ring-2 focus:ring-focus/15"
                   >
-                    {candidate.title}
-                  </option>
-                ))}
-              </select>
+                    <option value="">Research group</option>
 
-              {seriesId !== '' && (
-                <p
-                  id="create-meeting-template-help"
-                  className="mt-1.5 text-xs text-text-muted"
-                >
-                  Uses the template sections as the starting structure.
-                </p>
-              )}
-            </div>
+                    {writableProjects.map((project) => (
+                      <option
+                        key={project.id}
+                        value={project.id}
+                      >
+                        {project.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="create-meeting-template"
+                    className="mb-1.5 block text-sm font-medium text-text"
+                  >
+                    Meeting template
+                  </label>
+
+                  <select
+                    id="create-meeting-template"
+                    aria-describedby={
+                      seriesId !== ''
+                        ? 'create-meeting-template-help'
+                        : undefined
+                    }
+                    value={seriesId}
+                    onChange={(event) =>
+                      setSeriesId(event.target.value)
+                    }
+                    className="h-10 w-full rounded-lg border border-border-control bg-surface px-3 text-sm text-text outline-none focus:border-focus focus:ring-2 focus:ring-focus/15"
+                  >
+                    <option value="">No template</option>
+
+                    {availableSeries.map((candidate) => (
+                      <option
+                        key={candidate.id}
+                        value={candidate.id}
+                      >
+                        {candidate.title}
+                      </option>
+                    ))}
+                  </select>
+
+                  {seriesId !== '' && (
+                    <p
+                      id="create-meeting-template-help"
+                      className="mt-1.5 text-xs text-text-muted"
+                    >
+                      Uses the template sections as the starting
+                      structure.
+                    </p>
+                  )}
+                </div>
+              </>
+            )}
 
             <div className="border-t border-border-subtle pt-5">
               <h3 className="mb-3 text-sm font-semibold text-text">
@@ -1112,6 +1322,12 @@ export function CreateMeetingDialog({
               </p>
             </div>
 
+            {/*
+              Repeat: creation-only. The recurrence configuration
+              is never part of a Meeting PATCH, so the whole
+              section is absent (not merely disabled) in Edit mode.
+            */}
+            {!editing && (
             <div>
               <label
                 htmlFor="create-meeting-repeat"
@@ -1430,7 +1646,15 @@ export function CreateMeetingDialog({
                 </div>
               )}
             </div>
+            )}
 
+            {/*
+              Participants: creation-only. Meeting PATCH cannot
+              change the participant set (that is the dedicated
+              participant API), so the section is absent in Edit
+              mode.
+            */}
+            {!editing && (
             <div>
               <label
                 htmlFor="create-meeting-participants"
@@ -1567,6 +1791,7 @@ export function CreateMeetingDialog({
               )}
 
             </div>
+            )}
 
           </div>
 
@@ -1589,31 +1814,56 @@ export function CreateMeetingDialog({
               Cancel
             </button>
 
-              <button
-                type="submit"
-                disabled={
-                  submitting ||
-                  !title.trim() ||
-                  !dateValid ||
-                  !timeValid ||
-                  !researchGroupId ||
-                  (recurrenceActive && !recurrenceValid)
-                }
-                className="inline-flex h-9 items-center gap-2 rounded-lg bg-accent px-4 text-sm font-semibold text-text-inverse shadow-sm transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-45"
-              >
-                <span
-                  aria-hidden="true"
-                  className="material-symbols-outlined text-[18px]"
+              {editing ? (
+                // Edit-mode submit: only the title and the schedule
+                // are validated (research-group context is not part
+                // of the PATCH, and there is no recurrence path).
+                <button
+                  type="submit"
+                  disabled={
+                    submitting ||
+                    !title.trim() ||
+                    !dateValid ||
+                    !timeValid
+                  }
+                  className="inline-flex h-9 items-center gap-2 rounded-lg bg-accent px-4 text-sm font-semibold text-text-inverse shadow-sm transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-45"
                 >
-                  {recurrenceActive ? 'repeat' : 'add'}
-                </span>
+                  <span
+                    aria-hidden="true"
+                    className="material-symbols-outlined text-[18px]"
+                  >
+                    check
+                  </span>
 
-                {submitting
-                  ? 'Creating…'
-                  : recurrenceActive
-                    ? 'Create series'
-                    : 'Create meeting'}
-              </button>
+                  {submitting ? 'Saving…' : 'Save changes'}
+                </button>
+              ) : (
+                <button
+                  type="submit"
+                  disabled={
+                    submitting ||
+                    !title.trim() ||
+                    !dateValid ||
+                    !timeValid ||
+                    !researchGroupId ||
+                    (recurrenceActive && !recurrenceValid)
+                  }
+                  className="inline-flex h-9 items-center gap-2 rounded-lg bg-accent px-4 text-sm font-semibold text-text-inverse shadow-sm transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-45"
+                >
+                  <span
+                    aria-hidden="true"
+                    className="material-symbols-outlined text-[18px]"
+                  >
+                    {recurrenceActive ? 'repeat' : 'add'}
+                  </span>
+
+                  {submitting
+                    ? 'Creating…'
+                    : recurrenceActive
+                      ? 'Create series'
+                      : 'Create meeting'}
+                </button>
+              )}
           </div>
         </form>
       </div>

@@ -16,12 +16,14 @@ import {
   listMeetingRecurrences,
   listPersonalMeetingRecurrenceOccurrences,
   materializeMeetingRecurrenceOccurrence,
+  updateMeeting,
 } from '../../api/meetings'
 import type {
   ApiMeeting,
   ApiCreateMeetingRecurrenceInput,
   ApiMeetingRecurrenceOccurrence,
   ApiMeetingRecurrenceOverview,
+  ApiUpdateMeetingInput,
 } from '../../api/types'
 import { WorkspaceContent } from '../../components/layout/WorkspaceContent'
 import { useResearchGroupListScope } from '../research-group/useResearchGroupListScope'
@@ -188,6 +190,16 @@ export function MeetingListPage() {
     useState(false)
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] =
+    useState<string | null>(null)
+  // Edit mode of the SAME dialog: the concrete Meeting whose title /
+  // scheduled time is being edited. `null` = the dialog is either
+  // closed or in create mode. The row's Edit action only exists when
+  // the server marks the concrete Meeting editable, so this always
+  // targets a real, permission-checked Meeting.
+  const [editDialogMeeting, setEditDialogMeeting] =
+    useState<ApiMeeting | null>(null)
+  const [updating, setUpdating] = useState(false)
+  const [updateError, setUpdateError] =
     useState<string | null>(null)
   // Transient (auto-dismissing) success feedback for a created
   // recurring series: no concrete Meeting is created, so the
@@ -489,6 +501,81 @@ export function MeetingListPage() {
     setCreateError(null)
     dismissSeriesToast()
     setCreateDialogOpen(true)
+  }
+
+  /**
+   * The explicit "edit this Upcoming row" intent — fired ONLY by a
+   * concrete row's direct Edit action (rendered exclusively for
+   * rows whose server-derived `actionPermissions.canEdit` is true;
+   * never for virtual occurrences, which are never materialized
+   * just to be edited). The row model is resolved back to the
+   * canonical concrete Meeting from the page's list, so the dialog
+   * always receives the full authoritative representation.
+   */
+  const handleEditRow = useCallback(
+    (item: UpcomingMeeting) => {
+      if (item.meetingId == null) {
+        return
+      }
+
+      const meeting = (meetings ?? []).find(
+        (candidate) => candidate.id === item.meetingId,
+      )
+
+      if (meeting == null) {
+        return
+      }
+
+      setUpdateError(null)
+      dismissSeriesToast()
+      setEditDialogMeeting(meeting)
+    },
+    [meetings, dismissSeriesToast],
+  )
+
+  /**
+   * Edit-mode save: the existing `PATCH /api/meetings/{id}/`
+   * contract with exactly the supported changed fields (title /
+   * scheduledAt) computed by the dialog. On success the canonical
+   * returned Meeting is reconciled IN PLACE (same id — no second
+   * Meeting, no duplicate recurring row); the derived Upcoming
+   * groups re-sort and re-group by the effective time. The
+   * occurrence feed is refetched so a moved materialized occurrence
+   * is reported by the feed with its new time. On error the dialog
+   * stays open with the draft intact.
+   */
+  const handleUpdateMeeting = async (
+    meetingId: number,
+    input: ApiUpdateMeetingInput,
+  ) => {
+    setUpdating(true)
+    setUpdateError(null)
+
+    try {
+      const meeting = await updateMeeting(
+        meetingId,
+        input,
+      )
+
+      setMeetings((current) =>
+        (current ?? []).map((candidate) =>
+          candidate.id === meeting.id ? meeting : candidate,
+        ),
+      )
+
+      void loadOccurrences()
+
+      setEditDialogMeeting(null)
+    } catch (updateMeetingError) {
+      setUpdateError(
+        getErrorMessage(
+          updateMeetingError,
+          'Meeting could not be updated.',
+        ),
+      )
+    } finally {
+      setUpdating(false)
+    }
   }
 
   /**
@@ -836,6 +923,7 @@ export function MeetingListPage() {
                 onOpenRow={(item) =>
                   void handleOpenRow(item)
                 }
+                onEditMeeting={handleEditRow}
                 openingRowIds={openingRowIds}
               />
             </>
@@ -872,11 +960,23 @@ export function MeetingListPage() {
       </WorkspaceContent>
 
       <CreateMeetingDialog
-        open={createDialogOpen}
-        submitting={creating}
-        submitError={createError}
+        open={
+          createDialogOpen || editDialogMeeting != null
+        }
+        submitting={creating || updating}
+        submitError={
+          editDialogMeeting != null
+            ? updateError
+            : createError
+        }
         onClose={() => {
-          if (!creating) {
+          if (editDialogMeeting != null) {
+            // Edit mode: closing never mutates; the pending save
+            // (if any) keeps the dialog open.
+            if (!updating) {
+              setEditDialogMeeting(null)
+            }
+          } else if (!creating) {
             setCreateDialogOpen(false)
           }
         }}
@@ -885,6 +985,10 @@ export function MeetingListPage() {
         }
         onCreateSeries={(input) =>
           void handleCreateSeries(input)
+        }
+        meeting={editDialogMeeting}
+        onUpdate={(meetingId, input) =>
+          void handleUpdateMeeting(meetingId, input)
         }
       />
 
