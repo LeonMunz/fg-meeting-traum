@@ -374,6 +374,95 @@ def _require_meeting_admin_access(*, meeting, user):
     )
 
 
+@dataclass(frozen=True)
+class MeetingActionPermissions:
+    """Server-derived action capabilities for ONE concrete Meeting.
+
+    Read-model projection of what the current user may do with this
+    Meeting: the values are derived EXCLUSIVELY from the canonical
+    authorization kernel (``resolve_meeting_scope`` capabilities) and
+    the existing domain eligibility rules of the destructive Meeting
+    operations — no second authorization implementation:
+
+    - ``can_edit``: the user holds ``MEETING_WRITE`` (Meeting
+      collaboration rule) — the same rule the Meeting PATCH surface
+      enforces.
+    - ``can_delete``: the user holds ``MEETING_ADMIN`` (destructive
+      Meeting administration) AND the Meeting is eligible for the
+      ordinary permanent deletion — the exact guard of
+      ``delete_meeting``: NO recurrence provenance. A materialized
+      recurring occurrence is never hard-deletable, no matter who
+      asks.
+    - ``can_cancel``: the user holds ``MEETING_ADMIN`` AND the
+      Meeting is eligible for the materialized-occurrence
+      cancellation operation — the exact guard of
+      ``cancel_meeting_recurrence_occurrence``: recurrence
+      provenance (``recurrence`` + ``original_scheduled_at``) and a
+      still-``upcoming`` status. Live, completed, and already
+      cancelled Meetings are not cancellable (``cancelled`` is
+      terminal).
+    """
+
+    can_edit: bool
+    can_delete: bool
+    can_cancel: bool
+
+
+def meeting_action_permissions(
+    *,
+    meeting,
+    user,
+    group_scope=None,
+    project_scopes=None,
+) -> MeetingActionPermissions:
+    """Canonical action-permission read model for one concrete
+    Meeting.
+
+    The capability source is the canonical kernel scope for the
+    Meeting (``resolve_meeting_scope``): an inaccessible or
+    read-only position yields the corresponding denied flags, and a
+    user without any scope resolves to all-deny. Meeting eligibility
+    follows the EXACT guards of the destructive domain operations:
+
+    - ordinary permanent deletion (``delete_meeting``) rejects a
+      Meeting with recurrence provenance, so ``can_delete`` requires
+      ``MEETING_ADMIN`` plus a non-recurring Meeting;
+    - materialized-occurrence cancellation
+      (``cancel_meeting_recurrence_occurrence``) requires
+      ``MEETING_ADMIN`` plus recurrence provenance plus an
+      ``upcoming`` status, so ``can_cancel`` mirrors that gate (a
+      cancelled Meeting is terminal and offers no further cancel
+      action).
+
+    Read-only: no query beyond the canonical scope resolution, no
+    state change. ``group_scope`` / ``project_scopes`` are optional
+    pre-resolved kernel inputs (see ``resolve_meeting_scope``) so a
+    list caller that resolved them once for the whole result set
+    does not re-query per Meeting.
+    """
+    scope = resolve_meeting_scope(
+        user,
+        meeting,
+        group_scope=group_scope,
+        project_scopes=project_scopes,
+    )
+    has_write = scope is not None and scope.has(Capability.MEETING_WRITE)
+    has_admin = scope is not None and scope.has(Capability.MEETING_ADMIN)
+
+    return MeetingActionPermissions(
+        can_edit=has_write,
+        can_delete=(
+            has_admin and meeting.recurrence_id is None
+        ),
+        can_cancel=(
+            has_admin
+            and meeting.recurrence_id is not None
+            and meeting.original_scheduled_at is not None
+            and meeting.status == Meeting.Status.UPCOMING
+        ),
+    )
+
+
 def _require_eligible_participant_for_scope(
     *,
     research_group,

@@ -380,6 +380,28 @@ export type ApiMeetingScope =
   | 'group'
   | 'project'
 
+/**
+ * Server-authoritative action capabilities for one concrete Meeting.
+ *
+ * Derived on the server from the canonical authorization kernel
+ * (Meeting collaboration `canEdit`, destructive Meeting
+ * administration `canDelete` / `canCancel`) plus the existing
+ * destructive-operation eligibility rules: `canDelete` is only true
+ * for non-recurring Meetings (a materialized recurring occurrence is
+ * never hard-deletable), `canCancel` is only true for a materialized
+ * recurring occurrence that is still `upcoming`.
+ *
+ * The client must consume these values as-is: permissions must never
+ * be inferred from Meeting visibility, creator/participant ids,
+ * Project roles, or the presence of `seriesId` / recurrence
+ * provenance.
+ */
+export interface ApiMeetingActionPermissions {
+  canEdit: boolean
+  canDelete: boolean
+  canCancel: boolean
+}
+
 export interface ApiMeeting {
   id: number
   researchGroupId: number
@@ -393,6 +415,7 @@ export interface ApiMeeting {
   status: ApiMeetingStatus
   currentMeetingItemId: number | null
   participantIds: number[]
+  actionPermissions: ApiMeetingActionPermissions
   createdById: number
   createdAt: string
   updatedAt: string

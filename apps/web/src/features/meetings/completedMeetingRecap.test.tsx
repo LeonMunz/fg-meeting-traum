@@ -222,6 +222,7 @@ const meeting: ApiMeeting = {
   status: 'completed',
   currentMeetingItemId: null,
   participantIds: [1, 2],
+  actionPermissions: { canEdit: true, canDelete: true, canCancel: false },
   createdById: 1,
   createdAt: '2026-08-20T09:00:00Z',
   updatedAt: '2026-08-27T10:20:00Z',

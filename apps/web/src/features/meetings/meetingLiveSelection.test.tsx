@@ -146,6 +146,7 @@ function makeMeeting(
     status: 'live',
     currentMeetingItemId: 2,
     participantIds: [1],
+    actionPermissions: { canEdit: true, canDelete: true, canCancel: false },
     createdById: 1,
     createdAt: '2026-09-01T08:00:00Z',
     updatedAt: '2026-09-01T09:01:00Z',

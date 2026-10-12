@@ -138,36 +138,97 @@ def resolve_project_scope(
     Returns None when the user has no effective access (no
     ProjectMembership, no current group membership, unknown Project,
     or inactive account). Views answer 404.
+
+    Delegates to the batched canonical resolver
+    (``resolve_project_scopes``) for a single Project, so the
+    Project-scope rule has exactly one implementation.
+    """
+    if project_id is None:
+        return None
+    return resolve_project_scopes(user, [project_id]).get(project_id)
+
+
+def resolve_project_scopes(user, project_ids) -> dict:
+    """Batched canonical Project scope resolution for a set of
+    Projects.
+
+    The per-Project rule is IDENTICAL to ``resolve_project_scope``:
+    a current ``ProjectMembership`` in the Project AND a current
+    ``ResearchGroupMembership`` in the Project's Research Group
+    (default deny otherwise). The batched load issues exactly ONE
+    ProjectMembership query across ALL given Projects and — only when
+    at least one membership exists — ONE ResearchGroupMembership
+    query across exactly the Research Groups those memberships'
+    Projects belong to: the SQL query count is constant in the
+    number of Projects (no per-Project N+1). Projects without a
+    matching membership, or without current Research Group
+    membership, resolve to ``None`` exactly like the single-Project
+    resolver does.
+
+    ``project_ids`` may be any iterable of Project primary keys
+    (``None`` entries and duplicates are collapsed; an empty
+    iterable yields an empty mapping). The returned mapping covers
+    every non-None input id.
     """
     auth = get_auth_context(user)
     if not auth.is_active:
-        return None
+        return {
+            project_id: None
+            for project_id in sorted(
+                {
+                    project_id
+                    for project_id in project_ids
+                    if project_id is not None
+                }
+            )
+        }
 
-    membership = ProjectMembership.objects.select_related(
-        "project"
-    ).filter(
-        project_id=project_id,
-        user=user,
-    ).first()
-
-    if membership is None:
-        return None
-
-    project = membership.project
-
-    if not ResearchGroupMembership.objects.filter(
-        research_group_id=project.research_group_id,
-        user=user,
-    ).exists():
-        return None
-
-    return ScopeContext(
-        kind=ScopeKind.PROJECT,
-        research_group_id=project.research_group_id,
-        project_id=project.pk,
-        role=membership.role,
-        capabilities=capabilities_for_project_role(membership.role),
+    ids = sorted(
+        {project_id for project_id in project_ids if project_id is not None}
     )
+    if not ids:
+        return {}
+
+    memberships = {
+        membership.project_id: membership
+        for membership in (
+            ProjectMembership.objects.select_related("project")
+            .filter(user=user, project_id__in=ids)
+        )
+    }
+    if not memberships:
+        return {project_id: None for project_id in ids}
+
+    group_ids = {
+        membership.project.research_group_id
+        for membership in memberships.values()
+    }
+    group_membership_ids = set(
+        ResearchGroupMembership.objects
+        .filter(user=user, research_group_id__in=group_ids)
+        .values_list("research_group_id", flat=True)
+    )
+
+    scopes = {}
+    for project_id in ids:
+        membership = memberships.get(project_id)
+        if membership is None:
+            scopes[project_id] = None
+            continue
+        if (
+            membership.project.research_group_id
+            not in group_membership_ids
+        ):
+            scopes[project_id] = None
+            continue
+        scopes[project_id] = ScopeContext(
+            kind=ScopeKind.PROJECT,
+            research_group_id=membership.project.research_group_id,
+            project_id=membership.project_id,
+            role=membership.role,
+            capabilities=capabilities_for_project_role(membership.role),
+        )
+    return scopes
 
 
 def has_project_capability(
@@ -225,17 +286,61 @@ def _meeting_participant_or_creator(meeting, user) -> bool:
 
     if meeting.created_by_id == user.pk:
         return True
-    return MeetingParticipant.objects.filter(
-        meeting_id=meeting.pk,
-        user=user,
-    ).exists()
+    # Use the prefetched relation when the caller already loaded it
+    # (e.g. a permission-filtered Meeting list); otherwise fall back
+    # to the same direct query. The prefetch holds ALL participant
+    # relations of the Meeting, so the membership test is
+    # semantically identical to the filtered exists() check.
+    try:
+        relations = meeting._prefetched_objects_cache[
+            "participant_relations"
+        ]
+    except (AttributeError, KeyError):
+        return MeetingParticipant.objects.filter(
+            meeting_id=meeting.pk,
+            user=user,
+        ).exists()
+    return any(relation.user_id == user.pk for relation in relations)
 
 
 def resolve_meeting_scope(
     user,
     meeting,
+    *,
+    group_scope: Optional[ScopeContext] = None,
+    project_scopes: Optional[dict] = None,
 ) -> Optional[ScopeContext]:
     """Resolve the user's scope for one Meeting occurrence.
+
+    ``group_scope`` and ``project_scopes`` are optional pre-resolved
+    authorization inputs for list-style callers that already resolved
+    them for the whole result set: ``group_scope`` must be the
+    caller's ``resolve_group_scope`` result for this Meeting's
+    Research Group, and ``project_scopes`` a caller-built
+    ``resolve_project_scopes`` mapping covering this Meeting's
+    Project. When provided, the kernel consumes them instead of
+    issuing the equivalent queries; the capability rules applied to
+    them are the SAME rules as when the kernel resolves them itself
+    (one implementation, no second authorization path).
+
+    Pre-resolved inputs are trusted ONLY after an identity check
+    against the Meeting they are applied to — a scope that does not
+    belong to THIS Meeting's Research Group / Project is an
+    authorization identity mismatch and FAILS CLOSED: the Meeting
+    resolves to NO capabilities (``None``), and there is NO implicit
+    fallback to re-resolving the user's actual scope (an
+    inconsistent caller input is a programming error, not a cache
+    miss):
+
+    - ``group_scope`` must have ``kind == ScopeKind.GROUP`` and
+      ``research_group_id == meeting.research_group_id``;
+    - the ``project_scopes`` entry selected by ``meeting.project_id``
+      must exist and have ``kind == ScopeKind.PROJECT``,
+      ``project_id == meeting.project_id``, and
+      ``research_group_id == meeting.research_group_id``.
+
+    Ordinary resolution (no pre-resolved inputs supplied) is
+    unchanged.
 
     The capabilities are independent (canonical model):
 
@@ -280,9 +385,22 @@ def resolve_meeting_scope(
             # Scope inconsistency guard: a group Meeting must not
             # reference a Project.
             return None
-        group_scope = resolve_group_scope(
-            user, meeting.research_group_id
-        )
+        if group_scope is not None and not (
+            group_scope.kind == ScopeKind.GROUP
+            and group_scope.research_group_id
+            == meeting.research_group_id
+        ):
+            # An explicitly supplied group scope that does not
+            # belong to this Meeting's Research Group must never
+            # grant Meeting capabilities: fail closed, and do NOT
+            # fall back to re-resolving the user's actual group
+            # scope (an inconsistent caller input is a programming
+            # error, not a missing cache entry).
+            return None
+        if group_scope is None:
+            group_scope = resolve_group_scope(
+                user, meeting.research_group_id
+            )
         if group_scope is not None and group_scope.has(
             Capability.GROUP_READ
         ):
@@ -294,12 +412,36 @@ def resolve_meeting_scope(
             return None
         if not is_collaborator:
             return None
-        project = Project.objects.filter(pk=meeting.project_id).first()
-        project_scope = (
-            resolve_project_scope(user, meeting.project_id)
-            if project is not None
-            else None
-        )
+        # Use the already-loaded Project relation when the caller
+        # eager-loaded it (select_related); otherwise the access
+        # issues the same single-row lookup as before. A missing
+        # Project row resolves exactly like the former filtered
+        # query: None.
+        try:
+            project = meeting.project
+        except Project.DoesNotExist:
+            project = None
+        if project_scopes is not None:
+            project_scope = project_scopes.get(meeting.project_id)
+            if not (
+                project_scope is not None
+                and project_scope.kind == ScopeKind.PROJECT
+                and project_scope.project_id == meeting.project_id
+                and project_scope.research_group_id
+                == meeting.research_group_id
+            ):
+                # The explicitly supplied mapping must match this
+                # Meeting's Project identity exactly (kind, Project,
+                # and Research Group). A missing or mismatched
+                # entry fails closed — there is NO implicit
+                # fallback to resolving this or any other Project.
+                return None
+        else:
+            project_scope = (
+                resolve_project_scope(user, meeting.project_id)
+                if project is not None
+                else None
+            )
         if project_scope is None:
             # A stale creator / participant relation without valid
             # current Project access grants nothing.
@@ -452,6 +594,7 @@ __all__ = [
     "require_group_capability",
     "group_scope_for",
     "resolve_project_scope",
+    "resolve_project_scopes",
     "has_project_capability",
     "require_project_capability",
     "project_scope_for",

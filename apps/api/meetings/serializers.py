@@ -8,6 +8,7 @@ from projects.models import ProjectMembership
 from research_groups.models import ResearchGroupMembership
 
 from .services import AGENDA_EXPORT_SCHEMA_VERSION
+from .services import meeting_action_permissions
 
 from .models import (
     Meeting,
@@ -383,6 +384,13 @@ class MeetingSerializer(serializers.ModelSerializer):
         allow_null=True,
     )
     participantIds = serializers.SerializerMethodField()
+    # Server-derived action capabilities for this concrete Meeting
+    # (canonical kernel MEETING_WRITE / MEETING_ADMIN plus the
+    # existing destructive-operation eligibility rules — see
+    # ``meeting_action_permissions``). The client must not infer
+    # these from visibility, creator/participant ids, Project roles,
+    # or the presence of ``seriesId`` / ``recurrence`` provenance.
+    actionPermissions = serializers.SerializerMethodField()
     createdById = serializers.IntegerField(
         source="created_by_id",
         read_only=True,
@@ -411,17 +419,61 @@ class MeetingSerializer(serializers.ModelSerializer):
             "status",
             "currentMeetingItemId",
             "participantIds",
+            "actionPermissions",
             "createdById",
             "createdAt",
             "updatedAt",
         ]
 
     def get_participantIds(self, obj):
-        return list(
-            obj.participant_relations
-            .order_by("id")
-            .values_list("user_id", flat=True)
+        # Use the prefetched relation when the caller already loaded
+        # it (the permission-filtered Meetings list prefetches it):
+        # an extra ``order_by`` on the related manager would bypass
+        # the prefetch cache and re-query per Meeting (N+1). The
+        # in-memory sort reproduces the canonical ``order_by("id")``
+        # over the same ALL-rows prefetch.
+        try:
+            relations = obj._prefetched_objects_cache[
+                "participant_relations"
+            ]
+        except (AttributeError, KeyError):
+            return list(
+                obj.participant_relations
+                .order_by("id")
+                .values_list("user_id", flat=True)
+            )
+        return [
+            relation.user_id
+            for relation in sorted(
+                relations, key=lambda relation: relation.id,
+            )
+        ]
+
+    def get_actionPermissions(self, obj):
+        # Default-deny: without a request there is no authenticated
+        # identity to derive capabilities for, so every action is
+        # denied (the endpoint layer always serializes for the
+        # requesting user; this keeps the representation safe for
+        # any other, non-request caller).
+        request = self.context.get("request")
+        user = getattr(request, "user", None) if request else None
+        if user is None or not getattr(user, "is_authenticated", False):
+            return {
+                "canEdit": False,
+                "canDelete": False,
+                "canCancel": False,
+            }
+        permissions = meeting_action_permissions(
+            meeting=obj,
+            user=user,
+            group_scope=self.context.get("group_scope"),
+            project_scopes=self.context.get("project_scopes"),
         )
+        return {
+            "canEdit": permissions.can_edit,
+            "canDelete": permissions.can_delete,
+            "canCancel": permissions.can_cancel,
+        }
 
 
 class MeetingCreateSerializer(serializers.Serializer):

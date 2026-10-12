@@ -160,6 +160,7 @@ function makeMeeting(
     status: 'upcoming',
     currentMeetingItemId: null,
     participantIds: [1, 2],
+    actionPermissions: { canEdit: true, canDelete: true, canCancel: false },
     createdById: 1,
     createdAt: '2026-09-01T09:00:00Z',
     updatedAt: '2026-09-01T09:00:00Z',

@@ -647,6 +647,7 @@ describe('Recurrence occurrence materialization API client', () => {
       status: 'upcoming',
       currentMeetingItemId: null,
       participantIds: [1],
+      actionPermissions: { canEdit: true, canDelete: true, canCancel: false },
       createdById: 1,
       createdAt: '2026-09-23T09:00:00Z',
       updatedAt: '2026-09-23T09:00:00Z',

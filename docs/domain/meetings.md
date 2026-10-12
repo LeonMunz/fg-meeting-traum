@@ -2451,6 +2451,81 @@ vs.
 Edit series structure
 ```
 
+### Action permissions read model (implemented)
+
+The canonical concrete Meeting representation (the Research Group
+Meetings list `GET /api/research-groups/{groupId}/meetings/`,
+the Meeting detail `GET /api/meetings/{id}/`, and the other
+responses that return that representation — creation, PATCH,
+lifecycle actions, occurrence materialization / reschedule)
+exposes a server-derived `actionPermissions` block:
+
+```text
+actionPermissions
+  canEdit    boolean
+  canDelete  boolean
+  canCancel  boolean
+```
+
+All values are derived server-side, for the requesting user,
+EXCLUSIVELY from the canonical authorization kernel
+(`resolve_meeting_scope` capabilities) and the existing domain
+eligibility rules of the destructive Meeting operations — no
+second authorization implementation, and no client-side
+inference (the client must not derive permissions from Meeting
+visibility, creator/participant ids, Project roles, or the
+presence of `seriesId` / recurrence provenance):
+
+- `canEdit` — the user holds `MEETING_WRITE` for this Meeting
+  (the Meeting collaboration rule the PATCH surface enforces):
+  group scope — any current Research Group member; project scope
+  — the creator or an explicit participant with valid current
+  Project access while the Project is not archived.
+- `canDelete` — the user holds `MEETING_ADMIN` (destructive
+  Meeting administration) AND the Meeting is eligible for the
+  ordinary permanent deletion: the exact guard of `delete_meeting`
+  — NO recurrence provenance. A materialized recurring occurrence
+  is never hard-deletable, no matter who asks, and the generic
+  DELETE endpoint keeps rejecting it.
+- `canCancel` — the user holds `MEETING_ADMIN` AND the Meeting is
+  eligible for the materialized-occurrence cancellation operation:
+  the exact guard of `cancel_meeting_recurrence_occurrence` —
+  recurrence provenance (`recurrence` + `original_scheduled_at`)
+  AND a still-`upcoming` status. Live, completed, and already
+  cancelled Meetings are not cancellable (`cancelled` is terminal
+  and offers no further cancel action).
+
+Pinned semantics:
+
+- A Project Meeting participant with a `viewer` role may get
+  `canEdit: true` but NEVER `canDelete` / `canCancel` — those
+  require `PROJECT_WORK` (Project owner or member) on the
+  canonical Project-read boundary; an archived Project denies all
+  three actions.
+- Current Research Group members get all three capabilities on
+  group Meetings, subject to the same deletion / cancellation
+  eligibility rules.
+- The projection is a READ model only: it exposes the server's
+  decision, no operation and no UI action (hover actions,
+  Edit/Delete UI) are implemented by it.
+- Meetings the requesting user cannot read are not serialized at
+  all (permission-filtered list, non-leaking 404 detail), so
+  `actionPermissions` never leaks the existence of, or the
+  permissions on, an inaccessible Meeting.
+- Virtual (unmaterialized) recurring occurrences have no concrete
+  Meeting and are OUTSIDE this read model: their action
+  permissions are a later independent concern, never fabricated
+  from a Meeting id or by materializing an occurrence.
+
+Query efficiency: the Meetings list resolves the requesting
+user's group scope ONCE per request and the user's Project scopes
+with ONE batched canonical resolution across exactly the Projects
+the list represents (participant relations and Project rows are
+eager-loaded; the kernel consumes the pre-resolved scopes
+instead of re-querying per Meeting), so the list's SQL query
+count is constant in both the Meeting count and the Project
+count (pinned by a query-count regression test).
+
 ---
 
 ## 13. Meeting participants and access boundary (implemented)

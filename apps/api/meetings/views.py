@@ -20,6 +20,7 @@ from authorization.service import (
     resolve_meeting_scope,
     resolve_meeting_series_scope,
     resolve_meeting_recurrence_scope,
+    resolve_project_scopes,
 )
 from research_groups.models import (
     ResearchGroupMembership,
@@ -382,7 +383,8 @@ def _run_meeting_lifecycle_action(
     try:
         return Response(
             MeetingSerializer(
-                action(meeting=meeting, actor=request.user)
+                action(meeting=meeting, actor=request.user),
+                context={"request": request},
             ).data
         )
     except MeetingDomainError as exc:
@@ -1065,7 +1067,13 @@ class MeetingSeriesCreateOccurrenceView(APIView):
         except MeetingDomainError as exc:
             return Response({"error": exc.message}, status=400)
 
-        return Response(MeetingSerializer(meeting).data, status=201)
+        return Response(
+            MeetingSerializer(
+                meeting,
+                context={"request": request},
+            ).data,
+            status=201,
+        )
 
 
 # ── MeetingSection (snapshot) endpoints ──────────────────────────
@@ -1297,16 +1305,19 @@ class ResearchGroupMeetingListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, group_id):
-        group = _require_research_group_access(
-            request,
-            group_id,
-        )
-        if group is None:
+        # Resolve the canonical group scope ONCE for the whole list:
+        # it gates the endpoint (GROUP_READ) and is reused as a
+        # pre-resolved kernel input, so the per-Meeting scope
+        # resolution issues no group query per row.
+        group_scope = resolve_group_scope(request.user, group_id)
+        if group_scope is None or not group_scope.has(
+            Capability.GROUP_READ
+        ):
             return Response([])
 
         meetings = (
             Meeting.objects
-            .filter(research_group=group)
+            .filter(research_group_id=group_id)
             .filter(_accessible_scope_filter(request.user))
             .select_related(
                 "research_group",
@@ -1319,10 +1330,34 @@ class ResearchGroupMeetingListCreateView(APIView):
             .distinct()
         )
 
+        meetings = list(meetings)
+
+        # ONE batched canonical Project scope resolution across
+        # exactly the Projects represented by the visible project-
+        # scoped Meetings: the query count is constant in both the
+        # Meeting count and the Project count (no per-Meeting or
+        # per-Project N+1).
+        project_ids = {
+            meeting.project_id
+            for meeting in meetings
+            if meeting.scope == Meeting.Scope.PROJECT
+            and meeting.project_id is not None
+        }
+        project_scopes = (
+            resolve_project_scopes(request.user, project_ids)
+            if project_ids
+            else {}
+        )
+
         return Response(
             MeetingSerializer(
                 meetings,
                 many=True,
+                context={
+                    "request": request,
+                    "group_scope": group_scope,
+                    "project_scopes": project_scopes,
+                },
             ).data
         )
 
@@ -1375,7 +1410,10 @@ class ResearchGroupMeetingListCreateView(APIView):
             )
 
         return Response(
-            MeetingSerializer(meeting).data,
+            MeetingSerializer(
+                meeting,
+                context={"request": request},
+            ).data,
             status=201,
         )
 
@@ -1395,7 +1433,10 @@ class MeetingDetailView(APIView):
             )
 
         return Response(
-            MeetingSerializer(meeting).data
+            MeetingSerializer(
+                meeting,
+                context={"request": request},
+            ).data
         )
 
     def patch(self, request, meeting_id):
@@ -1466,7 +1507,10 @@ class MeetingDetailView(APIView):
         meeting.refresh_from_db()
 
         return Response(
-            MeetingSerializer(meeting).data
+            MeetingSerializer(
+                meeting,
+                context={"request": request},
+            ).data
         )
 
     def delete(self, request, meeting_id):
@@ -3189,7 +3233,10 @@ class MeetingRecurrenceOccurrenceMaterializeView(APIView):
             return Response({"error": exc.message}, status=400)
 
         return Response(
-            MeetingSerializer(meeting).data,
+            MeetingSerializer(
+                meeting,
+                context={"request": request},
+            ).data,
             status=201 if created_now else 200,
         )
 
@@ -3273,7 +3320,12 @@ class MeetingRecurrenceOccurrenceRescheduleView(APIView):
         except MeetingDomainError as exc:
             return Response({"error": exc.message}, status=400)
 
-        return Response(MeetingSerializer(meeting).data)
+        return Response(
+            MeetingSerializer(
+                meeting,
+                context={"request": request},
+            ).data
+        )
 
 
 class MeetingRecurrenceOccurrenceExcludeView(APIView):
