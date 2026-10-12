@@ -9,9 +9,11 @@ import { useNavigate } from 'react-router'
 
 import { ApiError } from '../../api/client'
 import {
+  cancelMeetingRecurrenceOccurrence,
   createMeeting,
   createMeetingFromSeries,
   createMeetingRecurrence,
+  deleteMeeting,
   listMeetings,
   listMeetingRecurrences,
   listPersonalMeetingRecurrenceOccurrences,
@@ -39,8 +41,16 @@ import {
   upcomingRequestWindow,
   type UpcomingMeeting,
 } from './upcomingModel'
-import { groupUpcomingByDate } from './upcomingGroups'
+import {
+  formatUpcomingDate,
+  formatUpcomingTime,
+  groupUpcomingByDate,
+} from './upcomingGroups'
 import { UpcomingMeetingsList } from './UpcomingMeetings'
+import {
+  MeetingDeleteConfirmDialog,
+  type MeetingDeleteConfirmMode,
+} from './MeetingDeleteConfirmDialog'
 
 const MEETINGS_TABS = [
   { id: 'upcoming', label: 'Upcoming' },
@@ -223,6 +233,19 @@ export function MeetingListPage() {
     useState<{ item: UpcomingMeeting; message: string } | null>(
       null,
     )
+
+  // Explicit destructive intent for a concrete Upcoming row: the
+  // row that requested it plus the operation the server allows for
+  // it (`delete` = standalone permanent deletion; `cancel` = the
+  // dedicated cancellation of THIS materialized recurring
+  // occurrence). `null` = no confirmation open.
+  const [deleteTarget, setDeleteTarget] = useState<{
+    item: UpcomingMeeting
+    mode: MeetingDeleteConfirmMode
+  } | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] =
+    useState<string | null>(null)
 
   // One request window per page session: today → +42 days (local).
   const requestWindow = useMemo(
@@ -657,9 +680,146 @@ export function MeetingListPage() {
           ),
         })
       }
+      },
+      [navigate, openingRowIds],
+    )
+
+  /**
+   * The explicit "remove this Upcoming row" intent — fired ONLY by
+   * a concrete row's destructive trash action (rendered
+   * exclusively for rows whose server-derived
+   * `actionPermissions.canDelete` or `canCancel` is true; never
+   * for virtual occurrences). Which operation the dialog confirms
+   * is the SERVER's decision, consumed as-is: `canCancel` ⇒
+   * cancellation of THIS materialized recurring occurrence (never
+   * a hard delete), otherwise `canDelete` ⇒ standalone permanent
+   * deletion. No authorization is inferred from recurrence ids or
+   * Project roles here.
+   */
+  const handleRequestDeleteAction = useCallback(
+    (item: UpcomingMeeting) => {
+      if (
+        item.meetingId == null ||
+        item.actionPermissions == null
+      ) {
+        return
+      }
+
+      const mode: MeetingDeleteConfirmMode =
+        item.actionPermissions.canCancel === true
+          ? 'cancel'
+          : 'delete'
+
+      // Defensive: the trash action is only rendered for the
+      // server-granted permission the mode requires.
+      const granted =
+        mode === 'cancel'
+          ? item.actionPermissions.canCancel === true
+          : item.actionPermissions.canDelete === true
+
+      if (!granted) {
+        return
+      }
+
+      setDeleteError(null)
+      dismissSeriesToast()
+      setDeleteTarget({ item, mode })
     },
-    [navigate, openingRowIds],
+    [dismissSeriesToast],
   )
+
+  const closeDeleteDialog = useCallback(() => {
+    // Cancellation never mutates; a pending operation must not be
+    // abandoned mid-write.
+    if (deleting) {
+      return
+    }
+
+    setDeleteTarget(null)
+    setDeleteError(null)
+  }, [deleting])
+
+  /**
+   * The confirmed destructive operation:
+   *
+  * - `delete` (standalone concrete Meeting): exactly ONE
+  *   `DELETE /api/meetings/{id}/`. Success removes ONLY that
+  *   concrete Meeting from Upcoming — no occurrence is created or
+  *   materialized, and every unrelated row is preserved.
+  * - `cancel` (materialized recurring occurrence): the dedicated
+  *   `POST /api/meetings/{id}/cancel` action (no trailing slash —
+  *   the registered `meeting-cancel` route) — NEVER the generic
+  *   Meeting DELETE. Success reconciles the returned canonical
+  *   Meeting (status `cancelled`) in place and refreshes the
+  *   occurrence feed, so exactly the cancelled occurrence drops
+   *   out of Upcoming while its siblings and the recurrence itself
+   *   stay.
+   *
+   * No optimistic removal: on failure the row stays available, the
+   * dialog stays open with the server's message, and the user can
+   * retry (the pending guard makes duplicate submission impossible
+   * while a request is in flight).
+   */
+  const handleConfirmDelete = useCallback(async () => {
+    const target = deleteTarget
+
+    if (
+      target == null ||
+      deleting ||
+      target.item.meetingId == null
+    ) {
+      return
+    }
+
+    const meetingId = target.item.meetingId
+
+    setDeleting(true)
+    setDeleteError(null)
+
+    try {
+      if (target.mode === 'delete') {
+        await deleteMeeting(meetingId)
+
+        // Remove ONLY the deleted concrete Meeting; every other
+        // Meeting (concrete or occurrence) is preserved.
+        setMeetings((current) =>
+          (current ?? []).filter(
+            (candidate) => candidate.id !== meetingId,
+          ),
+        )
+      } else {
+        const cancelled =
+          await cancelMeetingRecurrenceOccurrence(meetingId)
+
+        // Reconcile the retained canonical Meeting in place (same
+        // id — nothing is deleted or recreated)…
+        setMeetings((current) =>
+          (current ?? []).map((candidate) =>
+            candidate.id === cancelled.id ? cancelled : candidate,
+          ),
+        )
+
+        // …and refresh the occurrence feed: the cancelled
+        // occurrence is absent from the effective set while its
+        // siblings stay.
+        void loadOccurrences()
+      }
+
+      setDeleteTarget(null)
+      setDeleteError(null)
+    } catch (deleteActionError) {
+      setDeleteError(
+        getErrorMessage(
+          deleteActionError,
+          target.mode === 'cancel'
+            ? 'The occurrence could not be cancelled.'
+            : 'The meeting could not be deleted.',
+        ),
+      )
+    } finally {
+      setDeleting(false)
+    }
+  }, [deleteTarget, deleting, loadOccurrences])
 
   const handleTabKeyDown = (
     event: React.KeyboardEvent,
@@ -924,6 +1084,9 @@ export function MeetingListPage() {
                   void handleOpenRow(item)
                 }
                 onEditMeeting={handleEditRow}
+                onDestructiveAction={
+                  handleRequestDeleteAction
+                }
                 openingRowIds={openingRowIds}
               />
             </>
@@ -991,6 +1154,24 @@ export function MeetingListPage() {
           void handleUpdateMeeting(meetingId, input)
         }
       />
+
+      {deleteTarget != null && (
+        <MeetingDeleteConfirmDialog
+          mode={deleteTarget.mode}
+          meetingTitle={deleteTarget.item.title}
+          whenLabel={`${formatUpcomingDate(
+            deleteTarget.item.scheduledAt,
+          )} at ${formatUpcomingTime(
+            deleteTarget.item.scheduledAt,
+          )}`}
+          deleting={deleting}
+          error={deleteError}
+          onCancel={closeDeleteDialog}
+          onConfirm={() =>
+            void handleConfirmDelete()
+          }
+        />
+      )}
 
       {seriesToastVisible && <SeriesCreatedToast />}
     </div>

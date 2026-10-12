@@ -1,14 +1,15 @@
 /*
- * Upcoming row Edit action (pencil) — the same cascade trap as the
- * Live MeetingNote hover actions (see MeetingDetailPage.css):
+ * Upcoming row direct actions (Edit pencil + destructive trash) —
+ * the same cascade trap as the Live MeetingNote hover actions (see
+ * MeetingDetailPage.css):
  * Google Fonts' unlayered 24px `.material-symbols-outlined`
  * default beats Tailwind utilities (emitted in the utilities
  * cascade layer), so a `text-[16px]` utility alone would NOT pin
- * the artwork size. The two-class selector keeps its (0,2,0)
- * specificity above the external single-class rule (0,1,0)
+ * the artwork size. The two-class selectors keep their (0,2,0)
+ * specificity above the external single-class rules (0,1,0)
  * regardless of stylesheet load order.
  */
-.fg-upcoming-edit-icon.material-symbols-outlined {
+.fg-upcoming-row-icon.material-symbols-outlined {
   font-size: 16px;
   line-height: 1;
 }
@@ -16,12 +17,12 @@
 /*
  * Hover-reveal fallback for direct-manipulation devices: the
  * Tailwind group-hover / group-focus-within / focus-visible
- * utilities reveal the pencil on pointer devices; on touch
- * (hover: none) there is no hover to trigger them, so the control
+ * utilities reveal the row actions on pointer devices; on touch
+ * (hover: none) there is no hover to trigger them, so the controls
  * must stay permanently visible to remain discoverable and usable.
  */
 @media (hover: none) {
-  .fg-upcoming-edit-action {
+  .fg-upcoming-row-action {
     opacity: 1;
   }
 }

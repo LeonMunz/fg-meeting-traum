@@ -23,6 +23,7 @@ import json
 from datetime import datetime, timezone as dt_timezone
 from zoneinfo import ZoneInfo
 
+from django.urls import reverse
 from audit_history.models import AuditEvent
 from rest_framework import status
 from rest_framework.test import APIClient
@@ -156,6 +157,17 @@ class MeetingRecurrenceCancelApiBase(MeetingRecurrenceBase):
 
 class MeetingRecurrenceCancelApiTest(MeetingRecurrenceCancelApiBase):
     """Authorized cancellation of an upcoming materialized occurrence."""
+
+    def test_route_resolves_to_the_slashless_action_path(self):
+        """The registered route has NO trailing slash (like the
+        `start` / `end` / `reopen` actions). The frontend API client
+        pins this exact path (see
+        `apps/web/src/api/meetings.test.ts`): appending a slash
+        would 404 the only registered route."""
+        self.assertEqual(
+            reverse("meeting-cancel", args=[42]),
+            "/api/meetings/42/cancel",
+        )
 
     def test_authorized_group_member_cancels_upcoming_materialized_occurrence(
         self,

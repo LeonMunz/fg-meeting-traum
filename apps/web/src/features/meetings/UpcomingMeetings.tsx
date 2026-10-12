@@ -37,15 +37,16 @@ import './UpcomingMeetings.css'
  * Direct Edit affordance for a concrete Meeting row the server
  * says the user may edit (`actionPermissions.canEdit` — never
  * inferred client-side). A small, restrained icon action: 16px
- * outline pencil, ~32px hit area, neutral muted default, subtle
+ * outline pencil, ~32×32px hit area, neutral muted default, subtle
  * hover background and focus-visible ring. It is revealed with the
  * row on pointer devices (group-hover / group-focus-within) and is
  * always visible on direct-manipulation (touch) devices via the
  * `(hover: none)` rule in `UpcomingMeetings.css`.
  *
  * Activation (click OR keyboard) never activates the parent row:
- * pointer events stop at the wrapper, and Enter/Space keydown is
- * stopped so the row's own open handler never fires.
+ * the owning action group stops pointer events at its border, and
+ * this button stops Enter/Space keydown so the row's own open
+ * handler never fires.
  */
 function RowEditAction({
   item,
@@ -55,33 +56,139 @@ function RowEditAction({
   onEditMeeting: (item: UpcomingMeeting) => void
 }) {
   return (
+    <button
+      type="button"
+      aria-label={`Edit ${item.title}`}
+      onClick={() => onEditMeeting(item)}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.stopPropagation()
+        }
+      }}
+      className={[
+        'fg-upcoming-row-action flex h-8 w-8 items-center justify-center rounded-lg text-text-muted opacity-0 outline-none transition',
+        'hover:bg-surface-hover hover:text-text',
+        'focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-focus',
+        'group-hover:opacity-100 group-focus-within:opacity-100',
+      ].join(' ')}
+    >
+      <span
+        aria-hidden="true"
+        className="fg-upcoming-row-icon material-symbols-outlined"
+      >
+        edit
+      </span>
+    </button>
+  )
+}
+
+/**
+ * Direct destructive affordance for a concrete Meeting row the
+ * server marks deletable (`actionPermissions.canDelete` — a
+ * standalone Meeting, permanent delete) or cancellable
+ * (`actionPermissions.canCancel` — a materialized recurring
+ * occurrence, dedicated cancellation of THIS occurrence only).
+ * Same compact shape as the Edit action; the red destructive
+ * emphasis is reserved for the hover / focus treatment — the
+ * resting state stays neutral. The accessible label names the
+ * operation the server actually allows: `Delete …` for a
+ * standalone Meeting, `Cancel …` for a materialized recurring
+ * occurrence. It is never rendered for virtual occurrences and
+ * never inferred from any other row data.
+ */
+function RowDestructiveAction({
+  item,
+  onDestructiveAction,
+}: {
+  item: UpcomingMeeting
+  onDestructiveAction: (item: UpcomingMeeting) => void
+}) {
+  const cancellable =
+    item.actionPermissions?.canCancel === true
+
+  return (
+    <button
+      type="button"
+      aria-label={
+        cancellable
+          ? `Cancel ${item.title}`
+          : `Delete ${item.title}`
+      }
+      onClick={() => onDestructiveAction(item)}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.stopPropagation()
+        }
+      }}
+      className={[
+        'fg-upcoming-row-action flex h-8 w-8 items-center justify-center rounded-lg text-text-muted opacity-0 outline-none transition',
+        'hover:bg-danger-bg hover:text-danger',
+        'focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-danger',
+        'group-hover:opacity-100 group-focus-within:opacity-100',
+      ].join(' ')}
+    >
+      <span
+        aria-hidden="true"
+        className="fg-upcoming-row-icon material-symbols-outlined"
+      >
+        delete
+      </span>
+    </button>
+  )
+}
+
+/**
+ * The compact horizontal action group for a concrete Meeting row:
+ * the Edit pencil (server `canEdit`) and the destructive trash
+ * (server `canDelete` or `canCancel` — at most one of which the
+ * server can grant). The GROUP — not an individual button — stops
+ * pointer events at its border, so activating an action never
+ * triggers the row's open intent.
+ *
+ * Concrete rows carry this group INSTEAD of the three-dot
+ * overflow menu: the row itself remains openable, and the
+ * server's permission set decides exactly which direct actions
+ * appear. A concrete row with no granted action renders nothing
+ * here (its Actions region stays present but empty).
+ */
+function RowActionGroup({
+  item,
+  onEditMeeting,
+  onDestructiveAction,
+}: {
+  item: UpcomingMeeting
+  onEditMeeting: (item: UpcomingMeeting) => void
+  onDestructiveAction: (item: UpcomingMeeting) => void
+}) {
+  const permissions = item.actionPermissions
+  const editable = permissions?.canEdit === true
+  const destructive =
+    permissions?.canDelete === true ||
+    permissions?.canCancel === true
+
+  if (!editable && !destructive) {
+    return null
+  }
+
+  return (
     <div
+      className="flex items-center gap-1"
       onClick={(event) => event.stopPropagation()}
       onPointerDown={(event) => event.stopPropagation()}
     >
-      <button
-        type="button"
-        aria-label={`Edit ${item.title}`}
-        onClick={() => onEditMeeting(item)}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter' || event.key === ' ') {
-            event.stopPropagation()
-          }
-        }}
-        className={[
-          'fg-upcoming-edit-action flex h-8 w-8 items-center justify-center rounded-lg text-text-muted opacity-0 outline-none transition',
-          'hover:bg-surface-hover hover:text-text',
-          'focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-focus',
-          'group-hover:opacity-100 group-focus-within:opacity-100',
-        ].join(' ')}
-      >
-        <span
-          aria-hidden="true"
-          className="fg-upcoming-edit-icon material-symbols-outlined"
-        >
-          edit
-        </span>
-      </button>
+      {editable && (
+        <RowEditAction
+          item={item}
+          onEditMeeting={onEditMeeting}
+        />
+      )}
+
+      {destructive && (
+        <RowDestructiveAction
+          item={item}
+          onDestructiveAction={onDestructiveAction}
+        />
+      )}
     </div>
   )
 }
@@ -91,9 +198,10 @@ function RowEditAction({
  * Meeting — leaving the slot for future row actions without
  * changing the row geometry. It renders for virtual recurring
  * occurrences (opening one is the explicit intent that resolves it
- * into the concrete Meeting workspace) and for concrete Meeting
- * rows the server does NOT mark editable; a concrete editable row
- * instead carries the direct Edit action (its only row action).
+ * into the concrete Meeting workspace). Concrete Meeting rows
+ * carry the direct action group (Edit / destructive) and NO
+ * overflow menu; virtual deletion / cancellation is a separate
+ * slice and is never offered here.
  */
 function RowActionsMenu({
   meetingTitle,
@@ -253,11 +361,13 @@ function UpcomingMeetingRow({
   item,
   onOpenRow,
   onEditMeeting,
+  onDestructiveAction,
   pending,
 }: {
   item: UpcomingMeeting
   onOpenRow: (item: UpcomingMeeting) => void
   onEditMeeting: (item: UpcomingMeeting) => void
+  onDestructiveAction: (item: UpcomingMeeting) => void
   /**
    * True while this row's explicit open intent is in flight (a
    * virtual occurrence being resolved into its concrete Meeting).
@@ -272,12 +382,18 @@ function UpcomingMeetingRow({
   // Meeting opens it directly; a virtual recurring occurrence opens
   // by resolving exactly that occurrence on explicit intent.
   const openable = concrete || item.recurring
-  // The direct Edit action appears ONLY on a concrete row whose
-  // server-derived permissions mark it editable — never on a virtual
-  // occurrence (editing one would require materializing it) and
-  // never inferred from any other row data.
-  const editableConcrete =
-    concrete && item.actionPermissions?.canEdit === true
+  // The direct row actions (Edit pencil / destructive trash) appear
+  // ONLY on concrete rows, driven exclusively by the server-derived
+  // `actionPermissions` — never on a virtual occurrence (which
+  // keeps its Open affordance) and never inferred from any other
+  // row data, creator / participant ids, Project roles, or
+  // recurrence provenance.
+  const permissions = item.actionPermissions
+  const hasDirectActions =
+    concrete &&
+    (permissions?.canEdit === true ||
+      permissions?.canDelete === true ||
+      permissions?.canCancel === true)
   const timeLabel = formatUpcomingTime(item.scheduledAt)
   // Accessible identity of the concrete occurrence: title + EFFECTIVE
   // local date + local time, the same naming rule for concrete and
@@ -343,7 +459,10 @@ function UpcomingMeetingRow({
           : '',
         // Tablet 768–1099px: Time + Meeting + Actions (People
         // folds into the secondary metadata); desktop ≥1100px:
-        // four semantic columns.
+        // four semantic columns. The Actions track (72px) holds the
+        // compact direct action group — up to two 32px icon
+        // actions with a 4px gap — plus the retained single
+        // three-dot affordance of virtual occurrence rows.
         //
         // The two templates MUST use MUTUALLY EXCLUSIVE media
         // ranges (md:max-[1100px] vs min-[1100px]). Tailwind v4
@@ -356,8 +475,8 @@ function UpcomingMeetingRow({
         // display:block — four visible children in three tracks
         // (Actions auto-places to a second row, People clips in
         // the 40px Actions track).
-        'md:max-[1100px]:grid-cols-[88px_minmax(0,1fr)_40px]',
-        'min-[1100px]:grid-cols-[104px_minmax(0,1fr)_96px_48px]',
+        'md:max-[1100px]:grid-cols-[88px_minmax(0,1fr)_72px]',
+        'min-[1100px]:grid-cols-[104px_minmax(0,1fr)_96px_72px]',
       ].join(' ')}
     >
       <div className="fg-type-record-title tabular-nums text-text">
@@ -423,14 +542,23 @@ function UpcomingMeetingRow({
           >
             refresh
           </span>
-        ) : (
-          editableConcrete ? (
-            <RowEditAction
+        ) : concrete ? (
+          // Concrete row: the compact direct action group (Edit /
+          // destructive) — NO three-dot menu. A concrete row with no
+          // server-granted action keeps its four-region geometry
+          // with an empty Actions region and stays openable as a
+          // whole.
+          hasDirectActions && (
+            <RowActionGroup
               item={item}
               onEditMeeting={onEditMeeting}
+              onDestructiveAction={onDestructiveAction}
             />
-          ) : (
-            openable && (
+          )
+        ) : openable ? (
+          // Virtual occurrence: the retained three-dot "Open
+          // meeting" affordance (virtual deletion / cancellation is
+          // a separate slice — never invented here).
           <div
             onClick={(event) =>
               event.stopPropagation()
@@ -448,7 +576,7 @@ function UpcomingMeetingRow({
               }}
             />
           </div>
-            )))}
+        ) : null}
       </div>
     </div>
   )
@@ -471,11 +599,11 @@ function UpcomingSkeleton() {
             key={index}
             className={[
               'grid min-h-[68px] grid-cols-1 items-center gap-x-4 gap-y-1.5 px-4 py-3',
-              // Same mutually-exclusive breakpoint contract as the
-              // real row (see UpcomingMeetingRow).
-              'md:max-[1100px]:grid-cols-[88px_minmax(0,1fr)_40px]',
-              'min-[1100px]:grid-cols-[104px_minmax(0,1fr)_96px_48px]',
-            ].join(' ')}
+            // Same mutually-exclusive breakpoint contract as the
+            // real row (see UpcomingMeetingRow).
+            'md:max-[1100px]:grid-cols-[88px_minmax(0,1fr)_72px]',
+            'min-[1100px]:grid-cols-[104px_minmax(0,1fr)_96px_72px]',
+          ].join(' ')}
           >
             <div className="h-4 w-12 animate-pulse rounded bg-surface-muted" />
 
@@ -544,7 +672,12 @@ function UpcomingEmptyState({
  * an EXPLICIT edit intent (the row's direct Edit action, which
  * renders only on concrete rows with server-derived
  * `actionPermissions.canEdit`); it never fires for virtual
- * occurrences and never materializes one. `openingRowIds` marks the
+ * occurrences and never materializes one. `onDestructiveAction`
+ * receives the row model for an EXPLICIT delete / cancel intent
+ * (the row's destructive trash action, which renders only on
+ * concrete rows with server-derived `actionPermissions.canDelete`
+ * or `canCancel`); the parent owns the confirmation dialog and the
+ * request — the list never mutates. `openingRowIds` marks the
  * rows whose open intent is still in flight (subtle per-row pending
  * state).
  */
@@ -555,6 +688,7 @@ export function UpcomingMeetingsList({
   onNewMeeting,
   onOpenRow,
   onEditMeeting,
+  onDestructiveAction,
   openingRowIds,
 }: {
   groups: UpcomingDateGroup[]
@@ -563,6 +697,7 @@ export function UpcomingMeetingsList({
   onNewMeeting: () => void
   onOpenRow: (item: UpcomingMeeting) => void
   onEditMeeting: (item: UpcomingMeeting) => void
+  onDestructiveAction: (item: UpcomingMeeting) => void
   openingRowIds: ReadonlySet<string>
 }) {
   if (loading) {
@@ -608,6 +743,7 @@ export function UpcomingMeetingsList({
                 item={item}
                 onOpenRow={onOpenRow}
                 onEditMeeting={onEditMeeting}
+                onDestructiveAction={onDestructiveAction}
                 pending={openingRowIds.has(item.id)}
               />
             ))}

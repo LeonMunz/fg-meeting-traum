@@ -7,6 +7,7 @@ import {
 } from 'vitest'
 
 import {
+  apiDelete,
   apiGet,
   apiGetFile,
   apiPatch,
@@ -14,6 +15,7 @@ import {
   ApiError,
 } from './client'
 import {
+  cancelMeetingRecurrenceOccurrence,
   cancelMeetingItemFollowUp,
   createMeeting,
   createMeetingItem,
@@ -830,5 +832,93 @@ describe('MeetingItem canonical content write API client', () => {
           '## Plan\n\n- step one\n- step two',
       },
     )
+  })
+})
+
+describe('Meeting occurrence cancellation API client', () => {
+  beforeEach(() => {
+    vi.mocked(apiPost).mockReset()
+    vi.mocked(apiDelete).mockReset()
+  })
+
+  // The dedicated cancellation endpoint answers the RETAINED
+  // canonical Meeting representation (same id, status cancelled).
+  const cancelledMeeting: ApiMeeting = {
+    id: 202,
+    researchGroupId: 1,
+    scope: 'group',
+    projectId: null,
+    seriesId: null,
+    title: 'Weekly Research Sync',
+    scheduledAt: '2026-09-24T12:00:00Z',
+    startedAt: null,
+    endedAt: null,
+    status: 'cancelled',
+    currentMeetingItemId: null,
+    participantIds: [1],
+    actionPermissions: {
+      canEdit: false,
+      canDelete: false,
+      canCancel: false,
+    },
+    createdById: 1,
+    createdAt: '2026-09-01T08:00:00Z',
+    updatedAt: '2026-09-24T09:00:00Z',
+  }
+
+  it('posts to the dedicated cancellation action by Meeting ID with no body fields', async () => {
+    vi.mocked(apiPost).mockResolvedValue(cancelledMeeting)
+
+    await expect(
+      cancelMeetingRecurrenceOccurrence(202),
+    ).resolves.toEqual(cancelledMeeting)
+
+    // The concrete Meeting id is the ONLY input: one POST to the
+    // dedicated action with an empty body — no occurrence identity,
+    // no scheduled start, no title. The path pins the ACTUAL
+    // Django route (`config/urls.py` → `meeting-cancel` — no
+    // trailing slash, the same convention as the `start` / `end` /
+    // `reopen` actions): a trailing slash matches no route and
+    // 404s, so this assertion is the cross-layer contract with the
+    // backend's `test_route_resolves_to_the_slashless_action_path`.
+    expect(apiPost).toHaveBeenCalledTimes(1)
+    expect(apiPost).toHaveBeenCalledWith(
+      '/api/meetings/202/cancel',
+      {},
+    )
+  })
+
+  it('returns the retained canonical Meeting representation (same id, status cancelled)', async () => {
+    vi.mocked(apiPost).mockResolvedValue(cancelledMeeting)
+
+    const result =
+      await cancelMeetingRecurrenceOccurrence(202)
+
+    // The response is the SAME Meeting, retained (never deleted or
+    // recreated): same id, status cancelled, content unchanged.
+    expect(result.id).toBe(202)
+    expect(result.status).toBe('cancelled')
+    expect(result.title).toBe('Weekly Research Sync')
+    expect(result.scheduledAt).toBe('2026-09-24T12:00:00Z')
+  })
+
+  it('never issues a generic Meeting DELETE for a cancellation', async () => {
+    vi.mocked(apiPost).mockResolvedValue(cancelledMeeting)
+
+    await cancelMeetingRecurrenceOccurrence(202)
+
+    expect(apiDelete).not.toHaveBeenCalled()
+  })
+
+  it('surfaces client ApiError on failure', async () => {
+    const error = new ApiError(400, {
+      error:
+        'Only a recurring upcoming meeting can be cancelled.',
+    })
+    vi.mocked(apiPost).mockRejectedValue(error)
+
+    await expect(
+      cancelMeetingRecurrenceOccurrence(202),
+    ).rejects.toEqual(error)
   })
 })

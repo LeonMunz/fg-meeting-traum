@@ -108,6 +108,32 @@ export async function deleteMeeting(
   return apiDelete<void>(`/api/meetings/${meetingId}/`)
 }
 
+/**
+ * Cancel ONE materialized recurring occurrence through the
+ * dedicated Meeting-resource action. The concrete Meeting id is
+ * the ONLY input — no body fields, no occurrence identity (the
+ * server identifies the occurrence from the Meeting itself) — and
+ * the endpoint answers the retained canonical Meeting
+ * representation (`status: cancelled`) for BOTH the initial
+ * cancellation and an idempotent replay. This is the ONLY
+ * supported cancellation path: a Meeting with recurrence
+ * provenance is never hard-deleted through `deleteMeeting` (the
+ * generic DELETE rejects it).
+ *
+ * The path matches the Django registration EXACTLY
+ * (`config/urls.py` → `meeting-cancel`): NO trailing slash — the
+ * same convention as the `start` / `end` / `reopen` Meeting
+ * actions. A trailing slash matches no route and 404s.
+ */
+export async function cancelMeetingRecurrenceOccurrence(
+  meetingId: number,
+): Promise<ApiMeeting> {
+  return apiPost<ApiMeeting>(
+    `/api/meetings/${meetingId}/cancel`,
+    {},
+  )
+}
+
 export async function startMeeting(
   meetingId: number,
 ): Promise<ApiMeeting> {

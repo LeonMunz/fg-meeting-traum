@@ -1766,7 +1766,7 @@ service, which remains the final authority.
   concrete Meeting is rejected with `400` (the domain error) and the
   Meeting is left completely unchanged — not cancelled, not deleted,
   not altered, and no second exclusion is added through this path.
-  The client must use `POST /api/meetings/{meetingId}/cancel/` for a
+  The client must use `POST /api/meetings/{meetingId}/cancel` for a
   materialized upcoming occurrence (see "Single-occurrence
   cancellation (materialized)" below).
 - **Effect on the read API:** the bounded occurrence read API
@@ -1785,7 +1785,7 @@ virtual occurrence
 → exclusion only (no Meeting, no audit event)
 
 materialized upcoming occurrence
-→ POST /api/meetings/{meetingId}/cancel/
+→ POST /api/meetings/{meetingId}/cancel
 → cancelled Meeting + exclusion
 ```
 
@@ -1835,7 +1835,7 @@ through the dedicated cancellation domain operation:
   as if they never happened.
 
 **HTTP action (implemented).**
-`POST /api/meetings/{meetingId}/cancel/` exposes the domain operation
+`POST /api/meetings/{meetingId}/cancel` exposes the domain operation
 above as ONE explicit Meeting-resource action (the route shape and
 error conventions mirror the existing `start` / `end` / `reopen`
 actions and the FollowUp cancel action):

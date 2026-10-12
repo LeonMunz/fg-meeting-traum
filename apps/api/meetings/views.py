@@ -3337,7 +3337,7 @@ class MeetingRecurrenceOccurrenceExcludeView(APIView):
     occurrence drops out of the effective expansion — no `Meeting` is
     created and the recurrence rule is never mutated. This is the
     virtual counterpart of the materialized cancellation action
-    (``POST /api/meetings/{id}/cancel/``); the two paths must not be
+    (``POST /api/meetings/{id}/cancel``); the two paths must not be
     mixed: an occurrence that already has a concrete Meeting is
     REJECTED here with the domain error and that Meeting is left
     completely unchanged.

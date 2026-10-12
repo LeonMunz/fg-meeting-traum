@@ -1,14 +1,17 @@
 #!/usr/bin/env node
 /**
  * Turnkey browser layout check for the Upcoming Meeting row
- * (Slice 21 visual acceptance).
+ * (Slice 21 grid geometry + the compact direct row actions: the
+ * Edit pencil and the destructive trash).
  *
  * Renders the REAL `UpcomingMeetingsList` component (presentation-only)
  * against the REAL production CSS (fresh `vite build`) with the
  * acceptance fixtures, inside a shell that mirrors the app's width
  * chain (fixed 240px sidebar + page padding px-6 / lg:px-8), and
- * measures the COMPUTED grid geometry at the acceptance viewports:
- * 1440 / 1200 / 1100 / 900 / 390.
+ * measures the COMPUTED grid geometry and the direct action group
+ * (presence, 16px icons, 32x32 hit areas, 4px gap, row-edge inset,
+ * hover reveal + destructive hover treatment) at the acceptance
+ * viewports: 1440 / 1200 / 1100 / 900 / 390.
  *
  * This is a component+CSS harness, not the full authenticated app:
  * the row layout under test lives entirely in
@@ -117,6 +120,7 @@ const groups: UpcomingDateGroup[] = [
   {
     date: '2026-09-23',
     label: 'Today',
+    kind: 'today',
     items: [
       {
         id: 'meeting:1',
@@ -132,6 +136,7 @@ const groups: UpcomingDateGroup[] = [
         researchGroupId: 1,
         projectId: null,
         participantIds: [1, 2, 3, 4],
+        actionPermissions: { canEdit: true, canDelete: true, canCancel: false },
       },
       {
         id: 'meeting:2',
@@ -147,6 +152,7 @@ const groups: UpcomingDateGroup[] = [
         researchGroupId: 1,
         projectId: null,
         participantIds: [1, 2, 3, 4],
+        actionPermissions: { canEdit: true, canDelete: true, canCancel: false },
       },
       {
         id: 'meeting:3',
@@ -162,6 +168,7 @@ const groups: UpcomingDateGroup[] = [
         researchGroupId: 1,
         projectId: null,
         participantIds: [1, 2],
+        actionPermissions: { canEdit: true, canDelete: true, canCancel: false },
       },
       {
         id: 'meeting:4',
@@ -177,12 +184,14 @@ const groups: UpcomingDateGroup[] = [
         researchGroupId: 1,
         projectId: null,
         participantIds: [1, 2, 3, 4, 5],
+        actionPermissions: { canEdit: true, canDelete: true, canCancel: false },
       },
     ],
   },
   {
     date: '2026-09-24',
     label: 'Tomorrow',
+    kind: 'tomorrow',
     items: [
       {
         id: 'occurrence:occ-v1',
@@ -198,6 +207,7 @@ const groups: UpcomingDateGroup[] = [
         researchGroupId: 1,
         projectId: null,
         participantIds: [],
+        actionPermissions: null,
       },
     ],
   },
@@ -211,7 +221,10 @@ createRoot(
     loading={false}
     recurrenceLoading={false}
     onNewMeeting={() => {}}
-    onOpenMeeting={() => {}}
+    onOpenRow={() => {}}
+    onEditMeeting={() => {}}
+    onDestructiveAction={() => {}}
+    openingRowIds={new Set<string>()}
   />,
 )
 `,
@@ -386,6 +399,19 @@ try {
           const kebab = row.querySelector(
             'button[aria-label^="Meeting actions"]',
           )
+          const actions = Array.from(
+            row.querySelectorAll(
+              'button[aria-label^="Edit "], button[aria-label^="Delete "], button[aria-label^="Cancel "]',
+            ),
+          ).map((el) => ({
+            label: el.getAttribute('aria-label'),
+            box: box(el),
+            iconFontSize: el.firstElementChild
+              ? getComputedStyle(el.firstElementChild).fontSize
+              : null,
+            color: getComputedStyle(el).color,
+            opacity: getComputedStyle(el).opacity,
+          }))
           const title =
             row.children[1] && row.children[1].children[0]
               ? row.children[1].children[0]
@@ -397,6 +423,7 @@ try {
             rowOverflow: row.scrollWidth - row.clientWidth,
             cells,
             kebab: kebab ? box(kebab) : null,
+            actions,
             title: title
               ? {
                   box: box(title),
@@ -447,8 +474,8 @@ try {
           .map((c) => c.text)
           .find(Boolean) || 'row'
         check(
-          `${label}: four computed tracks (104 / flex / 96 / 48)`,
-          /^104px\s+[\d.]+px\s+96px\s+48px$/.test(row.columns),
+          `${label}: four computed tracks (104 / flex / 96 / 72)`,
+          /^104px\s+[\d.]+px\s+96px\s+72px$/.test(row.columns),
           row.columns,
         )
         check(
@@ -459,17 +486,54 @@ try {
       }
       const plain = byTitle('Project Review')
       if (plain) {
-        check(
-          'Project Review: kebab on the same visual row as Time',
-          plain.kebab != null &&
-            Math.abs(plain.kebab.cy - plain.cells[0].box.cy) <= 8,
-          `kebab.cy=${plain.kebab?.cy} time.cy=${plain.cells[0].box.cy}`,
+        const pencil = plain.actions.find((a) =>
+          a.label.startsWith('Edit '),
+        )
+        const trash = plain.actions.find((a) =>
+          a.label.startsWith('Delete '),
         )
         check(
-          'Project Review: kebab sits 16px in from the row edge',
-          plain.kebab != null &&
-            Math.abs(plain.kebab.right - (plain.row.right - 16)) <= 3,
-          `kebab.right=${plain.kebab?.right} row.right-16=${plain.row.right - 16}`,
+          'Project Review: direct Edit + Delete actions, no three-dot menu',
+          pencil != null &&
+            trash != null &&
+            plain.actions.length === 2 &&
+            plain.kebab == null,
+          `actions=${plain.actions.map((a) => a.label).join(', ')} kebab=${plain.kebab ? 'present' : 'absent'}`,
+        )
+        check(
+          'Project Review: actions on the same visual row as Time',
+          trash != null &&
+            Math.abs(trash.box.cy - plain.cells[0].box.cy) <= 8,
+          `trash.cy=${trash?.box.cy} time.cy=${plain.cells[0].box.cy}`,
+        )
+        check(
+          'Project Review: trash sits 16px in from the row edge',
+          trash != null &&
+            Math.abs(trash.box.right - (plain.row.right - 16)) <= 3,
+          `trash.right=${trash?.box.right} row.right-16=${plain.row.right - 16}`,
+        )
+        check(
+          'Project Review: action hit areas are 32x32 with a 4px gap',
+          pencil != null &&
+            trash != null &&
+            pencil.box.width >= 31 &&
+            pencil.box.width <= 33 &&
+            pencil.box.height >= 31 &&
+            pencil.box.height <= 33 &&
+            trash.box.width >= 31 &&
+            trash.box.width <= 33 &&
+            trash.box.height >= 31 &&
+            trash.box.height <= 33 &&
+            Math.abs(trash.box.left - (pencil.box.right + 4)) <= 1,
+          `pencil=${pencil?.box.width}x${pencil?.box.height} trash=${trash?.box.width}x${trash?.box.height} gap=${pencil && trash ? trash.box.left - pencil.box.right : 'n/a'}`,
+        )
+        check(
+          'Project Review: action icons pinned at 16px',
+          pencil != null &&
+            trash != null &&
+            pencil.iconFontSize === '16px' &&
+            trash.iconFontSize === '16px',
+          `pencil=${pencil?.iconFontSize} trash=${trash?.iconFontSize}`,
         )
         const people = plain.cells[2]
         check(
@@ -486,9 +550,9 @@ try {
         check(
           'Project Review: People column ends before the Actions track',
           Math.abs(
-            people.box.right - (plain.row.right - 16 - 48 - 16),
+            people.box.right - (plain.row.right - 16 - 72 - 16),
           ) <= 3,
-          `people.right=${people.box.right} expected=${plain.row.right - 80}`,
+          `people.right=${people.box.right} expected=${plain.row.right - 104}`,
         )
         check(
           'Project Review: compact row height (~68px)',
@@ -510,8 +574,9 @@ try {
           'Long title: People/Actions regions still present',
           long.cells.length === 4 &&
             long.cells[2].text === '5 people' &&
-            long.kebab != null,
-          `cells=${long.cells.length} people="${long.cells[2].text}"`,
+            long.actions.length >= 1 &&
+            long.kebab == null,
+          `cells=${long.cells.length} people="${long.cells[2].text}" actions=${long.actions.length}`,
         )
         console.log(
           `    note: long title truncated=${long.title?.truncated} (depends on available width)`,
@@ -520,12 +585,117 @@ try {
       const virtual = byTitle('Weekly Research Sync')
       if (virtual) {
         check(
-          'Virtual occurrence: Actions track kept, no unsupported action',
+          'Virtual occurrence: three-dot menu retained, no direct actions',
           virtual.cells.length === 4 &&
-            virtual.kebab == null &&
-            virtual.cells[3].text === '',
-          `cells=${virtual.cells.length} kebab=${virtual.kebab ? 'present' : 'absent'}`,
+            virtual.kebab != null &&
+            virtual.actions.length === 0,
+          `cells=${virtual.cells.length} kebab=${virtual.kebab ? 'present' : 'absent'} actions=${virtual.actions.length}`,
         )
+      }
+
+      // Pointer-device hover treatment, exercised once at the widest
+      // desktop viewport (the geometry itself is asserted at every
+      // desktop width above): the direct actions rest hidden and
+      // reveal with the row; the trash takes the RED destructive
+      // treatment on its own hover.
+      if (width === 1440) {
+        const reviewRow = page.locator('div[role="button"]', {
+          hasText: 'Project Review',
+        })
+        if (await reviewRow.count() > 0) {
+          await reviewRow.first().hover()
+          await page.waitForTimeout(400) // 150ms opacity transition
+          const revealed = await page.evaluate(() => {
+            const rows = Array.from(
+              document.querySelectorAll(
+                'div[class*="min-h-[68px]"]',
+              ),
+            )
+            const r = rows.find((x) =>
+              x.textContent.includes('Project Review'),
+            )
+            if (!r) {
+              return null
+            }
+            return Array.from(
+              r.querySelectorAll(
+                'button[aria-label^="Edit "], button[aria-label^="Delete "], button[aria-label^="Cancel "]',
+              ),
+            ).map((b) => ({
+              label: b.getAttribute('aria-label'),
+              opacity: getComputedStyle(b).opacity,
+            }))
+          })
+          check(
+            'Project Review: direct actions revealed on row hover',
+            revealed != null &&
+              revealed.length === 2 &&
+              revealed.every((a) => Number(a.opacity) >= 0.95),
+            revealed
+              ? revealed.map((a) => `${a.label}=${a.opacity}`).join(', ')
+              : 'row not found',
+          )
+
+          await page.hover(
+            'button[aria-label="Delete Project Review"]',
+          )
+          await page.waitForTimeout(400)
+          const dangerProbe = await page.evaluate(() => {
+            const probe = document.createElement('span')
+            probe.style.color = 'var(--color-danger)'
+            probe.style.background = 'var(--color-danger-bg)'
+            document.body.appendChild(probe)
+            const s = getComputedStyle(probe)
+            const out = {
+              color: s.color,
+              background: s.backgroundColor,
+            }
+            probe.remove()
+            return out
+          })
+          const trashHover = await page.evaluate(() => {
+            const b = document.querySelector(
+              'button[aria-label="Delete Project Review"]',
+            )
+            if (!b) {
+              return null
+            }
+            const s = getComputedStyle(b)
+            return {
+              color: s.color,
+              background: s.backgroundColor,
+            }
+          })
+          check(
+            'Trash: red destructive hover treatment',
+            trashHover != null &&
+              trashHover.color === dangerProbe.color &&
+              trashHover.background === dangerProbe.background,
+            `color=${trashHover?.color}/${dangerProbe.color} bg=${trashHover?.background}/${dangerProbe.background}`,
+          )
+
+          await page.mouse.move(5, 5)
+          await page.waitForTimeout(400)
+          const restOpacity = await page.evaluate(() => {
+            const rows = Array.from(
+              document.querySelectorAll(
+                'div[class*="min-h-[68px]"]',
+              ),
+            )
+            const r = rows.find((x) =>
+              x.textContent.includes('Project Review'),
+            )
+            const b = r
+              ? r.querySelector('button[aria-label^="Delete "]')
+              : null
+            return b ? getComputedStyle(b).opacity : null
+          })
+          check(
+            'Project Review: actions rest hidden without hover',
+            restOpacity != null && Number(restOpacity) <= 0.05,
+            `opacity=${restOpacity}`,
+          )
+        }
       }
     }
 
@@ -535,8 +705,8 @@ try {
           .map((c) => c.text)
           .find(Boolean) || 'row'
         check(
-          `${label}: three computed tracks (88 / flex / 40)`,
-          /^88px\s+[\d.]+px\s+40px$/.test(row.columns),
+          `${label}: three computed tracks (88 / flex / 72)`,
+          /^88px\s+[\d.]+px\s+72px$/.test(row.columns),
           row.columns,
         )
         const people = row.cells[2]
@@ -555,16 +725,24 @@ try {
           `metadata="${peopleText}"`,
         )
         check(
-          'Project Review: kebab on the same visual row as Time',
-          plain.kebab != null &&
-            Math.abs(plain.kebab.cy - plain.cells[0].box.cy) <= 8,
-          `kebab.cy=${plain.kebab?.cy} time.cy=${plain.cells[0].box.cy}`,
+          'Project Review: direct Edit + Delete actions, no three-dot menu',
+          plain.actions.length === 2 && plain.kebab == null,
+          `actions=${plain.actions.map((a) => a.label).join(', ')} kebab=${plain.kebab ? 'present' : 'absent'}`,
+        )
+        const trash = plain.actions.find((a) =>
+          a.label.startsWith('Delete '),
         )
         check(
-          'Project Review: kebab 16px in from the row edge',
-          plain.kebab != null &&
-            Math.abs(plain.kebab.right - (plain.row.right - 16)) <= 3,
-          `kebab.right=${plain.kebab?.right}`,
+          'Project Review: trash on the same visual row as Time',
+          trash != null &&
+            Math.abs(trash.box.cy - plain.cells[0].box.cy) <= 8,
+          `trash.cy=${trash?.box.cy} time.cy=${plain.cells[0].box.cy}`,
+        )
+        check(
+          'Project Review: trash 16px in from the row edge',
+          trash != null &&
+            Math.abs(trash.box.right - (plain.row.right - 16)) <= 3,
+          `trash.right=${trash?.box.right}`,
         )
       }
     }
