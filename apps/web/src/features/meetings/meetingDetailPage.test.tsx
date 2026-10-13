@@ -850,16 +850,17 @@ describe('MeetingDetailPage shared header color semantics', () => {
     )
   })
 
-  it('classifies Start meeting with the approved Stitch primary treatment', () => {
-    // The approved design uses its own accent button treatment
-    // (#6E9BF5 / #101114) for the Upcoming header; the Start
-    // action keeps the canonical focus ring with that palette.
+  it('classifies Start meeting with the canonical primary-action tokens', () => {
+    // The Start action is the Upcoming header's primary lifecycle
+    // action: it uses the themeable `action` role (frozen legacy
+    // Light treatment; the approved interaction accent in Dark)
+    // with the canonical focus ring.
     const start = classNameOf(MEETING_DETAIL_SOURCE, 'Start meeting', 'handleStartMeeting')
-    expect(start).toContain('bg-[#6E9BF5]')
-    expect(start).toContain('text-[#101114]')
-    expect(start).toContain('hover:bg-[#5a87e0]')
+    expect(start).toContain('bg-action')
+    expect(start).toContain('text-text-inverse')
+    expect(start).toContain('hover:bg-action-hover')
     expect(start).toContain('focus-visible:ring-2')
-    expect(start).toContain('focus-visible:ring-[#6898F0]')
+    expect(start).toContain('focus-visible:ring-focus')
   })
 
   it('classifies End meeting as a restrained destructive action', () => {

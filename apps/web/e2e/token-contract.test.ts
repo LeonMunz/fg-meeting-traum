@@ -204,7 +204,7 @@ const darkTokens: Record<string, string> = {
 
   // Lifecycle / primary action Dark treatment
   'color-status-active-bg': '#2e3135',
-  'color-status-active-text': '#edef0',
+  'color-status-active-text': '#edeef0',
   'color-success-text': '#3dd68c',
   'color-action': '#3e63dd',
   'color-action-hover': '#5472e4',

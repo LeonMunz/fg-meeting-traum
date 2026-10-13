@@ -736,14 +736,14 @@ function QuickAddSectionSelect({
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label="Quick add section"
-        className="flex shrink-0 items-center gap-1 text-[13px] font-medium text-[#E6E6E6] outline-none transition hover:text-white focus-visible:ring-2 focus-visible:ring-[#6898F0] disabled:opacity-50"
+        className="flex shrink-0 items-center gap-1 text-[13px] font-medium text-text outline-none transition hover:text-text focus-visible:ring-2 focus-visible:ring-focus disabled:opacity-50"
       >
         <span>
           {selected ? selected.name : 'Select a section'}
         </span>
         <span
           aria-hidden="true"
-          className="material-symbols-outlined text-[14px] text-[#8A8A8A]"
+          className="material-symbols-outlined text-[14px] text-text-muted"
         >
           arrow_drop_down
         </span>
@@ -3824,7 +3824,7 @@ export function MeetingDetailPage() {
         event.preventDefault()
         void handleAddSection()
       }}
-      className="flex h-9 w-full items-center gap-2 rounded-md bg-[#222222] px-2"
+      className="flex h-9 w-full items-center gap-2 rounded-md bg-surface-subtle px-2"
     >
       <input
         ref={sectionComposerInputRef}
@@ -3842,7 +3842,7 @@ export function MeetingDetailPage() {
         }}
         placeholder="Section name"
         aria-label="New section name"
-        className="h-7 min-w-0 flex-1 bg-transparent px-1.5 text-[15px] leading-[22px] text-[#E6E6E6] outline-none placeholder:text-[#8A8A8A]"
+        className="h-7 min-w-0 flex-1 bg-transparent px-1.5 text-[15px] leading-[22px] text-text outline-none placeholder:text-text-muted"
       />
 
       <button
@@ -3851,7 +3851,7 @@ export function MeetingDetailPage() {
           addingSection ||
           !newSectionName.trim()
         }
-        className="h-7 shrink-0 rounded px-2 text-[13px] font-medium text-[#E6E6E6] outline-none transition hover:bg-white/[0.06] focus-visible:ring-2 focus-visible:ring-[#6898F0] disabled:opacity-45"
+        className="h-7 shrink-0 rounded px-2 text-[13px] font-medium text-text outline-none transition hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus disabled:opacity-45"
       >
         {addingSection ? 'Adding…' : 'Add'}
       </button>
@@ -3859,7 +3859,7 @@ export function MeetingDetailPage() {
       <button
         type="button"
         onClick={closeSectionComposer}
-        className="h-7 shrink-0 rounded px-2 text-[13px] font-medium text-[#A3A3A3] outline-none transition hover:bg-white/[0.06] hover:text-[#E6E6E6] focus-visible:ring-2 focus-visible:ring-[#6898F0]"
+        className="h-7 shrink-0 rounded px-2 text-[13px] font-medium text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus"
       >
         Cancel
       </button>
@@ -3870,7 +3870,7 @@ export function MeetingDetailPage() {
       onClick={() =>
         setSectionComposerOpen(true)
       }
-      className="flex h-7 w-full items-center gap-2 rounded-md px-2 text-left text-xs leading-[18px] text-[#A3A3A3] outline-none transition hover:bg-[#222222] hover:text-[#E6E6E6] focus-visible:ring-2 focus-visible:ring-[#6898F0]"
+      className="flex h-7 w-full items-center gap-2 rounded-md px-2 text-left text-xs leading-[18px] text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus"
     >
       <span>+ Add section</span>
     </button>
@@ -4070,19 +4070,19 @@ export function MeetingDetailPage() {
           {/* Breadcrumb */}
           <nav
             aria-label="Breadcrumb"
-            className="mb-1.5 flex select-none items-center gap-1.5 text-[13px] leading-[18px] text-[#8A8A8A]"
+            className="mb-1.5 flex select-none items-center gap-1.5 text-[13px] leading-[18px] text-text-muted"
           >
             <button
               type="button"
               onClick={() => navigate('/meetings')}
-              className="-mx-1 rounded px-1 outline-none transition hover:text-[#E6E6E6] focus-visible:ring-2 focus-visible:ring-[#6898F0]"
+              className="-mx-1 rounded px-1 outline-none transition hover:text-text focus-visible:ring-2 focus-visible:ring-focus"
             >
               Meetings
             </button>
 
             {activeResearchGroup?.name && (
               <>
-                <span aria-hidden="true" className="text-[#666666]">
+                <span aria-hidden="true" className="text-text-faded">
                   /
                 </span>
 
@@ -4095,7 +4095,7 @@ export function MeetingDetailPage() {
 
           {/* Title row */}
           <div className="mb-2.5 mt-1 flex items-center justify-between gap-6">
-            <h1 className="min-w-0 truncate text-2xl font-semibold leading-8 tracking-tight text-[#E6E6E6]">
+            <h1 className="min-w-0 truncate text-2xl font-semibold leading-8 tracking-tight text-text">
               {meeting.title}
             </h1>
 
@@ -4105,7 +4105,7 @@ export function MeetingDetailPage() {
                   type="button"
                   disabled={updatingMeeting}
                   onClick={() => void handleStartMeeting()}
-                  className="flex items-center gap-1.5 rounded-md bg-[#6E9BF5] px-3.5 py-1.5 text-[13px] font-medium text-[#101114] shadow-xs outline-none transition hover:bg-[#5a87e0] focus-visible:ring-2 focus-visible:ring-[#6898F0] focus-visible:ring-offset-2 focus-visible:ring-offset-canvas disabled:opacity-60"
+                  className="flex items-center gap-1.5 rounded-md bg-action px-3.5 py-1.5 text-[13px] font-medium text-text-inverse shadow-xs outline-none transition hover:bg-action-hover focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-canvas disabled:opacity-60"
                 >
                   <span aria-hidden="true" className="material-symbols-outlined text-[16px]">
                     play_arrow
@@ -4136,7 +4136,7 @@ export function MeetingDetailPage() {
 
           {/* Metadata row: date · time · context | participant
               stack · Add user */}
-          <div className="mb-6 flex items-center gap-4 text-[13px] leading-[18px] text-[#A3A3A3]">
+          <div className="mb-6 flex items-center gap-4 text-[13px] leading-[18px] text-text-muted">
             <div className="flex items-center gap-1.5">
               <span>
                 {formatMeetingDayLabel(
@@ -4157,7 +4157,7 @@ export function MeetingDetailPage() {
               </span>
             </div>
 
-            <span aria-hidden="true" className="text-[#444444]">
+            <span aria-hidden="true" className="text-text-faded">
               |
             </span>
 
@@ -4171,7 +4171,7 @@ export function MeetingDetailPage() {
                   <span
                     key={participant.id}
                     title={getPersonName(participant.user)}
-                    className="flex h-6 w-6 select-none items-center justify-center rounded-full bg-[#2A2A2A] text-[10px] font-medium text-[#E6E6E6] ring-2 ring-canvas"
+                    className="flex h-6 w-6 select-none items-center justify-center rounded-full bg-surface-muted text-[10px] font-medium text-text ring-2 ring-canvas"
                   >
                     {getInitials(participant.user)}
                   </span>
@@ -4179,7 +4179,7 @@ export function MeetingDetailPage() {
               )}
 
               {participants.length > 4 && (
-                <span className="flex h-6 w-6 select-none items-center justify-center rounded-full bg-[#202020] text-[10px] font-medium text-[#A3A3A3] ring-2 ring-canvas">
+                <span className="flex h-6 w-6 select-none items-center justify-center rounded-full bg-surface-subtle text-[10px] font-medium text-text-muted ring-2 ring-canvas">
                   +{participants.length - 4}
                 </span>
               )}
@@ -4190,7 +4190,7 @@ export function MeetingDetailPage() {
                 type="button"
                 onClick={toggleParticipantManagement}
                 aria-expanded={managingParticipants}
-                className="ml-[-4px] rounded text-[13px] font-medium text-[#6E9BF5] outline-none hover:underline focus-visible:ring-2 focus-visible:ring-[#6898F0]"
+                className="ml-[-4px] rounded text-[13px] font-medium text-accent-text outline-none hover:underline focus-visible:ring-2 focus-visible:ring-focus"
               >
                 {managingParticipants ? 'Done' : 'Add user'}
               </button>
@@ -4199,9 +4199,9 @@ export function MeetingDetailPage() {
 
           {/* Quick Add bar */}
           {canPrepare && (
-            <div className="flex h-12 items-center justify-between rounded-lg border border-white/[0.06] bg-[#1A1A1A] px-4 shadow-xs">
+            <div className="flex h-12 items-center justify-between rounded-lg border border-border-subtle bg-surface px-4 shadow-xs">
               <div className="flex min-w-0 flex-1 items-center gap-3">
-                <span aria-hidden="true" className="material-symbols-outlined text-[16px] text-[#A3A3A3]">
+                <span aria-hidden="true" className="material-symbols-outlined text-[16px] text-text-muted">
                   add
                 </span>
 
@@ -4214,7 +4214,7 @@ export function MeetingDetailPage() {
                   disabled={visibleSections.length === 0}
                 />
 
-                <div className="mx-1 h-4 w-[1px] shrink-0 bg-white/[0.08]" />
+                <div className="mx-1 h-4 w-[1px] shrink-0 bg-border-subtle" />
 
                 <input
                   ref={topQuickAddInputRef}
@@ -4240,12 +4240,12 @@ export function MeetingDetailPage() {
                   }}
                   placeholder="Add a topic…"
                   aria-label="Add a topic"
-                  className="min-w-0 flex-1 bg-transparent pr-2 text-[13px] text-[#E6E6E6] outline-none placeholder:text-[#8A8A8A] disabled:opacity-50"
+                  className="min-w-0 flex-1 bg-transparent pr-2 text-[13px] text-text outline-none placeholder:text-text-muted disabled:opacity-50"
                 />
               </div>
 
               <div className="flex shrink-0 items-center gap-1.5">
-                <kbd className="select-none rounded border border-white/[0.08] bg-white/[0.04] px-1.5 py-0.5 font-sans text-[11px] text-[#8A8A8A]">
+                <kbd className="select-none rounded border border-border-subtle bg-surface-subtle px-1.5 py-0.5 font-sans text-[11px] text-text-muted">
                   {isMacLike ? '⌘K' : 'Ctrl K'}
                 </kbd>
               </div>
@@ -4313,7 +4313,7 @@ export function MeetingDetailPage() {
             <>
               <span
                 aria-hidden="true"
-                className="hidden h-3.5 w-[1px] shrink-0 bg-white/10 sm:block"
+                className="hidden h-3.5 w-[1px] shrink-0 bg-border-subtle sm:block"
               />
 
               {/* Participant avatar stack (actual participants)
@@ -4875,12 +4875,12 @@ export function MeetingDetailPage() {
           </nav>
 
           {/* RIGHT: the approved Stitch focus pane — the quiet
-              #1A1A1A container (low-contrast border, 8px radius,
-              24px padding, ~460px minimum height) carrying the
-              topic context, the canonical Markdown document, the
-              item Notes, and the execution actions. The pane
-              grows with long documents: no internal scroll
-              region, no clamping. */}
+              sunken `surface-subtle` container (low-contrast
+              border, 8px radius, 24px padding, ~460px minimum
+              height) carrying the topic context, the canonical
+              Markdown document, the item Notes, and the execution
+              actions. The pane grows with long documents: no
+              internal scroll region, no clamping. */}
           <main
             aria-label="Agenda item"
             className="min-w-0 flex-1"
@@ -5680,17 +5680,17 @@ export function MeetingDetailPage() {
                 <section
                   key={section.id}
                   aria-label={section.name}
-                  className="flex flex-col rounded-lg border border-white/[0.06] bg-[#1A1A1A] px-4 pb-1.5 pt-4"
+                  className="flex flex-col rounded-lg border border-border-subtle bg-surface px-4 pb-1.5 pt-4"
                 >
                   {/* Section header */}
                   <div className="group/menu flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                      <h2 className="text-[15px] font-semibold leading-5 text-[#E6E6E6]">
+                      <h2 className="text-[15px] font-semibold leading-5 text-text">
                         {section.name}
                       </h2>
 
                       {sectionItems.length > 0 && (
-                        <span className="text-[13px] leading-[18px] text-[#c8c6c5]">
+                        <span className="text-[13px] leading-[18px] text-text-muted">
                           {sectionItems.length}
                         </span>
                       )}
@@ -5780,7 +5780,7 @@ export function MeetingDetailPage() {
                   </div>
 
                   {section.description && (
-                    <p className="mb-1 mt-1 text-[13px] leading-[18px] text-[#A3A3A3]">
+                    <p className="mb-1 mt-1 text-[13px] leading-[18px] text-text-muted">
                       {section.description}
                     </p>
                   )}
@@ -5848,7 +5848,7 @@ export function MeetingDetailPage() {
                   {/* Items */}
                   <div className="flex flex-col">
                     {sectionItems.length === 0 && !canPrepare && (
-                      <p className="px-2 py-1 text-[13px] leading-[18px] text-[#A3A3A3]">
+                      <p className="px-2 py-1 text-[13px] leading-[18px] text-text-muted">
                         No agenda items yet.
                       </p>
                     )}
@@ -5894,10 +5894,10 @@ export function MeetingDetailPage() {
                               />
                             </div>
                           ) : (
-                            <div className="group/item flex flex-wrap items-start gap-x-3 gap-y-1.5 rounded-md px-2 py-1.5 transition hover:bg-[#222222]">
+                            <div className="group/item flex flex-wrap items-start gap-x-3 gap-y-1.5 rounded-md px-2 py-1.5 transition hover:bg-surface-hover">
                               <span
                                 aria-hidden="true"
-                                className="material-symbols-outlined mt-[3px] w-4 shrink-0 cursor-grab select-none text-[14px] text-[#c8c6c5] opacity-0 transition-opacity group-hover/item:opacity-100"
+                                className="material-symbols-outlined mt-[3px] w-4 shrink-0 cursor-grab select-none text-[14px] text-text-muted opacity-0 transition-opacity group-hover/item:opacity-100"
                               >
                                 drag_indicator
                               </span>
@@ -5929,9 +5929,9 @@ export function MeetingDetailPage() {
                               <div className="flex shrink-0 items-center gap-2">
                                 {/* Attribution: always visible, at rest
                                     and on row hover/focus alike. */}
-                                <div className="flex w-[200px] shrink-0 items-center justify-start gap-2 text-[13px] leading-[18px] text-[#c8c6c5]">
+                                <div className="flex w-[200px] shrink-0 items-center justify-start gap-2 text-[13px] leading-[18px] text-text-muted">
                                   {author && (
-                                    <span className="flex h-5 w-5 shrink-0 select-none items-center justify-center rounded-full bg-[#2A2A2A] text-[10px]">
+                                    <span className="flex h-5 w-5 shrink-0 select-none items-center justify-center rounded-full bg-surface-muted text-[10px]">
                                       {getInitials(author)}
                                     </span>
                                   )}
@@ -6073,7 +6073,7 @@ export function MeetingDetailPage() {
                             [section.id]: '',
                           }))
                         }}
-                        className="flex h-7 w-full items-center gap-2 rounded-md px-2 text-left text-[13px] leading-[18px] text-[#A3A3A3] outline-none transition hover:bg-[#222222] hover:text-[#E6E6E6] focus-visible:ring-2 focus-visible:ring-[#6898F0]"
+                        className="flex h-7 w-full items-center gap-2 rounded-md px-2 text-left text-[13px] leading-[18px] text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus"
                       >
                         <span aria-hidden="true" className="material-symbols-outlined w-4 shrink-0 select-none text-[14px] opacity-0">
                           drag_indicator
@@ -6125,7 +6125,7 @@ export function MeetingDetailPage() {
 
       {deleteDialogOpen && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/25 px-4 py-8 backdrop-blur-[2px]"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-overlay-scrim px-4 py-8 backdrop-blur-[2px]"
           onMouseDown={(event) => {
             if (
               event.target === event.currentTarget &&
@@ -6347,7 +6347,7 @@ export function MeetingDetailPage() {
             />
           </Suspense>
         ) : (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay-soft-scrim">
             <div className="flex items-center gap-2 rounded-xl border border-border-subtle bg-surface px-5 py-4 text-sm text-text-muted shadow-xl">
               <span aria-hidden="true" className="material-symbols-outlined animate-spin text-[18px]">
                 refresh

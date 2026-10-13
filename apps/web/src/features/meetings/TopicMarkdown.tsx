@@ -97,7 +97,7 @@ export function TopicMarkdownDisplay({
       onKeyDown={handleKeyDown}
       className={
         onEdit != null
-          ? 'cursor-text rounded-md outline-none focus-visible:ring-2 focus-visible:ring-[#6898F0] focus-visible:ring-offset-2 focus-visible:ring-offset-[#1A1A1A]'
+          ? 'cursor-text rounded-md outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface'
           : undefined
       }
     >
@@ -234,7 +234,7 @@ export function TopicMarkdownComposer({
         event.preventDefault()
         void submit()
       }}
-      className="overflow-hidden rounded-lg border border-white/[0.08] bg-[#222222]"
+      className="overflow-hidden rounded-lg border border-border-subtle bg-surface-subtle"
     >
       <textarea
         ref={textareaRef}
@@ -255,26 +255,26 @@ export function TopicMarkdownComposer({
         }
         placeholder={placeholder}
         rows={4}
-        className="block max-w-full min-h-[132px] w-full resize-none overflow-hidden whitespace-pre-wrap break-words bg-transparent px-3 py-2.5 text-[15px] leading-[22px] text-[#E6E6E6] outline-none placeholder:text-[#8A8A8A]"
+        className="block max-w-full min-h-[132px] w-full resize-none overflow-hidden whitespace-pre-wrap break-words bg-transparent px-3 py-2.5 text-[15px] leading-[22px] text-text outline-none placeholder:text-text-muted"
       />
 
       {error != null && (
         <p
           role="alert"
-          className="border-t border-white/[0.06] px-3 pb-1 pt-2 text-[13px] leading-[18px] text-danger"
+          className="border-t border-border-subtle px-3 pb-1 pt-2 text-[13px] leading-[18px] text-danger"
         >
           {error}
         </p>
       )}
 
-      <div className="flex items-center gap-2 border-t border-white/[0.06] px-2 py-1.5">
+      <div className="flex items-center gap-2 border-t border-border-subtle px-2 py-1.5">
         <button
           type="submit"
           disabled={
             saving ||
             draft.trim() === ''
           }
-          className="h-7 shrink-0 rounded px-2 text-[13px] font-medium text-[#E6E6E6] outline-none transition hover:bg-white/[0.06] focus-visible:ring-2 focus-visible:ring-[#6898F0] disabled:opacity-45"
+          className="h-7 shrink-0 rounded px-2 text-[13px] font-medium text-text outline-none transition hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus disabled:opacity-45"
         >
           {saving ? 'Saving…' : 'Save'}
         </button>
@@ -283,7 +283,7 @@ export function TopicMarkdownComposer({
           type="button"
           disabled={saving}
           onClick={onCancel}
-          className="h-7 shrink-0 rounded px-2 text-[13px] font-medium text-[#A3A3A3] outline-none transition hover:bg-white/[0.06] hover:text-[#E6E6E6] focus-visible:ring-2 focus-visible:ring-[#6898F0] disabled:opacity-45"
+          className="h-7 shrink-0 rounded px-2 text-[13px] font-medium text-text-muted outline-none transition hover:bg-surface-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus disabled:opacity-45"
         >
           Cancel
         </button>
