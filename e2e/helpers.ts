@@ -46,32 +46,38 @@ export async function quickAddAgendaItem(
       }),
     )
 
+  // Meeting detail first renders a loading shell. Wait until this
+  // exact Section exposes one of the mutually exclusive Upcoming or
+  // Live quick-add controls before deciding which interaction to use.
+  // An absent Upcoming control is only meaningful after this wait.
+  await expect(
+    composerInput
+      .or(composerTrigger)
+      .or(liveInput)
+      .or(addButton),
+  ).toBeVisible()
+
+  const usesPreparationComposer = await composerInput
+    .or(composerTrigger)
+    .isVisible()
+
   // The inline composer collapses after a successful submit and
   // stays open after a failed one. If one is already open for
   // this exact section, reuse it; otherwise open it via its
   // trigger (the trigger is hidden while the composer is open).
-  if (await composerInput.isVisible().catch(() => false)) {
-    // Preparation composer already open: use it directly.
-  } else if (
-    await liveInput.isVisible().catch(() => false)
-  ) {
-    // Live quick-add already open: use it directly.
-  } else if (
-    await composerTrigger.isVisible().catch(() => false)
-  ) {
-    await composerTrigger.scrollIntoViewIfNeeded()
-    await composerTrigger.click()
-    await composerInput.waitFor({ state: 'visible' })
+  if (usesPreparationComposer) {
+    if (await composerTrigger.isVisible()) {
+      await composerTrigger.scrollIntoViewIfNeeded()
+      await composerTrigger.click()
+      await composerInput.waitFor({ state: 'visible' })
+    }
   } else {
-    await addButton.scrollIntoViewIfNeeded()
-    await addButton.click()
-    await liveInput.waitFor({ state: 'visible' })
+    if (await addButton.isVisible()) {
+      await addButton.scrollIntoViewIfNeeded()
+      await addButton.click()
+      await liveInput.waitFor({ state: 'visible' })
+    }
   }
-
-  const usesPreparationComposer =
-    await composerInput
-      .isVisible()
-      .catch(() => false)
 
   if (usesPreparationComposer) {
     await composerInput.fill(title)

@@ -1794,11 +1794,22 @@ describe('Live Meeting focus pane (autosaving MeetingNotes)', () => {
         value: 'Note that becomes work.',
       },
     })
-    fireEvent.click(
-      screen.getByRole('button', {
-        name: 'Create work item',
-      }),
-    )
+    const workItemButton = screen.getByRole(
+      'button',
+      { name: 'Create work item' },
+    ) as HTMLElement
+
+    // Reproduce the browser's pointer order: pointerdown on the
+    // action moves focus out of the textarea before pointerup and
+    // click. That internal focus transition must not trigger the
+    // composer's focus-leave autosave ahead of the action.
+    fireEvent.pointerDown(workItemButton)
+    workItemButton.focus()
+    expect(
+      meetingsApi.createMeetingNote,
+    ).not.toHaveBeenCalled()
+    fireEvent.pointerUp(workItemButton)
+    fireEvent.click(workItemButton, { detail: 1 })
 
     // The Note is persisted FIRST (the Work Item needs the
     // persisted Note as its source)…
@@ -1837,6 +1848,179 @@ describe('Live Meeting focus pane (autosaving MeetingNotes)', () => {
         ),
       ).toBeTruthy()
     })
+    expect(
+      meetingsApi.createMeetingNote,
+    ).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the Work Item intent when keyboard focus moves from the draft to the action', async () => {
+    let resolveCreate: (
+      note: ApiMeetingNote,
+    ) => void = () => {}
+    vi.mocked(
+      meetingsApi.createMeetingNote,
+    ).mockImplementation(() =>
+      new Promise((resolve) => {
+        resolveCreate = resolve
+      }),
+    )
+
+    renderLiveWithNote()
+    await screen.findByRole('button', {
+      name: NOTE_TRIGGER_NAME,
+    })
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Add note' }),
+    )
+    const editor = await screen.findByRole(
+      'textbox',
+      { name: 'Add note to Journal submission deadline' },
+    )
+    fireEvent.change(editor, {
+      target: { value: 'Keyboard-created work.' },
+    })
+
+    const workItemButton = screen.getByRole(
+      'button',
+      { name: 'Create work item' },
+    ) as HTMLElement
+
+    // Tab moves focus to the action. The browser then synthesizes
+    // a detail=0 click for Enter/Space activation.
+    workItemButton.focus()
+    expect(workItemButton).toHaveFocus()
+    expect(
+      meetingsApi.createMeetingNote,
+    ).not.toHaveBeenCalled()
+    fireEvent.keyDown(workItemButton, { key: 'Enter' })
+    fireEvent.click(workItemButton, { detail: 0 })
+    fireEvent.keyUp(workItemButton, { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(
+        meetingsApi.createMeetingNote,
+      ).toHaveBeenCalledWith(41, {
+        content: 'Keyboard-created work.',
+      })
+    })
+    expect(
+      meetingsApi.createMeetingNote,
+    ).toHaveBeenCalledTimes(1)
+
+    resolveCreate(
+      makeNote({
+        id: 72,
+        content: 'Keyboard-created work.',
+      }),
+    )
+    expect(
+      await screen.findByRole('dialog', {
+        name: 'Create work item',
+      }),
+    ).toBeVisible()
+    expect(
+      meetingsApi.createMeetingNote,
+    ).toHaveBeenCalledTimes(1)
+  })
+
+  it('autosaves after keyboard focus passes through the action and leaves the composer', async () => {
+    vi.mocked(
+      meetingsApi.createMeetingNote,
+    ).mockResolvedValue(
+      makeNote({
+        id: 72,
+        content: 'Autosave after the action.',
+      }),
+    )
+
+    renderLiveWithNote()
+    await screen.findByRole('button', {
+      name: NOTE_TRIGGER_NAME,
+    })
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Add note' }),
+    )
+    const editor = await screen.findByRole(
+      'textbox',
+      { name: 'Add note to Journal submission deadline' },
+    )
+    fireEvent.change(editor, {
+      target: { value: 'Autosave after the action.' },
+    })
+
+    const workItemButton = screen.getByRole(
+      'button',
+      { name: 'Create work item' },
+    ) as HTMLElement
+    workItemButton.focus()
+    expect(
+      meetingsApi.createMeetingNote,
+    ).not.toHaveBeenCalled()
+
+    // A second Tab leaves the whole composer. With no Work Item
+    // activation, this remains the ordinary focus-leave autosave.
+    const doneButton = screen.getByRole(
+      'button',
+      { name: DONE_BUTTON_NAME },
+    ) as HTMLElement
+    doneButton.focus()
+
+    await waitFor(() => {
+      expect(
+        meetingsApi.createMeetingNote,
+      ).toHaveBeenCalledWith(41, {
+        content: 'Autosave after the action.',
+      })
+    })
+    expect(
+      screen.queryByRole('dialog', {
+        name: 'Create work item',
+      }),
+    ).toBeNull()
+  })
+
+  it('keeps a Work Item draft recoverable when Note creation fails', async () => {
+    vi.mocked(
+      meetingsApi.createMeetingNote,
+    ).mockRejectedValue(
+      new Error('Simulated create failure.'),
+    )
+
+    renderLiveWithNote()
+    await screen.findByRole('button', {
+      name: NOTE_TRIGGER_NAME,
+    })
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Add note' }),
+    )
+    const editor = await screen.findByRole(
+      'textbox',
+      { name: 'Add note to Journal submission deadline' },
+    )
+    fireEvent.change(editor, {
+      target: { value: 'Recover this draft.' },
+    })
+
+    const workItemButton = screen.getByRole(
+      'button',
+      { name: 'Create work item' },
+    ) as HTMLElement
+    workItemButton.focus()
+    fireEvent.click(workItemButton, { detail: 0 })
+
+    expect(
+      await screen.findByRole('alert'),
+    ).toHaveTextContent('Simulated create failure.')
+    expect(
+      screen.getByRole('textbox', {
+        name: 'Add note to Journal submission deadline',
+      }),
+    ).toHaveValue('Recover this draft.')
+    expect(
+      screen.queryByRole('dialog', {
+        name: 'Create work item',
+      }),
+    ).toBeNull()
     expect(
       meetingsApi.createMeetingNote,
     ).toHaveBeenCalledTimes(1)

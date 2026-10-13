@@ -8,6 +8,7 @@ import {
   datePartPlusDays,
   login,
   openProjects,
+  quickAddAgendaItem,
   replaceControlValue,
 } from './helpers'
 
@@ -293,33 +294,9 @@ test(
       /\/meetings\/\d+$/,
     )
 
-    // The Meeting is Upcoming: the redesigned Meeting Detail
-    // prepares agenda items through the per-section quick add
-    // (the legacy standalone "Agenda item" + "Notes" form no
-    // longer exists, and Notes are a Live Meeting concept).
-    const agendaSection = page
-      .locator('section')
-      .filter({
-        hasText: 'Agenda',
-      })
-
-    await agendaSection
-      .getByRole('button', {
-        name: 'Add first item',
-        exact: true,
-      })
-      .click()
-
-    await page
-      .getByLabel('Add item to Agenda')
-      .fill(agendaTitle)
-
-    await agendaSection
-      .getByRole('button', {
-        name: 'Add',
-        exact: true,
-      })
-      .click()
+    // The Meeting is Upcoming: prepare the agenda through the
+    // canonical per-Section Markdown topic composer.
+    await quickAddAgendaItem(page, agendaTitle)
 
     const agendaItem =
       page

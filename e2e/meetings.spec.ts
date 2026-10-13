@@ -304,14 +304,14 @@ test(
         .getByText('Current', { exact: true }),
     ).toBeAttached()
 
-    // The current item is shown as the Current Item heading.
+    // The Live Focus Pane shows the current item's canonical topic
+    // content through the read-only Markdown document renderer.
     const workspace = page.getByRole('main', {
       name: 'Agenda item',
     })
 
     await expect(
-      workspace.getByRole('heading', {
-        name: AGENDA_TITLE,
+      workspace.getByText(AGENDA_TITLE, {
         exact: true,
       }),
     ).toBeVisible()
@@ -341,8 +341,7 @@ test(
     // source stays selected so the Live detail pane keeps useful
     // context instead of becoming empty immediately.
     await expect(
-      workspace.getByRole('heading', {
-        name: AGENDA_TITLE,
+      workspace.getByText(AGENDA_TITLE, {
         exact: true,
       }),
     ).toBeVisible()
@@ -363,22 +362,25 @@ test(
       }),
     ).toBeVisible()
 
-    // Participant state persists across the reload. While Live the
-    // participants bar (avatar chips) is intentionally hidden, so the
-    // persisted participant set is represented by the header metadata
-    // count: Alex (creator) + Chris (added before Start).
-    //
-    // The count renders as <span>{n}</span>{' '}{plural}, i.e. three
-    // separate text nodes, so an exact single-node match fails. A
-    // regex on the metadata <span> (the only element whose text spans
-    // "N participants") matches reliably. Scope to the <header> that
-    // wraps the meeting title so this is not a page-global match.
+    // Participant state persists across the reload. Scope the current
+    // Live header's avatar group, then prove both the creator and the
+    // invited participant remain represented by their names.
     const header = page
       .getByRole('heading', { name: MEETING_TITLE, exact: true })
       .locator('xpath=ancestor::header[1]')
 
+    const participants = header.getByRole('group', {
+      name: 'Participants',
+    })
+
+    await expect(participants).toBeVisible()
+
     await expect(
-      header.getByText(/2 participants/),
+      participants.getByTitle('Alex Dev'),
+    ).toBeVisible()
+
+    await expect(
+      participants.getByTitle('Chris Dev'),
     ).toBeVisible()
 
     // The Meeting was NOT ended in this flow, so it is still
@@ -728,11 +730,18 @@ test(
       workItemDialog,
     ).not.toBeVisible()
 
+    // The current Preparation UI exposes direct linked-work state in
+    // the agenda item's actions menu.
+    await agendaItem.getByRole('button', {
+      name: `Actions for agenda item ${itemTitle}`,
+    }).click()
+
     await expect(
-      agendaItem,
-    ).toContainText(
-      '1 linked work item',
-    )
+      page.getByRole('menuitem', {
+        name: '1 linked work item',
+        exact: true,
+      }),
+    ).toBeVisible()
 
     // Reload proves MeetingItem -> WorkItem link persistence.
     await page.reload()
@@ -747,11 +756,16 @@ test(
           ),
         })
 
+    await persistedAgendaItem.getByRole('button', {
+      name: `Actions for agenda item ${itemTitle}`,
+    }).click()
+
     await expect(
-      persistedAgendaItem,
-    ).toContainText(
-      '1 linked work item',
-    )
+      page.getByRole('menuitem', {
+        name: '1 linked work item',
+        exact: true,
+      }),
+    ).toBeVisible()
 
     // --------------------------------------------------------
     // Chris sees exactly that canonical WorkItem in My Work.
@@ -992,10 +1006,12 @@ test(
       })
       .click()
 
-    await page
-      .getByLabel('New section name')
-      .fill('TOPs')
-      .press('Enter')
+    const newSectionName = page.getByLabel(
+      'New section name',
+    )
+
+    await newSectionName.fill('TOPs')
+    await newSectionName.press('Enter')
 
     await expect(
       page.getByRole('heading', {
@@ -1074,6 +1090,17 @@ test(
     await page.goto(
       `/meetings/series?group=${groupId}`,
     )
+
+    // A cold page load resolves the Research Group scope
+    // asynchronously: until the group subtitle renders,
+    // "Create template" submits nothing. Wait for the
+    // scope-ready state before using the create form.
+    await expect(
+      page.getByText(
+        'Meeting templates in FG Example.',
+        { exact: true },
+      ),
+    ).toBeVisible()
 
     await page
       .getByLabel('Name')
@@ -1865,18 +1892,21 @@ test(
       })
       .click()
 
-    await page
-      .getByLabel(`Add note to ${NOTE_AGENDA_TITLE}`)
-      .fill(NOTE_CONTENT)
+    const noteComposer = page.getByLabel(
+      `Add note to ${NOTE_AGENDA_TITLE}`,
+    )
 
+    await noteComposer.fill(NOTE_CONTENT)
+
+    // Leaving the seamless editor commits the nonempty draft.
     await page
-      .getByRole('button', {
-        name: /^Add note$/,
-        exact: true,
-      })
+      .getByRole('main', { name: 'Agenda item' })
+      .getByText('Notes', { exact: true })
       .click()
 
-    // The note is visible.
+    // The composer closes only after the Note was persisted and
+    // the saved Note content replaces it.
+    await expect(noteComposer).toHaveCount(0)
     await expect(
       page.getByText(NOTE_CONTENT, {
         exact: true,
@@ -1899,32 +1929,26 @@ test(
     // 6. Edit the note.
     // --------------------------------------------------------
 
-    // Open the note actions menu. The trigger is a menu button
-    // rendered in a hover row; use getByRole with the label.
-    const noteActions = page.getByRole(
-      'button',
-      { name: /Note actions for/ },
-    )
-
-    await expect(noteActions).toHaveCount(1)
-    await noteActions.click()
-
-    await page
-      .getByRole('menuitem', {
-        name: 'Edit note',
-      })
-      .click()
-
-    await page
-      .getByLabel(`Edit note on ${NOTE_AGENDA_TITLE}`)
-      .fill(NOTE_EDITED_CONTENT)
-
     await page
       .getByRole('button', {
-        name: /^Save$/,
-        exact: true,
+        name: `Edit note on ${NOTE_AGENDA_TITLE}: ${NOTE_CONTENT}`,
       })
       .click()
+
+    const noteEditor = page.getByRole('textbox', {
+      name: `Edit note on ${NOTE_AGENDA_TITLE}`,
+      exact: true,
+    })
+
+    await noteEditor.fill(NOTE_EDITED_CONTENT)
+
+    // Editing uses the same focus-leave autosave as creation.
+    await page
+      .getByRole('main', { name: 'Agenda item' })
+      .getByText('Notes', { exact: true })
+      .click()
+
+    await expect(noteEditor).toHaveCount(0)
 
     await expect(
       page.getByText(NOTE_EDITED_CONTENT, {
@@ -1964,8 +1988,7 @@ test(
     })
 
     await expect(
-      noteWorkspace.getByRole('heading', {
-        name: NOTE_AGENDA_TITLE,
+      noteWorkspace.getByText(NOTE_AGENDA_TITLE, {
         exact: true,
       }),
     ).toBeVisible()
@@ -1986,10 +2009,13 @@ test(
         }),
       })
 
+    // The resolved status is an sr-only hint inside the Agenda
+    // row: verify that the accessibility text is attached rather
+    // than requiring it to be visually visible.
     await expect(
       noteAgendaItem
         .getByText('Completed', { exact: true }),
-    ).toBeVisible()
+    ).toBeAttached()
 
     // No Done action remains anywhere (workspace switched
     // to the no-current-item state).
@@ -2028,10 +2054,16 @@ test(
       }),
     ).toHaveCount(0)
 
-    // No per-note "Edit note" menu is exposed in Completed.
+    // Completed Notes expose neither direct editing nor deletion.
     await expect(
       page.getByRole('button', {
-        name: /Note actions for/,
+        name: /Edit note on/,
+      }),
+    ).toHaveCount(0)
+
+    await expect(
+      page.getByRole('button', {
+        name: /Delete note:/,
       }),
     ).toHaveCount(0)
 
@@ -2056,7 +2088,13 @@ test(
 
     await expect(
       page.getByRole('button', {
-        name: /Note actions for/,
+        name: /Edit note on/,
+      }),
+    ).toHaveCount(0)
+
+    await expect(
+      page.getByRole('button', {
+        name: /Delete note:/,
       }),
     ).toHaveCount(0)
   },
@@ -2211,13 +2249,14 @@ test(
       noteInput,
     ).toHaveCount(0)
 
-    // The current item's title is shown as the Current Item
-    // heading while Live (and as an h4 in the Protocol after
-    // the Meeting ends), so assert it by role without coupling
-    // to one layout.
+    // The Live Focus Pane shows the current item's canonical topic
+    // content through the read-only Markdown document renderer.
+    const focusPane = page.getByRole('main', {
+      name: 'Agenda item',
+    })
+
     await expect(
-      page.getByRole('heading', {
-        name: agendaTitle,
+      focusPane.getByText(agendaTitle, {
         exact: true,
       }),
     ).toBeVisible()
@@ -2638,16 +2677,18 @@ test(
       })
       .click()
 
-    await page
-      .getByLabel(`Add note to ${agendaTitle}`)
-      .fill(noteContent)
+    const noteComposer = page.getByLabel(
+      `Add note to ${agendaTitle}`,
+    )
+
+    await noteComposer.fill(noteContent)
 
     await page
-      .getByRole('button', {
-        name: /^Add note$/,
-        exact: true,
-      })
+      .getByRole('main', { name: 'Agenda item' })
+      .getByText('Notes', { exact: true })
       .click()
+
+    await expect(noteComposer).toHaveCount(0)
 
     // The saved Note's <p> is the only element whose full text
     // equals the Note content. Its parent <li> is the Note row
@@ -2660,6 +2701,8 @@ test(
         { exact: true },
       )
       .locator('xpath=..')
+
+    await expect(noteBlock).toBeVisible()
 
     // Open the Note-anchored work dialog from the persisted
     // Note.
@@ -2785,16 +2828,18 @@ test(
       })
       .click()
 
-    await page
-      .getByLabel('Add note to E2E Delete Agenda')
-      .fill(deleteNoteContent)
+    const noteComposer = page.getByLabel(
+      'Add note to E2E Delete Agenda',
+    )
+
+    await noteComposer.fill(deleteNoteContent)
 
     await page
-      .getByRole('button', {
-        name: /^Add note$/,
-        exact: true,
-      })
+      .getByRole('main', { name: 'Agenda item' })
+      .getByText('Notes', { exact: true })
       .click()
+
+    await expect(noteComposer).toHaveCount(0)
 
     await expect(
       page.getByText(deleteNoteContent, {
@@ -2802,17 +2847,10 @@ test(
       }),
     ).toBeVisible()
 
-    // Open the note actions menu and select Delete note.
-    const noteActions = page.getByRole(
-      'button',
-      { name: /Note actions for/ },
-    )
-
-    await noteActions.click()
-
+    // Delete is a direct action on the persisted Note.
     await page
-      .getByRole('menuitem', {
-        name: 'Delete note',
+      .getByRole('button', {
+        name: `Delete note: ${deleteNoteContent}`,
       })
       .click()
 
@@ -2833,14 +2871,13 @@ test(
       }),
     ).toHaveCount(0)
 
-    // The agenda item itself is still present. Its title
-    // correctly appears in BOTH panes (Agenda rail + Current
-    // Item heading), so scope each assertion explicitly.
+    // The parent agenda item remains in the Agenda rail and its
+    // canonical topic content remains in the Live Focus Pane.
     const deleteAgenda = page.getByRole('navigation', {
       name: 'Agenda',
     })
 
-    await expect(
+    const deleteAgendaItem =
       deleteAgenda
         .locator('li')
         .filter({
@@ -2848,16 +2885,34 @@ test(
             exact: true,
           }),
         })
-        .getByText('E2E Delete Agenda', { exact: true }),
-    ).toBeVisible()
+        .getByText('E2E Delete Agenda', { exact: true })
+
+    await expect(deleteAgendaItem).toBeVisible()
 
     const deleteWorkspace = page.getByRole('main', {
       name: 'Agenda item',
     })
 
     await expect(
-      deleteWorkspace.getByRole('heading', {
-        name: 'E2E Delete Agenda',
+      deleteWorkspace.getByText('E2E Delete Agenda', {
+        exact: true,
+      }),
+    ).toBeVisible()
+
+    // Reload confirms the Note deletion persisted without removing
+    // the parent agenda item or its canonical topic content.
+    await page.reload()
+
+    await expect(
+      page.getByText(deleteNoteContent, {
+        exact: true,
+      }),
+    ).toHaveCount(0)
+
+    await expect(deleteAgendaItem).toBeVisible()
+
+    await expect(
+      deleteWorkspace.getByText('E2E Delete Agenda', {
         exact: true,
       }),
     ).toBeVisible()

@@ -9,7 +9,10 @@ import {
   useState,
 } from 'react'
 
-import type { ReactNode } from 'react'
+import type {
+  FocusEvent,
+  ReactNode,
+} from 'react'
 import {
   useNavigate,
   useParams,
@@ -536,6 +539,7 @@ function NoteInlineEditor({
   const textareaRef = useRef<
     HTMLTextAreaElement
   >(null)
+  const editorRootRef = useRef<HTMLDivElement>(null)
   // Escape must not commit through the focus-leave (or unmount)
   // that follows.
   const suppressCommitRef = useRef(false)
@@ -556,9 +560,24 @@ function NoteInlineEditor({
     el.style.height = `${el.scrollHeight}px`
   }, [value])
 
-  const handleBlur = () => {
+  const handleBlur = (
+    event: FocusEvent<HTMLDivElement>,
+  ) => {
     if (suppressCommitRef.current) {
       suppressCommitRef.current = false
+      return
+    }
+
+    // Moving from the writing surface to its Work Item action is
+    // still inside the composer. Let that action receive its click
+    // or keyboard activation before persistence changes the tree.
+    // A transition beyond the composer remains ordinary autosave.
+    if (
+      event.relatedTarget instanceof Node &&
+      editorRootRef.current?.contains(
+        event.relatedTarget,
+      )
+    ) {
       return
     }
 
@@ -566,7 +585,10 @@ function NoteInlineEditor({
   }
 
   return (
-    <div>
+    <div
+      ref={editorRootRef}
+      onBlur={handleBlur}
+    >
       <textarea
         ref={textareaRef}
         value={value}
@@ -574,7 +596,6 @@ function NoteInlineEditor({
         onChange={(event) =>
           onValueChange(event.target.value)
         }
-        onBlur={handleBlur}
         onKeyDown={(event) => {
           if (event.key === 'Escape') {
             event.preventDefault()
