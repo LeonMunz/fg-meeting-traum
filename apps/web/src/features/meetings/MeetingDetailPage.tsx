@@ -2033,12 +2033,12 @@ export function MeetingDetailPage() {
     setActionError(null)
 
     try {
-      await reorderMeetingSections(meetingId!, {
+      const updatedSections = await reorderMeetingSections(meetingId!, {
         sectionIds: reordered.map(
           (s) => s.id,
         ),
       })
-      setSections(reordered)
+      setSections(updatedSections)
     } catch (error) {
       setActionError(
         getErrorMessage(
@@ -5708,7 +5708,7 @@ export function MeetingDetailPage() {
                                 label="Move up"
                                 icon="arrow_upward"
                                 disabled={
-                                  sortedSections[0]?.id !==
+                                  sortedSections[0]?.id ===
                                   section.id ||
                                   reorderingSections
                                 }
@@ -5723,7 +5723,7 @@ export function MeetingDetailPage() {
                                 label="Move down"
                                 icon="arrow_downward"
                                 disabled={
-                                  sortedSections.at(-1)?.id !==
+                                  sortedSections.at(-1)?.id ===
                                   section.id ||
                                   reorderingSections
                                 }
