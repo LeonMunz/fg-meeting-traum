@@ -123,6 +123,31 @@ describe('MeetingDetailPage status gating', () => {
   })
 })
 
+describe('MeetingDetailPage agenda item deletion', () => {
+  it('deletes through the canonical typed API adapter', () => {
+    // The deletion goes through the shared CSRF-aware API
+    // client (apps/web/src/api/meetings.ts → apiDelete →
+    // DELETE /api/meeting-items/{id}/). A raw fetch to the
+    // unregistered legacy URL was the original false-success
+    // defect: this pins that it never comes back.
+    // Asserted on the transpiled call shape: the captured source
+    // is post-module-transformation, so the import is emitted as
+    // `(0, __vite_ssr_import_N__.deleteMeetingItem)(item.id)`.
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'deleteMeetingItem)(item.id)',
+    )
+    expect(MEETING_DETAIL_SOURCE).not.toContain(
+      'meetings/items/',
+    )
+  })
+
+  it('guards against duplicate in-flight deletions', () => {
+    expect(MEETING_DETAIL_SOURCE).toContain(
+      'deleteItemInFlightRef',
+    )
+  })
+})
+
 describe('MeetingDetailPage persistent Meeting Notes', () => {
   it('does not keep a second permanent frontend Note truth', () => {
     expect(MEETING_DETAIL_SOURCE).not.toContain(

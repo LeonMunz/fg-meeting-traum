@@ -56,6 +56,11 @@ class MeetingFollowUpConflictError(MeetingDomainError):
     """An active schedule exists and requires explicit rescheduling."""
 
 
+class MeetingItemDeletionBlockedError(MeetingDomainError):
+    """The item exists and is writable, but its persisted state
+    violates the safe agenda-item deletion contract."""
+
+
 class MeetingAuditEventType:
     """Event types recorded for Meeting history.
 
@@ -4417,6 +4422,122 @@ def update_meeting_item(
         )
 
     return meeting_item
+
+
+# ── Safe agenda item deletion ───────────────────────────────────
+
+
+@transaction.atomic
+def delete_meeting_item(*, meeting_item, actor):
+    """Permanently delete ONE eligible agenda item.
+
+    The safe deletion contract (docs/domain/meetings.md §17):
+    deletion is permitted only when ALL of the following hold
+    against authoritative database state:
+
+    - the actor has canonical ``MEETING_WRITE`` on the parent
+      Meeting (Meeting collaboration — NOT the destructive
+      ``MEETING_ADMIN`` administration rule, which governs
+      deleting the Meeting itself, cancelling a materialized
+      occurrence, and removing a participant);
+    - the Meeting is currently ``upcoming``;
+    - the item's outcome is ``not_discussed``;
+    - the item is NOT the Meeting's persisted current item;
+    - the item has no persistent Meeting Notes;
+    - the item has no MeetingItem-to-WorkItem links;
+    - the item is NOT the source of any persisted follow-up
+      relationship (including cancelled/historical records);
+    - the item is NOT referenced as a target item by any persisted
+      follow-up relationship (including cancelled/historical
+      records).
+
+    Any failed condition raises ``MeetingItemDeletionBlockedError``
+    and leaves all persistence unchanged. The operation never
+    relies on Django CASCADE to discard related records: the
+    reference checks above make that impossible, and only the
+    eligible ``MeetingItem`` row itself is deleted. Sibling items,
+    Sections, the Meeting, Templates, recurrence records, linked
+    Work Items, and unrelated audit history are untouched; no
+    other item's outcome or position is modified, and the
+    resulting position gap is safe — creation allocates
+    ``max(position) + 1`` per Section, and canonical ordering is
+    ``(Section.position, MeetingItem.position, id)``.
+
+    Transaction and locking follow the existing Meeting mutation
+    convention: the parent Meeting row is locked first (serialized
+    against concurrent lifecycle transitions such as Start, which
+    may set the current pointer) and then the item row, before any
+    eligibility check or mutation.
+    """
+    meeting = meeting_item.meeting
+
+    # Canonical Meeting-level write rule (MEETING_WRITE); the view
+    # performs the same check first, this is defense in depth
+    # consistent with the other Meeting mutation services.
+    _require_meeting_write_access(meeting=meeting, user=actor)
+
+    # Serialize against concurrent lifecycle transitions on this
+    # Meeting (Start may set the current pointer in the same
+    # window).
+    locked_meeting = Meeting.objects.select_for_update().get(
+        pk=meeting.pk,
+    )
+
+    # Lock the item row and re-read authoritative persisted state.
+    item = MeetingItem.objects.select_for_update().get(
+        pk=meeting_item.pk,
+    )
+
+    if locked_meeting.status != Meeting.Status.UPCOMING:
+        raise MeetingItemDeletionBlockedError(
+            "Agenda items can only be deleted while the Meeting "
+            "is upcoming."
+        )
+
+    if (
+        locked_meeting.current_meeting_item_id
+        is not None
+        and locked_meeting.current_meeting_item_id == item.pk
+    ):
+        raise MeetingItemDeletionBlockedError(
+            "The Meeting's current item cannot be deleted."
+        )
+
+    if item.outcome != MeetingItem.Outcome.NOT_DISCUSSED:
+        raise MeetingItemDeletionBlockedError(
+            "Only an agenda item that has not been discussed can "
+            "be deleted."
+        )
+
+    if MeetingNote.objects.filter(meeting_item=item).exists():
+        raise MeetingItemDeletionBlockedError(
+            "This agenda item has persistent Meeting Notes and "
+            "cannot be deleted."
+        )
+
+    if MeetingItemWorkItem.objects.filter(meeting_item=item).exists():
+        raise MeetingItemDeletionBlockedError(
+            "This agenda item is linked to Work Items and "
+            "cannot be deleted."
+        )
+
+    if MeetingItemFollowUp.objects.filter(
+        source_meeting_item=item,
+    ).exists():
+        raise MeetingItemDeletionBlockedError(
+            "This agenda item is the source of a persisted "
+            "follow-up relationship and cannot be deleted."
+        )
+
+    if MeetingItemFollowUp.objects.filter(
+        target_meeting_item=item,
+    ).exists():
+        raise MeetingItemDeletionBlockedError(
+            "This agenda item is referenced as a follow-up "
+            "target and cannot be deleted."
+        )
+
+    item.delete()
 
 
 # ── Live Meeting current pointer + item outcomes ────────────────

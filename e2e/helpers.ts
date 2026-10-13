@@ -92,11 +92,32 @@ export async function quickAddAgendaItem(
       .click()
   }
 
-  // The newly created topic content is visible inside this
-  // section.
+  // The newly created topic must be visible as an item ROW. Scoped
+  // to the list on purpose: Playwright's text matching also
+  // matches form control VALUES, and the quick-add field already
+  // carries the title from the moment it is typed — before the
+  // Save click and before any server response. A section-wide
+  // text assertion would "pass" while the create is still in
+  // flight, and the next call could then reuse the transient
+  // composer.
   await expect(
-    section.getByText(title, { exact: true }),
+    section
+      .locator('li')
+      .filter({
+        has: page.getByText(title, { exact: true }),
+      }),
   ).toBeVisible()
+
+  if (usesPreparationComposer) {
+    // The composer's collapse is the completion signal: it
+    // commits only after the successful create has settled
+    // (item listed, draft consumed). Until the trigger is back,
+    // a follow-up quickAddAgendaItem would probe the still-open
+    // composer — possibly mid-save, when its submit button
+    // reads "Saving…" and is disabled — fill it, and lose its
+    // Save button the moment the collapse commits.
+    await expect(composerTrigger).toBeVisible()
+  }
 }
 
 /**

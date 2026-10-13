@@ -3364,8 +3364,11 @@ Canonical semantics:
 - **A newly created item** (including a spontaneous item) gets
   outcome `not_discussed` and does **not** automatically become
   current.
-- **Deleting the current item** clears the pointer
-  (`SET_NULL`), leaving the Meeting without a current item.
+- **The safe deletion operation never deletes the current item**
+  (section below): it is rejected with a conflict. The `SET_NULL`
+  FK semantics remain the model-level safety net for the pointer
+  if an item row ever disappears through another path, but the
+  safe deletion API can never trigger it.
 
 Outcome mutations only happen through Done, Reopen Done, the legacy
 direct Follow-up action, or concrete Follow-up scheduling. Focus
@@ -3382,6 +3385,84 @@ to: the Meeting's `current_meeting_item` (the first such item per
 Meeting) and outcome `not_discussed`; `done` / `follow_up` /
 `not_discussed` rows kept their value. The old
 discussing-only conditional unique constraint was removed.
+
+### Safe deletion of an unreferenced agenda item (implemented)
+
+The only permitted item-level deletion is the **safe deletion of
+an unreferenced, not-discussed item belonging to an Upcoming
+Meeting** — the permanent removal of exactly ONE `MeetingItem`
+row. There is no other agenda-item deletion path, and no
+cascade deletion of meeting history.
+
+**Eligibility contract (every condition, validated against
+authoritative database state):**
+
+- The actor holds the canonical `MEETING_WRITE` permission on
+  the parent Meeting (Meeting collaboration — NOT the
+  destructive `MEETING_ADMIN` administration rule, which still
+  governs deleting the Meeting itself, cancelling a materialized
+  recurrence occurrence, and removing a Meeting participant).
+- The Meeting's status is `upcoming` (a `live`, `completed`, or
+  `cancelled` Meeting rejects the deletion).
+- The item's outcome is `not_discussed` (a `done` or `follow_up`
+  item is protected).
+- The item is NOT the Meeting's persisted current item
+  (`Meeting.current_meeting_item`).
+- The item has NO persistent Meeting Notes.
+- The item has NO `MeetingItemWorkItem` links.
+- The item is NOT the source of any persisted follow-up
+  relationship.
+- The item is NOT referenced as a target item by any persisted
+  follow-up relationship.
+
+**Historical traceability is protected.** Cancelled (historical)
+`MeetingItemFollowUp` records count for BOTH the source and the
+target reference checks: a source whose follow-up was cancelled
+remains the source of a persisted (cancelled) record, and a
+target that a cancellation preserved (section 18a — "uncertainty
+means preserve, never delete") remains referenced by that
+cancelled record. Neither may be deleted through this operation.
+The operation never cancels follow-ups, never deletes Notes, Work
+Items, or links as a shortcut, and never reorders, renumbers, or
+modifies any other item's outcome. A rejected request leaves ALL
+persistence unchanged (atomic no-op; no partial writes).
+
+**Position gaps are safe and intentional.** Deletion removes only
+the item's own row; sibling items keep their persisted
+`position` values. Subsequent creation allocates
+`max(position) + 1` per Section, so a gap never collides, and the
+canonical ordering (`Section.position`, then
+`MeetingItem.position`, then `id`) is unaffected.
+
+**Transaction and locking** follow the existing Meeting mutation
+convention: one transaction; the parent Meeting row is locked
+first (serializing against concurrent lifecycle transitions such
+as Start, which may set the current pointer), then the item row;
+eligibility is re-validated against the locked state before the
+single `MeetingItem` row is deleted.
+
+**API contract:** `DELETE /api/meeting-items/{meetingItemId}/`
+
+- `204 No Content` — the item was deleted (empty body).
+- `404` — the item does not exist or is not readable by the
+  actor (non-leaking; indistinguishable from nonexistent).
+- `403` — the actor has no canonical `MEETING_WRITE` on the
+  parent Meeting (generic mutation message; no eligibility
+  detail leaks).
+- `409 Conflict` — the item exists and is writable, but one of
+  the safe deletion conditions fails (body
+  `{"error": <reason>}` with a meaningful domain message, e.g.
+  "Agenda items can only be deleted while the Meeting is
+  upcoming." or "This agenda item has persistent Meeting Notes
+  and cannot be deleted.").
+
+A `409` never mutates anything: the item, its Notes / links /
+follow-up references, every sibling, and the Meeting (including
+its current pointer) remain exactly as they were. The frontend
+removes the item from local state ONLY after a successful `204`
+and surfaces the server message for a rejected deletion; the
+backend decision is authoritative and is never re-inferred from
+the frontend's incomplete relationship representation.
 
 ### Intended but not yet implemented
 
@@ -5059,6 +5140,7 @@ Move to section…
     non-cancelled follow-up has a concrete target item (null target only
     after cancellation). Reschedule remains unimplemented.
 21. Destructive Meeting administration follows the canonical `MEETING_ADMIN` rule and is strictly narrower than Meeting collaboration: permanently deleting a Meeting, cancelling a materialized recurrence occurrence, and removing a Meeting participant require — group scope: any current Research Group member (group Meetings are fully collaborative, so every current member has the full Meeting surface); project scope: the Meeting creator or an explicit participant with `PROJECT_WORK` (Project owner or member) while the Project is not archived. A `viewer`-role participant may collaborate (edit content, add participants, Start / Live / End / Reopen) but may NOT perform these destructive operations; a collaborator whose Project access has been revoked loses them as well as every other Meeting right (invariant 4). A non-participant Project owner or member gains no Meeting access of any kind. `MEETING_ADMIN` implies `MEETING_READ` and `MEETING_WRITE`, and it never grants `PROJECT_WORK` or any Work Item permission in return.
+22. Safe agenda-item deletion (section 17): only an unreferenced `not_discussed` item of an `upcoming` Meeting may be permanently deleted, and only by an actor with canonical `MEETING_WRITE` on that Meeting. The persisted current item, items with Meeting Notes, Work Item links, or follow-up source/target references (including cancelled/historical records) are protected. A rejected deletion is an atomic no-op (`409`): no partial writes, no outcome or position changes on siblings, no change to the current pointer. The `MEETING_ADMIN` administration operations (invariant 21) are unchanged and remain strictly narrower.
 
 > Intended invariants that depend on not-yet-implemented concepts (Topic
 > state, per-item `intent`/`origin`, NoteEntry streams, moderator rotation,

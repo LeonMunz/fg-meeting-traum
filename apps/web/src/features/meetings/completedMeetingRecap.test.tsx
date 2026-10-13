@@ -88,6 +88,7 @@ vi.mock('../../api/meetings', async (importOriginal) => {
     createMeetingNote: vi.fn(),
     updateMeetingNote: vi.fn(),
     deleteMeetingNote: vi.fn(),
+  deleteMeetingItem: vi.fn(),
   }
 })
 

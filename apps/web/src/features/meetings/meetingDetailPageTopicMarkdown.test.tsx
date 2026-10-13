@@ -42,6 +42,7 @@ vi.mock('../../api/meetings', () => ({
   createMeetingSection: vi.fn(),
   deleteMeeting: vi.fn(),
   deleteMeetingNote: vi.fn(),
+  deleteMeetingItem: vi.fn(),
   endMeeting: vi.fn(),
   focusMeetingItem: vi.fn(),
   getMeeting: vi.fn(),

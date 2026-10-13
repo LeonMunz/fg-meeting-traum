@@ -235,6 +235,14 @@ export async function updateMeetingItem(
   )
 }
 
+export async function deleteMeetingItem(
+  meetingItemId: number,
+): Promise<void> {
+  return apiDelete<void>(
+    `/api/meeting-items/${meetingItemId}/`,
+  )
+}
+
 export async function focusMeetingItem(
   meetingItemId: number,
 ): Promise<ApiMeetingItem> {

@@ -24,6 +24,7 @@ import {
   createMeetingSection,
   deleteMeeting,
   deleteMeetingNote,
+  deleteMeetingItem,
   endMeeting,
   focusMeetingItem,
   getMeeting,
@@ -974,6 +975,12 @@ export function MeetingDetailPage() {
   // in flight.
   const [savingItemId, setSavingItemId] =
     useState<number | null>(null)
+  // Synchronous in-flight guard for the agenda item deletion
+  // (same pattern as the note-delete guard): React state is
+  // batched, so a rapid repeated activation within one tick
+  // must observe the in-flight DELETE through the ref — a
+  // duplicate deletion is never started.
+  const deleteItemInFlightRef = useRef(false)
 
   // In-flight flag for the section-local creation composer (its
   // draft is composer-local; there is no item id yet).
@@ -2101,12 +2108,23 @@ export function MeetingDetailPage() {
       return
     }
 
+    // Duplicate-activation guard: a second activation while the
+    // server request is in flight must not start a second
+    // DELETE for the same item.
+    if (deleteItemInFlightRef.current) {
+      return
+    }
+
     setActionError(null)
+    deleteItemInFlightRef.current = true
 
     try {
-      await fetch(`/api/meetings/items/${item.id}`, {
-        method: 'DELETE',
-      })
+      // The shared API client rejects EVERY non-2xx response:
+      // the item is removed from local state only after the
+      // server has confirmed the deletion (204). A rejected
+      // deletion keeps the item visible with a meaningful
+      // error.
+      await deleteMeetingItem(item.id)
 
       setItems((current) =>
         current.filter(
@@ -2114,7 +2132,26 @@ export function MeetingDetailPage() {
         ),
       )
 
-      setEditingItemId(null)
+      // Item-specific local UI state loses its target after a
+      // confirmed deletion; unrelated drafts, the Meeting
+      // status, and the persisted current pointer stay untouched.
+      if (editingItemId === item.id) {
+        setEditingItemId(null)
+      }
+      if (selectedItemId === item.id) {
+        setSelectedItemId(null)
+      }
+      if (noteComposerItemId === item.id) {
+        setNoteComposerItemId(null)
+        setNoteDraftContent('')
+      }
+      if (
+        editingNoteId != null &&
+        item.notes.some((note) => note.id === editingNoteId)
+      ) {
+        setEditingNoteId(null)
+        setNoteEditContent('')
+      }
     } catch (error) {
       setActionError(
         getErrorMessage(
@@ -2122,6 +2159,8 @@ export function MeetingDetailPage() {
           'Agenda item could not be deleted.',
         ),
       )
+    } finally {
+      deleteItemInFlightRef.current = false
     }
   }
 

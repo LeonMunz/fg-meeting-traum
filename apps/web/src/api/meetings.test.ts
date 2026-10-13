@@ -21,6 +21,7 @@ import {
   createMeetingItem,
   createMeetingFromSeries,
   createMeetingRecurrence,
+  deleteMeetingItem,
   excludeMeetingRecurrenceOccurrence,
   exportMeetingSeriesAgenda,
   importMeetingSeriesAgenda,
@@ -1075,4 +1076,56 @@ describe('Meeting occurrence cancellation API client', () => {
       cancelMeetingRecurrenceOccurrence(202),
     ).rejects.toEqual(error)
   })
+})
+
+describe('Meeting agenda item deletion API client', () => {
+  beforeEach(() => {
+    vi.mocked(apiDelete).mockReset()
+  })
+
+  it('deletes through the canonical meeting-items resource route', async () => {
+    vi.mocked(apiDelete).mockResolvedValue(undefined)
+
+    await expect(
+      deleteMeetingItem(17),
+    ).resolves.toBeUndefined()
+
+    // The canonical resource route is
+    // `DELETE /api/meeting-items/{meeting_item_id}/`
+    // (`config/urls.py` → `meeting-item-detail`): the legacy
+    // `/api/meetings/items/...` URL matches NO registered route,
+    // so this exact path is the cross-layer contract. One DELETE,
+    // no request body.
+    expect(apiDelete).toHaveBeenCalledTimes(1)
+    expect(apiDelete).toHaveBeenCalledWith(
+      '/api/meeting-items/17/',
+    )
+  })
+
+  it('resolves void on a successful (204) deletion', async () => {
+    vi.mocked(apiDelete).mockResolvedValue(undefined)
+
+    const result = await deleteMeetingItem(17)
+
+    expect(result).toBeUndefined()
+  })
+
+  it.each([
+    403,
+    404,
+    409,
+    500,
+  ])(
+    'rejects on a server %i response (the item must stay)',
+    async (httpStatus) => {
+      const error = new ApiError(httpStatus, {
+        error: 'deletion rejected',
+      })
+      vi.mocked(apiDelete).mockRejectedValue(error)
+
+      await expect(
+        deleteMeetingItem(17),
+      ).rejects.toEqual(error)
+    },
+  )
 })

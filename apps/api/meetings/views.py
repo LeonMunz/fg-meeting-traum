@@ -83,12 +83,14 @@ from .services import (
     AGENDA_EXPORT_SCHEMA_VERSION,
     MeetingDomainError,
     MeetingFollowUpConflictError,
+    MeetingItemDeletionBlockedError,
     _has_canonical_meeting_read_access,
     add_meeting_participant,
     cancel_meeting_recurrence_occurrence,
     eligible_meeting_participant_user_ids,
     create_meeting,
     delete_meeting,
+    delete_meeting_item,
     delete_meeting_series,
     create_meeting_from_series,
     create_meeting_recurrence,
@@ -2046,6 +2048,32 @@ class MeetingItemDetailView(APIView):
                 context={"request": request},
             ).data
         )
+
+    def delete(self, request, meeting_item_id):
+        item = _require_meeting_item_access(
+            request,
+            meeting_item_id,
+        )
+        if item is None:
+            return Response(
+                {"error": "Meeting item not found"},
+                status=404,
+            )
+
+        if not _has_scoped_write_access(request.user, item.meeting):
+            return _mutation_forbidden_response()
+
+        try:
+            delete_meeting_item(
+                meeting_item=item,
+                actor=request.user,
+            )
+        except MeetingItemDeletionBlockedError as exc:
+            return Response({"error": exc.message}, status=409)
+        except MeetingDomainError as exc:
+            return Response({"error": exc.message}, status=400)
+
+        return Response(status=204)
 
 
 
