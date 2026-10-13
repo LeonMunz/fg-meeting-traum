@@ -305,6 +305,28 @@ class MeetingNoteApiTest(TestCase):
             status.HTTP_400_BAD_REQUEST,
         )
 
+    def test_cancelled_meeting_rejects_note_create(self):
+        meeting = self._make_live_meeting()
+        item = self._make_item(meeting)
+        meeting.status = Meeting.Status.CANCELLED
+        meeting.save(update_fields=["status", "updated_at"])
+
+        self.login(self.alex)
+
+        response = self.client.post(
+            f"/api/meeting-items/{item.pk}/notes/",
+            {"content": "Must not be persisted"},
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+        self.assertFalse(
+            MeetingNote.objects.filter(meeting_item=item).exists()
+        )
+
     # ── list / read ───────────────────────────────────────────
 
     def test_list_notes_returns_deterministic_order(self):
@@ -521,6 +543,42 @@ class MeetingNoteApiTest(TestCase):
             status.HTTP_400_BAD_REQUEST,
         )
 
+    def test_cancelled_meeting_note_update_is_rejected_and_preserved(self):
+        meeting = self._make_live_meeting()
+        item = self._make_item(meeting)
+
+        self.login(self.alex)
+        note_id = self.client.post(
+            f"/api/meeting-items/{item.pk}/notes/",
+            {"content": "original"},
+            format="json",
+        ).json()["id"]
+
+        meeting.status = Meeting.Status.CANCELLED
+        meeting.save(update_fields=["status", "updated_at"])
+
+        response = self.client.patch(
+            f"/api/meeting-notes/{note_id}/",
+            {"content": "changed"},
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+        note = MeetingNote.objects.get(pk=note_id)
+        self.assertEqual(note.content, "original")
+
+        read_response = self.client.get(
+            f"/api/meeting-notes/{note_id}/"
+        )
+        self.assertEqual(
+            read_response.status_code,
+            status.HTTP_200_OK,
+        )
+        self.assertEqual(read_response.json()["content"], "original")
+
     def test_non_member_cannot_update_note(self):
         meeting = self._make_live_meeting()
         item = self._make_item(meeting)
@@ -628,6 +686,43 @@ class MeetingNoteApiTest(TestCase):
         )
         self.assertTrue(
             MeetingNote.objects.filter(pk=note_id).exists()
+        )
+
+    def test_cancelled_meeting_note_delete_is_rejected_and_preserved(self):
+        meeting = self._make_live_meeting()
+        item = self._make_item(meeting)
+
+        self.login(self.alex)
+        note_id = self.client.post(
+            f"/api/meeting-items/{item.pk}/notes/",
+            {"content": "original"},
+            format="json",
+        ).json()["id"]
+
+        meeting.status = Meeting.Status.CANCELLED
+        meeting.save(update_fields=["status", "updated_at"])
+
+        response = self.client.delete(
+            f"/api/meeting-notes/{note_id}/"
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+        note = MeetingNote.objects.get(pk=note_id)
+        self.assertEqual(note.content, "original")
+
+        read_response = self.client.get(
+            f"/api/meeting-items/{item.pk}/notes/"
+        )
+        self.assertEqual(
+            read_response.status_code,
+            status.HTTP_200_OK,
+        )
+        self.assertEqual(
+            read_response.json()[0]["content"],
+            "original",
         )
 
     def test_non_member_cannot_delete_note(self):

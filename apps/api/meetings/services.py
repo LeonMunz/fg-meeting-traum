@@ -4893,8 +4893,8 @@ def _require_note_write_access(*, meeting, user):
     """Notes follow the existing Meeting write authorization model.
 
     Upcoming Meetings have no discussion to note; Live Meetings are the
-    authoring surface. Completed Meetings are protocol: their Notes are
-    readable but no longer editable through the Meeting UI.
+    only authoring surface. Completed and Cancelled Meetings are readable
+    protocol, but their Notes are no longer editable.
     """
     _require_meeting_write_access(meeting=meeting, user=user)
 
@@ -4906,6 +4906,11 @@ def _require_note_write_access(*, meeting, user):
     if meeting.status == Meeting.Status.UPCOMING:
         raise MeetingDomainError(
             "Notes cannot be added to an upcoming Meeting."
+        )
+
+    if meeting.status != Meeting.Status.LIVE:
+        raise MeetingDomainError(
+            "Notes can only be changed during a live Meeting."
         )
 
 
