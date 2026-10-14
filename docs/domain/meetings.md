@@ -1071,12 +1071,28 @@ window applied uniformly to both data sources:
 window — applied once, post-merge, to every row's EFFECTIVE
 displayed `scheduledAt` (one-time concrete Meetings, materialized
 recurring Meetings, virtual recurring occurrences, rescheduled
-occurrences judged by the effective time, never the original slot),
-with no unbounded exception for `live` Meetings, so a Meeting
-scheduled in the past or beyond +42 days never appears in the
-initial Upcoming view; the concrete list is additionally scoped to
-the Meetings that still take place (`upcoming` / `live`; `completed`
-and terminal `cancelled` excluded). The Upcoming view is therefore
+occurrences judged by the effective time, never the original slot)
+plus ONE narrow, strictly one-sided, strictly concrete exception:
+a concrete Meeting whose lifecycle status is still `upcoming` or
+`live` but whose scheduled start lies BEFORE the window start
+(local midnight today — an overdue Meeting) stays visible in
+Upcoming and remains startable, because elapsed time never changes
+the lifecycle status and the canonical Start action validates
+status, not clock time (the original `scheduledAt` is preserved
+verbatim; the server records the actual `startedAt`, and no
+automatic lifecycle transition is ever derived from clock time).
+The exception is strictly the PAST side of the window and strictly
+concrete: `live` receives no unbounded exception (a far-future
+`live` Meeting is still absent), the +42-day future boundary stays
+exact for every row kind, virtual recurring occurrences (and feed
+rows without a concrete Meeting) remain strictly windowed, and no
+historical virtual occurrence is ever displayed or materialized.
+`completed` and terminal `cancelled` Meetings never benefit from
+it. A concrete Meeting scheduled beyond +42 days never appears in
+the initial Upcoming view. The concrete list is additionally
+scoped to the Meetings that still take place (`upcoming` / `live`;
+`completed` and terminal `cancelled` excluded). The Upcoming view
+is therefore
 scoped to the page's active Research Group for BOTH data sources:
 the concrete Meetings come from the active group's Meetings
 endpoint, and the personal recurring-occurrence feed — which is

@@ -269,3 +269,177 @@ test(
     expect(materializeRequests).toBe(0)
   },
 )
+
+test(
+  'An overdue (yesterday) upcoming Meeting stays visible in Upcoming and can be started late',
+  async ({ page }) => {
+    await login(page, 'alex')
+
+    await openGroupMeetings(page, 'FG Example')
+
+    // This flow must never materialize an occurrence — the
+    // overdue Meeting is a concrete row (direct navigation).
+    let materializeRequests = 0
+    page.on('request', (request) => {
+      if (
+        request
+          .url()
+          .includes('/occurrences/materialize/')
+      ) {
+        materializeRequests += 1
+      }
+    })
+
+    // A one-time Meeting scheduled for YESTERDAY: its
+    // scheduled start lies before today's local midnight,
+    // while its lifecycle status is still `upcoming`.
+    const title = `E2E Overdue ${Date.now()
+      .toString(36)
+      .slice(-6)}`
+    const yesterday = datePartPlusDays(-1)
+    const time = '07:30'
+    const yesterdayDate = new Date()
+    yesterdayDate.setDate(
+      yesterdayDate.getDate() - 1,
+    )
+    // The Upcoming date-group header of the scheduled day
+    // (weekday + short month + day, local — the same
+    // rendering the list uses for non-relative dates).
+    const scheduledDayLabel = new Intl.DateTimeFormat(
+      'en',
+      {
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric',
+      },
+    ).format(yesterdayDate)
+    // The Completed header's compact scheduled slot
+    // (the same day + 24h clock, exactly as rendered).
+    const compactScheduledSlot =
+      `${scheduledDayLabel} · ${time}`
+
+    // 1) Create the overdue Meeting.
+    await clickHeaderNewMeeting(page)
+
+    await page.getByLabel('Title').fill(title)
+
+    await replaceControlValue(
+      page.getByRole('textbox', { name: 'Date', exact: true }),
+      yesterday,
+    )
+
+    await replaceControlValue(
+      page.getByRole('combobox', { name: 'Time', exact: true }),
+      time,
+    )
+
+    await page
+      .locator('form')
+      .getByRole('button', { name: /Create meeting/ })
+      .click()
+
+    // 2) The overdue concrete Meeting stays visible in
+    //    Upcoming under its own (past) date group — the
+    //    canonical Start path is lifecycle-gated, not
+    //    time-gated.
+    await expect(
+      page.getByRole('heading', {
+        name: scheduledDayLabel,
+        exact: true,
+      }),
+    ).toBeVisible()
+
+    const overdueRow = page
+      .getByRole('button')
+      .filter({ hasText: title })
+
+    await expect(overdueRow).toBeVisible()
+
+    // 3) Open it from Upcoming (a concrete row: direct
+    //    navigation, no materialization) and confirm the
+    //    original planned slot is what the detail shows.
+    await overdueRow.click()
+
+    await expect(page).toHaveURL(/\/meetings\/\d+$/)
+
+    const detailHeader = page
+      .locator('header')
+      .filter({
+        has: page.getByRole('heading', {
+          name: title,
+          level: 1,
+        }),
+      })
+
+    await expect(
+      page.getByRole('button', { name: 'Start meeting' }),
+    ).toBeVisible()
+
+    // The upcoming header carries the original planned
+    // day label + clock time.
+    await expect(
+      detailHeader.getByText(scheduledDayLabel),
+    ).toBeVisible()
+    await expect(
+      detailHeader.getByText(time),
+    ).toBeVisible()
+
+    // 4) Start late: upcoming -> live. The Live header's
+    //    elapsed timer renders ONLY from the
+    //    server-recorded startedAt, so its presence proves
+    //    the actual start timestamp was persisted.
+    await page
+      .getByRole('button', { name: 'Start meeting' })
+      .click()
+
+    await expect(
+      page.getByRole('button', { name: 'End meeting' }),
+    ).toBeVisible()
+
+    const liveHeader = page
+      .locator('header')
+      .filter({
+        has: page.getByRole('heading', {
+          name: title,
+          level: 1,
+        }),
+      })
+
+    await expect(
+      liveHeader.getByRole('status'),
+    ).toContainText(/Live · \d{1,2}:\d{2}/)
+
+    // 5) End the Meeting: completed. The Completed
+    //    header's meta line still reports the ORIGINAL
+    //    scheduled slot (start/end never rewrite
+    //    scheduledAt).
+    await page
+      .getByRole('button', { name: 'End meeting' })
+      .click()
+
+    await expect(
+      page.getByRole('button', {
+        name: 'Reopen meeting',
+      }),
+    ).toBeVisible()
+
+    const completedHeader = page
+      .locator('header')
+      .filter({
+        has: page.getByRole('heading', {
+          name: title,
+          level: 1,
+        }),
+      })
+
+    await expect(
+      completedHeader.getByText(compactScheduledSlot, {
+        exact: true,
+      }),
+    ).toBeVisible()
+
+    // 6) No occurrence materialization across the whole
+    //    late-start flow.
+    expect(materializeRequests).toBe(0)
+  },
+)

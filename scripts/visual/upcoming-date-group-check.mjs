@@ -29,8 +29,15 @@
  *     measurement).
  *
  * Checks performed (per viewport):
- *   - header copy: `Today · Wed, Sep 23` / `Tomorrow · Thu, Sep 24`
- *     (relative + absolute) and `Fri, Sep 25` (absolute only);
+ *   - header copy: `Tue, Sep 22` (absolute only — the PAST date
+ *     group of the overdue concrete Meeting), `Today · Wed, Sep 23`
+ *     / `Tomorrow · Thu, Sep 24` (relative + absolute) and
+ *     `Fri, Sep 25` (absolute only);
+ *   - the OVERDUE concrete Meeting (scheduled before local midnight
+ *     today, lifecycle status still `upcoming`) renders in its own
+ *     past date group — FIRST in the chronological list, with the
+ *     same row geometry, dividers, and interaction as the
+ *     in-window rows (no special badge / redesign);
  *   - header geometry: 12px / 600, 32px band, NO all-caps
  *     text-transform;
  *   - the Today header carries the slightly stronger text color, the
@@ -59,6 +66,11 @@
  *     sticky header), fits the viewport, and its appearance does NOT
  *     shift the Upcoming list (list bounding box measured with and
  *     without the toast).
+ *   - the real list MOUNTS at each viewport before any geometry
+ *     measurement: an uncaught page JavaScript error (e.g. a stale
+ *     component-prop contract) fails the run with captured
+ *     pageerror/console evidence — a rendering exception is
+ *     reported distinctly from a script-load failure;
  *
  * This is a component+CSS harness, not the full authenticated app:
  * the presentation under test lives entirely in
@@ -196,6 +208,27 @@ function iso(
 
 const items: UpcomingMeeting[] = [
   {
+    id: 'meeting:0',
+    title: 'Yesterday Standup (overdue)',
+    scheduledAt: iso(2026, 9, 22, 10, 0),
+    meetingId: 0,
+    status: 'upcoming',
+    recurrenceId: null,
+    recurring: false,
+    occurrenceId: null,
+    originalScheduledAt: null,
+    rescheduled: false,
+    researchGroupId: 1,
+    projectId: null,
+    participantIds: [1],
+    actionPermissions: {
+      canEdit: false,
+      canDelete: false,
+      canCancel: false,
+    },
+    canExclude: false,
+  },
+  {
     id: 'meeting:1',
     title: 'Morning Research Sync',
     scheduledAt: iso(2026, 9, 23, 17, 0),
@@ -209,6 +242,12 @@ const items: UpcomingMeeting[] = [
     researchGroupId: 1,
     projectId: null,
     participantIds: [1],
+    actionPermissions: {
+      canEdit: false,
+      canDelete: false,
+      canCancel: false,
+    },
+    canExclude: false,
   },
   {
     id: 'occurrence:occ-v1',
@@ -224,6 +263,8 @@ const items: UpcomingMeeting[] = [
     researchGroupId: 1,
     projectId: null,
     participantIds: [],
+    actionPermissions: null,
+    canExclude: false,
   },
   {
     id: 'meeting:2',
@@ -239,6 +280,12 @@ const items: UpcomingMeeting[] = [
     researchGroupId: 1,
     projectId: null,
     participantIds: [1, 2, 3, 4, 5],
+    actionPermissions: {
+      canEdit: false,
+      canDelete: false,
+      canCancel: false,
+    },
+    canExclude: false,
   },
   {
     id: 'occurrence:occ-v2',
@@ -254,6 +301,8 @@ const items: UpcomingMeeting[] = [
     researchGroupId: 1,
     projectId: null,
     participantIds: [],
+    actionPermissions: null,
+    canExclude: false,
   },
 ]
 
@@ -281,7 +330,10 @@ function Harness() {
           loading={false}
           recurrenceLoading={false}
           onNewMeeting={() => {}}
-          onOpenMeeting={() => {}}
+          onOpenRow={() => {}}
+          onEditMeeting={() => {}}
+          onDestructiveAction={() => {}}
+          openingRowIds={new Set<string>()}
         />
       </div>
 
@@ -436,12 +488,68 @@ try {
 
   const page = await browser.newPage()
 
+  // Capture uncaught page errors and console errors as mount
+  // evidence: if the list fails to render, this distinguishes a
+  // React rendering exception (a pageerror — e.g. a stale
+  // component-prop contract) from a script-load failure (bundle
+  // missing/broken — no pageerror, the list never mounts).
+  const pageErrors = []
+  const consoleErrors = []
+  page.on('pageerror', (error) => {
+    pageErrors.push(
+      String(error && error.message ? error.message : error),
+    )
+  })
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      consoleErrors.push(message.text())
+    }
+  })
+
+  function reportMountDiagnostics(context) {
+    console.error('')
+    console.error(context)
+    if (pageErrors.length > 0) {
+      console.error('Uncaught page errors (rendering exception):')
+      for (const entry of pageErrors) {
+        console.error(`  ${entry}`)
+      }
+    } else {
+      console.error(
+        'No uncaught page errors — the bundle likely never ran (script-load failure).',
+      )
+    }
+    if (consoleErrors.length > 0) {
+      console.error('Console errors (informational):')
+      for (const entry of consoleErrors.slice(0, 10)) {
+        console.error(`  ${entry}`)
+      }
+    }
+  }
+
   for (const width of VIEWPORTS) {
     await page.setViewportSize({ width, height: 1000 })
     await page.goto(`file://${htmlPath}`)
-    await page.waitForSelector(
-      '[aria-label="Upcoming meetings"]',
-    )
+    // The list must actually render before any geometry
+    // measurement: wait for the real section to be visible, and
+    // report captured JS evidence if the mount fails.
+    try {
+      await page.waitForSelector(
+        '[aria-label="Upcoming meetings"]',
+      )
+    } catch (mountError) {
+      reportMountDiagnostics(
+        `List failed to mount at ${width}px (not a layout defect — fix the harness contract or the environment):`,
+      )
+      console.error(
+        String(mountError.message)
+          .split('\n')
+          .slice(0, 4)
+          .join('\n'),
+      )
+      cleanupHarnessFiles()
+      process.exit(1)
+    }
     // Let webfonts settle so text metrics match the real app.
     await page.evaluate(() =>
       Promise.race([
@@ -645,7 +753,12 @@ try {
 
     /* ── Assertions ─────────────────────────────────────────── */
 
-    const [today, tomorrow, later] = m.headers
+    const [overdue, today, tomorrow, later] = m.headers
+    check(
+      'header copy: overdue group is the PAST date, absolute only',
+      overdue?.text === 'Tue, Sep 22',
+      overdue?.text,
+    )
     check(
       'header copy: Today carries relative + absolute date',
       today?.text === 'Today · Wed, Sep 23',
@@ -660,6 +773,13 @@ try {
       'header copy: later group is absolute date only',
       later?.text === 'Fri, Sep 25',
       later?.text,
+    )
+    check(
+      'chronological order: overdue group comes FIRST (before Today)',
+      m.headers.length === 4 &&
+        m.headers[0]?.text === 'Tue, Sep 22' &&
+        m.headers[1]?.text === 'Today · Wed, Sep 23',
+      m.headers.map((h) => h.text).join(' > '),
     )
 
     for (const [label, h] of m.headers.entries()) {
@@ -678,15 +798,16 @@ try {
     }
     check(
       'header emphasis: Today slightly stronger, others secondary',
-      today?.color === 'rgb(28, 32, 36)' &&
+      overdue?.color === 'rgb(96, 100, 108)' &&
+        today?.color === 'rgb(28, 32, 36)' &&
         tomorrow?.color === 'rgb(96, 100, 108)' &&
         later?.color === 'rgb(96, 100, 108)',
-      `today=${today?.color} tomorrow=${tomorrow?.color} later=${later?.color}`,
+      `overdue=${overdue?.color} today=${today?.color} tomorrow=${tomorrow?.color} later=${later?.color}`,
     )
 
     check(
       'one shared list container: exactly the group wrappers are the section children',
-      m.wrappers.length === 3 &&
+      m.wrappers.length === 4 &&
         m.wrappers.every((w) => w.hasHeader),
       `children=${m.wrappers.length}`,
     )
@@ -698,8 +819,9 @@ try {
     check(
       'later groups: ~8px separation before each header',
       m.wrappers[1]?.marginTop === '8px' &&
-        m.wrappers[2]?.marginTop === '8px',
-      `${m.wrappers[1]?.marginTop} / ${m.wrappers[2]?.marginTop}`,
+        m.wrappers[2]?.marginTop === '8px' &&
+        m.wrappers[3]?.marginTop === '8px',
+      `${m.wrappers[1]?.marginTop} / ${m.wrappers[2]?.marginTop} / ${m.wrappers[3]?.marginTop}`,
     )
     // Row dividers: the visible line is the border-bottom of
     // every non-last row (Tailwind v4 divide-y contract); it
@@ -742,7 +864,7 @@ try {
         width >= 1100 ? 4 : 3
       check(
         `row grid unchanged at ${width}px (${expectedTracks} tracks, compact rows)`,
-        m.rows.length === 4 &&
+        m.rows.length === 5 &&
           m.rows.every(
             (row) =>
               row.trackCount === expectedTracks &&
@@ -758,9 +880,13 @@ try {
       )
       if (width >= 1100) {
         check(
-          `desktop tracks start 104px and end 96px/48px at ${width}px`,
+          // The Actions track is 72px in the committed component
+          // contract (compact direct action group — up to two
+          // 32px icon actions with a 4px gap), unchanged since
+          // the row Edit / destructive actions landed.
+          `desktop tracks start 104px and end 96px/72px at ${width}px`,
           m.rows.every((row) =>
-            /^104px\s+[\d.]+px\s+96px\s+48px$/.test(
+            /^104px\s+[\d.]+px\s+96px\s+72px$/.test(
               row.columns,
             ),
           ),
@@ -774,7 +900,7 @@ try {
          60–74px band. */
       check(
         `mobile rows: single track at ${width}px`,
-        m.rows.length === 4 &&
+        m.rows.length === 5 &&
           m.rows.every((row) => row.trackCount === 1),
         m.rows.map((r) => `${r.trackCount}t`).join(' '),
       )
@@ -902,6 +1028,15 @@ try {
       console.log(`  header: ${h.text}`)
     }
   }
+
+  // The real list must mount without JavaScript errors — a
+  // rendering exception (e.g. a stale prop contract) would
+  // otherwise corrupt every measurement below.
+  check(
+    'list mounted without uncaught JavaScript errors',
+    pageErrors.length === 0,
+    pageErrors.slice(0, 3).join(' | '),
+  )
 } finally {
   if (browser) {
     await browser.close()

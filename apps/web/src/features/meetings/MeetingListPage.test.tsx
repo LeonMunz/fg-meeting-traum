@@ -1831,7 +1831,86 @@ describe('MeetingListPage — Upcoming data', () => {
     ).not.toBeInTheDocument()
   })
 
-  it('excludes past concrete Meetings while today stays visible', async () => {
+  it('keeps overdue concrete Meetings while excluding completed and cancelled past Meetings', async () => {
+    vi.mocked(meetingsApi.listMeetings).mockResolvedValue([
+      makeMeeting({
+        id: 1,
+        title: 'Yesterday upcoming',
+        scheduledAt: localIso(2026, 9, 22, 10, 0),
+      }),
+      makeMeeting({
+        id: 2,
+        title: 'Yesterday live',
+        scheduledAt: localIso(2026, 9, 22, 14, 0),
+        status: 'live',
+        startedAt: localIso(2026, 9, 22, 14, 5),
+      }),
+      makeMeeting({
+        id: 3,
+        title: 'Yesterday completed',
+        scheduledAt: localIso(2026, 9, 21, 10, 0),
+        status: 'completed',
+        startedAt: localIso(2026, 9, 21, 10, 0),
+        endedAt: localIso(2026, 9, 21, 11, 0),
+      }),
+      makeMeeting({
+        id: 4,
+        title: 'Yesterday cancelled',
+        scheduledAt: localIso(2026, 9, 20, 10, 0),
+        status: 'cancelled',
+      }),
+      makeMeeting({
+        id: 5,
+        title: 'Today meeting',
+        scheduledAt: localIso(2026, 9, 23, 10, 0),
+      }),
+    ])
+
+    renderPage()
+    await screen.findByRole('heading', { name: 'Today · Wed, Sep 23' })
+
+    // The overdue concrete Meetings (still `upcoming` / `live`)
+    // stay visible — elapsed time never changes the lifecycle
+    // status…
+    expect(screen.getByText('Yesterday upcoming')).toBeVisible()
+    expect(screen.getByText('Yesterday live')).toBeVisible()
+    // …and today stays visible…
+    expect(screen.getByText('Today meeting')).toBeVisible()
+    // …while completed / cancelled Meetings no longer take place
+    // and are absent from Upcoming (a completed Meeting belongs
+    // to the Past archive).
+    expect(
+      screen.queryByText('Yesterday completed'),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByText('Yesterday cancelled'),
+    ).not.toBeInTheDocument()
+  })
+
+  it('keeps the canonical window boundary: far-future concrete Meetings stay excluded', async () => {
+    vi.mocked(meetingsApi.listMeetings).mockResolvedValue([
+      makeMeeting({
+        id: 1,
+        title: 'Beyond window',
+        scheduledAt: localIso(2026, 11, 7, 10, 0),
+      }),
+      makeMeeting({
+        id: 2,
+        title: 'Today meeting',
+        scheduledAt: localIso(2026, 9, 23, 10, 0),
+      }),
+    ])
+
+    renderPage()
+    await screen.findByRole('heading', { name: 'Today · Wed, Sep 23' })
+
+    expect(screen.getByText('Today meeting')).toBeVisible()
+    expect(
+      screen.queryByText('Beyond window'),
+    ).not.toBeInTheDocument()
+  })
+
+  it('shows a concrete upcoming Meeting scheduled yesterday in its own date group', async () => {
     vi.mocked(meetingsApi.listMeetings).mockResolvedValue([
       makeMeeting({
         id: 1,
@@ -1846,12 +1925,27 @@ describe('MeetingListPage — Upcoming data', () => {
     ])
 
     renderPage()
-    await screen.findByRole('heading', { name: 'Today · Wed, Sep 23' })
 
-    expect(screen.getByText('Today meeting')).toBeVisible()
+    // The overdue concrete Meeting keeps its own (past) date group,
+    // ordered BEFORE today.
+    const yesterdayHeading = await screen.findByRole('heading', {
+      name: 'Tue, Sep 22',
+    })
+    const yesterdayGroup = within(
+      yesterdayHeading.closest('div')!,
+    )
     expect(
-      screen.queryByText('Yesterday meeting'),
-    ).not.toBeInTheDocument()
+      yesterdayGroup.getByText('Yesterday meeting'),
+    ).toBeVisible()
+
+    // Today stays visible in its own group.
+    const todayHeading = await screen.findByRole('heading', {
+      name: 'Today · Wed, Sep 23',
+    })
+    const todayGroup = within(
+      todayHeading.closest('div')!,
+    )
+    expect(todayGroup.getByText('Today meeting')).toBeVisible()
   })
 
   it('excludes a rescheduled occurrence whose EFFECTIVE time left the window', async () => {
@@ -1887,7 +1981,7 @@ describe('MeetingListPage — Upcoming data', () => {
     ).not.toBeInTheDocument()
   })
 
-  it('gives live Meetings no unbounded window exception', async () => {
+  it('shows a past live Meeting but still excludes a far-future live Meeting', async () => {
     vi.mocked(meetingsApi.listMeetings).mockResolvedValue([
       makeMeeting({
         id: 1,
@@ -1900,6 +1994,13 @@ describe('MeetingListPage — Upcoming data', () => {
         title: 'Live beyond window',
         scheduledAt: localIso(2026, 11, 7, 9, 0),
         status: 'live',
+      }),
+      makeMeeting({
+        id: 3,
+        title: 'Live yesterday',
+        scheduledAt: localIso(2026, 9, 22, 16, 0),
+        status: 'live',
+        startedAt: localIso(2026, 9, 22, 16, 5),
       }),
     ])
 
@@ -1914,7 +2015,11 @@ describe('MeetingListPage — Upcoming data', () => {
 
     // The in-window live Meeting keeps its In progress behavior…
     expect(todayGroup.getByText('In progress')).toBeVisible()
-    // …while the far-future live Meeting is not shown at all.
+    // …a live Meeting whose scheduled date has passed stays
+    // accessible (the overdue concrete exception)…
+    expect(screen.getByText('Live yesterday')).toBeVisible()
+    // …while the far-future live Meeting is not shown at all
+    // (the +42-day boundary stays exact).
     expect(
       screen.queryByText('Live beyond window'),
     ).not.toBeInTheDocument()

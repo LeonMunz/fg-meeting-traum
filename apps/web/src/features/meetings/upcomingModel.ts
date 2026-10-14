@@ -213,7 +213,15 @@ export function isWithinUpcomingWindow(
 /**
  * The visible-window half of Upcoming selection: keep only rows whose
  * EFFECTIVE displayed `scheduledAt` lies inside the initial window
- * (local today → +42 days, inclusive boundaries).
+ * (local today → +42 days, inclusive boundaries) — plus the narrow
+ * historical exception for overdue concrete Meetings (see
+ * `isPastConcreteMeeting`): a concrete Meeting that is still
+ * `upcoming` or `live` but whose scheduled start lies BEFORE the
+ * window start (local midnight today) stays visible, because elapsed
+ * time never changes the lifecycle status and the canonical Start
+ * action validates status, not clock time. The +42-day future
+ * boundary stays exact for every row kind, and rows without a
+ * concrete Meeting (virtual occurrences) remain strictly windowed.
  *
  * Applied AFTER `buildUpcomingList`, so ONE rule covers every row
  * kind: one-time concrete Meetings, materialized recurring Meetings
@@ -224,17 +232,59 @@ export function isWithinUpcomingWindow(
  *
  *   original inside → rescheduled outside  =>  absent
  *   effective time inside the window       =>  present
+ *   past concrete upcoming / live Meeting  =>  present (exception)
  *
- * `live` rows receive no separate unbounded exception. The filter
+ * The exception is strictly the PAST side of the window for concrete
+ * Meetings only: `live` receives no unbounded exception (a
+ * far-future `live` Meeting is still absent), and the filter
  * preserves the deterministic input ordering.
  */
 export function selectUpcomingWindowRows(
   rows: readonly UpcomingMeeting[],
   window: UpcomingWindow,
 ): UpcomingMeeting[] {
-  return rows.filter((row) =>
-    isWithinUpcomingWindow(row.scheduledAt, window),
-  )
+  return rows.filter((row) => {
+    if (isWithinUpcomingWindow(row.scheduledAt, window)) {
+      return true
+    }
+
+    return isPastConcreteMeeting(row, window)
+  })
+}
+
+/**
+ * The narrow historical-visibility exception of the Upcoming view:
+ * a row backed by a concrete Meeting that is still `upcoming` or
+ * `live` but whose scheduled start lies BEFORE the window start
+ * (local midnight today) — an overdue Meeting — stays visible and
+ * startable.
+ *
+ * Strictly one-sided and strictly concrete:
+ * - never admits a row beyond the window's `to` boundary (the
+ *   +42-day future limit stays exact for every row kind);
+ * - never applies to rows without a concrete Meeting (virtual
+ *   occurrences and feed rows without a concrete representation
+ *   stay strictly windowed — `status` is null for them);
+ * - never resurrects rows `buildUpcomingList` already dropped
+ *   (`completed` / `cancelled` Meetings are absent upstream).
+ *
+ * Unparseable instants are excluded, never guessed.
+ */
+function isPastConcreteMeeting(
+  row: UpcomingMeeting,
+  window: UpcomingWindow,
+): boolean {
+  if (row.status !== 'upcoming' && row.status !== 'live') {
+    return false
+  }
+
+  const time = Date.parse(row.scheduledAt)
+  const from = Date.parse(window.from)
+  if (Number.isNaN(time) || Number.isNaN(from)) {
+    return false
+  }
+
+  return time < from
 }
 
 function parseInstant(iso: string): number {

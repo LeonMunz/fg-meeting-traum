@@ -730,6 +730,73 @@ describe('isWithinUpcomingWindow / selectUpcomingWindowRows — the canonical vi
     expect(rows.map((row) => row.id)).toEqual(['live-in'])
   })
 
+  it('keeps a past concrete upcoming Meeting visible (overdue exception)', () => {
+    // A concrete Meeting whose scheduled start lies before local
+    // midnight today (yesterday) is still `upcoming`: it must remain
+    // visible and startable — elapsed time never changes the
+    // lifecycle status.
+    const overdue = makeRow({
+      id: 'meeting:7',
+      meetingId: 7,
+      scheduledAt: local(2026, 9, 22, 10, 0),
+      status: 'upcoming',
+    })
+    const today = makeRow({
+      id: 'meeting:8',
+      meetingId: 8,
+      scheduledAt: local(2026, 9, 23, 10, 0),
+      status: 'upcoming',
+    })
+
+    const rows = selectUpcomingWindowRows(
+      [today, overdue],
+      WINDOW,
+    )
+
+    expect(rows.map((row) => row.id)).toEqual([
+      'meeting:8',
+      'meeting:7',
+    ])
+  })
+
+  it('keeps a past concrete live Meeting visible (overdue exception)', () => {
+    const pastLive = makeRow({
+      id: 'meeting:9',
+      meetingId: 9,
+      scheduledAt: local(2026, 9, 21, 15, 0),
+      status: 'live',
+    })
+
+    const rows = selectUpcomingWindowRows(
+      [pastLive],
+      WINDOW,
+    )
+
+    expect(rows.map((row) => row.id)).toEqual([
+      'meeting:9',
+    ])
+  })
+
+  it('still excludes a past row without a concrete Meeting (feed rows stay windowed)', () => {
+    // A virtual occurrence (no concrete Meeting) scheduled before
+    // the window start has no lifecycle status to preserve — it
+    // stays strictly windowed.
+    const pastVirtual = makeRow({
+      id: 'occurrence:past-v',
+      recurring: true,
+      recurrenceId: 10,
+      occurrenceId: 'past-v',
+      scheduledAt: local(2026, 9, 22, 10, 0),
+    })
+
+    const rows = selectUpcomingWindowRows(
+      [pastVirtual],
+      WINDOW,
+    )
+
+    expect(rows).toHaveLength(0)
+  })
+
   it('judges rescheduled occurrences by their effective time, never the original slot', () => {
     // Original inside the window, rescheduled OUTSIDE => absent.
     const rescheduledOutside = makeRow({
@@ -785,6 +852,64 @@ describe('isWithinUpcomingWindow / selectUpcomingWindowRows — the canonical vi
     expect(
       selectUpcomingWindowRows(merged, WINDOW),
     ).toHaveLength(0)
+  })
+
+  it('places an overdue concrete Meeting before in-window rows in the final list', () => {
+    const overdue = makeMeeting({
+      id: 910,
+      title: 'Overdue one-time',
+      scheduledAt: local(2026, 9, 22, 9, 0),
+    })
+    const today = makeMeeting({
+      id: 911,
+      title: 'Today one-time',
+      scheduledAt: local(2026, 9, 23, 10, 0),
+    })
+
+    const rows = selectUpcomingWindowRows(
+      buildUpcomingList([today, overdue], []),
+      WINDOW,
+    )
+
+    expect(rows.map((row) => row.id)).toEqual([
+      'meeting:910',
+      'meeting:911',
+    ])
+  })
+
+  it('keeps a past materialized recurring Meeting exactly once through its concrete identity', () => {
+    const meeting = makeMeeting({
+      id: 912,
+      title: 'Overdue recurring',
+      scheduledAt: local(2026, 9, 21, 12, 0),
+    })
+    // A materialized occurrence whose EFFECTIVE time moved before
+    // the window start: its concrete Meeting identity is the only
+    // row it may produce (no duplicate virtual row).
+    const occurrence = makeOccurrence({
+      occurrenceId: 'occ-overdue',
+      title: 'Overdue recurring',
+      originalScheduledAt: local(2026, 9, 23, 12, 0),
+      scheduledAt: local(2026, 9, 21, 12, 0),
+      materialized: true,
+      meetingId: 912,
+    })
+
+    const rows = selectUpcomingWindowRows(
+      buildUpcomingList([meeting], [occurrence]),
+      WINDOW,
+    )
+
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      id: 'meeting:912',
+      meetingId: 912,
+      recurring: true,
+      recurrenceId: 10,
+      occurrenceId: 'occ-overdue',
+      rescheduled: true,
+      status: 'upcoming',
+    })
   })
 
   it('keeps an in-window materialized occurrence exactly once through the window filter', () => {

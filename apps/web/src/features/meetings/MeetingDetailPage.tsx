@@ -227,7 +227,10 @@ function formatMeetingDayLabel(value: string): string {
     return 'Today'
   }
 
-  if (dayDiff === 1) {
+  // dayDiff is positive for PAST days (today − scheduled), so
+  // Tomorrow is the next local day: dayDiff === -1. Yesterday
+  // (dayDiff === 1) falls through to the absolute date.
+  if (dayDiff === -1) {
     return 'Tomorrow'
   }
 
@@ -4067,135 +4070,137 @@ export function MeetingDetailPage() {
           cancelled) keep the shared header. */}
       {isUpcoming ? (
         <div className="flex flex-col">
-          {/* Breadcrumb */}
-          <nav
-            aria-label="Breadcrumb"
-            className="mb-1.5 flex select-none items-center gap-1.5 text-[13px] leading-[18px] text-text-muted"
-          >
-            <button
-              type="button"
-              onClick={() => navigate('/meetings')}
-              className="-mx-1 rounded px-1 outline-none transition hover:text-text focus-visible:ring-2 focus-visible:ring-focus"
+          <header>
+            {/* Breadcrumb */}
+            <nav
+              aria-label="Breadcrumb"
+              className="mb-1.5 flex select-none items-center gap-1.5 text-[13px] leading-[18px] text-text-muted"
             >
-              Meetings
-            </button>
-
-            {activeResearchGroup?.name && (
-              <>
-                <span aria-hidden="true" className="text-text-faded">
-                  /
-                </span>
-
-                <span className="truncate">
-                  {activeResearchGroup.name}
-                </span>
-              </>
-            )}
-          </nav>
-
-          {/* Title row */}
-          <div className="mb-2.5 mt-1 flex items-center justify-between gap-6">
-            <h1 className="min-w-0 truncate text-2xl font-semibold leading-8 tracking-tight text-text">
-              {meeting.title}
-            </h1>
-
-            <div className="flex shrink-0 items-center gap-2.5">
-              {canManageLifecycle && (
-                <button
-                  type="button"
-                  disabled={updatingMeeting}
-                  onClick={() => void handleStartMeeting()}
-                  className="flex items-center gap-1.5 rounded-md bg-action px-3.5 py-1.5 text-[13px] font-medium text-text-inverse shadow-xs outline-none transition hover:bg-action-hover focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-canvas disabled:opacity-60"
-                >
-                  <span aria-hidden="true" className="material-symbols-outlined text-[16px]">
-                    play_arrow
-                  </span>
-                  Start meeting
-                </button>
-              )}
-
-              {canAdministerMeeting && (
-                <MenuTrigger label="Meeting actions">
-                  {(_, close) => (
-                    <>
-                      <MenuItem
-                        label="Delete meeting"
-                        icon="delete"
-                        danger
-                        onClick={() => {
-                          setDeleteDialogOpen(true)
-                          close()
-                        }}
-                      />
-                    </>
-                  )}
-                </MenuTrigger>
-              )}
-            </div>
-          </div>
-
-          {/* Metadata row: date · time · context | participant
-              stack · Add user */}
-          <div className="mb-6 flex items-center gap-4 text-[13px] leading-[18px] text-text-muted">
-            <div className="flex items-center gap-1.5">
-              <span>
-                {formatMeetingDayLabel(
-                  meeting.scheduledAt,
-                )}
-              </span>
-
-              <span aria-hidden="true">·</span>
-              <span>
-                {formatMeetingClock(meeting.scheduledAt)}
-              </span>
-
-              <span aria-hidden="true">·</span>
-              <span>
-                {meeting.scope === 'project'
-                  ? 'Project Meeting'
-                  : 'Research Group Meeting'}
-              </span>
-            </div>
-
-            <span aria-hidden="true" className="text-text-faded">
-              |
-            </span>
-
-            <div
-              role="group"
-              aria-label="Participants"
-              className="flex items-center -space-x-1.5"
-            >
-              {sortedParticipants.slice(0, 4).map(
-                (participant) => (
-                  <span
-                    key={participant.id}
-                    title={getPersonName(participant.user)}
-                    className="flex h-6 w-6 select-none items-center justify-center rounded-full bg-surface-muted text-[10px] font-medium text-text ring-2 ring-canvas"
-                  >
-                    {getInitials(participant.user)}
-                  </span>
-                ),
-              )}
-
-              {participants.length > 4 && (
-                <span className="flex h-6 w-6 select-none items-center justify-center rounded-full bg-surface-subtle text-[10px] font-medium text-text-muted ring-2 ring-canvas">
-                  +{participants.length - 4}
-                </span>
-              )}
-            </div>
-
-            {canEditParticipants && (
               <button
                 type="button"
-                onClick={toggleParticipantManagement}
-                aria-expanded={managingParticipants}
-                className="ml-[-4px] rounded text-[13px] font-medium text-accent-text outline-none hover:underline focus-visible:ring-2 focus-visible:ring-focus"
+                onClick={() => navigate('/meetings')}
+                className="-mx-1 rounded px-1 outline-none transition hover:text-text focus-visible:ring-2 focus-visible:ring-focus"
               >
-                {managingParticipants ? 'Done' : 'Add user'}
+                Meetings
               </button>
-            )}
-          </div>
+
+              {activeResearchGroup?.name && (
+                <>
+                  <span aria-hidden="true" className="text-text-faded">
+                    /
+                  </span>
+
+                  <span className="truncate">
+                    {activeResearchGroup.name}
+                  </span>
+                </>
+              )}
+            </nav>
+
+            {/* Title row */}
+            <div className="mb-2.5 mt-1 flex items-center justify-between gap-6">
+              <h1 className="min-w-0 truncate text-2xl font-semibold leading-8 tracking-tight text-text">
+                {meeting.title}
+              </h1>
+
+              <div className="flex shrink-0 items-center gap-2.5">
+                {canManageLifecycle && (
+                  <button
+                    type="button"
+                    disabled={updatingMeeting}
+                    onClick={() => void handleStartMeeting()}
+                    className="flex items-center gap-1.5 rounded-md bg-action px-3.5 py-1.5 text-[13px] font-medium text-text-inverse shadow-xs outline-none transition hover:bg-action-hover focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-canvas disabled:opacity-60"
+                  >
+                    <span aria-hidden="true" className="material-symbols-outlined text-[16px]">
+                      play_arrow
+                    </span>
+                    Start meeting
+                  </button>
+                )}
+
+                {canAdministerMeeting && (
+                  <MenuTrigger label="Meeting actions">
+                    {(_, close) => (
+                      <>
+                        <MenuItem
+                          label="Delete meeting"
+                          icon="delete"
+                          danger
+                          onClick={() => {
+                            setDeleteDialogOpen(true)
+                            close()
+                          }}
+                        />
+                      </>
+                    )}
+                  </MenuTrigger>
+                )}
+              </div>
+            </div>
+
+            {/* Metadata row: date · time · context | participant
+                stack · Add user */}
+            <div className="mb-6 flex items-center gap-4 text-[13px] leading-[18px] text-text-muted">
+              <div className="flex items-center gap-1.5">
+                <span>
+                  {formatMeetingDayLabel(
+                    meeting.scheduledAt,
+                  )}
+                </span>
+
+                <span aria-hidden="true">·</span>
+                <span>
+                  {formatMeetingClock(meeting.scheduledAt)}
+                </span>
+
+                <span aria-hidden="true">·</span>
+                <span>
+                  {meeting.scope === 'project'
+                    ? 'Project Meeting'
+                    : 'Research Group Meeting'}
+                </span>
+              </div>
+
+              <span aria-hidden="true" className="text-text-faded">
+                |
+              </span>
+
+              <div
+                role="group"
+                aria-label="Participants"
+                className="flex items-center -space-x-1.5"
+              >
+                {sortedParticipants.slice(0, 4).map(
+                  (participant) => (
+                    <span
+                      key={participant.id}
+                      title={getPersonName(participant.user)}
+                      className="flex h-6 w-6 select-none items-center justify-center rounded-full bg-surface-muted text-[10px] font-medium text-text ring-2 ring-canvas"
+                    >
+                      {getInitials(participant.user)}
+                    </span>
+                  ),
+                )}
+
+                {participants.length > 4 && (
+                  <span className="flex h-6 w-6 select-none items-center justify-center rounded-full bg-surface-subtle text-[10px] font-medium text-text-muted ring-2 ring-canvas">
+                    +{participants.length - 4}
+                  </span>
+                )}
+              </div>
+
+              {canEditParticipants && (
+                <button
+                  type="button"
+                  onClick={toggleParticipantManagement}
+                  aria-expanded={managingParticipants}
+                  className="ml-[-4px] rounded text-[13px] font-medium text-accent-text outline-none hover:underline focus-visible:ring-2 focus-visible:ring-focus"
+                >
+                  {managingParticipants ? 'Done' : 'Add user'}
+                </button>
+              )}
+            </div>
+          </header>
 
           {/* Quick Add bar */}
           {canPrepare && (
