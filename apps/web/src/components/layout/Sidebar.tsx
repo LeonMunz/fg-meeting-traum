@@ -49,7 +49,7 @@ type SidebarIconName =
   | 'chevron-right'
   | 'loading'
 
-function SidebarIcon({
+export function SidebarIcon({
   name,
   className = 'h-3.5 w-3.5',
 }: {

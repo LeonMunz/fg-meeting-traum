@@ -527,6 +527,37 @@ describe('My Work List View — canonical personal endpoint', () => {
     expect(listMyWork).toHaveBeenCalledWith()
   })
 
+  it('authoritatively refreshes after global Work Item creation', async () => {
+    vi.mocked(listMyWork)
+      .mockResolvedValueOnce([makeItem()])
+      .mockResolvedValueOnce([
+        makeItem(),
+        makeItem({
+          id: 101,
+          title: 'Created from Quick Create',
+        }),
+      ])
+
+    const { getByText } = renderPage()
+
+    await waitFor(() => {
+      expect(getByText('Prepare samples')).toBeInTheDocument()
+    })
+
+    window.dispatchEvent(
+      new CustomEvent('fg-workspace:work-item-created', {
+        detail: { projectId: PROJECT_A },
+      }),
+    )
+
+    await waitFor(() => {
+      expect(listMyWork).toHaveBeenCalledTimes(2)
+      expect(
+        getByText('Created from Quick Create'),
+      ).toBeInTheDocument()
+    })
+  })
+
   it('makes no per-Project or per-Research-Group request to render status/context/names', async () => {
     vi.mocked(listMyWork).mockResolvedValue([
       makeItem(),

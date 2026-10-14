@@ -40,6 +40,7 @@ import {
 } from '../../api/projects'
 import { useSession } from '../../api/useSession'
 import { useResearchGroup } from '../research-group/useResearchGroup'
+import { WORK_ITEM_CREATED_EVENT } from '../../components/layout/workItemInvalidation'
 import type { WorkItemFormInput } from '../projects/WorkItemDrawer'
 import { WorkItemDeleteDialog } from '../projects/workItemDelete'
 import {
@@ -802,6 +803,24 @@ export function MyWorkPage() {
       // false is rendered) — the next load reconciles.
     }
   }, [])
+
+  useEffect(() => {
+    const handleWorkItemCreated = () => {
+      void refreshMyWork()
+    }
+
+    window.addEventListener(
+      WORK_ITEM_CREATED_EVENT,
+      handleWorkItemCreated,
+    )
+
+    return () => {
+      window.removeEventListener(
+        WORK_ITEM_CREATED_EVENT,
+        handleWorkItemCreated,
+      )
+    }
+  }, [refreshMyWork])
 
   // Board/List switch: update the COMPLETE preference snapshot
   // locally — only `viewMode` changes, the three filter arrays are

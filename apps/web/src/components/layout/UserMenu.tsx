@@ -46,18 +46,24 @@ function UserMenuItem({
 /**
  * Global authenticated topbar user menu.
  *
- * Owns the menu open/closed state, the global InviteToWorkspaceDialog
- * open state, and the menu actions (profile, invite, settings, sign
- * out). The invite dialog stays fully independent: this component only
- * controls `open` and passes the session `logout` through; no
+ * Receives the coordinated TopBar menu state, and owns the global
+ * InviteToWorkspaceDialog open state plus the menu actions (profile,
+ * invite, settings, sign out). The invite dialog stays fully
+ * independent: this component only controls `open` and passes the
+ * session `logout` through; no
  * invitation API logic lives here. The dropdown and the dialog never
  * remain open simultaneously: every action closes the dropdown first.
  */
-export function UserMenu() {
+export function UserMenu({
+  open,
+  onOpenChange,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
   const { user, logout } = useSession()
   const navigate = useNavigate()
 
-  const [open, setOpen] = useState(false)
   const [inviteOpen, setInviteOpen] = useState(false)
   const containerRef = useRef<HTMLDivElement | null>(null)
 
@@ -73,13 +79,13 @@ export function UserMenu() {
         target instanceof Node &&
         !containerRef.current?.contains(target)
       ) {
-        setOpen(false)
+        onOpenChange(false)
       }
     }
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        setOpen(false)
+        onOpenChange(false)
       }
     }
 
@@ -90,7 +96,7 @@ export function UserMenu() {
       document.removeEventListener('mousedown', handlePointerDown)
       document.removeEventListener('keydown', handleKeyDown)
     }
-  }, [open])
+  }, [onOpenChange, open])
 
   if (!user) {
     return null
@@ -105,7 +111,7 @@ export function UserMenu() {
         aria-label={name}
         aria-haspopup="menu"
         aria-expanded={open}
-        onClick={() => setOpen((current) => !current)}
+        onClick={() => onOpenChange(!open)}
         className={[
           'flex h-8 items-center gap-1.5 rounded border border-transparent bg-transparent px-2 py-1 transition',
           'hover:bg-surface',
@@ -143,7 +149,7 @@ export function UserMenu() {
             icon="person"
             label="Profile"
             onClick={() => {
-              setOpen(false)
+              onOpenChange(false)
               navigate('/profile', {
                 viewTransition: true,
               })
@@ -154,7 +160,7 @@ export function UserMenu() {
             icon="person_add"
             label="Invite to FG Workspace"
             onClick={() => {
-              setOpen(false)
+              onOpenChange(false)
               setInviteOpen(true)
             }}
           />
@@ -163,7 +169,7 @@ export function UserMenu() {
             icon="settings"
             label="Settings"
             onClick={() => {
-              setOpen(false)
+              onOpenChange(false)
               navigate('/settings/appearance', {
                 viewTransition: true,
               })
@@ -177,7 +183,7 @@ export function UserMenu() {
             label="Sign out"
             danger
             onClick={() => {
-              setOpen(false)
+              onOpenChange(false)
               void logout()
             }}
           />

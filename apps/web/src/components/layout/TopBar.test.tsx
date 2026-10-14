@@ -27,6 +27,16 @@ vi.mock('../../api/useSession', () => ({
   useSession: () => session,
 }))
 
+vi.mock('../../features/research-group/useResearchGroup', () => ({
+  useResearchGroup: () => ({
+    groups: [],
+    activeResearchGroupId: null,
+    activeResearchGroup: null,
+    loading: false,
+    error: null,
+  }),
+}))
+
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
@@ -65,9 +75,18 @@ describe('authenticated topbar user menu', () => {
     renderTopBar()
 
     const trigger = screen.getByRole('button', { name: 'Leo' })
+    const quickCreate = screen.getByRole('button', {
+      name: /Quick create/,
+    })
 
     expect(trigger).toHaveAttribute('aria-haspopup', 'menu')
     expect(trigger).toHaveAttribute('aria-expanded', 'false')
+    expect(quickCreate).toHaveAttribute('aria-haspopup', 'menu')
+    expect(quickCreate).toHaveAttribute('aria-expanded', 'false')
+    expect(
+      quickCreate.compareDocumentPosition(trigger) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
 
     // The permanent topbar Sign out button is gone.
     expect(

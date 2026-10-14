@@ -258,6 +258,20 @@ function installShowPicker() {
   }
 }
 
+describe('Work Item drawer — Project-local create header', () => {
+  it('keeps the existing Project context row static', () => {
+    renderCreatePanel()
+
+    expect(screen.getByText('Alpha', { exact: true })).toBeVisible()
+    expect(
+      screen.queryByRole('button', { name: 'Select project' }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('listbox', { name: 'Projects' }),
+    ).not.toBeInTheDocument()
+  })
+})
+
 function dueDateField() {
   return screen.getByLabelText(
     'Due date',

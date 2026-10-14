@@ -52,6 +52,10 @@ import {
   invalidateProjectQuickAccess,
 } from '../../components/layout/projectQuickAccessInvalidation'
 import {
+  WORK_ITEM_CREATED_EVENT,
+  type WorkItemCreatedDetail,
+} from '../../components/layout/workItemInvalidation'
+import {
   buildCreateWorkItemInput,
   resolveStatusDefinitionIdByCategory,
   resolveWorkItemDisplay,
@@ -1120,9 +1124,9 @@ export function ProjectDetailPage() {
     ) {
       // The event payload carries the newly created ApiWorkItem,
       // which includes the canonical projectId.
-      const detail = (event as CustomEvent<{
-        projectId?: number
-      }>).detail
+      const detail = (
+        event as CustomEvent<WorkItemCreatedDetail>
+      ).detail
       const numericProjectId = Number(project?.id)
 
       if (
@@ -1137,13 +1141,13 @@ export function ProjectDetailPage() {
     }
 
     window.addEventListener(
-      'fg-workspace:work-item-created',
+      WORK_ITEM_CREATED_EVENT,
       handleWorkItemCreated,
     )
 
     return () => {
       window.removeEventListener(
-        'fg-workspace:work-item-created',
+        WORK_ITEM_CREATED_EVENT,
         handleWorkItemCreated,
       )
     }
