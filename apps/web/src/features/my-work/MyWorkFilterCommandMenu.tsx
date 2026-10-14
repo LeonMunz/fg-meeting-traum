@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
 } from 'react'
+import { createPortal } from 'react-dom'
 
 import type { ApiWorkItemTypeKind } from '../../api/types'
 import type { ResearchGroupFilterOption } from './MyWorkResearchGroupFilter'
@@ -102,10 +103,19 @@ export const MyWorkFilterCommandMenu = forwardRef<
   forwardedRef,
 ) {
   const [open, setOpen] = useState(false)
+  // Viewport anchor for the portaled dialog: 6px below the trigger's
+  // bottom edge, with a right inset that keeps the dialog's right edge
+  // aligned with the trigger's right edge. Recomputed on open and on
+  // scroll/resize so the dialog keeps following the trigger.
+  const [anchor, setAnchor] = useState<{
+    top: number
+    right: number
+  } | null>(null)
   const [view, setView] = useState<CommandView>('root')
   const [search, setSearch] = useState('')
   const [activeIndex, setActiveIndex] = useState(0)
   const containerRef = useRef<HTMLDivElement | null>(null)
+  const portalRef = useRef<HTMLDivElement | null>(null)
   const triggerRef = useRef<HTMLButtonElement | null>(null)
   const rootRowRefs = useRef<Array<HTMLButtonElement | null>>([])
   const optionRefs = useRef<Array<HTMLDivElement | null>>([])
@@ -204,19 +214,33 @@ export const MyWorkFilterCommandMenu = forwardRef<
     [resetClosedState],
   )
 
+  const updateAnchor = useCallback(() => {
+    const trigger = triggerRef.current
+    if (!trigger) {
+      return
+    }
+    const rect = trigger.getBoundingClientRect()
+    setAnchor({
+      top: rect.bottom + 6,
+      right: window.innerWidth - rect.right,
+    })
+  }, [])
+
   const openRoot = useCallback(() => {
+    updateAnchor()
     setView('root')
     setSearch('')
     setActiveIndex(0)
     setOpen(true)
-  }, [])
+  }, [updateAnchor])
 
   const openCategory = useCallback((category: MyWorkFilterCategory) => {
+    updateAnchor()
     setView(category)
     setSearch('')
     setActiveIndex(0)
     setOpen(true)
-  }, [])
+  }, [updateAnchor])
 
   useImperativeHandle(
     forwardedRef,
@@ -233,6 +257,10 @@ export const MyWorkFilterCommandMenu = forwardRef<
       if (
         event.target instanceof Node &&
         !containerRef.current?.contains(event.target)
+        // The portaled dialog lives outside containerRef (on
+        // document.body) but is still "inside" the menu: a click
+        // there must never close it.
+        && !portalRef.current?.contains(event.target)
       ) {
         close(false)
       }
@@ -253,6 +281,25 @@ export const MyWorkFilterCommandMenu = forwardRef<
       document.removeEventListener('keydown', handleKeyDown)
     }
   }, [close, open])
+
+  // The portaled dialog is viewport-fixed: keep it pinned to the
+  // trigger while the page or an inner scroller moves (the same
+  // follow-the-trigger behavior the in-flow absolute dialog had for
+  // free).
+  useEffect(() => {
+    if (!open) {
+      return
+    }
+
+    const reposition = () => updateAnchor()
+    window.addEventListener('scroll', reposition, true)
+    window.addEventListener('resize', reposition)
+
+    return () => {
+      window.removeEventListener('scroll', reposition, true)
+      window.removeEventListener('resize', reposition)
+    }
+  }, [open, updateAnchor])
 
   useEffect(() => {
     if (!open) {
@@ -397,18 +444,41 @@ export const MyWorkFilterCommandMenu = forwardRef<
         )}
       </button>
 
-      {open && (
-        <div
-          role="dialog"
-          aria-label="Filter by"
-          onKeyDown={(event) => {
-            if (event.altKey && event.key === 'ArrowLeft' && view !== 'root') {
-              event.preventDefault()
-              backToRoot()
-            }
-          }}
-          className="absolute left-0 top-[calc(100%+6px)] z-50 flex max-h-[360px] w-[300px] max-w-[calc(100vw-48px)] flex-col overflow-hidden rounded-md border border-border-subtle bg-surface shadow-[0_12px_32px_rgba(0,0,0,0.32)]"
-        >
+      {/* LAYER CONTRACT: the command menu is an application overlay
+          surface, not route content, so it portals to document.body
+          (the application overlay root; the same pattern the Work Item
+          inspector and the modal dialogs use) instead of rendering in
+          the mounting route. `.fg-route-content` (the AppShell <main>,
+          the ONE named View Transition surface) carries
+          `view-transition-name`, which per CSS View Transitions S2.1.1
+          makes it form a stacking context at ALL times; rendered inside
+          that <main>, the z-50 menu would only compete WITHIN the
+          route-content context (effective z=0 at the root level), so at
+          narrow widths the fixed Sidebar (z-30, a sibling of <main> in
+          the root stacking context) paints over the menu's left part
+          and its subtree intercepts pointer input aimed at the menu.
+          From document.body the z-50 competes in the ROOT stacking
+          context. The fix is layer ownership, not a z-index escalation:
+          geometry (6px below the trigger, right edge aligned with the
+          trigger's right edge), focus, and interactions are unchanged. */}
+      {open && anchor !== null &&
+        createPortal(
+          <div
+            ref={portalRef}
+            role="dialog"
+            aria-label="Filter by"
+            onKeyDown={(event) => {
+              if (event.altKey && event.key === 'ArrowLeft' && view !== 'root') {
+                event.preventDefault()
+                backToRoot()
+              }
+            }}
+            style={{
+              top: anchor.top,
+              right: anchor.right,
+            }}
+            className="fixed z-50 flex max-h-[360px] w-[300px] max-w-[calc(100vw-48px)] flex-col overflow-hidden rounded-md border border-border-subtle bg-surface shadow-[0_12px_32px_rgba(0,0,0,0.32)]"
+          >
           {view === 'root' ? (
             <>
               <div className="flex items-center justify-between px-3 pb-1.5 pt-3">
@@ -612,8 +682,9 @@ export const MyWorkFilterCommandMenu = forwardRef<
               </div>
             </>
           )}
-        </div>
-      )}
+          </div>,
+          document.body,
+        )}
     </div>
   )
 })

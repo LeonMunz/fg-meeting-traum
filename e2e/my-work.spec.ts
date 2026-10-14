@@ -66,6 +66,67 @@ function expectNoHorizontalOverflow(page: Page) {
     })
 }
 
+async function expectAppliedFiltersAndActionsOnOneRow(page: Page) {
+  const appliedFilters = page.getByRole('group', {
+    name: 'Applied filters',
+  })
+  const toolbarActions = page
+    .getByRole('group', { name: 'My Work view' })
+    .locator('..')
+  const [appliedBox, actionsBox] = await Promise.all([
+    appliedFilters.boundingBox(),
+    toolbarActions.boundingBox(),
+  ])
+
+  expect(appliedBox).not.toBeNull()
+  expect(actionsBox).not.toBeNull()
+  expect(
+    Math.abs(
+      appliedBox!.y + appliedBox!.height / 2 -
+        (actionsBox!.y + actionsBox!.height / 2),
+    ),
+  ).toBeLessThanOrEqual(1)
+}
+
+type MyWorkFilterCategory =
+  | 'Research group'
+  | 'Project'
+  | 'Work item type'
+
+async function openMyWorkFilterCategory(
+  page: Page,
+  category: MyWorkFilterCategory,
+) {
+  const listbox = page.getByRole('listbox', {
+    name: `${category} options`,
+  })
+  if (await listbox.isVisible()) {
+    return listbox
+  }
+
+  const dialog = page.getByRole('dialog', { name: 'Filter by' })
+  if (!(await dialog.isVisible())) {
+    await page
+      .getByRole('button', { name: /^Filter,/ })
+      .click()
+  } else {
+    const back = dialog.getByRole('button', {
+      name: 'Back to filter categories',
+    })
+    if (await back.isVisible()) {
+      await back.click()
+    }
+  }
+
+  await dialog
+    .getByRole('button', {
+      name: new RegExp(`^${category}(?: \\d+)?$`),
+    })
+    .click()
+  await expect(listbox).toBeVisible()
+  return listbox
+}
+
 test('My Work lists assigned Work Items across Projects and Research Groups', async ({ page }, testInfo) => {
   // Record the wire contract: the page must load from the one
   // canonical personal endpoint and must not fetch per-Project
@@ -120,6 +181,67 @@ test('My Work lists assigned Work Items across Projects and Research Groups', as
       'E2E Analyze robot data',
     ],
   })
+
+  const filterTrigger = page.getByRole('button', {
+    name: 'Filter, 0 active categories',
+  })
+  const toolbar = page.getByRole('toolbar', {
+    name: 'My Work controls',
+  })
+  await expect(
+    toolbar.getByRole('group', { name: 'Applied filters' }),
+  ).toHaveCount(0)
+  await expect(toolbar.locator(':scope > *')).toHaveCount(1)
+  const viewSwitch = page.getByRole('group', {
+    name: 'My Work view',
+  })
+  const [viewSwitchBox, filterTriggerBox] = await Promise.all([
+    viewSwitch.boundingBox(),
+    filterTrigger.boundingBox(),
+  ])
+  expect(viewSwitchBox).not.toBeNull()
+  expect(filterTriggerBox).not.toBeNull()
+  expect(filterTriggerBox!.x).toBeGreaterThanOrEqual(
+    viewSwitchBox!.x + viewSwitchBox!.width,
+  )
+
+  await filterTrigger.focus()
+  await filterTrigger.press('Enter')
+  const filterDialog = page.getByRole('dialog', { name: 'Filter by' })
+  await expect(filterDialog).toBeVisible()
+  const filterDialogBox = await filterDialog.boundingBox()
+  expect(filterDialogBox).not.toBeNull()
+  expect(
+    Math.abs(
+      filterDialogBox!.x + filterDialogBox!.width -
+        (filterTriggerBox!.x + filterTriggerBox!.width),
+    ),
+  ).toBeLessThanOrEqual(1)
+  await expect(
+    filterDialog.getByRole('button', { name: 'Research group' }),
+  ).toBeVisible()
+  await expect(
+    filterDialog.getByRole('button', { name: 'Project' }),
+  ).toBeVisible()
+  await expect(
+    filterDialog.getByRole('button', { name: 'Work item type' }),
+  ).toBeVisible()
+
+  for (const theme of ['dark', 'light'] as const) {
+    await page.evaluate((value) => {
+      document.documentElement.dataset.theme = value
+    }, theme)
+    await filterDialog.screenshot({
+      path: testInfo.outputPath(`my-work-filter-${theme}.png`),
+    })
+  }
+  await page.evaluate(() => {
+    document.documentElement.dataset.theme = 'dark'
+  })
+
+  await page.keyboard.press('Escape')
+  await expect(filterDialog).toBeHidden()
+  await expect(filterTrigger).toBeFocused()
 
   const firstDraftRow = page.getByRole(
     'button',
@@ -579,6 +701,25 @@ test('My Work Kanban has no document horizontal overflow at a narrow viewport', 
     'board scroller must contain a horizontally scrollable grid',
   ).toBeGreaterThan(scroller.clientWidth)
 
+  await openMyWorkFilterCategory(page, 'Project')
+  await expect(
+    page.getByRole('searchbox', { name: 'Search projects' }),
+  ).toBeFocused()
+  const dialogBox = await page
+    .getByRole('dialog', { name: 'Filter by' })
+    .boundingBox()
+  if (!dialogBox) {
+    throw new Error('Filter command dialog bounding box not found')
+  }
+  expect(dialogBox.x).toBeGreaterThanOrEqual(0)
+  expect(dialogBox.x + dialogBox.width).toBeLessThanOrEqual(
+    viewport.width,
+  )
+  expect(dialogBox.y + dialogBox.height).toBeLessThanOrEqual(
+    viewport.height,
+  )
+  await expectNoHorizontalOverflow(page)
+
   await page.screenshot({
     path: testInfo.outputPath('my-work-kanban-narrow.png'),
     fullPage: true,
@@ -686,6 +827,10 @@ test('My Work Research Groups multiselect filters, persists, and restores', asyn
     page,
     'FG Example',
   )
+  const roboticsLabId = await getResearchGroupId(
+    page,
+    'Robotics Lab',
+  )
 
   await page.goto('/my-work')
 
@@ -707,10 +852,10 @@ test('My Work Research Groups multiselect filters, persists, and restores', asyn
     name: 'Open E2E Analyze robot data',
   })
 
-  // The Research Groups multiselect toggle is visible in the toolbar
-  // (no active filter in the baseline).
+  // The single command trigger is visible in the toolbar (no active
+  // filter in the baseline).
   const toggle = page.getByRole('button', {
-    name: 'Research groups, none selected',
+    name: 'Filter, 0 active categories',
   })
   await expect(toggle).toBeVisible()
 
@@ -725,12 +870,12 @@ test('My Work Research Groups multiselect filters, persists, and restores', asyn
     1,
   )
 
-  // Open the popover and select "FG Example".
-  await toggle.click()
-  const groupCheckbox = page.getByRole('checkbox', {
+  // Open the Research Group command view and select "FG Example".
+  await openMyWorkFilterCategory(page, 'Research group')
+  const groupOption = page.getByRole('option', {
     name: 'FG Example',
   })
-  await expect(groupCheckbox).toBeVisible()
+  await expect(groupOption).toBeVisible()
 
   // Event-based persistence: the wait for the debounced
   // complete-snapshot save is registered BEFORE the UI action. It
@@ -742,7 +887,7 @@ test('My Work Research Groups multiselect filters, persists, and restores', asyn
     researchGroupIds: [fgExampleId],
   })
 
-  await groupCheckbox.check()
+  await groupOption.click()
 
   // Filtering applies immediately WITHOUT a page reload or a
   // refetch of the personal endpoint.
@@ -752,11 +897,11 @@ test('My Work Research Groups multiselect filters, persists, and restores', asyn
     requestCountBeforeFilterChange,
   )
 
-  // The active filter is visible: the toggle shows a count badge
-  // and the applied row shows an "FG: ..." chip.
+  // The active filter is visible in the shared toolbar: the trigger
+  // shows a category badge and the summary shows an "FG: ..." chip.
   await expect(
     page.getByRole('button', {
-      name: 'Research groups, 1 selected',
+      name: 'Filter, 1 active category',
     }),
   ).toBeVisible()
   await expect(
@@ -765,9 +910,34 @@ test('My Work Research Groups multiselect filters, persists, and restores', asyn
     }),
   ).toBeVisible()
 
-  // The applied filter survives a full reload (server-side
-  // preference restore) — the verified save must have landed first.
   await preferenceSaveFlushed
+  const roboticsOption = page.getByRole('option', {
+    name: 'Robotics Lab',
+  })
+  const multiGroupSaveFlushed = expectMyWorkPreferenceSave(page, {
+    ...MY_WORK_PREFERENCES_BASELINE,
+    researchGroupIds: [fgExampleId, roboticsLabId].sort(
+      (a, b) => a - b,
+    ),
+  })
+  await roboticsOption.click()
+  await expect(groupOption).toHaveAttribute('aria-selected', 'true')
+  await expect(roboticsOption).toHaveAttribute('aria-selected', 'true')
+  await expect(firstDraftCard).toBeVisible()
+  await expect(robotCard).toBeVisible()
+  await expectAppliedFiltersAndActionsOnOneRow(page)
+  await multiGroupSaveFlushed
+
+  const singleGroupSaveFlushed = expectMyWorkPreferenceSave(page, {
+    ...MY_WORK_PREFERENCES_BASELINE,
+    researchGroupIds: [fgExampleId],
+  })
+  await roboticsOption.click()
+  await expect(robotCard).toBeHidden()
+  await singleGroupSaveFlushed
+
+  // The applied filter survives a full reload (server-side
+  // preference restore) — the final one-group save has landed.
   await page.reload()
   await expectMyWorkReady(page, {
     viewMode: 'board',
@@ -776,9 +946,17 @@ test('My Work Research Groups multiselect filters, persists, and restores', asyn
   })
   await expect(
     page.getByRole('button', {
-      name: 'Research groups, 1 selected',
+      name: 'Filter, 1 active category',
     }),
   ).toBeVisible()
+
+  await page.goto('/')
+  await page.goto('/my-work')
+  await expectMyWorkReady(page, {
+    viewMode: 'board',
+    visibleTitles: ['First Draft Complete'],
+    hiddenTitles: ['E2E Analyze robot data'],
+  })
 
   // Board -> List keeps the same active filter (one row only).
   await page
@@ -815,7 +993,7 @@ test('My Work Research Groups multiselect filters, persists, and restores', asyn
     .click()
   await expect(
     page.getByRole('button', {
-      name: 'Research groups, none selected',
+      name: 'Filter, 0 active categories',
     }),
   ).toBeVisible()
   await expect(firstDraftCard).toBeVisible()
@@ -898,10 +1076,10 @@ test('My Work Projects multiselect filters, persists, restores, and narrows with
     name: 'Open E2E Analyze robot data',
   })
 
-  const projectToggle = page.getByRole('button', {
-    name: 'Projects, none selected',
+  const filterTrigger = page.getByRole('button', {
+    name: 'Filter, 0 active categories',
   })
-  await expect(projectToggle).toBeVisible()
+  await expect(filterTrigger).toBeVisible()
 
   const requestCountBeforeFilterChange =
     myWorkRequests.length
@@ -911,27 +1089,49 @@ test('My Work Projects multiselect filters, persists, restores, and narrows with
 
   // ── Project options with NO Research Group filter: every seeded
   // Project represented by the canonical payload. ──
-  await projectToggle.click()
-  const paperCheckbox = page.getByRole('checkbox', {
+  await openMyWorkFilterCategory(page, 'Project')
+  const paperOption = page.getByRole('option', {
     name: 'Paper XYZ',
   })
-  const robotCheckbox = page.getByRole('checkbox', {
+  const robotOption = page.getByRole('option', {
     name: 'E2E Robot Study',
   })
-  await expect(paperCheckbox).toBeVisible()
-  await expect(robotCheckbox).toBeVisible()
+  await expect(paperOption).toBeVisible()
+  await expect(robotOption).toBeVisible()
 
-  // Select Paper XYZ: only its item remains, without a refetch of
-  // the personal endpoint.
-  const projectSaveFlushed = expectMyWorkPreferenceSave(
+  const projectSearch = page.getByRole('searchbox', {
+    name: 'Search projects',
+  })
+  await projectSearch.fill('Paper')
+  await expect(paperOption).toBeVisible()
+  await expect(robotOption).toHaveCount(0)
+  await projectSearch.fill('')
+  await expect(robotOption).toBeVisible()
+
+  // Multi-select both Projects first: OR semantics keeps both items,
+  // and both options report immediate selected state.
+  const multiProjectSaveFlushed = expectMyWorkPreferenceSave(
     page,
     {
       ...MY_WORK_PREFERENCES_BASELINE,
-      projectIds: [paperXyzId],
+      projectIds: [paperXyzId, robotStudyId].sort((a, b) => a - b),
     },
   )
+  await paperOption.click()
+  await robotOption.click()
+  await expect(paperOption).toHaveAttribute('aria-selected', 'true')
+  await expect(robotOption).toHaveAttribute('aria-selected', 'true')
+  await expect(firstDraftCard).toBeVisible()
+  await expect(robotCard).toBeVisible()
+  await multiProjectSaveFlushed
 
-  await paperCheckbox.check()
+  // Remove Robot Study again: Paper XYZ is the sole selection for
+  // the persistence and restore assertions below.
+  const projectSaveFlushed = expectMyWorkPreferenceSave(page, {
+    ...MY_WORK_PREFERENCES_BASELINE,
+    projectIds: [paperXyzId],
+  })
+  await robotOption.click()
 
   await expect(robotCard).toBeHidden()
   await expect(firstDraftCard).toBeVisible()
@@ -939,11 +1139,11 @@ test('My Work Projects multiselect filters, persists, restores, and narrows with
     requestCountBeforeFilterChange,
   )
 
-  // The active filter is visible: count badge, "PJ: ..." chip, and
+  // The active filter is visible: category badge, "PJ: ..." chip, and
   // the filtered result count.
   await expect(
     page.getByRole('button', {
-      name: 'Projects, 1 selected',
+      name: 'Filter, 1 active category',
     }),
   ).toBeVisible()
   await expect(
@@ -966,7 +1166,7 @@ test('My Work Projects multiselect filters, persists, restores, and narrows with
   })
   await expect(
     page.getByRole('button', {
-      name: 'Projects, 1 selected',
+      name: 'Filter, 1 active category',
     }),
   ).toBeVisible()
 
@@ -1012,11 +1212,8 @@ test('My Work Projects multiselect filters, persists, restores, and narrows with
 
   // ── Research Group → Project narrowing: with FG Example active,
   // the Projects control exposes only that group's Project. ──
-  const groupToggle = page.getByRole('button', {
-    name: /Research groups,/,
-  })
-  await groupToggle.click()
-  const fgCheckbox = page.getByRole('checkbox', {
+  await openMyWorkFilterCategory(page, 'Research group')
+  const fgOption = page.getByRole('option', {
     name: 'FG Example',
   })
   const groupSaveFlushed = expectMyWorkPreferenceSave(
@@ -1027,7 +1224,7 @@ test('My Work Projects multiselect filters, persists, restores, and narrows with
       projectIds: [paperXyzId],
     },
   )
-  await fgCheckbox.check()
+  await fgOption.click()
 
   // Combined filters (FG Example + Paper XYZ): the intersection —
   // still exactly the one Paper XYZ item; both applied chips show.
@@ -1045,25 +1242,20 @@ test('My Work Projects multiselect filters, persists, restores, and narrows with
   ).toBeVisible()
   await groupSaveFlushed
 
-  // The group popover stays open after a selection — close it, then
-  // open the Projects popover: only Paper XYZ remains an option.
-  await groupToggle.click()
-  await page
-    .getByRole('button', { name: /Projects, / })
-    .click()
+  // Move from the Research Group view to Project: only Paper XYZ
+  // remains an option.
+  await openMyWorkFilterCategory(page, 'Project')
   await expect(
-    page.getByRole('checkbox', {
+    page.getByRole('option', {
       name: 'Paper XYZ',
     }),
   ).toBeVisible()
   await expect(
-    page.getByRole('checkbox', {
+    page.getByRole('option', {
       name: 'E2E Robot Study',
     }),
   ).toHaveCount(0)
-  await page
-    .getByRole('button', { name: /Projects, / })
-    .click()
+  await page.keyboard.press('Escape')
 
   // ── Dependency normalization: a Project selection invalidated by
   // a Research Group scope change is normalized away (never left as
@@ -1091,17 +1283,17 @@ test('My Work Projects multiselect filters, persists, restores, and narrows with
       page,
       MY_WORK_PREFERENCES_BASELINE,
     )
-  await groupToggle.click()
+  await openMyWorkFilterCategory(page, 'Research group')
   // Scope to the OPEN Research groups popover (role dialog): a bare
   // `name: 'Clear'` also substring-matches the applied-filters row's
   // "Clear filters" button, which is not the control under test.
   await page
-    .getByRole('dialog', { name: 'Research groups' })
+    .getByRole('dialog', { name: 'Filter by' })
     .getByRole('button', { name: 'Clear' })
     .click()
-  // The popover stays open after Clear — close it so the Projects
-  // toggle below is not covered.
-  await groupToggle.click()
+  // The command menu stays open after Clear; dismiss it before the
+  // next direct category open.
+  await page.keyboard.press('Escape')
   await groupClearSaveFlushed
   await expect(firstDraftCard).toBeVisible()
   await expect(robotCard).toBeVisible()
@@ -1115,10 +1307,8 @@ test('My Work Projects multiselect filters, persists, restores, and narrows with
       projectIds: [robotStudyId],
     },
   )
-  await page
-    .getByRole('button', { name: /Projects, / })
-    .click()
-  await robotCheckbox.check()
+  await openMyWorkFilterCategory(page, 'Project')
+  await robotOption.click()
   await expect(robotCard).toBeVisible()
   await expect(firstDraftCard).toBeHidden()
   await robotSaveFlushed
@@ -1134,8 +1324,8 @@ test('My Work Projects multiselect filters, persists, restores, and narrows with
       researchGroupIds: [fgExampleId],
       projectIds: [],
     })
-  await groupToggle.click()
-  await fgCheckbox.check()
+  await openMyWorkFilterCategory(page, 'Research group')
+  await fgOption.click()
 
   await expect(firstDraftCard).toBeVisible()
   await expect(robotCard).toBeHidden()
@@ -1148,7 +1338,7 @@ test('My Work Projects multiselect filters, persists, restores, and narrows with
   ).toHaveCount(0)
   await expect(
     page.getByRole('button', {
-      name: 'Projects, none selected',
+      name: 'Filter, 1 active category',
     }),
   ).toBeVisible()
   await normalizedSaveFlushed
@@ -1234,10 +1424,10 @@ test('My Work Work Item Types multiselect filters, persists, restores, and combi
     name: 'Open E2E Analyze robot data',
   })
 
-  // The Work Item Types multiselect toggle is visible in the
-  // toolbar (no active filter in the baseline).
+  // The single command trigger is visible in the toolbar (no active
+  // filter in the baseline).
   const typeToggle = page.getByRole('button', {
-    name: 'Work item types, none selected',
+    name: 'Filter, 0 active categories',
   })
   await expect(typeToggle).toBeVisible()
 
@@ -1249,24 +1439,20 @@ test('My Work Work Item Types multiselect filters, persists, restores, and combi
 
   // The option set is the CLOSED canonical set of semantic kinds —
   // exactly four, in canonical order, no Other/Unknown category.
-  await typeToggle.click()
-  const typeDialog = page.getByRole('dialog', {
-    name: 'Work item types',
-  })
-  await expect(
-    typeDialog.getByRole('checkbox'),
-  ).toHaveCount(4)
-  const typeOptions = typeDialog.locator('label')
-  expect(
-    (
-      await typeOptions.allTextContents()
-    ).map((text) => text.trim()),
-  ).toEqual([
-    'Task',
-    'Epic',
-    'Milestone',
-    'Deliverable',
+  const typeListbox = await openMyWorkFilterCategory(
+    page,
+    'Work item type',
+  )
+  await expect(typeListbox.getByRole('option')).toHaveCount(4)
+  await expect(typeListbox.getByRole('option')).toHaveText([
+    /Task$/,
+    /Epic$/,
+    /Milestone$/,
+    /Deliverable$/,
   ])
+  for (const option of await typeListbox.getByRole('option').all()) {
+    await expect(option).toHaveAttribute('aria-selected', 'false')
+  }
 
   // Select "Milestone": only its seeded item remains, without a
   // refetch of the personal endpoint.
@@ -1278,9 +1464,9 @@ test('My Work Work Item Types multiselect filters, persists, restores, and combi
     },
   )
 
-  await typeDialog
-    .getByRole('checkbox', { name: 'Milestone' })
-    .check()
+  await typeListbox
+    .getByRole('option', { name: 'Milestone' })
+    .click()
 
   await expect(robotCard).toBeHidden()
   await expect(firstDraftCard).toBeVisible()
@@ -1292,7 +1478,7 @@ test('My Work Work Item Types multiselect filters, persists, restores, and combi
   // the filtered result count.
   await expect(
     page.getByRole('button', {
-      name: 'Work item types, 1 selected',
+      name: 'Filter, 1 active category',
     }),
   ).toBeVisible()
   await expect(
@@ -1315,7 +1501,7 @@ test('My Work Work Item Types multiselect filters, persists, restores, and combi
   })
   await expect(
     page.getByRole('button', {
-      name: 'Work item types, 1 selected',
+      name: 'Filter, 1 active category',
     }),
   ).toBeVisible()
 
@@ -1328,14 +1514,10 @@ test('My Work Work Item Types multiselect filters, persists, restores, and combi
       workItemTypes: ['task', 'milestone'],
     },
   )
-  await page
-    .getByRole('button', {
-      name: 'Work item types, 1 selected',
-    })
+  await openMyWorkFilterCategory(page, 'Work item type')
+  await typeListbox
+    .getByRole('option', { name: 'Task' })
     .click()
-  await typeDialog
-    .getByRole('checkbox', { name: 'Task' })
-    .check()
   await expect(robotCard).toBeVisible()
   await expect(firstDraftCard).toBeVisible()
   await expect(
@@ -1354,11 +1536,7 @@ test('My Work Work Item Types multiselect filters, persists, restores, and combi
       workItemTypes: ['task', 'milestone'],
     },
   )
-  await page
-    .getByRole('button', {
-      name: 'Research groups, none selected',
-    })
-    .click()
+  await openMyWorkFilterCategory(page, 'Research group')
   // No refetch on a Research Group filter change. The checkpoint
   // is taken right BEFORE the change: the earlier reload
   // legitimately issued its own initial loads, so the original
@@ -1366,8 +1544,8 @@ test('My Work Work Item Types multiselect filters, persists, restores, and combi
   const requestCountBeforeGroupChange =
     myWorkRequests.length
   await page
-    .getByRole('checkbox', { name: 'FG Example' })
-    .check()
+    .getByRole('option', { name: 'FG Example' })
+    .click()
   await expect(robotCard).toBeHidden()
   await expect(firstDraftCard).toBeVisible()
   expect(myWorkRequests.length).toBe(
@@ -1430,12 +1608,7 @@ test('My Work Work Item Types multiselect filters, persists, restores, and combi
   await expect(robotCard).toBeVisible()
   await expect(
     page.getByRole('button', {
-      name: 'Work item types, none selected',
-    }),
-  ).toBeVisible()
-  await expect(
-    page.getByRole('button', {
-      name: 'Research groups, none selected',
+      name: 'Filter, 0 active categories',
     }),
   ).toBeVisible()
 

@@ -392,6 +392,71 @@ function renderPage() {
   )
 }
 
+type RoleQueries = {
+  queryByRole: (
+    role: string,
+    options?: { name?: string | RegExp },
+  ) => HTMLElement | null
+  getByRole: (
+    role: string,
+    options?: { name?: string | RegExp },
+  ) => HTMLElement
+}
+
+async function openFilterCategory(
+  util: RoleQueries,
+  category: 'Research group' | 'Project' | 'Work item type',
+) {
+  if (
+    util.queryByRole('listbox', {
+      name: `${category} options`,
+    })
+  ) {
+    return
+  }
+
+  if (!util.queryByRole('dialog', { name: 'Filter by' })) {
+    await act(async () => {
+      fireEvent.click(
+        util.getByRole('button', { name: /^Filter,/ }),
+      )
+    })
+  } else if (
+    util.queryByRole('button', {
+      name: 'Back to filter categories',
+    })
+  ) {
+    await act(async () => {
+      fireEvent.click(
+        util.getByRole('button', {
+          name: 'Back to filter categories',
+        }),
+      )
+    })
+  }
+
+  await act(async () => {
+    fireEvent.click(
+      util.getByRole('button', {
+        name: new RegExp(`^${category}(?: \\d+)?$`),
+      }),
+    )
+  })
+}
+
+async function toggleFilterOption(
+  util: RoleQueries,
+  category: 'Research group' | 'Project' | 'Work item type',
+  optionName: string,
+) {
+  await openFilterCategory(util, category)
+  await act(async () => {
+    fireEvent.click(
+      util.getByRole('option', { name: optionName }),
+    )
+  })
+}
+
 function WorkItemsTarget() {
   const { projectId } = useParams()
   return (
@@ -423,34 +488,12 @@ async function switchView(
   })
 }
 
-// Open the Research Group multi-select popover and toggle ONE group's
-// checkbox (addressed by its accessible name — the group name). This
-// is the behavioral path a user takes; it exercises the toggle ->
-// popover -> checkbox flow, not internal state.
+// Open the command menu's Research Group view and toggle one option.
 async function selectResearchGroup(
-  util: {
-    getByRole: (
-      role: string,
-      options?: { name?: string | RegExp },
-    ) => HTMLElement
-  },
+  util: RoleQueries,
   groupName: string,
 ) {
-  await act(async () => {
-    fireEvent.click(
-      util.getByRole('button', {
-        name: /Research groups,/,
-      }),
-    )
-  })
-
-  await act(async () => {
-    fireEvent.click(
-      util.getByRole('checkbox', {
-        name: groupName,
-      }),
-    )
-  })
+  await toggleFilterOption(util, 'Research group', groupName)
 }
 
 // The `data-work-item-id` of every card inside one semantic column.
@@ -1643,7 +1686,7 @@ describe('My Work Kanban — visual contract', () => {
     ])
   })
 
-  it('replaces the legacy single-select with the Research groups toolbar toggle', async () => {
+  it('renders one Filter trigger with exactly three command categories and no legacy triggers', async () => {
     mockGroups = [
       { id: GROUP_A, name: 'Research Group A' },
       { id: GROUP_B, name: 'Research Group B' },
@@ -1653,12 +1696,12 @@ describe('My Work Kanban — visual contract', () => {
       todoItem(),
     ])
 
-    const { container, getByRole } = renderPage()
+    const { container, getByRole, getAllByRole, queryByRole } = renderPage()
 
     await waitFor(() => {
       expect(
         getByRole('button', {
-          name: 'Research groups, none selected',
+          name: 'Filter, 0 active categories',
         }),
       ).toBeInTheDocument()
     })
@@ -1674,6 +1717,60 @@ describe('My Work Kanban — visual contract', () => {
     expect(
       container.querySelector('select'),
     ).toBeNull()
+
+    expect(
+      getAllByRole('button', { name: /^Filter,/ }),
+    ).toHaveLength(1)
+
+    const viewSwitch = getByRole('group', {
+      name: 'My Work view',
+    })
+    const filterTrigger = getByRole('button', {
+      name: 'Filter, 0 active categories',
+    })
+    const toolbarActions = viewSwitch.parentElement
+    expect(toolbarActions?.firstElementChild).toBe(viewSwitch)
+    expect(toolbarActions?.lastElementChild).toContainElement(
+      filterTrigger,
+    )
+
+    const toolbar = getByRole('toolbar', {
+      name: 'My Work controls',
+    })
+    expect(toolbarActions?.parentElement).toBe(toolbar)
+    expect(toolbar.children).toHaveLength(1)
+    expect(
+      within(toolbar).queryByRole('group', {
+        name: 'Applied filters',
+      }),
+    ).toBeNull()
+
+    expect(
+      queryByRole('button', { name: /Research groups,/ }),
+    ).toBeNull()
+    expect(
+      queryByRole('button', { name: /Projects,/ }),
+    ).toBeNull()
+    expect(
+      queryByRole('button', { name: /Work item types,/ }),
+    ).toBeNull()
+
+    fireEvent.click(
+      getByRole('button', { name: 'Filter, 0 active categories' }),
+    )
+    const dialog = within(
+      getByRole('dialog', { name: 'Filter by' }),
+    )
+    expect(dialog.getAllByRole('button')).toHaveLength(3)
+    expect(
+      dialog.getByRole('button', { name: 'Research group' }),
+    ).toBeInTheDocument()
+    expect(
+      dialog.getByRole('button', { name: 'Project' }),
+    ).toBeInTheDocument()
+    expect(
+      dialog.getByRole('button', { name: 'Work item type' }),
+    ).toBeInTheDocument()
   })
 
   it('labels the view switch Board (not Kanban)', async () => {
@@ -2038,6 +2135,83 @@ describe('My Work Kanban — visual contract', () => {
     expect(card.textContent).toContain('3d overdue')
   })
 
+  it('presents due states as text-only labels with semantic colors and no due icon', async () => {
+    vi.mocked(listMyWork).mockResolvedValue([
+      makeItem({
+        id: 201,
+        statusCategory: 'todo',
+        dueDate: isoDaysFromNow(-3),
+      }),
+      makeItem({
+        id: 202,
+        statusCategory: 'todo',
+        dueDate: isoDaysFromNow(0),
+      }),
+      makeItem({
+        id: 203,
+        statusCategory: 'todo',
+        dueDate: isoDaysFromNow(1),
+      }),
+    ])
+
+    const { container } = renderPage()
+
+    for (const id of [201, 202, 203]) {
+      await waitForCard(container, id)
+    }
+
+    const cases: Array<{
+      id: number
+      label: string
+      colorClass: string
+    }> = [
+      {
+        id: 201,
+        label: '3d overdue',
+        colorClass: 'text-work-exception-danger',
+      },
+      {
+        id: 202,
+        label: 'Due today',
+        colorClass: 'text-work-exception-warning',
+      },
+      {
+        id: 203,
+        label: 'Tomorrow',
+        colorClass: 'text-work-exception-warning',
+      },
+    ]
+
+    for (const { id, label, colorClass } of cases) {
+      const card = cardFor(container, id)
+      const dueLabel = Array.from(
+        card.querySelectorAll('span'),
+      ).find(
+        (span) =>
+          span.textContent?.trim() === label,
+      ) as HTMLElement
+
+      expect(dueLabel).not.toBeUndefined()
+      // Semantic color binding for the due-state label.
+      expect(
+        dueLabel.className,
+      ).toContain(colorClass)
+      // Text-only: no warning/due icon inside the label, and no
+      // exception icon anywhere in the card — the type icon in the
+      // top row is the only one.
+      expect(
+        dueLabel.querySelector(
+          '.material-symbols-outlined',
+        ),
+      ).toBeNull()
+      expect(
+        card.querySelectorAll(
+          '.material-symbols-outlined',
+        ).length,
+      ).toBe(1)
+    }
+  })
+
   it('keeps the blocked state visible on the card', async () => {
     vi.mocked(listMyWork).mockResolvedValue([
       makeItem({
@@ -2312,7 +2486,7 @@ describe('My Work Kanban — interaction, filter, and contract', () => {
       }),
     ])
 
-    const { getByRole, container } = renderPage()
+    const { getByRole, queryByRole, container } = renderPage()
 
     const card = () =>
       getByRole('button', {
@@ -2325,7 +2499,7 @@ describe('My Work Kanban — interaction, filter, and contract', () => {
 
     // Apply the Research Group A filter via the multiselect popover.
     await selectResearchGroup(
-      { getByRole },
+      { getByRole, queryByRole },
       'Research Group A',
     )
     await waitFor(() => {
@@ -2407,7 +2581,7 @@ describe('My Work Kanban — interaction, filter, and contract', () => {
       }),
     ])
 
-    const { container, getByRole } = renderPage()
+    const { container, getByRole, queryByRole } = renderPage()
 
     await waitFor(() => {
       expect(
@@ -2418,7 +2592,7 @@ describe('My Work Kanban — interaction, filter, and contract', () => {
     })
 
     await selectResearchGroup(
-      { getByRole },
+      { getByRole, queryByRole },
       'Research Group A',
     )
 
@@ -2465,6 +2639,7 @@ describe('My Work Kanban — interaction, filter, and contract', () => {
       getByText,
       queryByText,
       getByRole,
+      queryByRole,
     } = renderPage()
 
     await waitFor(() => {
@@ -2477,7 +2652,7 @@ describe('My Work Kanban — interaction, filter, and contract', () => {
 
     // Filter to Group A while in the Board view.
     await selectResearchGroup(
-      { getByRole },
+      { getByRole, queryByRole },
       'Research Group A',
     )
     await waitFor(() => {
@@ -5050,7 +5225,7 @@ describe('My Work Kanban — exact positional drag and drop', () => {
       moved,
     )
 
-    const { container, getByRole } = renderPage()
+    const { container, getByRole, queryByRole } = renderPage()
 
     await waitFor(() => {
       expect(
@@ -5063,7 +5238,7 @@ describe('My Work Kanban — exact positional drag and drop', () => {
     // Apply the Research Group A filter via the multiselect
     // popover.
     await selectResearchGroup(
-      { getByRole },
+      { getByRole, queryByRole },
       'Research Group A',
     )
     await waitFor(() => {
@@ -6395,44 +6570,11 @@ describe('My Work — Research Group multi-select filter', () => {
     ]
   }
 
-  // Open the popover once (idempotent guard) and toggle the named
-  // group's checkbox. The menu stays open after a selection, so this
-  // can be called repeatedly within one open popover.
   async function toggleGroup(
-    util: {
-      queryByRole: (
-        role: string,
-        options?: { name?: string | RegExp },
-      ) => HTMLElement | null
-      getByRole: (
-        role: string,
-        options?: { name?: string | RegExp },
-      ) => HTMLElement
-    },
+    util: RoleQueries,
     groupName: string,
   ) {
-    const dialogOpen = () =>
-      util.queryByRole('dialog', {
-        name: 'Research groups',
-      }) != null
-
-    if (!dialogOpen()) {
-      await act(async () => {
-        fireEvent.click(
-          util.getByRole('button', {
-            name: /Research groups,/,
-          }),
-        )
-      })
-    }
-
-    await act(async () => {
-      fireEvent.click(
-        util.getByRole('checkbox', {
-          name: groupName,
-        }),
-      )
-    })
+    await toggleFilterOption(util, 'Research group', groupName)
   }
 
   function columnCount(
@@ -6478,7 +6620,7 @@ describe('My Work — Research Group multi-select filter', () => {
     await waitFor(() => {
       expect(
         getByRole('button', {
-          name: 'Research groups, none selected',
+          name: 'Filter, 0 active categories',
         }),
       ).toBeInTheDocument()
     })
@@ -6529,8 +6671,9 @@ describe('My Work — Research Group multi-select filter', () => {
     })
 
     // Select A and B (menu stays open for the second).
-    await toggleGroup(
+    await toggleFilterOption(
       { getByRole, queryByRole },
+      'Research group',
       'Research Group A',
     )
     await toggleGroup(
@@ -6571,8 +6714,9 @@ describe('My Work — Research Group multi-select filter', () => {
       ).toHaveAttribute('aria-pressed', 'true')
     })
 
-    await toggleGroup(
+    await toggleFilterOption(
       { getByRole, queryByRole },
+      'Research group',
       'Research Group A',
     )
     await switchView({ getByRole }, 'List')
@@ -6713,8 +6857,9 @@ describe('My Work — Research Group multi-select filter', () => {
 
     vi.useFakeTimers()
     try {
-      await toggleGroup(
+      await toggleFilterOption(
         { getByRole, queryByRole },
+        'Research group',
         'Research Group A',
       )
       await act(async () => {
@@ -6769,7 +6914,7 @@ describe('My Work — Research Group multi-select filter', () => {
     ).toBeNull()
     expect(
       getByRole('button', {
-        name: 'Research groups, 1 selected',
+        name: 'Filter, 1 active category',
       }),
     ).toBeInTheDocument()
   })
@@ -6893,11 +7038,11 @@ describe('My Work — Research Group multi-select filter', () => {
     }
 
     // Reconciled to the authoritative response: Group B is gone from
-    // the chips and from filtering; the toggle count reflects one.
+    // the chips and from filtering; one filter category remains active.
     await waitFor(() => {
       expect(
         getByRole('button', {
-          name: 'Research groups, 1 selected',
+          name: 'Filter, 1 active category',
         }),
       ).toBeInTheDocument()
     })
@@ -6922,7 +7067,7 @@ describe('My Work — Research Group multi-select filter', () => {
     ).toBeNull()
   })
 
-  it('shows the applied row only while a Research Group filter is active', async () => {
+  it('adds the applied-filter summary to the main toolbar only while a filter is active', async () => {
     mockGroups = TWO_GROUPS
     vi.mocked(listMyWork).mockResolvedValue(
       groupItems(),
@@ -6936,22 +7081,52 @@ describe('My Work — Research Group multi-select filter', () => {
       ).toHaveAttribute('aria-pressed', 'true')
     })
 
-    // No active filter → no applied row.
+    const toolbar = getByRole('toolbar', {
+      name: 'My Work controls',
+    })
+
+    // No active filter → no empty applied-filter group.
     expect(
       queryByRole('button', { name: 'Clear filters' }),
     ).toBeNull()
+    expect(
+      within(toolbar).queryByRole('group', {
+        name: 'Applied filters',
+      }),
+    ).toBeNull()
 
-    await toggleGroup(
+    await toggleFilterOption(
       { getByRole, queryByRole },
+      'Research group',
       'Research Group A',
     )
 
-    // Active filter → the applied row (with Clear filters) appears.
+    // Active filter → the summary and actions share the one toolbar.
     await waitFor(() => {
       expect(
         getByRole('button', { name: 'Clear filters' }),
       ).toBeInTheDocument()
     })
+    const appliedFilters = within(toolbar).getByRole('group', {
+      name: 'Applied filters',
+    })
+    const toolbarActions = getByRole('group', {
+      name: 'My Work view',
+    }).parentElement
+    expect(appliedFilters.parentElement).toBe(toolbar)
+    expect(toolbarActions?.parentElement).toBe(toolbar)
+    expect(toolbar.firstElementChild).toBe(appliedFilters)
+    expect(toolbar.lastElementChild).toBe(toolbarActions)
+    expect(appliedFilters).toHaveClass('sm:flex-1')
+    // At sm and up the action group stays intact on one row; below
+    // sm it may wrap so its controls fit the narrow content region
+    // (never overflowing under the fixed Sidebar).
+    expect(toolbarActions).toHaveClass(
+      'flex-wrap',
+      'max-w-full',
+      'sm:flex-nowrap',
+      'sm:shrink-0',
+    )
   })
 
   it('renders a visible applied chip per selected Research Group', async () => {
@@ -6987,7 +7162,7 @@ describe('My Work — Research Group multi-select filter', () => {
     ).toContain('FG: Research Group A')
   })
 
-  it('keeps the active toggle count in step with the number selected', async () => {
+  it('keeps the active-category count stable across multi-selection', async () => {
     mockGroups = TWO_GROUPS
     vi.mocked(listMyWork).mockResolvedValue(
       groupItems(),
@@ -6998,7 +7173,7 @@ describe('My Work — Research Group multi-select filter', () => {
     await waitFor(() => {
       expect(
         getByRole('button', {
-          name: 'Research groups, none selected',
+          name: 'Filter, 0 active categories',
         }),
       ).toBeInTheDocument()
     })
@@ -7010,7 +7185,7 @@ describe('My Work — Research Group multi-select filter', () => {
     await waitFor(() => {
       expect(
         getByRole('button', {
-          name: 'Research groups, 1 selected',
+          name: 'Filter, 1 active category',
         }),
       ).toBeInTheDocument()
     })
@@ -7022,7 +7197,7 @@ describe('My Work — Research Group multi-select filter', () => {
     await waitFor(() => {
       expect(
         getByRole('button', {
-          name: 'Research groups, 2 selected',
+          name: 'Filter, 1 active category',
         }),
       ).toBeInTheDocument()
     })
@@ -7130,7 +7305,7 @@ describe('My Work — Research Group multi-select filter', () => {
     })
     expect(
       getByRole('button', {
-        name: 'Research groups, none selected',
+        name: 'Filter, 0 active categories',
       }),
     ).toBeInTheDocument()
   })
@@ -7162,6 +7337,20 @@ describe('My Work — Research Group multi-select filter', () => {
         getByRole('button', { name: 'Clear filters' }),
       ).toBeInTheDocument()
     })
+    const toolbar = getByRole('toolbar', {
+      name: 'My Work controls',
+    })
+    const appliedFilters = within(toolbar).getByRole('group', {
+      name: 'Applied filters',
+    })
+    expect(
+      within(appliedFilters).getByText('2 work items'),
+    ).toBeInTheDocument()
+    expect(
+      within(appliedFilters).getByRole('button', {
+        name: 'Clear filters',
+      }),
+    ).toBeInTheDocument()
     // All three categories active on load (Group A + Project Alpha
     // + Task → the two Group A task items).
     expect(
@@ -7206,7 +7395,7 @@ describe('My Work — Research Group multi-select filter', () => {
     })
   })
 
-  it('shows the current filtered result count in the applied row', async () => {
+  it('shows the current filtered result count in the toolbar summary', async () => {
     mockGroups = TWO_GROUPS
     vi.mocked(listMyWork).mockResolvedValue(
       groupItems(),
@@ -7324,7 +7513,7 @@ describe('My Work — Research Group multi-select filter', () => {
     })
 
     // Click the "Clear filters" inside the filtered-empty state
-    // (scoped, since the applied row carries its own Clear filters).
+    // (scoped, since the toolbar summary carries its own Clear filters).
     const emptyStateHeading = getByRole('heading', {
       name: 'No work items match these filters.',
     })
@@ -7363,13 +7552,10 @@ describe('My Work — Research Group multi-select filter', () => {
       ).toHaveAttribute('aria-pressed', 'true')
     })
 
-    await act(async () => {
-      fireEvent.click(
-        getByRole('button', {
-          name: 'Research groups, none selected',
-        }),
-      )
-    })
+    await openFilterCategory(
+      { getByRole, queryByRole },
+      'Research group',
+    )
 
     expect(
       queryByRole('searchbox', {
@@ -7396,13 +7582,10 @@ describe('My Work — Research Group multi-select filter', () => {
       ).toHaveAttribute('aria-pressed', 'true')
     })
 
-    await act(async () => {
-      fireEvent.click(
-        getByRole('button', {
-          name: 'Research groups, none selected',
-        }),
-      )
-    })
+    await openFilterCategory(
+      { getByRole, queryByRole },
+      'Research group',
+    )
 
     const search = getByRole('searchbox', {
       name: 'Search research groups',
@@ -7411,10 +7594,10 @@ describe('My Work — Research Group multi-select filter', () => {
 
     // All nine options render initially.
     expect(
-      getByRole('checkbox', { name: 'Group 1' }),
+      getByRole('option', { name: 'Group 1' }),
     ).toBeInTheDocument()
     expect(
-      getByRole('checkbox', { name: 'Group 9' }),
+      getByRole('option', { name: 'Group 9' }),
     ).toBeInTheDocument()
 
     // The search query is transient local filtering.
@@ -7424,17 +7607,17 @@ describe('My Work — Research Group multi-select filter', () => {
       })
     })
     expect(
-      getByRole('checkbox', { name: 'Group 9' }),
+      getByRole('option', { name: 'Group 9' }),
     ).toBeInTheDocument()
     expect(
-      queryByRole('checkbox', { name: 'Group 1' }),
+      queryByRole('option', { name: 'Group 1' }),
     ).toBeNull()
     expect(
-      queryByRole('checkbox', { name: 'Group 2' }),
+      queryByRole('option', { name: 'Group 2' }),
     ).toBeNull()
   })
 
-  it('keeps the multiselect menu open after a checkbox selection', async () => {
+  it('keeps the multiselect menu open after an option selection', async () => {
     mockGroups = TWO_GROUPS
     vi.mocked(listMyWork).mockResolvedValue(
       groupItems(),
@@ -7448,31 +7631,28 @@ describe('My Work — Research Group multi-select filter', () => {
       ).toHaveAttribute('aria-pressed', 'true')
     })
 
-    await act(async () => {
-      fireEvent.click(
-        getByRole('button', {
-          name: 'Research groups, none selected',
-        }),
-      )
-    })
+    await openFilterCategory(
+      { getByRole, queryByRole },
+      'Research group',
+    )
     expect(
-      getByRole('dialog', { name: 'Research groups' }),
+      getByRole('listbox', { name: 'Research group options' }),
     ).toBeInTheDocument()
 
     // Selecting a group does NOT close the menu (no Apply button).
     await act(async () => {
       fireEvent.click(
-        getByRole('checkbox', {
+        getByRole('option', {
           name: 'Research Group A',
         }),
       )
     })
     expect(
-      queryByRole('dialog', { name: 'Research groups' }),
+      queryByRole('dialog', { name: 'Filter by' }),
     ).not.toBeNull()
     // The second option is still reachable in the same open menu.
     expect(
-      getByRole('checkbox', { name: 'Research Group B' }),
+      getByRole('option', { name: 'Research Group B' }),
     ).toBeInTheDocument()
   })
 
@@ -7497,7 +7677,7 @@ describe('My Work — Research Group multi-select filter', () => {
     await waitFor(() => {
       expect(
         getByRole('button', {
-          name: 'Research groups, 7 selected',
+          name: 'Filter, 1 active category',
         }),
       ).toBeInTheDocument()
     })
@@ -7519,11 +7699,19 @@ describe('My Work — Research Group multi-select filter', () => {
         name: 'Remove Research Group filter Group 3',
       }),
     ).toBeNull()
-    expect(
-      getByRole('button', {
-        name: 'Research groups: +5',
-      }),
-    ).toBeInTheDocument()
+    const summary = getByRole('button', {
+      name: 'Research groups: +5',
+    })
+    expect(summary).toBeInTheDocument()
+
+    fireEvent.click(summary)
+    const listbox = getByRole('listbox', {
+      name: 'Research group options',
+    })
+    expect(listbox).toBeInTheDocument()
+    await waitFor(() => {
+      expect(listbox.contains(document.activeElement)).toBe(true)
+    })
   })
 
   it('keeps the locally filtered state and shows the save warning when the save fails', async () => {
@@ -7580,12 +7768,12 @@ describe('My Work — Research Group multi-select filter', () => {
       groupItems(),
     )
 
-    const { getByRole } = renderPage()
+    const { getByRole, queryByRole } = renderPage()
 
     const toggle =
       (await waitFor(() =>
         getByRole('button', {
-          name: 'Research groups, none selected',
+          name: 'Filter, 0 active categories',
         }),
       )) as HTMLButtonElement
 
@@ -7595,10 +7783,13 @@ describe('My Work — Research Group multi-select filter', () => {
     expect(toggle).toHaveAttribute('type', 'button')
 
     // Open (activation) — the popover is a labeled dialog.
-    fireEvent.click(toggle)
+    await openFilterCategory(
+      { getByRole, queryByRole },
+      'Research group',
+    )
     await waitFor(() => {
       expect(
-        getByRole('dialog', { name: 'Research groups' }),
+        getByRole('dialog', { name: 'Filter by' }),
       ).toBeInTheDocument()
     })
 
@@ -7665,43 +7856,11 @@ describe('My Work — Project multi-select filter', () => {
     ]
   }
 
-  // Open the Projects popover once (idempotent guard) and toggle the
-  // named Project's checkbox. The menu stays open after a selection.
   async function toggleProject(
-    util: {
-      queryByRole: (
-        role: string,
-        options?: { name?: string | RegExp },
-      ) => HTMLElement | null
-      getByRole: (
-        role: string,
-        options?: { name?: string | RegExp },
-      ) => HTMLElement
-    },
+    util: RoleQueries,
     projectName: string,
   ) {
-    const dialogOpen = () =>
-      util.queryByRole('dialog', {
-        name: 'Projects',
-      }) != null
-
-    if (!dialogOpen()) {
-      await act(async () => {
-        fireEvent.click(
-          util.getByRole('button', {
-            name: /Projects,/,
-          }),
-        )
-      })
-    }
-
-    await act(async () => {
-      fireEvent.click(
-        util.getByRole('checkbox', {
-          name: projectName,
-        }),
-      )
-    })
+    await toggleFilterOption(util, 'Project', projectName)
   }
 
   it('shows every assigned Work Item when no Project is selected', async () => {
@@ -7732,7 +7891,7 @@ describe('My Work — Project multi-select filter', () => {
     await waitFor(() => {
       expect(
         getByRole('button', {
-          name: 'Projects, none selected',
+          name: 'Filter, 0 active categories',
         }),
       ).toBeInTheDocument()
     })
@@ -7753,29 +7912,26 @@ describe('My Work — Project multi-select filter', () => {
     })
     expect(listMyWork).toHaveBeenCalledTimes(1)
 
-    await act(async () => {
-      fireEvent.click(
-        getByRole('button', {
-          name: 'Projects, none selected',
-        }),
-      )
-    })
+    await openFilterCategory(
+      { getByRole, queryByRole },
+      'Project',
+    )
 
     // No Research Group filter: every Project represented by the
     // payload is an option (Project Alpha once, not twice), and NO
     // further request of any kind was issued.
     expect(
-      queryByRole('checkbox', {
+      queryByRole('option', {
         name: 'Project Alpha',
       }),
     ).toBeInTheDocument()
     expect(
-      queryByRole('checkbox', {
+      queryByRole('option', {
         name: 'Project Beta',
       }),
     ).toBeInTheDocument()
     expect(
-      queryByRole('checkbox', {
+      queryByRole('option', {
         name: 'Project Delta',
       }),
     ).toBeInTheDocument()
@@ -7796,63 +7952,30 @@ describe('My Work — Project multi-select filter', () => {
       ).toHaveAttribute('aria-pressed', 'true')
     })
 
-    // Select Research Group A first (menu flow of the group filter).
-    const groupDialog = () =>
-      queryByRole('dialog', {
-        name: 'Research groups',
-      }) != null
-
-    if (!groupDialog()) {
-      await act(async () => {
-        fireEvent.click(
-          getByRole('button', {
-            name: /Research groups,/,
-          }),
-        )
-      })
-    }
-
-    await act(async () => {
-      fireEvent.click(
-        getByRole('checkbox', {
-          name: 'Research Group A',
-        }),
-      )
-    })
-
-    // Group A selected: the group popover closed itself on
-    // selection? No — it stays open; close it via the trigger, then
-    // open the Projects popover.
-    await act(async () => {
-      fireEvent.click(
-        getByRole('button', {
-          name: /Research groups,/,
-        }),
-      )
-    })
-
-    await act(async () => {
-      fireEvent.click(
-        getByRole('button', {
-          name: /Projects,/,
-        }),
-      )
-    })
+    await toggleFilterOption(
+      { getByRole, queryByRole },
+      'Research group',
+      'Research Group A',
+    )
+    await openFilterCategory(
+      { getByRole, queryByRole },
+      'Project',
+    )
 
     // Only the Group A Projects remain options — Beta (Group B) is
     // not selectable while the group filter is active.
     expect(
-      queryByRole('checkbox', {
+      queryByRole('option', {
         name: 'Project Alpha',
       }),
     ).toBeInTheDocument()
     expect(
-      queryByRole('checkbox', {
+      queryByRole('option', {
         name: 'Project Delta',
       }),
     ).toBeInTheDocument()
     expect(
-      queryByRole('checkbox', {
+      queryByRole('option', {
         name: 'Project Beta',
       }),
     ).toBeNull()
@@ -7967,36 +8090,11 @@ describe('My Work — Project multi-select filter', () => {
 
     // Group A → items 1, 3, 4. Then Project Delta → the
     // intersection: item 4 only.
-    const groupDialog = () =>
-      queryByRole('dialog', {
-        name: 'Research groups',
-      }) != null
-
-    if (!groupDialog()) {
-      await act(async () => {
-        fireEvent.click(
-          getByRole('button', {
-            name: /Research groups,/,
-          }),
-        )
-      })
-    }
-
-    await act(async () => {
-      fireEvent.click(
-        getByRole('checkbox', {
-          name: 'Research Group A',
-        }),
-      )
-    })
-
-    await act(async () => {
-      fireEvent.click(
-        getByRole('button', {
-          name: /Research groups,/,
-        }),
-      )
-    })
+    await toggleFilterOption(
+      { getByRole, queryByRole },
+      'Research group',
+      'Research Group A',
+    )
 
     await toggleProject(
       { getByRole, queryByRole },
@@ -8059,28 +8157,11 @@ describe('My Work — Project multi-select filter', () => {
       // for the active group scope — the selection is normalized
       // client-side and must NOT keep a contradictory active-filter
       // state behind it.
-      const groupDialog = () =>
-        queryByRole('dialog', {
-          name: 'Research groups',
-        }) != null
-
-      if (!groupDialog()) {
-        await act(async () => {
-          fireEvent.click(
-            getByRole('button', {
-              name: /Research groups,/,
-            }),
-          )
-        })
-      }
-
-      await act(async () => {
-        fireEvent.click(
-          getByRole('checkbox', {
-            name: 'Research Group A',
-          }),
-        )
-      })
+      await toggleFilterOption(
+        { getByRole, queryByRole },
+        'Research group',
+        'Research Group A',
+      )
 
       // The Group A items are visible again — the invalidated
       // Project filter does not keep hiding them (no impossible
@@ -8100,7 +8181,7 @@ describe('My Work — Project multi-select filter', () => {
       ).toBeNull()
       expect(
         getByRole('button', {
-          name: 'Projects, none selected',
+          name: 'Filter, 1 active category',
         }),
       ).toBeInTheDocument()
 
@@ -8285,7 +8366,7 @@ describe('My Work — Project multi-select filter', () => {
     ).toBeNull()
     expect(
       getByRole('button', {
-        name: 'Projects, 1 selected',
+        name: 'Filter, 1 active category',
       }),
     ).toBeInTheDocument()
   })
@@ -8323,7 +8404,42 @@ describe('My Work — Project multi-select filter', () => {
     ).toContain('PJ: Project Beta')
   })
 
-  it('shows the applied row while only the Project filter is active', async () => {
+  it('opens the Project command view and focuses search from the overflow summary', async () => {
+    mockGroups = [{ id: GROUP_A, name: 'Research Group A' }]
+    const projects = Array.from({ length: 7 }, (_, index) => ({
+      id: index + 1,
+      projectId: index + 1,
+      projectName: `Project ${index + 1}`,
+      title: `Item ${index + 1}`,
+      researchGroupId: GROUP_A,
+      researchGroupName: 'Research Group A',
+    }))
+    vi.mocked(listMyWork).mockResolvedValue(
+      projects.map((project) => makeItem(project)),
+    )
+    vi.mocked(fetchMyWorkPreferences).mockResolvedValue(
+      makePreferences({
+        projectIds: projects.map((project) => project.projectId),
+      }),
+    )
+
+    const { getByRole } = renderPage()
+    const summary = await waitFor(() =>
+      getByRole('button', { name: 'Projects: +5' }),
+    )
+
+    fireEvent.click(summary)
+    expect(
+      getByRole('listbox', { name: 'Project options' }),
+    ).toBeInTheDocument()
+    await waitFor(() => {
+      expect(document.activeElement).toBe(
+        getByRole('searchbox', { name: 'Search projects' }),
+      )
+    })
+  })
+
+  it('shows the toolbar summary while only the Project filter is active', async () => {
     mockGroups = TWO_GROUPS
     vi.mocked(listMyWork).mockResolvedValue(
       projectItems(),
@@ -8337,7 +8453,7 @@ describe('My Work — Project multi-select filter', () => {
       ).toHaveAttribute('aria-pressed', 'true')
     })
 
-    // No active filter → no applied row.
+    // No active filter → no applied-filter summary.
     expect(
       queryByRole('button', { name: 'Clear filters' }),
     ).toBeNull()
@@ -8347,7 +8463,7 @@ describe('My Work — Project multi-select filter', () => {
       'Project Beta',
     )
 
-    // Active filter → the applied row (with Clear filters) appears.
+    // Active filter → the toolbar summary (with Clear filters) appears.
     await waitFor(() => {
       expect(
         getByRole('button', { name: 'Clear filters' }),
@@ -8372,36 +8488,11 @@ describe('My Work — Project multi-select filter', () => {
 
     // Group A (items 1, 3, 4) + Project Alpha (items 1, 3) →
     // two visible items → "2 work items".
-    const groupDialog = () =>
-      queryByRole('dialog', {
-        name: 'Research groups',
-      }) != null
-
-    if (!groupDialog()) {
-      await act(async () => {
-        fireEvent.click(
-          getByRole('button', {
-            name: /Research groups,/,
-          }),
-        )
-      })
-    }
-
-    await act(async () => {
-      fireEvent.click(
-        getByRole('checkbox', {
-          name: 'Research Group A',
-        }),
-      )
-    })
-
-    await act(async () => {
-      fireEvent.click(
-        getByRole('button', {
-          name: /Research groups,/,
-        }),
-      )
-    })
+    await toggleFilterOption(
+      { getByRole, queryByRole },
+      'Research group',
+      'Research Group A',
+    )
 
     await toggleProject(
       { getByRole, queryByRole },
@@ -8519,7 +8610,7 @@ describe('My Work — Project multi-select filter', () => {
     })
     expect(
       getByRole('button', {
-        name: 'Projects, none selected',
+        name: 'Filter, 0 active categories',
       }),
     ).toBeInTheDocument()
   })
@@ -8705,45 +8796,11 @@ describe('My Work — Work Item Type multi-select filter', () => {
     ]
   }
 
-  // Open the Work item types popover once (idempotent guard) and
-  // toggle the named kind's checkbox. The menu stays open after a
-  // selection, so this can be called repeatedly within one open
-  // popover.
   async function toggleType(
-    util: {
-      queryByRole: (
-        role: string,
-        options?: { name?: string | RegExp },
-      ) => HTMLElement | null
-      getByRole: (
-        role: string,
-        options?: { name?: string | RegExp },
-      ) => HTMLElement
-    },
+    util: RoleQueries,
     kindLabel: string,
   ) {
-    const dialogOpen = () =>
-      util.queryByRole('dialog', {
-        name: 'Work item types',
-      }) != null
-
-    if (!dialogOpen()) {
-      await act(async () => {
-        fireEvent.click(
-          util.getByRole('button', {
-            name: /Work item types,/,
-          }),
-        )
-      })
-    }
-
-    await act(async () => {
-      fireEvent.click(
-        util.getByRole('checkbox', {
-          name: kindLabel,
-        }),
-      )
-    })
+    await toggleFilterOption(util, 'Work item type', kindLabel)
   }
 
   it('shows every assigned Work Item when no Work Item Type is selected (unclassified types included)', async () => {
@@ -8773,15 +8830,13 @@ describe('My Work — Work Item Type multi-select filter', () => {
     await waitFor(() => {
       expect(
         getByRole('button', {
-          name: 'Work item types, none selected',
+          name: 'Filter, 0 active categories',
         }),
       ).toBeInTheDocument()
     })
     // No dialog until the toggle is opened.
     expect(
-      queryByRole('dialog', {
-        name: 'Work item types',
-      }),
+      queryByRole('dialog', { name: 'Filter by' }),
     ).toBeNull()
   })
 
@@ -8796,45 +8851,36 @@ describe('My Work — Work Item Type multi-select filter', () => {
     await waitFor(() => {
       expect(
         getByRole('button', {
-          name: 'Work item types, none selected',
+          name: 'Filter, 0 active categories',
         }),
       ).toBeInTheDocument()
     })
 
-    await act(async () => {
-      fireEvent.click(
-        getByRole('button', {
-          name: 'Work item types, none selected',
-        }),
-      )
-    })
+    await openFilterCategory(
+      { getByRole, queryByRole },
+      'Work item type',
+    )
 
-    const dialog = queryByRole('dialog', {
-      name: 'Work item types',
-    }) as HTMLElement
-    const checkboxes = within(dialog).getAllByRole(
-      'checkbox',
-    ) as HTMLInputElement[]
+    const options = within(
+      getByRole('listbox', {
+        name: 'Work item type options',
+      }),
+    ).getAllByRole('option')
 
     // Exactly the closed canonical set — no Other / Unknown /
     // Custom category — in canonical order, all initially
     // unchecked.
     expect(
-      checkboxes.map((box) =>
-        (
-          box.closest('label')
-            ?.textContent ?? ''
-        ).trim(),
-      ),
+      options.map((option) => option.textContent?.trim()),
     ).toEqual([
-      'Task',
-      'Epic',
-      'Milestone',
-      'Deliverable',
+      'assignmentTask',
+      'account_treeEpic',
+      'flagMilestone',
+      'deployed_codeDeliverable',
     ])
     expect(
-      checkboxes.every(
-        (box) => box.checked === false,
+      options.every(
+        (option) => option.getAttribute('aria-selected') === 'false',
       ),
     ).toBe(true)
   })
@@ -9101,7 +9147,7 @@ describe('My Work — Work Item Type multi-select filter', () => {
     await waitFor(() => {
       expect(
         getByRole('button', {
-          name: 'Work item types, none selected',
+          name: 'Filter, 0 active categories',
         }),
       ).toBeInTheDocument()
     })
@@ -9121,7 +9167,7 @@ describe('My Work — Work Item Type multi-select filter', () => {
     await waitFor(() => {
       expect(
         getByRole('button', {
-          name: 'Work item types, 2 selected',
+          name: 'Filter, 1 active category',
         }),
       ).toBeInTheDocument()
     })
@@ -9240,7 +9286,7 @@ describe('My Work — Work Item Type multi-select filter', () => {
     expect(getByText('2 work items')).toBeInTheDocument()
   })
 
-  it('shows the applied row while only the Work Item Type filter is active', async () => {
+  it('shows the toolbar summary while only the Work Item Type filter is active', async () => {
     vi.mocked(listMyWork).mockResolvedValue(
       typeItems(),
     )
@@ -9258,15 +9304,10 @@ describe('My Work — Work Item Type multi-select filter', () => {
         getByText('WT: Task'),
       ).toBeInTheDocument()
     })
-    // The other categories stay inactive.
+    // Only the Work Item Type category is active.
     expect(
       getByRole('button', {
-        name: 'Research groups, none selected',
-      }),
-    ).toBeInTheDocument()
-    expect(
-      getByRole('button', {
-        name: 'Projects, none selected',
+        name: 'Filter, 1 active category',
       }),
     ).toBeInTheDocument()
     expect(
@@ -9357,20 +9398,13 @@ describe('My Work — Work Item Type multi-select filter', () => {
 
     vi.useFakeTimers()
     try {
+      await openFilterCategory(
+        { getByRole, queryByRole },
+        'Work item type',
+      )
       await act(async () => {
         fireEvent.click(
-          getByRole('button', {
-            name: /Work item types,/,
-          }),
-        )
-      })
-      await act(async () => {
-        fireEvent.click(
-          within(
-            queryByRole('dialog', {
-              name: 'Work item types',
-            }) as HTMLElement,
-          ).getByRole('button', { name: 'Clear' }),
+          getByRole('button', { name: 'Clear' }),
         )
       })
       await act(async () => {

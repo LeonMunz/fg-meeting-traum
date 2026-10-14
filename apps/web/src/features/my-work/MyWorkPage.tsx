@@ -60,7 +60,6 @@ import {
   filterMyWorkItemsByWorkItemType,
   sortWorkItemTypes,
   workItemTypeChips,
-  WORK_ITEM_TYPE_FILTER_OPTIONS,
 } from './myWorkTypeFilter'
 import {
   deriveMyWorkProjectOptions,
@@ -68,14 +67,9 @@ import {
   normalizeMyWorkProjectIdsForGroupScope,
 } from './myWorkProjectFilter'
 import {
-  MyWorkProjectsFilter,
-} from './MyWorkProjectsFilter'
-import {
-  MyWorkResearchGroupFilter,
-} from './MyWorkResearchGroupFilter'
-import {
-  MyWorkTypesFilter,
-} from './MyWorkTypesFilter'
+  MyWorkFilterCommandMenu,
+  type MyWorkFilterCommandMenuHandle,
+} from './MyWorkFilterCommandMenu'
 
 // Stable empty references so a null preference snapshot never
 // allocates a fresh array each render (keeps the filter memos
@@ -490,11 +484,14 @@ function getDueDisplay(
 // reuses the repository's existing date logic (getWorkItemDueFields),
 // no second date interpretation. No due date (or a completed item)
 // renders NOTHING; a future due date is neutral metadata; due today
-// is an explicit warning; overdue is an explicit danger.
+// and due tomorrow are explicit warnings; overdue is an explicit
+// danger. The due state is text-only (no icon); the written label
+// carries the meaning, so color is never the sole carrier.
 type CardDueState =
   | { kind: 'none' }
   | { kind: 'future'; label: string }
   | { kind: 'today' }
+  | { kind: 'tomorrow' }
   | { kind: 'overdue'; label: string }
 
 function getCardDueState(
@@ -522,6 +519,10 @@ function getCardDueState(
 
   if (due.dueInDays === 0) {
     return { kind: 'today' }
+  }
+
+  if (due.dueInDays === 1) {
+    return { kind: 'tomorrow' }
   }
 
   return {
@@ -645,36 +646,11 @@ export function MyWorkPage() {
     string | null
   >(null)
 
-  // Research Group multi-select filter (first implemented filter
-  // category). The single source of truth is the persisted
-  // preference snapshot field `preferences.researchGroupIds` — there
-  // is no separate transient filter state. The popover open/closed
-  // state is the only transient UI concern, and it is lifted here so
-  // the applied-row "+N" summary can open + focus the control.
-  const [groupFilterOpen, setGroupFilterOpen] =
-    useState(false)
-  const groupFilterTriggerRef = useRef<
-    HTMLButtonElement | null
-  >(null)
-
-  // Project multi-select filter (second implemented filter
-  // category): the SAME single-source-of-truth rule — the persisted
-  // `preferences.projectIds` — with the popover open/closed state
-  // lifted for the applied-row "+N" summary.
-  const [projectFilterOpen, setProjectFilterOpen] =
-    useState(false)
-  const projectFilterTriggerRef = useRef<
-    HTMLButtonElement | null
-  >(null)
-
-  // Work Item Type multi-select filter (third implemented filter
-  // category): the SAME single-source-of-truth rule — the persisted
-  // `preferences.workItemTypes` — with the popover open/closed state
-  // lifted for the applied-row "+N" summary.
-  const [typeFilterOpen, setTypeFilterOpen] =
-    useState(false)
-  const typeFilterTriggerRef = useRef<
-    HTMLButtonElement | null
+  // The command menu owns its transient open/view/search/focus state.
+  // The handle exists only so applied-row overflow summaries can open
+  // the corresponding category directly.
+  const filterMenuRef = useRef<
+    MyWorkFilterCommandMenuHandle | null
   >(null)
 
   // The COMPLETE persisted My Work preference snapshot (the server
@@ -1677,7 +1653,7 @@ export function MyWorkPage() {
 
   // The SAME approved chip-density rule as the Research Group
   // category (up to six individual chips; above that the first two +
-  // a "+N" summary) bounds the applied row in BOTH categories.
+  // a "+N" summary) bounds the applied-filter summary in BOTH categories.
   const collapsedProjectChips =
     collapseResearchGroupChips(selectedProjectChips)
 
@@ -1775,7 +1751,7 @@ export function MyWorkPage() {
     })
   }, [preferences])
 
-  // "Clear filters" (applied row + filtered-empty state) clears ALL
+  // "Clear filters" (toolbar summary + filtered-empty state) clears ALL
   // THREE implemented filter categories — Research Groups, Projects,
   // and Work Item Types — in one complete snapshot. Unrelated
   // preference fields (`viewMode`) are preserved untouched.
@@ -1877,22 +1853,18 @@ export function MyWorkPage() {
     [handleProjectToggle],
   )
 
-  // The applied-row "+N" summary opens AND focuses the toggle.
+  // Applied-row "+N" summaries open the corresponding command view;
+  // the menu moves focus into that view.
   const openGroupFilter = useCallback(() => {
-    setGroupFilterOpen(true)
-    groupFilterTriggerRef.current?.focus()
+    filterMenuRef.current?.openCategory('research-group')
   }, [])
 
-  // The applied-row "+N" summary opens AND focuses the toggle.
   const openProjectFilter = useCallback(() => {
-    setProjectFilterOpen(true)
-    projectFilterTriggerRef.current?.focus()
+    filterMenuRef.current?.openCategory('project')
   }, [])
 
-  // The applied-row "+N" summary opens AND focuses the toggle.
   const openTypeFilter = useCallback(() => {
-    setTypeFilterOpen(true)
-    typeFilterTriggerRef.current?.focus()
+    filterMenuRef.current?.openCategory('work-item-type')
   }, [])
 
   const orderedItems = useMemo(() => {
@@ -2005,267 +1977,255 @@ export function MyWorkPage() {
        * across the whole window. */}
       <div className="mx-auto w-full max-w-[1440px]">
         <header>
-          <div className="min-w-0">
-            <h1 className="text-[28px] font-semibold leading-[34px] tracking-[-0.015em] text-text">
-              My Work
-            </h1>
-
-            <p className="mt-1 text-[12px] font-normal leading-[18px] text-text-muted">
-              Everything currently assigned to you.
-            </p>
-          </div>
+          <h1 className="text-[28px] font-semibold leading-[34px] tracking-[-0.015em] text-text">
+            My Work
+          </h1>
         </header>
 
-        {/* Filter toolbar row: the three implemented filter
-         * categories (Research Groups + Projects + Work Item Types)
-         * on the left. Board/List stays on the right, unchanged.
-         * flex-wrap keeps the row usable in the narrow column
-         * without forcing document horizontal overflow. */}
+        {/* One responsive toolbar: applied filters share the row with
+         * the right-aligned Board/List and Filter action group when
+         * space allows. At narrow widths the applied-filter summary
+         * wraps below the action group; below the sm breakpoint the
+         * action group itself wraps (Board/List stack, then Filter)
+         * so every control stays inside the content region and never
+         * overflows under the fixed Sidebar. */}
         <div
-          className="mt-5 flex w-full flex-wrap items-center justify-between gap-2"
+          role="toolbar"
+          aria-label="My Work controls"
+          className="mt-4 flex w-full flex-wrap items-center justify-end gap-x-4 gap-y-2"
         >
-          <div className="flex min-w-0 items-center gap-2">
-            <MyWorkResearchGroupFilter
-              ref={groupFilterTriggerRef}
-              options={groups}
-              selectedIds={selectedGroupIds}
-              open={groupFilterOpen}
-              onOpenChange={setGroupFilterOpen}
-              onToggle={handleGroupToggle}
-              onClear={handleClearGroupFilter}
-            />
-
-            <MyWorkProjectsFilter
-              ref={projectFilterTriggerRef}
-              options={projectOptions}
-              selectedIds={selectedProjectIds}
-              open={projectFilterOpen}
-              onOpenChange={setProjectFilterOpen}
-              onToggle={handleProjectToggle}
-              onClear={handleClearProjectFilter}
-            />
-
-            <MyWorkTypesFilter
-              ref={typeFilterTriggerRef}
-              options={WORK_ITEM_TYPE_FILTER_OPTIONS}
-              selectedKinds={selectedTypeKinds}
-              open={typeFilterOpen}
-              onOpenChange={setTypeFilterOpen}
-              onToggle={handleTypeToggle}
-              onClear={handleClearTypeFilter}
-            />
-          </div>
-
-          {/* Board/List switch — same segmented control pattern as the
-           *  Project Work Items view switch. Presentation-only for the
-           *  Work Item data (no refetch, no Project configuration);
-           *  the chosen mode is persisted as part of the complete
-           *  personal preference snapshot (debounced). The pressed
-           *  state reflects the persisted preference. Each button
-           *  exposes its name and pressed state. */}
-          <div
-            role="group"
-            aria-label="My Work view"
-            className="inline-flex h-8 max-w-full flex-wrap items-center rounded-[5px] border border-border-structural bg-segmented-bg p-0.5"
-          >
-            <button
-              type="button"
-              aria-pressed={view === 'board'}
-              data-work-item-inspector-keep-open="true"
-              onClick={() =>
-                handleViewModeChange('board')
-              }
-              className={[
-                'inline-flex h-[26px] items-center gap-1.5 rounded px-[9px] text-xs font-medium transition',
-                view === 'board'
-                  ? 'bg-segmented-selected text-segmented-selected-text'
-                  : 'text-work-content-muted hover:text-work-content-text',
-              ].join(' ')}
+          {/* Applied filters are rendered ONLY while at least one
+           * implemented filter category is active (an active filter
+           * must never be invisible). Shows the current filtered
+           * result count (after ALL active categories), the
+           * selected-group chips, then the selected-Project chips,
+           * then the selected-Work-Item-Type chips (each
+           * density-collapsed), and a "Clear filters" action that
+           * clears ALL THREE implemented categories. */}
+          {hasActiveFilter && (
+            <div
+              role="group"
+              aria-label="Applied filters"
+              className="order-2 flex w-full min-w-0 flex-wrap items-center gap-x-3 gap-y-2 sm:order-1 sm:w-auto sm:flex-1"
             >
-              <span
-                aria-hidden="true"
-                className="material-symbols-outlined icon-stable text-[14px]"
-              >
-                view_kanban
+              <span className="shrink-0 text-[11px] leading-4 text-text-tertiary">
+                {resultCount}
               </span>
-              Board
-            </button>
 
-            <button
-              type="button"
-              aria-pressed={view === 'list'}
-              data-work-item-inspector-keep-open="true"
-              onClick={() =>
-                handleViewModeChange('list')
-              }
-              className={[
-                'inline-flex h-[26px] items-center gap-1.5 rounded px-[9px] text-xs font-medium transition',
-                view === 'list'
-                  ? 'bg-segmented-selected text-segmented-selected-text'
-                  : 'text-work-content-muted hover:text-work-content-text',
-              ].join(' ')}
+              <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                {collapsedChips.chips.map((chip) => (
+                  <span
+                    key={chip.id}
+                    title={`FG: ${chip.name}`}
+                    className="flex h-6 max-w-[220px] items-center gap-1.5 rounded border border-border-subtle bg-surface-muted pl-2 pr-[7px]"
+                  >
+                    <span className="min-w-0 truncate text-[11px] font-medium leading-4 text-text">
+                      FG: {chip.name}
+                    </span>
+
+                    <button
+                      type="button"
+                      aria-label={`Remove Research Group filter ${chip.name}`}
+                      onClick={() =>
+                        handleRemoveGroupChip(chip.id)
+                      }
+                      className="shrink-0 rounded text-text-tertiary transition hover:text-text focus-visible:outline-2 focus-visible:outline focus-visible:outline-focus"
+                    >
+                      <span
+                        aria-hidden="true"
+                        className="material-symbols-outlined icon-stable text-[12px]"
+                      >
+                        close
+                      </span>
+                    </button>
+                  </span>
+                ))}
+
+                {collapsedChips.overflowCount != null && (
+                  // Shrinkable (label truncates) so the summary chip
+                  // cannot push the toolbar past the narrow column
+                  // width and overflow the document.
+                  <button
+                    type="button"
+                    onClick={openGroupFilter}
+                    className="flex h-6 min-w-0 max-w-full items-center overflow-hidden text-ellipsis whitespace-nowrap rounded border border-border-subtle bg-surface-muted px-2 text-[11px] font-medium leading-4 text-text transition hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline focus-visible:outline-focus"
+                  >
+                    Research groups: +{collapsedChips.overflowCount}
+                  </button>
+                )}
+
+                {collapsedProjectChips.chips.map((chip) => (
+                  <span
+                    key={`project-${chip.id}`}
+                    title={`PJ: ${chip.name}`}
+                    className="flex h-6 max-w-[220px] items-center gap-1.5 rounded border border-border-subtle bg-surface-muted pl-2 pr-[7px]"
+                  >
+                    <span className="min-w-0 truncate text-[11px] font-medium leading-4 text-text">
+                      PJ: {chip.name}
+                    </span>
+
+                    <button
+                      type="button"
+                      aria-label={`Remove Project filter ${chip.name}`}
+                      onClick={() =>
+                        handleRemoveProjectChip(
+                          chip.id,
+                        )
+                      }
+                      className="shrink-0 rounded text-text-tertiary transition hover:text-text focus-visible:outline-2 focus-visible:outline focus-visible:outline-focus"
+                    >
+                      <span
+                        aria-hidden="true"
+                        className="material-symbols-outlined icon-stable text-[12px]"
+                      >
+                        close
+                      </span>
+                    </button>
+                  </span>
+                ))}
+
+                {collapsedProjectChips.overflowCount != null && (
+                  // Shrinkable (label truncates) so the summary chip
+                  // cannot push the toolbar past the narrow column
+                  // width and overflow the document.
+                  <button
+                    type="button"
+                    onClick={openProjectFilter}
+                    className="flex h-6 min-w-0 max-w-full items-center overflow-hidden text-ellipsis whitespace-nowrap rounded border border-border-subtle bg-surface-muted px-2 text-[11px] font-medium leading-4 text-text transition hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline focus-visible:outline-focus"
+                  >
+                    Projects: +{collapsedProjectChips.overflowCount}
+                  </button>
+                )}
+
+                {collapsedTypeChips.chips.map((chip) => (
+                  <span
+                    key={`type-${chip.kind}`}
+                    title={`WT: ${chip.label}`}
+                    className="flex h-6 max-w-[220px] items-center gap-1.5 rounded border border-border-subtle bg-surface-muted pl-2 pr-[7px]"
+                  >
+                    <span className="min-w-0 truncate text-[11px] font-medium leading-4 text-text">
+                      WT: {chip.label}
+                    </span>
+
+                    <button
+                      type="button"
+                      aria-label={`Remove Work Item Type filter ${chip.label}`}
+                      onClick={() =>
+                        handleRemoveTypeChip(chip.kind)
+                      }
+                      className="shrink-0 rounded text-text-tertiary transition hover:text-text focus-visible:outline-2 focus-visible:outline focus-visible:outline-focus"
+                    >
+                      <span
+                        aria-hidden="true"
+                        className="material-symbols-outlined icon-stable text-[12px]"
+                      >
+                        close
+                      </span>
+                    </button>
+                  </span>
+                ))}
+
+                {collapsedTypeChips.overflowCount != null && (
+                  // Shrinkable (label truncates) so the summary chip
+                  // cannot push the toolbar past the narrow column
+                  // width and overflow the document.
+                  <button
+                    type="button"
+                    onClick={openTypeFilter}
+                    className="flex h-6 min-w-0 max-w-full items-center overflow-hidden text-ellipsis whitespace-nowrap rounded border border-border-subtle bg-surface-muted px-2 text-[11px] font-medium leading-4 text-text transition hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline focus-visible:outline-focus"
+                  >
+                    Work item types: +{collapsedTypeChips.overflowCount}
+                  </button>
+                )}
+              </div>
+
+              <button
+                type="button"
+                onClick={handleClearFilters}
+                className="shrink-0 text-[11px] font-semibold leading-4 text-text-muted transition hover:text-text focus-visible:outline-2 focus-visible:outline focus-visible:outline-focus"
+              >
+                Clear filters
+              </button>
+            </div>
+          )}
+
+          <div className="order-1 ml-auto flex max-w-full flex-wrap items-center justify-end gap-2 sm:order-2 sm:flex-nowrap sm:shrink-0">
+            {/* Board/List switch — same segmented control pattern as the
+             *  Project Work Items view switch. Presentation-only for the
+             *  Work Item data (no refetch, no Project configuration);
+             *  the chosen mode is persisted as part of the complete
+             *  personal preference snapshot (debounced). The pressed
+             *  state reflects the persisted preference. Each button
+             *  exposes its name and pressed state. */}
+            <div
+              role="group"
+              aria-label="My Work view"
+              className="inline-flex h-auto max-w-full flex-wrap items-center rounded-[5px] border border-border-structural bg-segmented-bg p-0.5 sm:h-8 sm:shrink-0 sm:flex-nowrap"
             >
-              <span
-                aria-hidden="true"
-                className="material-symbols-outlined icon-stable text-[14px]"
+              <button
+                type="button"
+                aria-pressed={view === 'board'}
+                data-work-item-inspector-keep-open="true"
+                onClick={() =>
+                  handleViewModeChange('board')
+                }
+                className={[
+                  'inline-flex h-[26px] items-center gap-1.5 rounded px-[9px] text-xs font-medium transition',
+                  view === 'board'
+                    ? 'bg-segmented-selected text-segmented-selected-text'
+                    : 'text-work-content-muted hover:text-work-content-text',
+                ].join(' ')}
               >
-                view_list
-              </span>
-              List
-            </button>
-          </div>
-        </div>
-
-        {/* Applied-filters row — rendered ONLY while at least one
-         * implemented filter category is active (an active filter
-         * must never be invisible). Shows the current filtered
-         * result count (after ALL active categories), the
-         * selected-group chips, then the selected-Project chips,
-         * then the selected-Work-Item-Type chips (each
-         * density-collapsed), and a "Clear filters" action that
-         * clears ALL THREE implemented categories. */}
-        {hasActiveFilter && (
-          <div className="mt-2 flex w-full flex-wrap items-center gap-x-3 gap-y-2">
-            <span className="shrink-0 text-[11px] leading-4 text-text-tertiary">
-              {resultCount}
-            </span>
-
-            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
-              {collapsedChips.chips.map((chip) => (
                 <span
-                  key={chip.id}
-                  title={`FG: ${chip.name}`}
-                  className="flex h-6 max-w-[220px] items-center gap-1.5 rounded border border-border-subtle bg-surface-muted pl-2 pr-[7px]"
+                  aria-hidden="true"
+                  className="material-symbols-outlined icon-stable text-[14px]"
                 >
-                  <span className="min-w-0 truncate text-[11px] font-medium leading-4 text-text">
-                    FG: {chip.name}
-                  </span>
-
-                  <button
-                    type="button"
-                    aria-label={`Remove Research Group filter ${chip.name}`}
-                    onClick={() =>
-                      handleRemoveGroupChip(chip.id)
-                    }
-                    className="shrink-0 rounded text-text-tertiary transition hover:text-text focus-visible:outline-2 focus-visible:outline focus-visible:outline-focus"
-                  >
-                    <span
-                      aria-hidden="true"
-                      className="material-symbols-outlined icon-stable text-[12px]"
-                    >
-                      close
-                    </span>
-                  </button>
+                  view_kanban
                 </span>
-              ))}
+                Board
+              </button>
 
-              {collapsedChips.overflowCount != null && (
-                // Shrinkable (label truncates) so the summary chip
-                // cannot push the applied row past the narrow column
-                // width and overflow the document.
-                <button
-                  type="button"
-                  onClick={openGroupFilter}
-                  className="flex h-6 min-w-0 max-w-full items-center overflow-hidden text-ellipsis whitespace-nowrap rounded border border-border-subtle bg-surface-muted px-2 text-[11px] font-medium leading-4 text-text transition hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline focus-visible:outline-focus"
-                >
-                  Research groups: +{collapsedChips.overflowCount}
-                </button>
-              )}
-
-              {collapsedProjectChips.chips.map((chip) => (
+              <button
+                type="button"
+                aria-pressed={view === 'list'}
+                data-work-item-inspector-keep-open="true"
+                onClick={() =>
+                  handleViewModeChange('list')
+                }
+                className={[
+                  'inline-flex h-[26px] items-center gap-1.5 rounded px-[9px] text-xs font-medium transition',
+                  view === 'list'
+                    ? 'bg-segmented-selected text-segmented-selected-text'
+                    : 'text-work-content-muted hover:text-work-content-text',
+                ].join(' ')}
+              >
                 <span
-                  key={`project-${chip.id}`}
-                  title={`PJ: ${chip.name}`}
-                  className="flex h-6 max-w-[220px] items-center gap-1.5 rounded border border-border-subtle bg-surface-muted pl-2 pr-[7px]"
+                  aria-hidden="true"
+                  className="material-symbols-outlined icon-stable text-[14px]"
                 >
-                  <span className="min-w-0 truncate text-[11px] font-medium leading-4 text-text">
-                    PJ: {chip.name}
-                  </span>
-
-                  <button
-                    type="button"
-                    aria-label={`Remove Project filter ${chip.name}`}
-                    onClick={() =>
-                      handleRemoveProjectChip(
-                        chip.id,
-                      )
-                    }
-                    className="shrink-0 rounded text-text-tertiary transition hover:text-text focus-visible:outline-2 focus-visible:outline focus-visible:outline-focus"
-                  >
-                    <span
-                      aria-hidden="true"
-                      className="material-symbols-outlined icon-stable text-[12px]"
-                    >
-                      close
-                    </span>
-                  </button>
+                  view_list
                 </span>
-              ))}
-
-              {collapsedProjectChips.overflowCount != null && (
-                // Shrinkable (label truncates) so the summary chip
-                // cannot push the applied row past the narrow column
-                // width and overflow the document.
-                <button
-                  type="button"
-                  onClick={openProjectFilter}
-                  className="flex h-6 min-w-0 max-w-full items-center overflow-hidden text-ellipsis whitespace-nowrap rounded border border-border-subtle bg-surface-muted px-2 text-[11px] font-medium leading-4 text-text transition hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline focus-visible:outline-focus"
-                >
-                  Projects: +{collapsedProjectChips.overflowCount}
-                </button>
-              )}
-
-              {collapsedTypeChips.chips.map((chip) => (
-                <span
-                  key={`type-${chip.kind}`}
-                  title={`WT: ${chip.label}`}
-                  className="flex h-6 max-w-[220px] items-center gap-1.5 rounded border border-border-subtle bg-surface-muted pl-2 pr-[7px]"
-                >
-                  <span className="min-w-0 truncate text-[11px] font-medium leading-4 text-text">
-                    WT: {chip.label}
-                  </span>
-
-                  <button
-                    type="button"
-                    aria-label={`Remove Work Item Type filter ${chip.label}`}
-                    onClick={() =>
-                      handleRemoveTypeChip(chip.kind)
-                    }
-                    className="shrink-0 rounded text-text-tertiary transition hover:text-text focus-visible:outline-2 focus-visible:outline focus-visible:outline-focus"
-                  >
-                    <span
-                      aria-hidden="true"
-                      className="material-symbols-outlined icon-stable text-[12px]"
-                    >
-                      close
-                    </span>
-                  </button>
-                </span>
-              ))}
-
-              {collapsedTypeChips.overflowCount != null && (
-                // Shrinkable (label truncates) so the summary chip
-                // cannot push the applied row past the narrow column
-                // width and overflow the document.
-                <button
-                  type="button"
-                  onClick={openTypeFilter}
-                  className="flex h-6 min-w-0 max-w-full items-center overflow-hidden text-ellipsis whitespace-nowrap rounded border border-border-subtle bg-surface-muted px-2 text-[11px] font-medium leading-4 text-text transition hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline focus-visible:outline-focus"
-                >
-                  Work item types: +{collapsedTypeChips.overflowCount}
-                </button>
-              )}
+                List
+              </button>
             </div>
 
-            <button
-              type="button"
-              onClick={handleClearFilters}
-              className="shrink-0 text-[11px] font-semibold leading-4 text-text-muted transition hover:text-text focus-visible:outline-2 focus-visible:outline focus-visible:outline-focus"
-            >
-              Clear filters
-            </button>
+            <MyWorkFilterCommandMenu
+              ref={filterMenuRef}
+              researchGroupOptions={groups}
+              selectedResearchGroupIds={selectedGroupIds}
+              onResearchGroupToggle={handleGroupToggle}
+              onClearResearchGroups={handleClearGroupFilter}
+              projectOptions={projectOptions}
+              selectedProjectIds={selectedProjectIds}
+              onProjectToggle={handleProjectToggle}
+              onClearProjects={handleClearProjectFilter}
+              selectedWorkItemTypes={selectedTypeKinds}
+              onWorkItemTypeToggle={handleTypeToggle}
+              onClearWorkItemTypes={handleClearTypeFilter}
+              onClearAll={handleClearFilters}
+            />
           </div>
-        )}
+        </div>
 
       {/* Non-fatal preference save failure: the established
        * page-local dismissible error treatment (the same as the
@@ -3209,7 +3169,9 @@ function MyWorkBoardCard({
       </div>
 
       {/* 4. Exception footer — only when an exception exists.
-          Icon + text (never color alone); blocked and due state may
+          Blocked keeps icon + text; the due state is text-only (no
+          warning icon) — the written label carries the meaning, so
+          color is never the sole carrier. Blocked and due state may
           coexist. */}
       {hasExceptions && (
         <div className="mt-2 flex min-w-0 flex-wrap items-center gap-3 border-t border-work-lane-divider pt-[7px]">
@@ -3229,37 +3191,25 @@ function MyWorkBoardCard({
           )}
 
           {dueState.kind === 'overdue' && (
-            <span className="flex items-center gap-1 text-[10px] font-medium leading-[15px] text-work-exception-danger">
-              <span
-                aria-hidden="true"
-                className="material-symbols-outlined text-[13px]"
-              >
-                warning
-              </span>
+            <span className="text-[10px] font-medium leading-[15px] text-work-exception-danger">
               {dueState.label}
             </span>
           )}
 
           {dueState.kind === 'today' && (
-            <span className="flex items-center gap-1 text-[10px] font-medium leading-[15px] text-work-exception-warning">
-              <span
-                aria-hidden="true"
-                className="material-symbols-outlined text-[13px]"
-              >
-                event
-              </span>
+            <span className="text-[10px] font-medium leading-[15px] text-work-exception-warning">
               Due today
             </span>
           )}
 
+          {dueState.kind === 'tomorrow' && (
+            <span className="text-[10px] font-medium leading-[15px] text-work-exception-warning">
+              Tomorrow
+            </span>
+          )}
+
           {dueState.kind === 'future' && (
-            <span className="flex items-center gap-1 text-[10px] font-medium leading-[15px] text-text-muted">
-              <span
-                aria-hidden="true"
-                className="material-symbols-outlined text-[13px]"
-              >
-                event
-              </span>
+            <span className="text-[10px] font-medium leading-[15px] text-text-muted">
               {dueState.label}
             </span>
           )}

@@ -177,6 +177,11 @@ describe('MyWorkFilterCommandMenu', () => {
   it('shows exactly the three canonical categories in order', () => {
     const view = render(<MyWorkFilterCommandMenu {...baseProps()} />)
     const dialog = openRoot(view.getByRole)
+    // The dialog is portaled to document.body and pinned by its
+    // right inset (right edge aligned with the trigger's right edge)
+    // — it must never be left-anchored.
+    expect(dialog.style.left).toBe('')
+    expect(dialog.style.right).toMatch(/[0-9]+(\.[0-9]+)?px$/)
     const buttons = within(dialog)
       .getAllByRole('button')
       .map((button) => button.textContent?.trim())
@@ -261,7 +266,11 @@ describe('MyWorkFilterCommandMenu', () => {
       expect(option).toHaveTextContent('check')
       expect(option.querySelector('.text-accent-text')).not.toBeNull()
     }
-    expect(view.container.querySelector('input[type="checkbox"]')).toBeNull()
+    // Scoped to the base element so the portaled dialog (on
+    // document.body) is covered, not just the render container.
+    expect(
+      view.baseElement.querySelector('input[type="checkbox"]'),
+    ).toBeNull()
   })
 
   it('always searches Projects and filters the keyboard-navigable option set', () => {
@@ -318,6 +327,11 @@ describe('MyWorkFilterCommandMenu', () => {
     openRoot(view.getByRole)
     fireEvent.click(view.getByRole('button', { name: 'Work item type' }))
 
+    // The dialog is portaled to document.body, so the class checks
+    // are scoped to the dialog element itself.
+    const typeDialog = view.getByRole('dialog', {
+      name: 'Filter by',
+    })
     expect(
       view.getAllByRole('option').map((option) => option.textContent?.trim()),
     ).toEqual([
@@ -326,10 +340,10 @@ describe('MyWorkFilterCommandMenu', () => {
       'flagMilestone',
       'deployed_codeDeliverable',
     ])
-    expect(view.container.querySelector('.text-work-type-task')).not.toBeNull()
-    expect(view.container.querySelector('.text-work-type-epic')).not.toBeNull()
-    expect(view.container.querySelector('.text-work-type-milestone')).not.toBeNull()
-    expect(view.container.querySelector('.text-work-type-deliverable')).not.toBeNull()
+    expect(typeDialog.querySelector('.text-work-type-task')).not.toBeNull()
+    expect(typeDialog.querySelector('.text-work-type-epic')).not.toBeNull()
+    expect(typeDialog.querySelector('.text-work-type-milestone')).not.toBeNull()
+    expect(typeDialog.querySelector('.text-work-type-deliverable')).not.toBeNull()
     expect(view.queryByText(/unknown|custom/i)).toBeNull()
     expect(view.queryByRole('searchbox')).toBeNull()
   })

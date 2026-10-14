@@ -171,12 +171,13 @@ test(
     )
 
     // Neutral / global baseline of the current My Work contract: the
-    // Research Group filter (the multiselect toggle that replaced the
-    // legacy single-select "Filter by research group" = "all") has no
-    // group selected, so My Work is not scoped by the filter.
+    // single Filter command menu (which replaced the legacy
+    // "Research groups" multiselect toggle) reports zero active
+    // filter categories — in particular no Research Group
+    // restriction — so My Work is not scoped by the filter.
     await expect(
       page.getByRole('button', {
-        name: 'Research groups, none selected',
+        name: 'Filter, 0 active categories',
       }),
     ).toBeVisible()
 
