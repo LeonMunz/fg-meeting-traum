@@ -2320,9 +2320,18 @@ export function WorkItemInspector({
     useState<SaveStatus>('idle')
   const [saveError, setSaveError] =
     useState<string | null>(null)
-  const savedTimeoutRef = useRef<
-    ReturnType<typeof setTimeout> | null
-  >(null)
+  // Identity of the pending delayed "Saved" message
+  // clearing: the timer handle, the Work Item whose
+  // settled PATCH scheduled it, and the save token
+  // that scheduled it. The timer callback only clears
+  // the indicator when it is still this timer, for
+  // this Work Item, still on screen, and no newer save
+  // operation has since started.
+  const savedTimeoutRef = useRef<{
+    handle: ReturnType<typeof setTimeout>
+    workItemId: number
+    token: number
+  } | null>(null)
 
   // Deletion is a destructive, object-level action exposed from the
   // drawer header. When the parent wires the shared page-level flow
@@ -2353,6 +2362,19 @@ export function WorkItemInspector({
     Promise<void>
   >(Promise.resolve())
   const queuedPatchCountRef = useRef(0)
+
+  // Monotonically increasing save-generation token,
+  // advanced when a queued PATCH actually starts.
+  // Together with the initiating Work Item's ID it is
+  // the identity every save-feedback write is checked
+  // against: a PATCH may only touch the indicator
+  // while the Work Item that initiated it is still the
+  // one displayed, and the delayed saved-message
+  // clearing additionally requires that no newer save
+  // operation has since started, so a stale timer —
+  // same Work Item or another — can never clear a
+  // newer save's feedback.
+  const saveTokenRef = useRef(0)
 
   const inspectorStatusDefinitions =
     useMemo(
@@ -2491,7 +2513,7 @@ export function WorkItemInspector({
     () => () => {
       if (savedTimeoutRef.current) {
         clearTimeout(
-          savedTimeoutRef.current,
+          savedTimeoutRef.current.handle,
         )
       }
     },
@@ -3219,15 +3241,44 @@ export function WorkItemInspector({
 
     const runPatch =
       async (): Promise<boolean> => {
-        if (savedTimeoutRef.current) {
+        // This PATCH's save-feedback identity: the
+        // initiating Work Item (captured at enqueue)
+        // plus a fresh save token — a newer token
+        // means a newer save operation has started
+        // and now owns the indicator.
+        const token =
+          ++saveTokenRef.current
+
+        // Cancel only the pending saved-message timer
+        // that belongs to THIS Work Item: a timer
+        // scheduled for another Work Item must survive
+        // (it is identity-checked when it fires), so
+        // this PATCH cannot cut off that Work Item's
+        // "Saved" message early.
+        if (
+          savedTimeoutRef.current !==
+          null &&
+          savedTimeoutRef.current.workItemId ===
+            workItemId
+        ) {
           clearTimeout(
-            savedTimeoutRef.current,
+            savedTimeoutRef.current.handle,
           )
           savedTimeoutRef.current = null
         }
 
-        setSaveStatus('saving')
-        setSaveError(null)
+        // The save indicator belongs to the Work Item
+        // currently on screen: a PATCH that starts
+        // after the inspector has switched to another
+        // Work Item must not show that Work Item as
+        // saving — or clear that Work Item's error.
+        if (
+          currentItemIdRef.current ===
+          workItemId
+        ) {
+          setSaveStatus('saving')
+          setSaveError(null)
+        }
 
         try {
           await onPatch(
@@ -3242,38 +3293,73 @@ export function WorkItemInspector({
           // to flip the indicator back to "Saving…" anyway. Refresh
           // History on the same condition: once per drained batch of
           // serialized patches, not once per individual PATCH.
+          //
+          // Both writes are scoped to the initiating Work Item:
+          // the response of a PATCH queued for a Work Item the
+          // inspector has since switched away from must never
+          // flash "Saved" — or refresh the History — of the Work
+          // Item now on screen.
           if (
             queuedPatchCountRef.current ===
-            0
+            0 &&
+            currentItemIdRef.current ===
+              workItemId
           ) {
             setSaveStatus('saved')
             savedTimeoutRef.current =
-              setTimeout(() => {
-                setSaveStatus('idle')
-              }, 1600)
-
-            // Only refresh if this Work Item is still the one on
-            // screen — if the inspector has since switched to
-            // another Work Item, that switch already fetched its
-            // own History, and this settling patch must not touch it.
-            if (
-              currentItemIdRef.current ===
-              workItemId
-            ) {
-              fetchHistory(workItemId)
-            }
+              {
+                handle: setTimeout(() => {
+                  // Identity guard on the delayed
+                  // clearing: only the timer that is
+                  // still the pending saved-message
+                  // timer, for the Work Item still on
+                  // screen, with no newer save
+                  // operation having since started, may
+                  // clear the indicator.
+                  if (
+                    savedTimeoutRef.current !==
+                    null &&
+                    savedTimeoutRef.current.workItemId ===
+                      workItemId &&
+                    savedTimeoutRef.current.token ===
+                      token &&
+                    currentItemIdRef.current ===
+                      workItemId
+                  ) {
+                    savedTimeoutRef.current =
+                      null
+                    setSaveStatus('idle')
+                  }
+                }, 1600),
+                workItemId,
+                token,
+              }
+            // This Work Item is still the one on
+            // screen (checked above): refresh its
+            // History once per drained batch.
+            fetchHistory(workItemId)
           }
 
           return true
         } catch (error) {
           queuedPatchCountRef.current -= 1
 
-          setSaveStatus('error')
-          setSaveError(
-            error instanceof Error
-              ? error.message
-              : 'Work item could not be saved.',
-          )
+          // Same identity scope as the success path:
+          // a rejection that settles after the
+          // inspector has switched to another Work
+          // Item must not show this Work Item's error
+          // on it.
+          if (
+            currentItemIdRef.current ===
+            workItemId
+          ) {
+            setSaveStatus('error')
+            setSaveError(
+              error instanceof Error
+                ? error.message
+                : 'Work item could not be saved.',
+            )
+          }
 
           return false
         }
