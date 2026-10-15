@@ -11,7 +11,7 @@
 import type {
   ApiProjectWorkItemConfiguration,
   ApiWorkItem,
-  ApiWorkItemStatus,
+  ApiWorkItemStatusDefinition,
   ApiWorkItemTypeDefinition,
 } from '../../api/types'
 
@@ -124,6 +124,29 @@ export function resolveWorkItemTypeName(
   return null
 }
 
+/**
+ * Resolve the concrete StatusDefinition referenced by a Work Item's
+ * canonical `statusDefinitionId` — a pure ID lookup against the
+ * Project's Work Item configuration. Returns the definition as
+ * configured (including inactive definitions an existing Work Item
+ * may still reference), or null when the configuration is missing
+ * or cannot resolve the ID. Nothing is inferred: no fallback
+ * definition, no name or semantic-category matching.
+ */
+export function resolveWorkItemStatusDefinition(
+  statusDefinitionId: number | null | undefined,
+  config: ApiProjectWorkItemConfiguration | null,
+): ApiWorkItemStatusDefinition | null {
+  if (config && statusDefinitionId != null) {
+    return (
+      config.statuses.find(
+        (candidate) => candidate.id === statusDefinitionId,
+      ) ?? null
+    )
+  }
+  return null
+}
+
 export interface ResolvedWorkItemDisplay {
   type: DemoWorkItemType
   status: DemoWorkItemStatus
@@ -228,40 +251,4 @@ export function resolveStatusDefinitionIdByCategory(
       candidate.category === statusCategory,
   )
   return match ? match.id : null
-}
-
-/**
- * Resolve the status definition ID that currently represents a Work Item's
- * status, given the item's resolved status category. This is the inverse of
- * `resolveStatusDefinitionIdByCategory` and is the value a controlled
- * status <select> (whose options are status definitions) must render.
- *
- * Reads the item's canonical `statusDefinitionId` when present and the
- * category only as a fallback, so the selected option always matches what
- * the Board column and the persisted API state agree on.
- */
-export function resolveWorkItemStatusSelectValue(
-  item: {
-    statusDefinitionId?: number | null
-    status?: ApiWorkItemStatus | null
-  },
-  statusCategory: DemoWorkItemStatus,
-  config: ApiProjectWorkItemConfiguration | null,
-): number | null {
-  if (
-    config &&
-    item.statusDefinitionId != null &&
-    config.statuses.some(
-      (candidate) => candidate.id === item.statusDefinitionId,
-    )
-  ) {
-    return item.statusDefinitionId
-  }
-
-  // Fall back to matching by resolved category (covers legacy items that
-  // only carry a fixed-string `status`).
-  return resolveStatusDefinitionIdByCategory(
-    statusCategory,
-    config,
-  )
 }

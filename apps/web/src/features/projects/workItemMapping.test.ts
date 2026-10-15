@@ -9,7 +9,7 @@ import {
   resolveStatusDefinitionIdByCategory,
   resolveWorkItemDisplay,
   resolveWorkItemStatus,
-  resolveWorkItemStatusSelectValue,
+  resolveWorkItemStatusDefinition,
   resolveWorkItemType,
   resolveWorkItemTypeDefinition,
 } from './workItemMapping'
@@ -347,36 +347,62 @@ describe('resolveStatusDefinitionIdByCategory — board/status category to defin
 })
 
 
-describe('resolveWorkItemStatusSelectValue — inspector select controlled value', () => {
-  it('prefers the canonical statusDefinitionId when it is configured', () => {
-    // id 12 = Review definition.
+describe('resolveWorkItemStatusDefinition — canonical ID lookup', () => {
+  it('returns the referenced definition by ID (no inference, no fallback)', () => {
     expect(
-      resolveWorkItemStatusSelectValue(
-        { statusDefinitionId: 12, status: 'todo' },
-        'review',
-        config,
-      ),
-    ).toBe(12)
+      resolveWorkItemStatusDefinition(12, config),
+    ).toEqual({
+      id: 12,
+      name: 'Review',
+      category: 'review',
+      order: 2,
+      active: true,
+      isDefault: false,
+    })
   })
 
-  it('falls back to the resolved category when only a legacy string is set', () => {
-    // statusDefinitionId null + legacy 'review' -> resolves to Review def (12).
+  it('returns an INACTIVE referenced definition (it stays attached to existing WorkItems)', () => {
+    const withInactive: ApiProjectWorkItemConfiguration = {
+      ...config,
+      statuses: [
+        ...config.statuses,
+        {
+          id: 99,
+          name: 'Archive review',
+          category: 'review',
+          order: 9,
+          active: false,
+          isDefault: false,
+        },
+      ],
+    }
+
     expect(
-      resolveWorkItemStatusSelectValue(
-        { statusDefinitionId: null, status: 'review' },
-        'review',
-        config,
-      ),
-    ).toBe(12)
+      resolveWorkItemStatusDefinition(99, withInactive),
+    ).toMatchObject({
+      id: 99,
+      name: 'Archive review',
+      category: 'review',
+      active: false,
+    })
   })
 
-  it('returns null when there is no matching configured definition', () => {
+  it('never substitutes a same-category definition for an unresolvable ID', () => {
+    // id 999 is not configured, but an ACTIVE `review` definition
+    // (id 12) exists — the lookup must still return null (the
+    // inspector shows an explicit unavailable state, it must not
+    // silently display another status).
     expect(
-      resolveWorkItemStatusSelectValue(
-        { statusDefinitionId: null, status: 'todo' },
-        'todo',
-        null,
-      ),
+      resolveWorkItemStatusDefinition(999, config),
+    ).toBeNull()
+  })
+
+  it('returns null when the configuration is missing or the ID is null', () => {
+    expect(
+      resolveWorkItemStatusDefinition(12, null),
+    ).toBeNull()
+    expect(
+      resolveWorkItemStatusDefinition(null, config),
     ).toBeNull()
   })
 })

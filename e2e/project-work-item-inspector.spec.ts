@@ -3115,8 +3115,18 @@ interface E2eTypeDefinition {
   active: boolean
 }
 
+interface E2eStatusDefinition {
+  id: number
+  name: string
+  category: string
+  order: number
+  active: boolean
+  isDefault: boolean
+}
+
 interface E2eWorkItemConfiguration {
   types: E2eTypeDefinition[]
+  statuses: E2eStatusDefinition[]
 }
 
 async function ensureCsrfToken(
@@ -3142,6 +3152,28 @@ async function ensureCsrfToken(
     throw new Error('CSRF token unavailable.')
   }
   return token
+}
+
+async function createStatusDefinition(
+  page: import('@playwright/test').Page,
+  projectId: number,
+  name: string,
+  category: string,
+): Promise<E2eStatusDefinition> {
+  const response = await page.request.post(
+    `/api/projects/${projectId}/work-item-configuration/statuses/`,
+    {
+      data: { name, category },
+      headers: {
+        'X-CSRFToken': await ensureCsrfToken(page),
+      },
+    },
+  )
+  expect(
+    response.status(),
+    `Creating status definition "${name}" must succeed.`,
+  ).toBe(201)
+  return (await response.json()) as E2eStatusDefinition
 }
 
 async function getProjectIdFromRoute(
@@ -3898,5 +3930,363 @@ test(
         inactiveItem.id,
       ).getByText('Epic', { exact: true }),
     ).toBeVisible()
+  },
+)
+
+
+/* ────────────────────────────────────────────────────────────────
+ * Canonical Work Item status (statusDefinitionId) acceptance.
+ *
+ * The inspector must resolve the Work Item's actual status from
+ * the canonical `statusDefinitionId` (never from semantic
+ * categories or display names), offer the Project's ACTIVE
+ * StatusDefinitions as independently selectable targets in
+ * configured order (option values are concrete definition IDs),
+ * and persist status changes exclusively through the canonical
+ * PATCH contract key `statusDefinitionId` — including between two
+ * definitions that share one semantic category (docs/domain/
+ * foundation.md §3a.2 + §6.2 + §7 + Board ↔ Editor invariant).
+ *
+ * Fixture setup mutates the Project's own Work Item configuration
+ * through the production configuration API (owner-authorized) using
+ * the browser's authenticated session — the same pattern the
+ * canonical type acceptance above uses.
+ * ──────────────────────────────────────────────────────────────── */
+
+const STATUS_PROJECT_NAME =
+  'E2E Inspector Status Project'
+const STATUS_ITEM_TITLE =
+  'E2E Inspector Status Item'
+const SECOND_IN_PROGRESS_NAME = 'Stalled'
+
+test(
+  'Work Item inspector: same-category status definitions stay independently selectable via statusDefinitionId',
+  async ({ page }, testInfo) => {
+    await login(page, 'alex')
+    await openProjects(page)
+
+    await createProjectViaUi(
+      page,
+      STATUS_PROJECT_NAME,
+    )
+    await openProject(page, STATUS_PROJECT_NAME)
+
+    const projectId =
+      await getProjectIdFromRoute(page)
+
+    // --------------------------------------------------------
+    // Fixture: read the Project's configured statuses, then
+    // create a SECOND StatusDefinition in the SAME semantic
+    // category (`in_progress`) as the project's existing one —
+    // the exact configuration shape the category-based
+    // resolution collapsed into a single option. Also create
+    // the Work Item through the canonical API out-of-band.
+    // --------------------------------------------------------
+    const configuration =
+      await getWorkItemConfiguration(page, projectId)
+    const todoDefinition = requireDefined(
+      configuration.statuses.find(
+        (candidate) => candidate.isDefault,
+      ),
+      'default (todo) status definition',
+    )
+    expect(todoDefinition.category).toBe(
+      'todo',
+    )
+    const inProgressDefinition =
+      requireDefined(
+        configuration.statuses.find(
+          (candidate) =>
+            candidate.category ===
+            'in_progress' &&
+            candidate.active,
+        ),
+        'active in_progress status definition',
+      )
+
+    // The Project's canonical Task definition: the API create
+    // contract requires an explicit typeDefinitionId (the
+    // fixture item's type is irrelevant to the status surface
+    // under test).
+    const taskDefinition = requireDefined(
+      configuration.types.find(
+        (candidate) => candidate.kind === 'task',
+      ),
+      'canonical Task definition',
+    )
+
+    const stalledDefinition =
+      await createStatusDefinition(
+        page,
+        projectId,
+        SECOND_IN_PROGRESS_NAME,
+        'in_progress',
+      )
+    expect(stalledDefinition.id).not.toBe(
+      inProgressDefinition.id,
+    )
+    expect(stalledDefinition.category).toBe(
+      'in_progress',
+    )
+
+    await createWorkItemViaApi(page, projectId, {
+      typeDefinitionId: taskDefinition.id,
+      title: STATUS_ITEM_TITLE,
+    })
+
+    // The fixture items/configuration were persisted through the
+    // canonical API OUT-OF-BAND: a full reload is the canonical
+    // way to make the UI observe externally persisted data (the
+    // same pattern as the canonical type acceptance above): the
+    // reloaded page re-fetches both the Work Items list and the
+    // Project Work Item configuration.
+    await page.reload()
+
+    // The server's authoritative list: the fixture item's id
+    // anchors the Board card, and its initial status must be
+    // the Project's default todo definition.
+    const fixtureItems =
+      await (
+        await page.request.get(
+          `/api/projects/${projectId}/work-items/`,
+        )
+      ).json() as Array<{
+        id: number
+        title: string
+        statusDefinitionId: number
+      }>
+    const fixtureItem = requireDefined(
+      fixtureItems.find(
+        (item) =>
+          item.title === STATUS_ITEM_TITLE,
+      ),
+      'fixture Work Item',
+    )
+    expect(
+      fixtureItem.statusDefinitionId,
+      'New Work Items start in the Project default status.',
+    ).toBe(todoDefinition.id)
+
+    await expect(
+      page.getByRole('button', {
+        name: `Open ${STATUS_ITEM_TITLE}`,
+      }),
+    ).toBeVisible()
+
+    // --------------------------------------------------------
+    // 1. Open the inspector: the status control is controlled
+    //    by the canonical statusDefinitionId, and BOTH
+    //    same-category definitions are independently
+    //    selectable (option values are definition IDs).
+    // --------------------------------------------------------
+    await page
+      .getByRole('button', {
+        name: `Open ${STATUS_ITEM_TITLE}`,
+      })
+      .click()
+
+    const inspector = page.getByRole(
+      'region',
+      { name: 'Work item', exact: true },
+    )
+    await expect(inspector).toBeVisible()
+
+    const statusSelect = inspector.getByLabel(
+      'Status',
+      { exact: true },
+    )
+
+    await expect(
+      statusSelect,
+    ).toHaveValue(String(todoDefinition.id))
+
+    const options = await statusSelect
+      .locator('option')
+      .all()
+    const optionStates = await Promise.all(
+      options.map(async (option) => ({
+        value: await option.getAttribute('value'),
+        text: await option.textContent(),
+        disabled:
+          (await option.getAttribute('disabled')) !==
+          null,
+      })),
+    )
+    expect(
+      optionStates.find(
+        (option) =>
+          option.value ===
+          String(inProgressDefinition.id),
+      ),
+    ).toMatchObject({
+      text: inProgressDefinition.name,
+      disabled: false,
+    })
+    expect(
+      optionStates.find(
+        (option) =>
+          option.value ===
+          String(stalledDefinition.id),
+      ),
+    ).toMatchObject({
+      text: SECOND_IN_PROGRESS_NAME,
+      disabled: false,
+    })
+
+    // --------------------------------------------------------
+    // 2. Switch to the FIRST in_progress definition: the
+    //    canonical PATCH carries exactly
+    //    { statusDefinitionId } (no legacy `status` key).
+    // --------------------------------------------------------
+    const patchBodies = trackTypePatches(
+      page,
+      fixtureItem.id,
+    )
+
+    await statusSelect.selectOption(
+      String(inProgressDefinition.id),
+    )
+    await expect(
+      statusSelect,
+    ).toHaveValue(String(inProgressDefinition.id))
+
+    await expect
+      .poll(() => patchBodies.length)
+      .toBe(1)
+    expect(patchBodies[0]).toEqual({
+      statusDefinitionId:
+        inProgressDefinition.id,
+    })
+    expect('status' in patchBodies[0]).toBe(false)
+
+    // --------------------------------------------------------
+    // 3. Switch to the SECOND definition of the SAME category:
+    //    the PATCH still carries the exact selected definition
+    //    ID — the category-based code re-PATCHed the first
+    //    in_progress definition here, silently losing the
+    //    selection's identity.
+    // --------------------------------------------------------
+    await statusSelect.selectOption(
+      String(stalledDefinition.id),
+    )
+    await expect(
+      statusSelect,
+    ).toHaveValue(String(stalledDefinition.id))
+
+    await expect
+      .poll(() => patchBodies.length)
+      .toBe(2)
+    expect(patchBodies[1]).toEqual({
+      statusDefinitionId: stalledDefinition.id,
+    })
+    expect('status' in patchBodies[1]).toBe(false)
+
+    // Visual acceptance artifact: the inspector selects the
+    // second same-category definition by its concrete ID.
+    await page.screenshot({
+      path: testInfo.outputPath(
+        'inspector-status-second-same-category-definition.png',
+      ),
+    })
+
+    // --------------------------------------------------------
+    // 4. Re-selecting the already-current definition issues
+    //    no redundant PATCH. (Bounded settle wait to prove the
+    //    ABSENCE of a request — same pattern as the canonical
+    //    type acceptance above.)
+    // --------------------------------------------------------
+    await statusSelect.selectOption(
+      String(stalledDefinition.id),
+    )
+    await page.waitForTimeout(500)
+    expect(patchBodies.length).toBe(2)
+
+    // --------------------------------------------------------
+    // 5. Close, RELOAD, and reopen: the exact persisted
+    //    statusDefinitionId survives a full page reload (the
+    //    reloaded Board re-fetches its items from the server,
+    //    so reopening after a reload cannot be explained by
+    //    frontend in-memory state alone).
+    // --------------------------------------------------------
+    await page
+      .getByRole('button', {
+        name: 'Close work item',
+      })
+      .click()
+    await expect(inspector).not.toBeVisible()
+
+    await page.reload()
+
+    await expect(
+      page.getByRole('button', {
+        name: `Open ${STATUS_ITEM_TITLE}`,
+      }),
+    ).toBeVisible()
+
+    // The server is the authority: the persisted Work Item's
+    // canonical statusDefinitionId equals the SECOND
+    // (same-category) definition.
+    const persistedItems =
+      await (
+        await page.request.get(
+          `/api/projects/${projectId}/work-items/`,
+        )
+      ).json() as Array<{
+        id: number
+        statusDefinitionId: number
+      }>
+    expect(
+      persistedItems.find(
+        (item) => item.id === fixtureItem.id,
+      )?.statusDefinitionId,
+      'The persisted Work Item must reference the second (Stalled) definition.',
+    ).toBe(stalledDefinition.id)
+
+    // The Board displays the Work Item in the column
+    // corresponding to the persisted definition's semantic
+    // category (in_progress).
+    const inProgressColumn = page.locator(
+      '[data-board-column="in_progress"]',
+    )
+    await expect(
+      inProgressColumn.locator(
+        `[data-board-card="${fixtureItem.id}"]`,
+      ),
+    ).toBeVisible()
+
+    // Visual acceptance artifact: the Board column placement
+    // after close + full page reload (fresh server fetch).
+    await page.screenshot({
+      path: testInfo.outputPath(
+        'inspector-status-board-column-after-reload.png',
+      ),
+    })
+
+    // --------------------------------------------------------
+    // 6. Reopen after the reload: the inspector selection is
+    //    the exact persisted definition (name + ID), not the
+    //    first definition of its category.
+    // --------------------------------------------------------
+    await page
+      .getByRole('button', {
+        name: `Open ${STATUS_ITEM_TITLE}`,
+      })
+      .click()
+    await expect(inspector).toBeVisible()
+
+    await expect(
+      statusSelect,
+    ).toHaveValue(String(stalledDefinition.id))
+    await expect(
+      statusSelect.locator('option:checked'),
+    ).toHaveText(SECOND_IN_PROGRESS_NAME)
+
+    // Visual acceptance artifact: the reopened inspector after
+    // a full page reload shows the exact persisted definition.
+    await page.screenshot({
+      path: testInfo.outputPath(
+        'inspector-status-persisted-reopened.png',
+      ),
+    })
   },
 )

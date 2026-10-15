@@ -38,8 +38,7 @@ import {
   updateWorkItemComment,
 } from '../../api/work-items'
 import {
-  resolveStatusDefinitionIdByCategory,
-  resolveWorkItemStatusSelectValue,
+  resolveWorkItemStatusDefinition,
   resolveWorkItemTypeDefinition,
 } from './workItemMapping'
 import {
@@ -2367,23 +2366,32 @@ export function WorkItemInspector({
       [workItemConfiguration],
     )
 
-  // The controlled <select> must render the option that matches the Work
-  // Item's *actual* status — the same value the Board column and the
-  // persisted API agree on. Derive it from the canonical definition ID
-  // (with the resolved category as a fallback) rather than from the
-  // legacy fixed-string `item.status`, which the API no longer populates.
-  const statusSelectValue = useMemo(
-    () =>
-      resolveWorkItemStatusSelectValue(
-        item,
-        item.status ?? 'todo',
-        workItemConfiguration,
-      ),
-    [
-      item,
+  // The Work Item's ACTUAL status: the Project-configured
+  // StatusDefinition referenced by the canonical
+  // `statusDefinitionId` — resolved by ID only (never inferred
+  // from a display name, a semantic category, or the legacy
+  // fixed-string `item.status`), and including an inactive
+  // definition an existing Work Item may still reference. Null
+  // when the configuration is missing or cannot resolve the ID:
+  // the inspector then shows an explicit unavailable state
+  // instead of silently displaying another status.
+  const currentStatusDefinition =
+    resolveWorkItemStatusDefinition(
+      item.statusDefinitionId,
       workItemConfiguration,
-    ],
-  )
+    )
+
+  // Controlled by the canonical definition ID: after any
+  // successful mutation the parent reconciles with the
+  // authoritative Work Item, and after a FAILED mutation the item
+  // is unchanged — so the control can never show a persisted
+  // selection that the server did not store.
+  const statusSelectValue =
+    currentStatusDefinition != null
+      ? String(
+          item.statusDefinitionId,
+        )
+      : ''
 
   const [titleEditing, setTitleEditing] =
     useState(false)
@@ -3446,24 +3454,35 @@ export function WorkItemInspector({
   }
 
   function handleStatusChange(
-    nextStatus: ApiWorkItemStatus,
+    nextStatusDefinitionId: number,
   ) {
-    if (nextStatus === item.status) {
+    // Selecting the already-current definition never issues a
+    // redundant PATCH — the no-op check is against the concrete
+    // definition ID, so two definitions that share a category
+    // still PATCH when switching between them.
+    if (
+      nextStatusDefinitionId ===
+      item.statusDefinitionId
+    ) {
       return
     }
 
-    const statusDefinitionId =
-      resolveStatusDefinitionIdByCategory(
-        nextStatus,
-        workItemConfiguration,
+    // Only an ACTIVE definition of this Project may become the
+    // new status (a referenced inactive definition renders as a
+    // disabled option and is guarded here as well).
+    if (
+      !inspectorStatusDefinitions.some(
+        (definition) =>
+          definition.id ===
+          nextStatusDefinitionId,
       )
-
-    if (statusDefinitionId == null) {
+    ) {
       return
     }
 
     void patchField({
-      statusDefinitionId,
+      statusDefinitionId:
+        nextStatusDefinitionId,
     })
   }
 
@@ -3930,43 +3949,71 @@ export function WorkItemInspector({
               </PropertyRow>
 
               <PropertyRow label="Status">
+                {/* Canonical status control: options are the
+                    Project's ACTIVE StatusDefinitions in
+                    configured order (option values are definition
+                    IDs); the selected value is the Work Item's
+                    actual statusDefinitionId. A referenced inactive
+                    definition is offered only as a disabled entry
+                    so the current status stays identifiable without
+                    becoming a selectable new target. */}
                 <select
-                  value={
-                    statusSelectValue == null
-                      ? ''
-                      : statusSelectValue
-                  }
+                  value={statusSelectValue}
                   disabled={
                     readOnly ||
+                    currentStatusDefinition ==
+                    null ||
                     inspectorStatusDefinitions.length === 0
                   }
-                  onChange={(event) => {
-                    const option =
-                      inspectorStatusDefinitions.find(
-                        (definition) =>
-                          String(definition.id) ===
-                          event.target.value,
-                      )
-                    if (option) {
-                      handleStatusChange(
-                        option.category as ApiWorkItemStatus,
-                      )
-                    }
-                  }}
+                  onChange={(event) =>
+                    handleStatusChange(
+                      Number(
+                        event.target
+                          .value,
+                      ),
+                    )
+                  }
                   aria-label="Status"
                   className={
                     compactControlClassName
                   }
                 >
-                  {inspectorStatusDefinitions.map(
-                    (definition) => (
-                      <option
-                        key={definition.id}
-                        value={definition.id}
-                      >
-                        {definition.name}
-                      </option>
-                    ),
+                  {currentStatusDefinition ==
+                  null ? (
+                    <option
+                      value=""
+                      disabled
+                    >
+                      Status unavailable
+                    </option>
+                  ) : (
+                    <>
+                      {inspectorStatusDefinitions.map(
+                        (definition) => (
+                          <option
+                            key={definition.id}
+                            value={definition.id}
+                          >
+                            {definition.name}
+                          </option>
+                        ),
+                      )}
+
+                      {currentStatusDefinition
+                        .active ===
+                        false && (
+                          <option
+                            value={
+                              currentStatusDefinition.id
+                            }
+                            disabled
+                          >
+                            {
+                              currentStatusDefinition.name
+                            }
+                          </option>
+                        )}
+                    </>
                   )}
                 </select>
               </PropertyRow>

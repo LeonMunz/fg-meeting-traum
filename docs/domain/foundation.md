@@ -1460,11 +1460,16 @@ changing the column on the Board updates the canonical status.
 ### Editor status change placement (implemented)
 
 Changing status through the Work Item Editor sends a `statusDefinitionId`
-patch (the editor resolves the chosen status category to the Project's
-matching Status Definition) and does not send an insertion anchor. The server
-then appends the item to the **end** of the target column. Board drag/drop
-uses `reposition_work_item` instead, which honors an explicit insertion
-anchor.
+patch carrying the **exact** Status Definition the user selected: the
+editor's options are the Project's active StatusDefinitions in configured
+order, valued by concrete definition ID, and the editor's current selection
+is resolved from the Work Item's canonical `statusDefinitionId` (never from
+display names or semantic categories). Two definitions that share a category
+therefore remain independently selectable, and re-selecting the currently
+referenced definition issues no PATCH. The editor never sends an insertion
+anchor; the server then appends the item to the **end** of the target
+column. Board drag/drop uses `reposition_work_item` instead, which honors an
+explicit insertion anchor.
 
 ### Status-only transition (preserves board position, implemented)
 
