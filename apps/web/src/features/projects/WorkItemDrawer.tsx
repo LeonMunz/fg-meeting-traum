@@ -2439,6 +2439,32 @@ export function WorkItemInspector({
   const assigneePickerRef =
     useRef<HTMLDivElement>(null)
 
+  // The LATEST INTENDED assignee selection — including changes
+  // whose PATCH is not acknowledged yet. `null` means "no pending
+  // override", i.e. the canonical `item.assigneeIds` is what the
+  // UI renders. The ref is the synchronous source of truth for the
+  // next toggle: while the serialized PATCH queue is still in
+  // flight, two rapid toggles must both derive their next full set
+  // from the state that already contains the previous
+  // unacknowledged change (reading the last acknowledged server
+  // snapshot instead would silently drop the earlier toggle,
+  // because every PATCH replaces the complete set). The state is
+  // the rendering mirror — pills and checkboxes show the intended
+  // selection immediately, never a stale server state while a
+  // PATCH is pending.
+  //
+  // Each toggle stores a NEW array object, and the settle handler
+  // compares array REFERENCES: "this patch's intent is still the
+  // latest intent" (drop the override) vs. "a newer user intent
+  // superseded it" (an intermediate or stale result must never
+  // touch the newer selection).
+  const pendingAssigneeIdsRef =
+    useRef<string[] | null>(null)
+  const [
+    pendingAssigneeIds,
+    setPendingAssigneeIds,
+  ] = useState<string[] | null>(null)
+
   useEffect(() => {
     setTitleEditing(false)
     setDescriptionEditing(false)
@@ -2446,6 +2472,14 @@ export function WorkItemInspector({
     setPendingBlock(false)
     setAssigneePickerOpen(false)
     setAssigneeQuery('')
+    // The pending local assignee selection is per-item: it must
+    // not leak into another Work Item when the inspector switches
+    // items, and a late result of a previous item must not
+    // disturb the new item's selection (settle handlers identify
+    // their own patch by intent-array reference, which can never
+    // match a later item's state).
+    pendingAssigneeIdsRef.current = null
+    setPendingAssigneeIds(null)
     setSaveStatus('idle')
     setSaveError(null)
     setLocalDeleteDialogOpen(false)
@@ -3051,16 +3085,24 @@ export function WorkItemInspector({
     [item.assigneeIds],
   )
 
+  // What the assignee UI (pills + picker checkboxes) renders: the
+  // canonical server selection, or — while a PATCH is in flight —
+  // the latest INTENDED selection. Both surfaces always agree,
+  // and they never show a stale server state while a save is
+  // pending.
+  const displayAssigneeIds =
+    pendingAssigneeIds ?? itemAssigneeIds
+
   const selectedAssignees = useMemo(
     () =>
       sortedAssignees.filter(
         (assignee) =>
-          itemAssigneeIds.includes(
+          displayAssigneeIds.includes(
             assignee.id,
           ),
       ),
     [
-      itemAssigneeIds,
+      displayAssigneeIds,
       sortedAssignees,
     ],
   )
@@ -3409,17 +3451,60 @@ export function WorkItemInspector({
       return
     }
 
-    const nextIds = itemAssigneeIds.includes(
+    // Derive the next full selection from the LATEST INTENDED
+    // state — including unacknowledged changes — so rapid
+    // toggles accumulate instead of each re-reading (and
+    // silently overwriting) the last acknowledged server
+    // snapshot.
+    const current =
+      pendingAssigneeIdsRef.current ??
+      itemAssigneeIds
+
+    const nextIds = current.includes(
       assigneeId,
     )
-      ? itemAssigneeIds.filter(
+      ? current.filter(
           (id) => id !== assigneeId,
         )
-      : [...itemAssigneeIds, assigneeId]
+      : [...current, assigneeId]
 
+    pendingAssigneeIdsRef.current = nextIds
+    setPendingAssigneeIds(nextIds)
+
+    // Every toggle enqueues a full-set replacement — deliberately
+    // with NO no-op check against the last acknowledged state: an
+    // earlier PATCH still in flight may carry an OLDER full set,
+    // and only a later full-set PATCH can clobber it (e.g. add C,
+    // then remove C before the first response — the second PATCH
+    // must still be sent to bring the server back to the original
+    // set).
     void patchField({
       assigneeIds: nextIds.map(Number),
-    })
+    }).then(
+      () => {
+        // This PATCH has settled. If a newer user intent has
+        // superseded it, keep the newer override — this
+        // intermediate (or stale) result must not touch it.
+        // Otherwise this intent is still the latest: on success
+        // the parent has already reconciled the item with the
+        // authoritative response, and on failure the change was
+        // never persisted — so in BOTH cases drop the override
+        // and let the canonical server selection render. The UI
+        // never permanently presents an unpersisted assignment as
+        // saved (the save error stays visible through
+        // patchField's status handling, and the user can retry
+        // the toggle).
+        if (
+          pendingAssigneeIdsRef.current !==
+          nextIds
+        ) {
+          return
+        }
+
+        pendingAssigneeIdsRef.current = null
+        setPendingAssigneeIds(null)
+      },
+    )
   }
 
   function handleTypeChange(
@@ -4175,7 +4260,7 @@ export function WorkItemInspector({
                                   assignee,
                                 ) => {
                                   const selected =
-                                    itemAssigneeIds.includes(
+                                    displayAssigneeIds.includes(
                                       assignee.id,
                                     )
 
