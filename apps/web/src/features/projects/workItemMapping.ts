@@ -12,6 +12,7 @@ import type {
   ApiProjectWorkItemConfiguration,
   ApiWorkItem,
   ApiWorkItemStatus,
+  ApiWorkItemTypeDefinition,
 } from '../../api/types'
 
 export type DemoWorkItemType =
@@ -34,16 +35,6 @@ export const workItemTypeLabels: Record<
   milestone: 'Milestone',
   deliverable: 'Deliverable',
   task: 'Task',
-}
-
-const DEMO_TYPE_KEY_BY_NAME: Record<
-  string,
-  DemoWorkItemType
-> = {
-  epic: 'epic',
-  milestone: 'milestone',
-  deliverable: 'deliverable',
-  task: 'task',
 }
 
 export function resolveWorkItemStatus(
@@ -69,21 +60,51 @@ export function resolveWorkItemStatus(
   return 'todo'
 }
 
+/**
+ * Resolve the concrete TypeDefinition referenced by a Work Item's
+ * canonical `typeDefinitionId` — a pure ID lookup against the
+ * Project's Work Item configuration. Returns the definition as
+ * configured (including inactive definitions an existing Work Item
+ * may still reference), or null when the configuration is missing
+ * or cannot resolve the ID. Nothing is inferred: no fallback
+ * definition, no name matching.
+ */
+export function resolveWorkItemTypeDefinition(
+  typeDefinitionId: number | null | undefined,
+  config: ApiProjectWorkItemConfiguration | null,
+): ApiWorkItemTypeDefinition | null {
+  if (config && typeDefinitionId != null) {
+    return (
+      config.types.find(
+        (candidate) => candidate.id === typeDefinitionId,
+      ) ?? null
+    )
+  }
+  return null
+}
+
 export function resolveWorkItemType(
   typeDefinitionId: number | null | undefined,
   config: ApiProjectWorkItemConfiguration | null,
 ): DemoWorkItemType {
-  if (config && typeDefinitionId != null) {
-    const def = config.types.find(
-      (candidate) => candidate.id === typeDefinitionId,
-    )
-    if (def) {
-      const key =
-        DEMO_TYPE_KEY_BY_NAME[def.name.trim().toLowerCase()]
-      if (key) {
-        return key
-      }
-    }
+  // Semantic kind is the definition's stored, system-assigned
+  // `kind` — NEVER inferred from the configurable display name
+  // (foundation.md §3a.1 runtime rule). A renamed canonical
+  // definition keeps its kind; a custom (kind null) definition or
+  // an unresolvable ID keeps the neutral `task` presentation
+  // fallback (same as the pre-kind behavior, unchanged).
+  const def = resolveWorkItemTypeDefinition(
+    typeDefinitionId,
+    config,
+  )
+  if (
+    def != null &&
+    (def.kind === 'epic' ||
+      def.kind === 'milestone' ||
+      def.kind === 'deliverable' ||
+      def.kind === 'task')
+  ) {
+    return def.kind
   }
   return 'task'
 }

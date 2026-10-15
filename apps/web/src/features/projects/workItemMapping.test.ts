@@ -11,6 +11,7 @@ import {
   resolveWorkItemStatus,
   resolveWorkItemStatusSelectValue,
   resolveWorkItemType,
+  resolveWorkItemTypeDefinition,
 } from './workItemMapping'
 
 const config: ApiProjectWorkItemConfiguration = {
@@ -126,6 +127,118 @@ describe('workItemMapping — definition-based resolution', () => {
       status: 'todo',
       typeLabel: 'Task',
     })
+  })
+})
+
+
+describe('resolveWorkItemType — semantic kind resolution', () => {
+  it('resolves a RENAMED canonical definition by its stored kind, not its display name', () => {
+    const renamed: ApiProjectWorkItemConfiguration = {
+      types: [
+        {
+          id: 1,
+          name: 'Big Initiative',
+          kind: 'epic',
+          order: 0,
+          active: true,
+        },
+        {
+          id: 2,
+          name: 'Experiment step',
+          kind: 'task',
+          order: 1,
+          active: true,
+        },
+      ],
+      statuses: [],
+      labels: [],
+    }
+
+    // The display names no longer match any built-in label — the
+    // semantic kind must come from the stored `kind`.
+    expect(resolveWorkItemType(1, renamed)).toBe('epic')
+    expect(resolveWorkItemType(2, renamed)).toBe('task')
+  })
+
+  it('never attributes a canonical kind to a custom (kind null) definition from its display name', () => {
+    const customNamedEpic: ApiProjectWorkItemConfiguration = {
+      types: [
+        {
+          id: 9,
+          name: 'Epic',
+          kind: null,
+          order: 0,
+          active: true,
+        },
+      ],
+      statuses: [],
+      labels: [],
+    }
+
+    // A custom type named exactly "Epic" carries NO canonical
+    // kind: the pre-kind name-based lookup returned 'epic' here,
+    // which the runtime rule forbids. The resolver keeps the
+    // neutral fallback instead.
+    expect(
+      resolveWorkItemType(9, customNamedEpic),
+    ).toBe('task')
+  })
+
+  it('keeps the neutral fallback for unresolvable definitions', () => {
+    expect(resolveWorkItemType(999, config)).toBe('task')
+    expect(resolveWorkItemType(null, config)).toBe('task')
+    expect(resolveWorkItemType(4, null)).toBe('task')
+  })
+})
+
+
+describe('resolveWorkItemTypeDefinition — canonical ID lookup', () => {
+  it('returns the referenced definition by ID (no inference, no fallback)', () => {
+    expect(
+      resolveWorkItemTypeDefinition(4, config),
+    ).toEqual({
+      id: 4,
+      name: 'Task',
+      kind: 'task',
+      order: 3,
+      active: true,
+    })
+  })
+
+  it('returns an INACTIVE referenced definition (it stays attached to existing WorkItems)', () => {
+    const withInactive: ApiProjectWorkItemConfiguration = {
+      ...config,
+      types: [
+        ...config.types,
+        {
+          id: 99,
+          name: 'Archive milestone',
+          kind: 'milestone',
+          order: 9,
+          active: false,
+        },
+      ],
+    }
+
+    expect(
+      resolveWorkItemTypeDefinition(99, withInactive),
+    ).toMatchObject({
+      id: 99,
+      name: 'Archive milestone',
+      active: false,
+    })
+  })
+
+  it('returns null when the configuration is missing or the ID cannot be resolved', () => {
+    expect(
+      resolveWorkItemTypeDefinition(4, null),
+    ).toBeNull()
+    expect(
+      resolveWorkItemTypeDefinition(null, config),
+    ).toBeNull()
+    expect(
+      resolveWorkItemTypeDefinition(999, config),
+    ).toBeNull()
   })
 })
 

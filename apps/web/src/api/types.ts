@@ -273,7 +273,11 @@ export interface ApiCreateWorkItemInput {
 }
 
 export interface ApiUpdateWorkItemInput {
-  type?: ApiWorkItemType
+  // Canonical Work Item type mutation: the concrete ID of the
+  // Project's TypeDefinition (foundation.md §3a.7). The legacy
+  // fixed-string `type` field is NOT part of the PATCH contract —
+  // the backend maps `typeDefinitionId` only.
+  typeDefinitionId?: number
   title?: string
   description?: string
   status?: ApiWorkItemStatus

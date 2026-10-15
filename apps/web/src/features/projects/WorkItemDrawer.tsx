@@ -28,6 +28,7 @@ import type {
   ApiWorkItemHistoryEvent,
   ApiWorkItemStatus,
   ApiWorkItemType,
+  ApiWorkItemTypeKind,
 } from '../../api/types'
 import {
   createWorkItemComment,
@@ -39,6 +40,7 @@ import {
 import {
   resolveStatusDefinitionIdByCategory,
   resolveWorkItemStatusSelectValue,
+  resolveWorkItemTypeDefinition,
 } from './workItemMapping'
 import {
   WorkItemActionMenuTrigger,
@@ -162,14 +164,30 @@ const statusOptions: Array<{
   },
 ]
 
-// Icon for a Project-configured type definition by its display name.
-// Falls back to the generic task icon for custom types we do not know.
-function typeIconForName(name: string): string {
-  const match = typeOptions.find(
-    (option) =>
-      option.label.toLowerCase() === name.trim().toLowerCase(),
-  )
-  return match ? match.icon : 'check_box_outline_blank'
+// Semantic icon presentation for a Work Item type, keyed ONLY by
+// the machine-readable `kind` (foundation.md §3a.1 runtime rule) —
+// never by the configurable display name. The glyphs are the
+// inspector's existing per-kind icons, so default types look
+// exactly as before.
+const TYPE_KIND_ICONS: Record<
+  ApiWorkItemTypeKind,
+  string
+> = {
+  epic: 'account_tree',
+  milestone: 'flag',
+  deliverable: 'inventory_2',
+  task: 'check_box_outline_blank',
+}
+
+// Neutral icon for custom / unclassified types (kind null).
+// Deliberately DISTINCT from the canonical Task glyph so a custom
+// type is never presented as a canonical Task.
+const CUSTOM_TYPE_ICON = 'task_alt'
+
+function typeIconForKind(
+  kind: ApiWorkItemTypeKind | null,
+): string {
+  return kind != null ? TYPE_KIND_ICONS[kind] : CUSTOM_TYPE_ICON
 }
 
 // Open the native date picker from ANYWHERE on the Due date field
@@ -1818,8 +1836,8 @@ function CreateWorkItemPanel({
                               aria-hidden="true"
                               className="pointer-events-none material-symbols-outlined text-[16px]"
                             >
-                              {typeIconForName(
-                                definition.name,
+                              {typeIconForKind(
+                                definition.kind,
                               )}
                             </span>
 
@@ -3087,11 +3105,51 @@ export function WorkItemInspector({
     [item.id, parentItems],
   )
 
-  const selectedTypeOption =
-    typeOptions.find(
-      (option) =>
-        option.value === item.type,
-    ) ?? typeOptions[3]
+  // The Work Item's ACTUAL type: the Project-configured
+  // TypeDefinition referenced by the canonical
+  // `typeDefinitionId` — resolved by ID only (never inferred from
+  // a display name or a legacy fixed string), and including an
+  // inactive definition an existing Work Item may still reference.
+  // Null when the configuration is missing or cannot resolve the
+  // ID: the inspector then shows an explicit unavailable state
+  // instead of inventing a type.
+  const currentTypeDefinition =
+    resolveWorkItemTypeDefinition(
+      item.typeDefinitionId,
+      workItemConfiguration,
+    )
+
+  // Selectable NEW type targets: exactly the Project's ACTIVE
+  // TypeDefinitions, in configuration order. A referenced inactive
+  // definition is never a selectable target (it is rendered as a
+  // disabled entry only, so the current type stays identifiable).
+  const inspectorTypeDefinitions =
+    useMemo(
+      () =>
+        (workItemConfiguration?.types ?? [])
+          .filter(
+            (definition) =>
+              definition.active,
+          )
+          .sort(
+            (left, right) =>
+              left.order -
+              right.order,
+          ),
+      [workItemConfiguration],
+    )
+
+  // Controlled by the canonical definition ID: after any
+  // successful mutation the parent reconciles with the
+  // authoritative Work Item, and after a FAILED mutation the item
+  // is unchanged — so the control can never show a persisted
+  // selection that the server did not store.
+  const typeSelectValue =
+    currentTypeDefinition != null
+      ? String(
+          item.typeDefinitionId,
+        )
+      : ''
 
   const isBlocked =
     item.blockedReason !== null
@@ -3357,13 +3415,34 @@ export function WorkItemInspector({
   }
 
   function handleTypeChange(
-    nextType: ApiWorkItemType,
+    nextTypeDefinitionId: number,
   ) {
-    if (nextType === item.type) {
+    // Selecting the already-current definition never issues a
+    // redundant PATCH.
+    if (
+      nextTypeDefinitionId ===
+      item.typeDefinitionId
+    ) {
       return
     }
 
-    void patchField({ type: nextType })
+    // Only an ACTIVE definition of this Project may become the
+    // new type (a referenced inactive definition renders as a
+    // disabled option and is guarded here as well).
+    if (
+      !inspectorTypeDefinitions.some(
+        (definition) =>
+          definition.id ===
+          nextTypeDefinitionId,
+      )
+    ) {
+      return
+    }
+
+    void patchField({
+      typeDefinitionId:
+        nextTypeDefinitionId,
+    })
   }
 
   function handleStatusChange(
@@ -3547,15 +3626,19 @@ export function WorkItemInspector({
                   aria-hidden="true"
                   className="material-symbols-outlined text-[15px]"
                 >
-                  {
-                    selectedTypeOption.icon
-                  }
+                  {typeIconForKind(
+                    currentTypeDefinition
+                      ? currentTypeDefinition
+                        .kind
+                      : null,
+                  )}
                 </span>
 
                 <span>
-                  {
-                    selectedTypeOption.label
-                  }
+                  {currentTypeDefinition
+                    ? currentTypeDefinition
+                      .name
+                    : 'Type unavailable'}
                 </span>
 
                 <span aria-hidden="true">
@@ -3775,13 +3858,30 @@ export function WorkItemInspector({
 
             <div className="border-t border-border-structural pt-5">
               <PropertyRow label="Type">
+                {/* Canonical type control: options are the
+                    Project's ACTIVE TypeDefinitions (option
+                    values are definition IDs); the selected value
+                    is the Work Item's actual typeDefinitionId. A
+                    referenced inactive definition is offered only
+                    as a disabled entry so the current type stays
+                    identifiable without becoming a selectable new
+                    target. */}
                 <select
-                  value={item.type}
-                  disabled={readOnly}
+                  value={typeSelectValue}
+                  disabled={
+                    readOnly ||
+                    currentTypeDefinition ==
+                    null ||
+                    inspectorTypeDefinitions
+                      .length ===
+                    0
+                  }
                   onChange={(event) =>
                     handleTypeChange(
-                      event.target
-                        .value as ApiWorkItemType,
+                      Number(
+                        event.target
+                          .value,
+                      ),
                     )
                   }
                   aria-label="Type"
@@ -3789,15 +3889,42 @@ export function WorkItemInspector({
                     compactControlClassName
                   }
                 >
-                  {typeOptions.map(
-                    (option) => (
-                      <option
-                        key={option.value}
-                        value={option.value}
-                      >
-                        {option.label}
-                      </option>
-                    ),
+                  {currentTypeDefinition ==
+                  null ? (
+                    <option
+                      value=""
+                      disabled
+                    >
+                      Type unavailable
+                    </option>
+                  ) : (
+                    <>
+                      {inspectorTypeDefinitions.map(
+                        (definition) => (
+                          <option
+                            key={definition.id}
+                            value={definition.id}
+                          >
+                            {definition.name}
+                          </option>
+                        ),
+                      )}
+
+                      {currentTypeDefinition
+                        .active ===
+                        false && (
+                          <option
+                            value={
+                              currentTypeDefinition.id
+                            }
+                            disabled
+                          >
+                            {
+                              currentTypeDefinition.name
+                            }
+                          </option>
+                        )}
+                    </>
                   )}
                 </select>
               </PropertyRow>

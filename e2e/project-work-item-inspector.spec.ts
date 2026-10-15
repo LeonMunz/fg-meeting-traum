@@ -3075,3 +3075,828 @@ test(
     expect(reloadedText).not.toContain('**')
   },
 )
+
+
+/* ────────────────────────────────────────────────────────────────
+ * Canonical Work Item type (typeDefinitionId) acceptance.
+ *
+ * The inspector must display the Work Item's actual
+ * Project-configured type (resolved by typeDefinitionId, display
+ * name from the Project configuration, semantic icon from the
+ * definition's machine-readable `kind` — never from the display
+ * name) and persist type changes exclusively through the canonical
+ * PATCH contract key `typeDefinitionId` (docs/domain/foundation.md
+ * §3a.1 + §3a.7 + §7).
+ *
+ * Fixture setup mutates the Project's own Work Item configuration
+ * through the production configuration API (owner-authorized) using
+ * the browser's authenticated session — the same pattern the
+ * My Work preferences harness uses.
+ * ──────────────────────────────────────────────────────────────── */
+
+const TYPE_PROJECT_NAME =
+  'E2E Inspector Type Project'
+const TYPE_ITEM_TITLE =
+  'E2E Inspector Type Item'
+const RENAMED_TASK_NAME = 'Experiment step'
+
+const CUSTOM_PROJECT_NAME =
+  'E2E Inspector Custom Type Project'
+const CUSTOM_ITEM_TITLE =
+  'E2E Inspector Custom Type Item'
+const INACTIVE_ITEM_TITLE =
+  'E2E Inspector Inactive Type Item'
+
+interface E2eTypeDefinition {
+  id: number
+  name: string
+  kind: 'task' | 'epic' | 'milestone' | 'deliverable' | null
+  order: number
+  active: boolean
+}
+
+interface E2eWorkItemConfiguration {
+  types: E2eTypeDefinition[]
+}
+
+async function ensureCsrfToken(
+  page: import('@playwright/test').Page,
+): Promise<string> {
+  const readToken = async () => {
+    const cookies = await page.context().cookies()
+    return cookies.find(
+      (cookie) => cookie.name === 'csrftoken',
+    )?.value
+  }
+
+  let token = await readToken()
+  if (!token) {
+    const response = await page.request.get(
+      '/api/auth/csrf/',
+    )
+    expect(response.ok()).toBe(true)
+    token = await readToken()
+  }
+
+  if (!token) {
+    throw new Error('CSRF token unavailable.')
+  }
+  return token
+}
+
+async function getProjectIdFromRoute(
+  page: import('@playwright/test').Page,
+): Promise<number> {
+  const match = /\/projects\/(\d+)\//.exec(
+    page.url(),
+  )
+  if (!match) {
+    throw new Error(
+      `Expected /projects/<id>/ in URL, got ${page.url()}`,
+    )
+  }
+  return Number(match[1])
+}
+
+async function getWorkItemConfiguration(
+  page: import('@playwright/test').Page,
+  projectId: number,
+): Promise<E2eWorkItemConfiguration> {
+  const response = await page.request.get(
+    `/api/projects/${projectId}/work-item-configuration/`,
+  )
+  expect(
+    response.ok(),
+    'Reading the Project Work Item configuration must succeed.',
+  ).toBe(true)
+  return (await response.json()) as E2eWorkItemConfiguration
+}
+
+async function patchTypeDefinition(
+  page: import('@playwright/test').Page,
+  projectId: number,
+  definitionId: number,
+  body: Record<string, unknown>,
+): Promise<E2eTypeDefinition> {
+  const response = await page.request.patch(
+    `/api/projects/${projectId}/work-item-configuration/types/${definitionId}/`,
+    {
+      data: body,
+      headers: {
+        'X-CSRFToken': await ensureCsrfToken(page),
+      },
+    },
+  )
+  expect(
+    response.status(),
+    `Patching type definition ${definitionId} must succeed (${JSON.stringify(body)}).`,
+  ).toBe(200)
+  return (await response.json()) as E2eTypeDefinition
+}
+
+async function createTypeDefinition(
+  page: import('@playwright/test').Page,
+  projectId: number,
+  name: string,
+): Promise<E2eTypeDefinition> {
+  const response = await page.request.post(
+    `/api/projects/${projectId}/work-item-configuration/types/`,
+    {
+      data: { name },
+      headers: {
+        'X-CSRFToken': await ensureCsrfToken(page),
+      },
+    },
+  )
+  expect(
+    response.status(),
+    `Creating type definition "${name}" must succeed.`,
+  ).toBe(201)
+  return (await response.json()) as E2eTypeDefinition
+}
+
+async function createWorkItemViaApi(
+  page: import('@playwright/test').Page,
+  projectId: number,
+  body: Record<string, unknown>,
+): Promise<{ id: number }> {
+  const response = await page.request.post(
+    `/api/projects/${projectId}/work-items/`,
+    {
+      data: body,
+      headers: {
+        'X-CSRFToken': await ensureCsrfToken(page),
+      },
+    },
+  )
+  expect(
+    response.status(),
+    `Creating Work Item via the canonical API must succeed (${JSON.stringify(body)}).`,
+  ).toBe(201)
+  const created = (await response.json()) as {
+    id: number
+  }
+  return created
+}
+
+function projectIdFromRoute(page: import('@playwright/test').Page) {
+  return getProjectIdFromRoute(page)
+}
+
+async function createProjectViaUi(
+  page: import('@playwright/test').Page,
+  projectName: string,
+): Promise<void> {
+  await page
+    .getByRole('button', {
+      name: /New project/,
+    })
+    .click()
+
+  const createProjectDialog =
+    page.getByRole('dialog', {
+      name: 'Create project',
+    })
+
+  await createProjectDialog
+    .getByLabel('Project name')
+    .fill(projectName)
+
+  await createProjectDialog
+    .getByRole('button', {
+      name: /Create project/,
+    })
+    .click()
+
+  await expect(
+    page.getByText(projectName, {
+      exact: true,
+    }),
+  ).toBeVisible()
+}
+
+/**
+ * Fixture precondition guard: narrows an `x | undefined` lookup
+ * result with a clear failure (the configuration lookups below are
+ * exact, so absence is always a fixture error, not a variant).
+ */
+function requireDefined<T>(
+  value: T | undefined,
+  label: string,
+): T {
+  if (value == null) {
+    throw new Error(
+      `Fixture precondition failed: ${label}`,
+    )
+  }
+  return value
+}
+
+/**
+ * Collects the bodies of every PATCH to the given Work Item's
+ * canonical detail endpoint while the test runs.
+ */
+function trackTypePatches(
+  page: import('@playwright/test').Page,
+  workItemId: number,
+): Record<string, unknown>[] {
+  const bodies: Record<string, unknown>[] = []
+  page.on('request', (request) => {
+    if (
+      request.method() === 'PATCH' &&
+      request
+        .url()
+        .endsWith(
+          `/api/work-items/${workItemId}/`,
+        )
+    ) {
+      bodies.push(
+        JSON.parse(
+          request.postData() ?? '{}',
+        ),
+      )
+    }
+  })
+  return bodies
+}
+
+/**
+ * The inspector's header type row: icon + configured name +
+ * "#<id>". Returns the row locator scoped to the inspector
+ * overlay region.
+ */
+function inspectorTypeHeaderRow(
+  inspector: import('@playwright/test').Locator,
+  workItemId: number,
+) {
+  return inspector
+    .getByText(`#${workItemId}`, {
+      exact: true,
+    })
+    .locator('xpath=..')
+}
+
+test(
+  'Work Item inspector: canonical type display and typeDefinitionId mutation persist',
+  async ({ page }, testInfo) => {
+    await login(page, 'alex')
+    await openProjects(page)
+
+    await createProjectViaUi(
+      page,
+      TYPE_PROJECT_NAME,
+    )
+    await openProject(page, TYPE_PROJECT_NAME)
+
+    const projectId =
+      await projectIdFromRoute(page)
+
+    // --------------------------------------------------------
+    // Fixture: rename the Project's canonical Task definition
+    // (kind `task` is preserved; only the display name changes).
+    // The create form then defaults new Work Items to THIS
+    // renamed definition by kind.
+    // --------------------------------------------------------
+    const configuration =
+      await getWorkItemConfiguration(page, projectId)
+    const taskDefinition = requireDefined(
+      configuration.types.find(
+        (candidate) => candidate.kind === 'task',
+      ),
+      'canonical Task definition',
+    )
+    const epicDefinition = requireDefined(
+      configuration.types.find(
+        (candidate) => candidate.kind === 'epic',
+      ),
+      'canonical Epic definition',
+    )
+
+    await patchTypeDefinition(
+      page,
+      projectId,
+      taskDefinition.id,
+      { name: RENAMED_TASK_NAME },
+    )
+
+    // --------------------------------------------------------
+    // 1. Create a Work Item through the UI — its type is the
+    //    Project's active canonical Task (the renamed
+    //    definition, resolved by kind).
+    // --------------------------------------------------------
+    await page
+      .getByRole('button', {
+        name: /New work item/,
+      })
+      .click()
+
+    const createDialog = page.getByRole(
+      'dialog',
+      { name: 'New work item' },
+    )
+
+    await createDialog
+      .getByLabel('Title')
+      .fill(TYPE_ITEM_TITLE)
+
+    // The create picker must offer the RENAMED display name of
+    // the canonical Task (its kind is what selects it as the
+    // default — never the built-in label).
+    const typeRadio = createDialog.getByRole(
+      'radio',
+      { name: RENAMED_TASK_NAME },
+    )
+    await expect(typeRadio).toBeChecked()
+
+    await createDialog
+      .getByRole('button', {
+        name: /Create work item/,
+      })
+      .click()
+
+    await expect(createDialog).not.toBeVisible()
+
+    // The created Work Item's canonical id, from the server's
+    // authoritative list (the same list the Board renders).
+    // Anchors the inspector header type row on its own
+    // "#<id>" marker.
+    const workItemIdResponse =
+      await (
+        await page.request.get(
+          `/api/projects/${projectId}/work-items/`,
+        )
+      ).json() as Array<{
+        id: number
+        title: string
+      }>
+    const workItemId = requireDefined(
+      workItemIdResponse
+        .find(
+          (item) =>
+            item.title === TYPE_ITEM_TITLE,
+        )
+        ?.id,
+      'created Work Item id',
+    )
+
+    // --------------------------------------------------------
+    // 2. Open the Work Item: the inspector header shows the
+    //    actual configured name + the semantic Task kind icon.
+    // --------------------------------------------------------
+    await page
+      .getByRole('button', {
+        name: `Open ${TYPE_ITEM_TITLE}`,
+      })
+      .click()
+
+    const inspector = page.getByRole(
+      'region',
+      { name: 'Work item', exact: true },
+    )
+    await expect(inspector).toBeVisible()
+
+    const typeHeaderRow =
+      inspectorTypeHeaderRow(
+        inspector,
+        workItemId,
+      )
+    await expect(
+      typeHeaderRow.getByText(
+        RENAMED_TASK_NAME,
+        { exact: true },
+      ),
+    ).toBeVisible()
+    await expect(
+      typeHeaderRow.getByText(
+        'check_box_outline_blank',
+        { exact: true },
+      ),
+    ).toBeVisible()
+
+    // Visual acceptance artifact: the RENAMED canonical Task is
+    // displayed by its configured name with its semantic kind icon
+    // in the header, and the type control selects the concrete
+    // definition ID.
+    await page.screenshot({
+      path: testInfo.outputPath(
+        'inspector-type-renamed-canonical-task.png',
+      ),
+    })
+
+    // The type control is controlled by the canonical
+    // typeDefinitionId and shows the configured name.
+    const typeSelect = inspector.getByLabel(
+      'Type',
+      { exact: true },
+    )
+    await expect(typeSelect).toHaveValue(
+      String(taskDefinition.id),
+    )
+    expect(
+      await typeSelect
+        .locator('option:checked')
+        .textContent(),
+    ).toBe(RENAMED_TASK_NAME)
+
+    // --------------------------------------------------------
+    // 3. Change the type to the Project's Epic definition: the
+    //    canonical PATCH carries exactly { typeDefinitionId }
+    //    (no legacy `type` key, no name strings).
+    // --------------------------------------------------------
+    const patchBodies = trackTypePatches(
+      page,
+      workItemId,
+    )
+
+    await typeSelect.selectOption(
+      String(epicDefinition.id),
+    )
+
+    // The authoritative rerender (the parent reconciles with the
+    // PATCH response) shows the Epic type immediately.
+    await expect(
+      inspectorTypeHeaderRow(
+        inspector,
+        workItemId,
+      ).getByText('Epic', { exact: true }),
+    ).toBeVisible()
+    await expect(typeSelect).toHaveValue(
+      String(epicDefinition.id),
+    )
+
+    await expect
+      .poll(() => patchBodies.length)
+      .toBe(1)
+    expect(patchBodies[0]).toEqual({
+      typeDefinitionId: epicDefinition.id,
+    })
+    expect('type' in patchBodies[0]).toBe(false)
+
+    // --------------------------------------------------------
+    // 4. Re-selecting the already-current type issues no
+    //    redundant PATCH. (Bounded settle wait to prove the
+    //    ABSENCE of a request — same pattern as the
+    //    my-work.spec.ts no-refetch test.)
+    // --------------------------------------------------------
+    await typeSelect.selectOption(
+      String(epicDefinition.id),
+    )
+    await page.waitForTimeout(500)
+    expect(patchBodies.length).toBe(1)
+
+    // --------------------------------------------------------
+    // 5. Close, RELOAD, and reopen: the persisted type survives
+    //    a full page reload. The reloaded Board refetches its
+    //    items from the server (the local `apiWorkItems` state
+    //    is rebuilt from persistence), so reopening after a
+    //    reload cannot be explained by frontend in-memory
+    //    state alone.
+    // --------------------------------------------------------
+    await page
+      .getByRole('button', {
+        name: 'Close work item',
+      })
+      .click()
+    await expect(inspector).not.toBeVisible()
+
+    await page.reload()
+
+    // The reloaded Board must actually render this Work Item's
+    // trigger from the fresh server data before it can be
+    // opened again.
+    await expect(
+      page.getByRole('button', {
+        name: `Open ${TYPE_ITEM_TITLE}`,
+      }),
+    ).toBeVisible()
+
+    await page
+      .getByRole('button', {
+        name: `Open ${TYPE_ITEM_TITLE}`,
+      })
+      .click()
+    await expect(inspector).toBeVisible()
+
+    await expect(
+      inspectorTypeHeaderRow(
+        inspector,
+        workItemId,
+      ).getByText('Epic', { exact: true }),
+    ).toBeVisible()
+    await expect(typeSelect).toHaveValue(
+      String(epicDefinition.id),
+    )
+
+    // The server is the authority: the persisted Work Item's
+    // canonical typeDefinitionId equals the selected Epic
+    // definition (read through the same authenticated list the
+    // Board renders from).
+    const persistedItems =
+      await (
+        await page.request.get(
+          `/api/projects/${projectId}/work-items/`,
+        )
+      ).json() as Array<{
+        id: number
+        typeDefinitionId: number
+      }>
+    expect(
+      persistedItems.find(
+        (item) => item.id === workItemId,
+      )?.typeDefinitionId,
+      'The persisted Work Item must reference the Epic definition.',
+    ).toBe(epicDefinition.id)
+
+    // Visual acceptance artifact: the persisted Epic type after
+    // close + full page reload + reopen (fresh server fetch).
+    await page.screenshot({
+      path: testInfo.outputPath(
+        'inspector-type-persisted-epic-reopened.png',
+      ),
+    })
+  },
+)
+
+test(
+  'Work Item inspector: custom (kind null) and referenced-inactive types stay identifiable and never mis-attributed',
+  async ({ page }, testInfo) => {
+    await login(page, 'alex')
+    await openProjects(page)
+
+    await createProjectViaUi(
+      page,
+      CUSTOM_PROJECT_NAME,
+    )
+    await openProject(page, CUSTOM_PROJECT_NAME)
+
+    const projectId =
+      await projectIdFromRoute(page)
+
+    // --------------------------------------------------------
+    // Fixture: rename the canonical Task ("Experiment step"),
+    // then create a CUSTOM type named exactly "Task" (kind
+    // null — a name that resembles a built-in type), and
+    // deactivate the canonical Milestone AFTER a Work Item
+    // already references it.
+    // --------------------------------------------------------
+    const configuration =
+      await getWorkItemConfiguration(page, projectId)
+    const taskDefinition = requireDefined(
+      configuration.types.find(
+        (candidate) => candidate.kind === 'task',
+      ),
+      'canonical Task definition',
+    )
+    const milestoneDefinition = requireDefined(
+      configuration.types.find(
+        (candidate) =>
+          candidate.kind === 'milestone',
+      ),
+      'canonical Milestone definition',
+    )
+    const epicDefinition = requireDefined(
+      configuration.types.find(
+        (candidate) => candidate.kind === 'epic',
+      ),
+      'canonical Epic definition',
+    )
+
+    await patchTypeDefinition(
+      page,
+      projectId,
+      taskDefinition.id,
+      { name: 'Experiment step' },
+    )
+    const customTask = await createTypeDefinition(
+      page,
+      projectId,
+      'Task',
+    )
+    expect(customTask.kind).toBeNull()
+
+    await createWorkItemViaApi(page, projectId, {
+      typeDefinitionId: customTask.id,
+      title: CUSTOM_ITEM_TITLE,
+    })
+    await createWorkItemViaApi(page, projectId, {
+      typeDefinitionId: milestoneDefinition.id,
+      title: INACTIVE_ITEM_TITLE,
+    })
+
+    await patchTypeDefinition(
+      page,
+      projectId,
+      milestoneDefinition.id,
+      { active: false },
+    )
+
+    // The fixture Work Items were created through the canonical
+    // API OUT-OF-BAND: the Board's list (fetched when the
+    // Project opened) predates them, and the panel only
+    // re-fetches on app-internal events — so it still renders
+    // an empty Board. A full reload is the canonical way to
+    // make the UI observe externally persisted data (same
+    // pattern as the meeting E2E fixtures): no waits, no
+    // force-clicks.
+    await page.reload()
+
+    // The server's authoritative list of the fixture items:
+    // the ids anchor the inspector header rows, and the
+    // typeDefinitionId values prove the fixture itself.
+    const customItemResponse =
+      await (
+        await page.request.get(
+          `/api/projects/${projectId}/work-items/`,
+        )
+      ).json() as Array<{
+        id: number
+        title: string
+        typeDefinitionId: number
+      }>
+    const customItem = requireDefined(
+      customItemResponse.find(
+        (item) => item.title === CUSTOM_ITEM_TITLE,
+      ),
+      'custom-type Work Item',
+    )
+    expect(customItem.typeDefinitionId).toBe(
+      customTask.id,
+    )
+    const inactiveItem = requireDefined(
+      customItemResponse.find(
+        (item) =>
+          item.title === INACTIVE_ITEM_TITLE,
+      ),
+      'inactive-type Work Item',
+    )
+
+    // --------------------------------------------------------
+    // 1. Custom type: the configured name is displayed with
+    //    the neutral custom-type icon — never the canonical
+    //    Task icon, even though the name is "Task".
+    // --------------------------------------------------------
+    const openCustomItem = page.getByRole(
+      'button',
+      { name: `Open ${CUSTOM_ITEM_TITLE}` },
+    )
+    await expect(openCustomItem).toBeVisible()
+    await openCustomItem.click()
+
+    const inspector = page.getByRole(
+      'region',
+      { name: 'Work item', exact: true },
+    )
+    await expect(inspector).toBeVisible()
+
+    const customTypeHeaderRow =
+      inspectorTypeHeaderRow(
+        inspector,
+        customItem.id,
+      )
+    await expect(
+      customTypeHeaderRow.getByText('Task', {
+        exact: true,
+      }),
+    ).toBeVisible()
+    await expect(
+      customTypeHeaderRow.getByText('task_alt', {
+        exact: true,
+      }),
+    ).toBeVisible()
+    await expect(
+      customTypeHeaderRow.getByText(
+        'check_box_outline_blank',
+        { exact: true },
+      ),
+    ).toHaveCount(0)
+
+    // Visual acceptance artifact: the CUSTOM type (kind null)
+    // named "Task" is displayed with the neutral custom glyph —
+    // never the canonical Task glyph.
+    await page.screenshot({
+      path: testInfo.outputPath(
+        'inspector-type-custom-kind-null.png',
+      ),
+    })
+
+    const typeSelect = inspector.getByLabel(
+      'Type',
+      { exact: true },
+    )
+    await expect(typeSelect).toHaveValue(
+      String(customTask.id),
+    )
+
+    // --------------------------------------------------------
+    // 2. Changing the custom type PATCHes its target's
+    //    canonical definition ID.
+    // --------------------------------------------------------
+    const customPatches = trackTypePatches(
+      page,
+      customItem.id,
+    )
+
+    await typeSelect.selectOption(
+      String(epicDefinition.id),
+    )
+    await expect(
+      inspectorTypeHeaderRow(
+        inspector,
+        customItem.id,
+      ).getByText('Epic', { exact: true }),
+    ).toBeVisible()
+    await expect
+      .poll(() => customPatches.length)
+      .toBe(1)
+    expect(customPatches[0]).toEqual({
+      typeDefinitionId: epicDefinition.id,
+    })
+
+    // --------------------------------------------------------
+    // 3. Referenced-inactive type: the deactivated Milestone
+    //    stays visible as the item's current type but is NOT a
+    //    selectable new target.
+    // --------------------------------------------------------
+    await page
+      .getByRole('button', {
+        name: 'Close work item',
+      })
+      .click()
+    await expect(inspector).not.toBeVisible()
+
+    await page
+      .getByRole('button', {
+        name: `Open ${INACTIVE_ITEM_TITLE}`,
+      })
+      .click()
+    await expect(inspector).toBeVisible()
+
+    await expect(
+      inspectorTypeHeaderRow(
+        inspector,
+        inactiveItem.id,
+      ).getByText('Milestone', { exact: true }),
+    ).toBeVisible()
+    await expect(typeSelect).toHaveValue(
+      String(milestoneDefinition.id),
+    )
+
+    // Visual acceptance artifact: the referenced INACTIVE type
+    // stays identifiable as the current type (disabled entry in
+    // the control).
+    await page.screenshot({
+      path: testInfo.outputPath(
+        'inspector-type-inactive-referenced.png',
+      ),
+    })
+
+    const options = await typeSelect
+      .locator('option')
+      .all()
+    const optionStates = await Promise.all(
+      options.map(async (option) => ({
+        value: await option.getAttribute('value'),
+        text: await option.textContent(),
+        disabled:
+          (await option.getAttribute('disabled')) !==
+          null,
+      })),
+    )
+    expect(
+      optionStates.filter(
+        (option) => option.text === 'Milestone',
+      ),
+    ).toEqual([
+      {
+        value: String(milestoneDefinition.id),
+        text: 'Milestone',
+        disabled: true,
+      },
+    ])
+    expect(
+      optionStates.filter(
+        (option) => option.disabled,
+      ).map((option) => option.text),
+    ).toEqual(['Milestone'])
+
+    const inactivePatches = trackTypePatches(
+      page,
+      inactiveItem.id,
+    )
+    await typeSelect.selectOption(
+      String(epicDefinition.id),
+    )
+    await expect
+      .poll(() => inactivePatches.length)
+      .toBe(1)
+    expect(inactivePatches[0]).toEqual({
+      typeDefinitionId: epicDefinition.id,
+    })
+    await expect(
+      inspectorTypeHeaderRow(
+        inspector,
+        inactiveItem.id,
+      ).getByText('Epic', { exact: true }),
+    ).toBeVisible()
+  },
+)
