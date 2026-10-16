@@ -29,8 +29,12 @@
 //   - the board keeps reserving the 520px rail while the inspector is
 //     open (and releases it when the inspector closes),
 //   - the page-level outside-click close still works across the portal,
-//   - the create modal's scrim lives on the same overlay root and its
-//     outside-click dismissal still works,
+//   - the Project-local "New work item" entry launches the SAME
+//     centrally managed create Drawer (owned by QuickCreate,
+//     mounted next to the route content as the AppShell TopBar
+//     does in production), preselected with the page's Research
+//     Group and Project; its scrim lives on the same overlay root
+//     and its outside-click dismissal still works,
 //   - the delete confirmation overlay (the shared page-level dialog
 //     and the drawer's standalone fallback) lives on the same overlay
 //     root, outside the route content surface AND outside the
@@ -62,12 +66,14 @@ import {
   Route,
   Routes,
 } from 'react-router'
+import type { ReactNode } from 'react'
 
 import {
   getProject,
   getProjectWorkItemConfiguration,
   listProjectMemberships,
   listResearchGroupMembers,
+  listProjects,
 } from '../../api/projects'
 import {
   deleteWorkItem,
@@ -79,6 +85,7 @@ import type {
   ApiWorkItem,
 } from '../../api/types'
 
+import { QuickCreate } from '../../components/layout/QuickCreate'
 import { ProjectDetailPage } from './ProjectDetailPage'
 import { WorkItemDrawer } from './WorkItemDrawer'
 
@@ -87,6 +94,7 @@ vi.mock('../../api/projects', () => ({
   getProjectWorkItemConfiguration: vi.fn(),
   listProjectMemberships: vi.fn(),
   listResearchGroupMembers: vi.fn(),
+  listProjects: vi.fn(),
   addProjectMembership: vi.fn(),
   archiveProject: vi.fn(),
   deleteProject: vi.fn(),
@@ -125,6 +133,20 @@ vi.mock('../../api/useSession', () => ({
 
 vi.mock('../research-group/useSyncResearchGroupContext', () => ({
   useSyncResearchGroupContext: () => {},
+}))
+
+// QuickCreate is the central owner of the create Drawer; the
+// project-local layer test mounts it next to the route content,
+// exactly as the AppShell TopBar does in production.
+vi.mock('../research-group/useResearchGroup', () => ({
+  useResearchGroup: () => ({
+    groups: [
+      { id: 1, name: 'Layer Group', role: 'member' as const },
+    ],
+    loading: false,
+    error: null,
+    reloadResearchGroups: vi.fn(async () => {}),
+  }),
 }))
 
 // Deliberately NOT mocking './WorkItemDrawer': this spec's contract is
@@ -241,7 +263,7 @@ function workItemsSection(): HTMLElement {
   return section
 }
 
-function renderPage() {
+function renderPage(chrome: ReactNode = null) {
   const page = (
     <ProjectDetailPage />
   )
@@ -250,25 +272,28 @@ function renderPage() {
     <MemoryRouter
       initialEntries={['/projects/7/work-items']}
     >
-      <Routes>
-        <Route
-          path="/projects/:projectId"
-          element={
-            <main className="fg-route-content">
-              {page}
-            </main>
-          }
-        />
+      <>
+        {chrome}
+        <Routes>
+          <Route
+            path="/projects/:projectId"
+            element={
+              <main className="fg-route-content">
+                {page}
+              </main>
+            }
+          />
 
-        <Route
-          path="/projects/:projectId/:tab"
-          element={
-            <main className="fg-route-content">
-              {page}
-            </main>
-          }
-        />
-      </Routes>
+          <Route
+            path="/projects/:projectId/:tab"
+            element={
+              <main className="fg-route-content">
+                {page}
+              </main>
+            }
+          />
+        </Routes>
+      </>
     </MemoryRouter>,
   )
 }
@@ -401,7 +426,7 @@ describe('Work Item overlay layer ownership', () => {
     )
   })
 
-  it('renders the create modal scrim on the same overlay root and keeps its outside-click dismissal', async () => {
+  it('launches the centrally managed create Drawer from the Project page on the same overlay root and keeps its outside-click dismissal', async () => {
     vi.mocked(getProject).mockResolvedValue(PROJECT)
     vi.mocked(listProjectMemberships).mockResolvedValue([])
     vi.mocked(listResearchGroupMembers).mockResolvedValue([])
@@ -411,21 +436,47 @@ describe('Work Item overlay layer ownership', () => {
     vi.mocked(
       getProjectWorkItemConfiguration,
     ).mockResolvedValue(CONFIGURATION)
+    vi.mocked(listProjects).mockResolvedValue([
+      PROJECT,
+    ])
 
-    renderPage()
+    // QuickCreate next to the route content: the AppShell TopBar
+    // position of the central create-Drawer controller.
+    renderPage(
+      <QuickCreate
+        open={false}
+        onOpenChange={() => {}}
+      />,
+    )
 
     await screen.findByRole('button', {
       name: 'Open Layer task',
     })
 
+    // The Project-local entry opens the SAME centrally managed
+    // create Drawer (owned by QuickCreate, not a page-local fork).
     fireEvent.click(
       screen.getByRole('button', {
         name: /New work item/,
       }),
     )
 
+    const dialog = await screen.findByRole('dialog', {
+      name: 'New work item',
+    })
+
+    // The launch preselects the page's actual Research Group and
+    // Project — both selectors remain editable.
+    expect(
+      screen.getByLabelText('Research Group'),
+    ).toHaveValue('1')
+    await waitFor(() =>
+      expect(
+        screen.getByLabelText('Project'),
+      ).toHaveValue('7'),
+    )
+
     // The create dialog panel; its direct parent is the scrim.
-    const dialog = await screen.findByRole('dialog')
     const scrim = dialog.parentElement!
 
     // Same overlay-root contract as the edit inspector: the scrim

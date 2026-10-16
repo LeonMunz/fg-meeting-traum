@@ -19,6 +19,10 @@ import type {
   ApiWorkItem,
 } from '../../api/types'
 import { QuickCreate } from './QuickCreate'
+import {
+  OPEN_QUICK_CREATE_WORK_ITEM_EVENT,
+  requestQuickCreateWorkItem,
+} from './quickCreateLaunch'
 
 const mocks = vi.hoisted(() => ({
   listProjects: vi.fn(),
@@ -1163,5 +1167,364 @@ describe('global Work Item Quick Create', () => {
     )
     expect(title).toHaveValue('Keep this draft')
     expect(dialog).toBeVisible()
+  })
+})
+
+describe('Project-local Quick Create launch', () => {
+  it('preselects the launched Research Group and eligible Project, loads its context, and creates in the source Project', async () => {
+    renderQuickCreate()
+
+    requestQuickCreateWorkItem({
+      researchGroupId: 11,
+      projectId: 7,
+    })
+
+    const dialog = await screen.findByRole('dialog', {
+      name: 'New work item',
+    })
+
+    // The source Project's actual Research Group is preselected —
+    // and still editable.
+    expect(checkedOption(researchGroupSelect())?.textContent).toBe(
+      'FG Example',
+    )
+    expect(researchGroupSelect()).toBeEnabled()
+    expect(mocks.listProjects).toHaveBeenCalledWith(11)
+
+    // The eligible source Project is preselected after its
+    // eligibility has been validated against the group's listing.
+    await waitFor(() =>
+      expect(
+        checkedOption(projectSelect())?.textContent,
+      ).toBe('Writable Project'),
+    )
+    expect(projectSelect()).toBeEnabled()
+
+    // The preselected Project's canonical configuration is loaded
+    // and the type defaults to its ACTIVE canonical Task.
+    await waitFor(() =>
+      expect(
+        within(dialog).getByRole('radio', {
+          name: 'Experiment step',
+        }),
+      ).toBeChecked(),
+    )
+    fireEvent.change(within(dialog).getByLabelText('Title'), {
+      target: { value: 'From Project A' },
+    })
+    await waitFor(() =>
+      expect(
+        within(dialog).getByRole('button', {
+          name: 'Create work item',
+        }),
+      ).toBeEnabled(),
+    )
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        within(dialog).getByLabelText('Title'),
+      ),
+    )
+
+    // Creating without manually changing anything targets the
+    // source Project.
+    fireEvent.click(
+      within(dialog).getByRole('button', {
+        name: 'Create work item',
+      }),
+    )
+    await waitFor(() =>
+      expect(mocks.createWorkItem).toHaveBeenCalledTimes(1),
+    )
+    expect(mocks.createWorkItem).toHaveBeenCalledWith(7, {
+      typeDefinitionId: 41,
+      title: 'From Project A',
+      description: '',
+      statusDefinitionId: 51,
+    })
+    expect(
+      await screen.findByText('Work item created in Writable Project.'),
+    ).toBeVisible()
+  })
+
+  it('never silently replaces a non-writable source Project (viewer role)', async () => {
+    renderQuickCreate()
+
+    requestQuickCreateWorkItem({
+      researchGroupId: 11,
+      projectId: 8,
+    })
+
+    const dialog = await screen.findByRole('dialog', {
+      name: 'New work item',
+    })
+
+    expect(checkedOption(researchGroupSelect())?.textContent).toBe(
+      'FG Example',
+    )
+
+    // The viewer Project is not eligible: it stays UNSELECTED —
+    // no other Project is substituted — and it is not even
+    // offered in the (editable) Project list.
+    await waitFor(() => expect(projectSelect()).toBeEnabled())
+    expect(checkedOption(projectSelect())?.textContent).toBe(
+      'Select project…',
+    )
+    expect(
+      within(projectSelect()).queryByRole('option', {
+        name: 'Viewer Project',
+      }),
+    ).not.toBeInTheDocument()
+    expect(
+      within(dialog).getByRole('button', {
+        name: 'Create work item',
+      }),
+    ).toBeDisabled()
+    expect(mocks.getProjectWorkItemConfiguration).not.toHaveBeenCalled()
+
+    // The selectors remain editable: an eligible Project can be
+    // chosen explicitly.
+    await selectProject('Writable Project')
+    fireEvent.change(within(dialog).getByLabelText('Title'), {
+      target: { value: 'Chosen explicitly' },
+    })
+    await waitFor(() =>
+      expect(
+        within(dialog).getByRole('button', {
+          name: 'Create work item',
+        }),
+      ).toBeEnabled(),
+    )
+  })
+
+  it('never silently replaces an archived source Project', async () => {
+    renderQuickCreate()
+
+    requestQuickCreateWorkItem({
+      researchGroupId: 11,
+      projectId: 9,
+    })
+
+    const dialog = await screen.findByRole('dialog', {
+      name: 'New work item',
+    })
+
+    await waitFor(() => expect(projectSelect()).toBeEnabled())
+    expect(checkedOption(projectSelect())?.textContent).toBe(
+      'Select project…',
+    )
+    expect(
+      within(projectSelect()).queryByRole('option', {
+        name: 'Archived Project',
+      }),
+    ).not.toBeInTheDocument()
+    expect(
+      within(dialog).getByRole('button', {
+        name: 'Create work item',
+      }),
+    ).toBeDisabled()
+  })
+
+  it('keeps an unavailable source group visible, never substitutes, and applies the pending preselect once the group becomes available', async () => {
+    const view = renderQuickCreate()
+
+    requestQuickCreateWorkItem({
+      researchGroupId: 99,
+      projectId: 10,
+    })
+
+    const dialog = await screen.findByRole('dialog', {
+      name: 'New work item',
+    })
+
+    // The launched group is not (yet) in the authenticated
+    // membership: it stays visible as selected (never substituted),
+    // the Project stays blocked, and no Project listing is fetched.
+    expect(
+      checkedOption(researchGroupSelect())?.textContent,
+    ).toBe('Unavailable Research Group')
+    expect(
+      within(dialog).getByRole('alert'),
+    ).toHaveTextContent(
+      'The selected Research Group is no longer available.',
+    )
+    expect(projectSelect()).toBeDisabled()
+    expect(
+      within(dialog).getByRole('button', {
+        name: 'Create work item',
+      }),
+    ).toBeDisabled()
+    expect(mocks.listProjects).not.toHaveBeenCalled()
+
+    // The group appears in the membership (initial load settled):
+    // only its eligible Projects load, and the pending preselect
+    // applies to the eligible source Project.
+    mocks.groups = [
+      { id: 11, name: 'FG Example', role: 'member' },
+      { id: 12, name: 'Other Group', role: 'member' },
+      { id: 99, name: 'Late Group', role: 'member' },
+    ]
+    view.rerender(
+      <MemoryRouter initialEntries={['/notes']}>
+        <Harness />
+      </MemoryRouter>,
+    )
+
+    expect(mocks.listProjects).toHaveBeenCalledWith(99)
+    await waitFor(() =>
+      expect(
+        checkedOption(projectSelect())?.textContent,
+      ).toBe('Second Project'),
+    )
+    await waitFor(() =>
+      expect(
+        within(dialog).getByRole('radio', {
+          name: 'Second task',
+        }),
+      ).toBeChecked(),
+    )
+    fireEvent.change(within(dialog).getByLabelText('Title'), {
+      target: { value: 'Late group task' },
+    })
+    expect(
+      within(dialog).getByRole('button', {
+        name: 'Create work item',
+      }),
+    ).toBeEnabled()
+  })
+
+  it('a delayed source-group listing from an earlier launch cannot overwrite a newer launch', async () => {
+    let resolveGroupAListing:
+      | ((value: ApiProject[]) => void)
+      | undefined
+    mocks.listProjects.mockImplementation((groupId: number) => {
+      if (groupId === 11 && resolveGroupAListing === undefined) {
+        return new Promise<ApiProject[]>((resolve) => {
+          resolveGroupAListing = resolve
+        })
+      }
+      return Promise.resolve(
+        groupId === 11 ? [writableProject] : [secondProject],
+      )
+    })
+
+    renderQuickCreate()
+
+    requestQuickCreateWorkItem({
+      researchGroupId: 11,
+      projectId: 7,
+    })
+    await screen.findByRole('dialog', { name: 'New work item' })
+
+    // A newer launch takes over while listing A is still in flight.
+    requestQuickCreateWorkItem({
+      researchGroupId: 12,
+      projectId: 10,
+    })
+    await waitFor(() =>
+      expect(
+        checkedOption(projectSelect())?.textContent,
+      ).toBe('Second Project'),
+    )
+
+    // The stale listing A finally arrives: a strict no-op.
+    await act(async () => {
+      resolveGroupAListing?.([writableProject])
+    })
+    expect(
+      checkedOption(researchGroupSelect())?.textContent,
+    ).toBe('Other Group')
+    expect(
+      checkedOption(projectSelect())?.textContent,
+    ).toBe('Second Project')
+
+    const dialog = screen.getByRole('dialog', {
+      name: 'New work item',
+    })
+    fireEvent.change(within(dialog).getByLabelText('Title'), {
+      target: { value: 'Stale-proof' },
+    })
+    await waitFor(() =>
+      expect(
+        within(dialog).getByRole('button', {
+          name: 'Create work item',
+        }),
+      ).toBeEnabled(),
+    )
+    fireEvent.click(
+      within(dialog).getByRole('button', {
+        name: 'Create work item',
+      }),
+    )
+    await waitFor(() =>
+      expect(mocks.createWorkItem).toHaveBeenCalledTimes(1),
+    )
+    expect(mocks.createWorkItem).toHaveBeenCalledWith(10, {
+      typeDefinitionId: 61,
+      title: 'Stale-proof',
+      description: '',
+      statusDefinitionId: 71,
+    })
+  })
+
+  it('a launch takes over an already open Drawer, resetting its previous context', async () => {
+    renderQuickCreate()
+    const dialog = await openDrawer()
+    await selectResearchGroup('Other Group')
+    await selectProject('Second Project')
+    await waitFor(() =>
+      expect(
+        checkedOption(projectSelect())?.textContent,
+      ).toBe('Second Project'),
+    )
+
+    requestQuickCreateWorkItem({
+      researchGroupId: 11,
+      projectId: 7,
+    })
+
+    await waitFor(() =>
+      expect(
+        checkedOption(researchGroupSelect())?.textContent,
+      ).toBe('FG Example'),
+    )
+    await waitFor(() =>
+      expect(
+        checkedOption(projectSelect())?.textContent,
+      ).toBe('Writable Project'),
+    )
+    fireEvent.change(within(dialog).getByLabelText('Title'), {
+      target: { value: 'Takeover task' },
+    })
+    await waitFor(() =>
+      expect(
+        within(dialog)
+          .getByRole('button', { name: 'Create work item' }),
+      ).toBeEnabled(),
+    )
+  })
+
+  it('ignores malformed launch events', async () => {
+    renderQuickCreate()
+
+    window.dispatchEvent(
+      new CustomEvent(OPEN_QUICK_CREATE_WORK_ITEM_EVENT, {
+        detail: null,
+      }),
+    )
+    window.dispatchEvent(
+      new CustomEvent(OPEN_QUICK_CREATE_WORK_ITEM_EVENT, {
+        detail: { researchGroupId: '11', projectId: 7 },
+      }),
+    )
+    window.dispatchEvent(
+      new CustomEvent(OPEN_QUICK_CREATE_WORK_ITEM_EVENT, {
+        detail: { researchGroupId: 11 },
+      }),
+    )
+
+    expect(
+      screen.queryByRole('dialog', { name: 'New work item' }),
+    ).not.toBeInTheDocument()
+    expect(mocks.listProjects).not.toHaveBeenCalled()
   })
 })

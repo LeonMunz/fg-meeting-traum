@@ -28,7 +28,6 @@ import {
   ProjectLifecycleDialog,
   type ProjectLifecycleAction,
 } from './ProjectLifecycleDialog'
-import type { WorkItemFormInput } from './WorkItemDrawer'
 import {
   WorkItemActionMenuTrigger,
   WorkItemDeleteDialog,
@@ -52,11 +51,13 @@ import {
   invalidateProjectQuickAccess,
 } from '../../components/layout/projectQuickAccessInvalidation'
 import {
+  requestQuickCreateWorkItem,
+} from '../../components/layout/quickCreateLaunch'
+import {
   WORK_ITEM_CREATED_EVENT,
   type WorkItemCreatedDetail,
 } from '../../components/layout/workItemInvalidation'
 import {
-  buildCreateWorkItemInput,
   resolveStatusDefinitionIdByCategory,
   resolveWorkItemDisplay,
 } from './workItemMapping'
@@ -69,7 +70,6 @@ import type {
   ApiWorkItem,
 } from '../../api/types'
 import {
-  createWorkItem,
   deleteWorkItem,
   listProjectWorkItems,
   reorderWorkItem,
@@ -121,14 +121,15 @@ function WorkItemDrawerFallback({
 
 type ProjectStatus = 'active' | 'paused' | 'completed'
 type ProjectRole = 'owner' | 'member' | 'viewer'
-type WorkItemDrawerState =
-  | {
-      mode: 'create'
-    }
-  | {
-      mode: 'edit'
-      workItemId: number
-    }
+// Create mode is NOT a local drawer state anymore: Work Item
+// creation is centrally owned by the QuickCreate controller
+// (quickCreateLaunch.ts), which this page launches with the
+// Project-local context. The page-level drawer state is the
+// non-modal edit-mode inspector only.
+type WorkItemDrawerState = {
+  mode: 'edit'
+  workItemId: number
+}
 
 type ProjectTab =
   | 'work-items'
@@ -1980,51 +1981,6 @@ export function ProjectDetailPage() {
     }
   }
 
-  const handleCreateWorkItem = async (
-    input: WorkItemFormInput,
-  ) => {
-    if (isReadOnly) {
-      throw new Error(
-        isArchived
-          ? 'Archived Projects are read-only. Restore the Project first.'
-          : 'A viewer cannot create Work Items.',
-      )
-    }
-
-    const numericProjectId = Number(project.id)
-
-    if (!Number.isInteger(numericProjectId)) {
-      throw new Error('Invalid Project ID.')
-    }
-
-    const createInput = buildCreateWorkItemInput(input)
-
-    setWorkItemsError(null)
-
-    try {
-      const created = await createWorkItem(
-        numericProjectId,
-        createInput,
-      )
-
-      // New Work Items are appended to the end of their status column
-      // by the server (see WorkItem.board_position), so mirror that by
-      // appending here to keep the local list in canonical order.
-      setApiWorkItems((current) => [
-        ...current.filter((item) => item.id !== created.id),
-        created,
-      ])
-    } catch (error) {
-      const message = getWorkItemErrorMessage(
-        error,
-        'Work item could not be created.',
-      )
-
-      setWorkItemsError(message)
-      throw new Error(message)
-    }
-  }
-
   const handlePatchWorkItem = async (
     workItemId: number,
     patch: ApiUpdateWorkItemInput,
@@ -2662,8 +2618,9 @@ export function ProjectDetailPage() {
           )}
           readOnly={isReadOnly}
           onCreate={() =>
-            setWorkItemDrawerState({
-              mode: 'create',
+            requestQuickCreateWorkItem({
+              researchGroupId: project.researchGroupId,
+              projectId: Number(project.id),
             })
           }
           onOpen={handleOpenWorkItem}
@@ -3263,7 +3220,11 @@ export function ProjectDetailPage() {
             onClose={() =>
               setWorkItemDrawerState(null)
             }
-            onCreate={handleCreateWorkItem}
+            // Create mode is unreachable from this page (see
+            // WorkItemDrawerState): creation is centrally owned by
+            // the QuickCreate controller, which the Work Items
+            // surface launches with this Project's context.
+            onCreate={async () => {}}
             onPatch={handlePatchWorkItem}
             onDelete={handleDeleteWorkItem}
             onRequestDelete={requestWorkItemDelete}

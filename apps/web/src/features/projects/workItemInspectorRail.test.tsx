@@ -250,8 +250,9 @@ describe('Work Item inspector rail reservation', () => {
       ),
     )
 
-    // Create mode is a modal with its own backdrop — it must not
-    // reserve the rail (the page behind is blocked anyway).
+    // The Project-local "New work item" entry launches the centrally
+    // managed create Drawer (owned by QuickCreate) — the page never
+    // renders a local create modal, so it must not reserve the rail.
     fireEvent.click(
       screen.getByRole('button', {
         name: /New work item/,

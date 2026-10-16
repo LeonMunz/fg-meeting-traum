@@ -136,3 +136,158 @@ test('global Quick Create opens the Work Item drawer with explicit Research Grou
   await projectDialog.getByRole('button', { name: 'Cancel' }).click()
   expect(createRequests).toBe(1)
 })
+
+test('Project-local New Work Item opens the same create Drawer with the validated source context (editable) and creates exclusively in the selected target Project', async ({
+  page,
+}) => {
+  const titleA = `Quick Create A ${Date.now()}`
+  const titleB = `Quick Create B ${Date.now()}`
+  const createRequests: string[] = []
+
+  page.on('request', (request) => {
+    if (
+      request.method() === 'POST' &&
+      /\/api\/projects\/\d+\/work-items\/$/.test(request.url())
+    ) {
+      createRequests.push(request.url())
+    }
+  })
+
+  await login(page, 'alex')
+
+  // A second writable Project in the same Research Group: the
+  // alternate creation target.
+  await openProjects(page)
+  await page
+    .getByRole('button', { name: /New project/ })
+    .click()
+  const createProjectDialog = page.getByRole('dialog', {
+    name: 'Create project',
+  })
+  await expect(createProjectDialog).toBeVisible()
+  await createProjectDialog
+    .getByLabel('Project name')
+    .fill('Quick Create B')
+  await createProjectDialog
+    .getByLabel('Description')
+    .fill('Second target Project for the unified create flow.')
+  await createProjectDialog
+    .getByRole('button', { name: /Create project/ })
+    .click()
+  await expect(createProjectDialog).not.toBeVisible()
+
+  // Source Project A: the Project-local create entry.
+  await openProject(page, 'Paper XYZ')
+  const newWorkItemButton = page.getByRole('button', {
+    name: /New work item/,
+  })
+  await expect(newWorkItemButton).toBeVisible()
+  await newWorkItemButton.click()
+
+  const dialog = page.getByRole('dialog', { name: 'New work item' })
+  await expect(dialog).toBeVisible()
+  const researchGroupSelect = dialog.getByRole('combobox', {
+    name: 'Research Group',
+    exact: true,
+  })
+  const projectSelect = dialog.getByRole('combobox', {
+    name: 'Project',
+    exact: true,
+  })
+
+  // The source Project's ACTUAL Research Group and Project are
+  // preselected after their eligibility has been validated — and
+  // both selectors remain editable.
+  await expect(researchGroupSelect).toBeEnabled()
+  await expect(
+    researchGroupSelect.locator('option:checked'),
+  ).toHaveText('FG Example')
+  await expect(projectSelect).toBeEnabled()
+  await expect(
+    projectSelect.locator('option:checked'),
+  ).toHaveText('Paper XYZ')
+
+  // Creation stays locked while the required Title is empty — it
+  // becomes available once the validated source context and a valid
+  // Title both exist (creation without touching the selectors
+  // targets the source Project).
+  await expect(
+    dialog.getByRole('button', { name: 'Create work item' }),
+  ).toBeDisabled()
+  await dialog.getByLabel('Title').fill(titleA)
+  await expect(
+    dialog.getByRole('button', { name: 'Create work item' }),
+  ).toBeEnabled()
+  await dialog
+    .getByRole('button', { name: 'Create work item' })
+    .click()
+
+  await expect(dialog).not.toBeVisible()
+  await expect(
+    page.getByText('Work item created in Paper XYZ.', {
+      exact: true,
+    }),
+  ).toBeVisible()
+  expect(createRequests).toHaveLength(1)
+
+  // The source Project view refreshes — it actually owns the item.
+  await expect(page.getByText(titleA, { exact: true })).toBeVisible()
+
+  // A second launch from the same Project prefills the SAME
+  // validated context again.
+  await newWorkItemButton.click()
+  await expect(dialog).toBeVisible()
+  await expect(
+    researchGroupSelect.locator('option:checked'),
+  ).toHaveText('FG Example')
+  await expect(
+    projectSelect.locator('option:checked'),
+  ).toHaveText('Paper XYZ')
+
+  // Switching the target to Project B reloads its canonical
+  // configuration; creation becomes available once B's context is
+  // loaded and the required Title is entered.
+  await projectSelect.selectOption({ label: 'Quick Create B' })
+  await expect(
+    projectSelect.locator('option:checked'),
+  ).toHaveText('Quick Create B')
+  await dialog.getByLabel('Title').fill(titleB)
+  await expect(
+    dialog.getByRole('button', { name: 'Create work item' }),
+  ).toBeEnabled()
+  await dialog
+    .getByRole('button', { name: 'Create work item' })
+    .click()
+
+  await expect(dialog).not.toBeVisible()
+  await expect(
+    page.getByText('Work item created in Quick Create B.', {
+      exact: true,
+    }),
+  ).toBeVisible()
+  expect(createRequests).toHaveLength(2)
+
+  // The second creation went to the SELECTED target (Project B),
+  // never to the source Project A — and the source Project view
+  // is not refreshed with a foreign Work Item.
+  await expect(page.getByText(titleB, { exact: true })).toHaveCount(0)
+
+  // Project B's page shows the created Work Item.
+  await openProjects(page)
+  await openProject(page, 'Quick Create B')
+  await expect(page.getByText(titleB, { exact: true })).toBeVisible()
+
+  const targetMatch = /\/projects\/(\d+)\/work-items/.exec(page.url())
+  expect(targetMatch).not.toBeNull()
+  const targetProjectId = targetMatch![1]
+  expect(
+    new RegExp(
+      `api/projects/${targetProjectId}/work-items/$`,
+    ).test(createRequests[1]),
+  ).toBe(true)
+  expect(
+    new RegExp(
+      `api/projects/${targetProjectId}/work-items/$`,
+    ).test(createRequests[0]),
+  ).toBe(false)
+})

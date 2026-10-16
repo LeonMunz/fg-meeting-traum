@@ -28,6 +28,10 @@ import {
   buildCreateWorkItemInput,
 } from '../../features/projects/workItemMapping'
 import { useResearchGroup } from '../../features/research-group/useResearchGroup'
+import {
+  OPEN_QUICK_CREATE_WORK_ITEM_EVENT,
+  type QuickCreateWorkItemLaunch,
+} from './quickCreateLaunch'
 import { notifyWorkItemCreated } from './workItemInvalidation'
 import { SidebarIcon } from './Sidebar'
 
@@ -55,6 +59,12 @@ type ProjectLoadState =
       projects: EligibleProject[]
     }
   | { status: 'error'; message: string }
+
+// A Project-local launch keeps its requested Research Group +
+// Project pending until that group's Project listing settles; it
+// is consumed exactly once and applied only when the Project
+// passes the same eligibility check as a manual selection.
+type ProjectPreselect = QuickCreateWorkItemLaunch
 
 const MENU_ITEM_CLASSES =
   'fg-type-nav-primary font-medium flex h-8 w-full items-center gap-2 rounded bg-transparent px-2 text-left text-text-muted transition hover:bg-surface-muted hover:text-text focus-visible:bg-surface-muted focus-visible:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus'
@@ -163,6 +173,8 @@ export function QuickCreate({
   const [drawerContext, setDrawerContext] =
     useState<DrawerContext | null>(null)
   const [confirmation, setConfirmation] = useState<string | null>(null)
+  const [pendingProjectPreselect, setPendingProjectPreselect] =
+    useState<ProjectPreselect | null>(null)
 
   // Loads only the eligible Projects of ONE explicitly selected
   // Research Group (never the whole membership). Sequence +
@@ -281,6 +293,20 @@ export function QuickCreate({
     [loadProjectsForGroup],
   )
 
+  // Single application point for a Project selection: records the
+  // selection synchronously (ref first, so the in-flight context
+  // guards can see it) and loads that Project's context. Both the
+  // user's explicit pick and a Project-local launch preselect go
+  // through here, so neither path can skip the sequencing guards.
+  const applyProjectSelection = useCallback(
+    (project: EligibleProject) => {
+      selectedProjectIdRef.current = project.id
+      setSelectedProjectId(project.id)
+      void loadProjectContext(project)
+    },
+    [loadProjectContext],
+  )
+
   const selectProject = useCallback(
     (projectId: number) => {
       const project = readyProjects.find(
@@ -288,11 +314,9 @@ export function QuickCreate({
       )
       if (!project) return
 
-      selectedProjectIdRef.current = project.id
-      setSelectedProjectId(project.id)
-      void loadProjectContext(project)
+      applyProjectSelection(project)
     },
-    [loadProjectContext, readyProjects],
+    [applyProjectSelection, readyProjects],
   )
 
   const selectResearchGroup = useCallback(
@@ -314,6 +338,9 @@ export function QuickCreate({
       // another Research Group.
       ++projectRequestSeq.current
       ++contextRequestSeq.current
+      // An explicit group switch supersedes any pending launch
+      // preselect: the user has taken over the context.
+      setPendingProjectPreselect(null)
       selectedProjectIdRef.current = null
       setSelectedProjectId(null)
       setDrawerContext(null)
@@ -328,6 +355,52 @@ export function QuickCreate({
     [groups, loadProjectsForGroup],
   )
 
+  // Project-local entry: opens the SAME centrally managed create
+  // Drawer, but the source Project's actual Research Group and
+  // Project provide the EDITABLE initial context. The group is
+  // recorded immediately (its listing loads as soon as it is known
+  // to be in the authenticated membership); the Project preselect
+  // is applied only after that listing settles AND the Project
+  // passes the same eligibility check as every manual selection —
+  // an unavailable, archived, or non-writable source Project is
+  // never silently replaced with another Project.
+  const launchWorkItemDrawer = useCallback(
+    (launch: QuickCreateWorkItemLaunch) => {
+      ++projectRequestSeq.current
+      ++contextRequestSeq.current
+      selectedProjectIdRef.current = null
+
+      const group = groups.find(
+        (candidate) => candidate.id === launch.researchGroupId,
+      )
+
+      selectedResearchGroupIdRef.current = launch.researchGroupId
+      // Unknown group: keep the selection visible as unavailable
+      // (never substituted) and let the group availability effect
+      // reload its listing — and apply the pending Project
+      // preselect — if the group becomes available.
+      selectedGroupWasUnavailableRef.current = group === undefined
+      setSelectedResearchGroupId(launch.researchGroupId)
+      setSelectedResearchGroupName(group?.name ?? null)
+      setSelectedProjectId(null)
+      setDrawerContext(null)
+      setContextError(null)
+      setContextLoadingProjectId(null)
+      setProjectState({ status: 'idle' })
+      setPendingProjectPreselect({
+        researchGroupId: launch.researchGroupId,
+        projectId: launch.projectId,
+      })
+      setDrawerOpen(true)
+      onOpenChange(false)
+
+      if (group) {
+        void loadProjectsForGroup(group.id)
+      }
+    },
+    [groups, loadProjectsForGroup, onOpenChange],
+  )
+
   const openWorkItemDrawer = useCallback(() => {
     // Global creation always starts WITHOUT an implicitly
     // selected Research Group or Project — regardless of the
@@ -337,6 +410,7 @@ export function QuickCreate({
     selectedResearchGroupIdRef.current = null
     selectedGroupWasUnavailableRef.current = false
     selectedProjectIdRef.current = null
+    setPendingProjectPreselect(null)
     setSelectedResearchGroupId(null)
     setSelectedResearchGroupName(null)
     setSelectedProjectId(null)
@@ -378,6 +452,35 @@ export function QuickCreate({
     }
   }, [drawerOpen, projectState])
 
+  // A Project-local launch preselect applies only after the
+  // launched Research Group's Project listing has settled
+  // (`ready` for that group), and then ONLY when the requested
+  // Project passes the same eligibility check as a manual
+  // selection. The pending preselect is consumed exactly once per
+  // settled listing; an ineligible source Project is never
+  // silently replaced (the Project stays unselected and creation
+  // stays blocked until the user picks one explicitly).
+  useEffect(() => {
+    const preselect = pendingProjectPreselect
+    if (preselect === null) return
+
+    if (
+      projectState.status !== 'ready' ||
+      projectState.researchGroupId !== preselect.researchGroupId
+    ) {
+      return
+    }
+
+    setPendingProjectPreselect(null)
+
+    const project = projectState.projects.find(
+      (candidate) => candidate.id === preselect.projectId,
+    )
+    if (project) {
+      applyProjectSelection(project)
+    }
+  }, [projectState, pendingProjectPreselect, applyProjectSelection])
+
   // The selected Research Group is part of the authenticated
   // membership. If it stops being, keep the (stale) selection
   // visible — never substitute another group — but invalidate the
@@ -410,6 +513,7 @@ export function QuickCreate({
     if (selectedGroupWasUnavailableRef.current) return
 
     selectedGroupWasUnavailableRef.current = true
+    setPendingProjectPreselect(null)
     ++projectRequestSeq.current
     ++contextRequestSeq.current
     selectedProjectIdRef.current = null
@@ -442,6 +546,40 @@ export function QuickCreate({
     document.addEventListener('keydown', handleShortcut)
     return () => document.removeEventListener('keydown', handleShortcut)
   }, [openWorkItemDrawer])
+
+  // Project-local "New work item" entries emit a typed launch
+  // request (see quickCreateLaunch.ts); this controller is the
+  // single owner of the create Drawer and of its context
+  // loading/eligibility/sequencing logic. The handler validates
+  // the bounded detail so a malformed event is a strict no-op.
+  useEffect(() => {
+    const handleLaunch = (event: Event) => {
+      const detail = (
+        event as CustomEvent<QuickCreateWorkItemLaunch>
+      ).detail
+      if (
+        detail === null ||
+        typeof detail !== 'object' ||
+        !Number.isInteger(detail.researchGroupId) ||
+        !Number.isInteger(detail.projectId)
+      ) {
+        return
+      }
+
+      launchWorkItemDrawer(detail)
+    }
+
+    window.addEventListener(
+      OPEN_QUICK_CREATE_WORK_ITEM_EVENT,
+      handleLaunch,
+    )
+
+    return () =>
+      window.removeEventListener(
+        OPEN_QUICK_CREATE_WORK_ITEM_EVENT,
+        handleLaunch,
+      )
+  }, [launchWorkItemDrawer])
 
   useEffect(() => {
     if (!open) return
@@ -516,6 +654,7 @@ export function QuickCreate({
   const closeDrawer = () => {
     ++projectRequestSeq.current
     ++contextRequestSeq.current
+    setPendingProjectPreselect(null)
     selectedResearchGroupIdRef.current = null
     selectedGroupWasUnavailableRef.current = false
     selectedProjectIdRef.current = null
