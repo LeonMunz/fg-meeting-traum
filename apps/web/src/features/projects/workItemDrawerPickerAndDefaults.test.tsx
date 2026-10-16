@@ -65,6 +65,7 @@ import {
   WorkItemDrawer,
   WorkItemInspector,
 } from './WorkItemDrawer'
+import type { WorkItemProjectPicker } from './WorkItemDrawer'
 
 const DEFAULT_STATUSES: ApiProjectWorkItemConfiguration['statuses'] = [
   {
@@ -274,6 +275,403 @@ describe('Work Item drawer — Project-local create header', () => {
     ).not.toBeInTheDocument()
   })
 })
+
+/* ── Create mode: explicit Research Group + Project context ──────
+//
+// The shared create-mode context picker renders two explicit,
+// labeled, dependent selects (Research Group → Project). Neither
+// selection is implicit: the parent (global Quick Create) owns
+// loading, race protection, and eligibility; the drawer renders
+// the parent-owned state and reports selections back. The
+// Project-local static context row (no picker) and the edit-mode
+// inspector are intentionally NOT covered here — they stay
+// unchanged. */
+
+const CONTEXT_GROUPS = [
+  { id: 101, name: 'Alpha Group' },
+  { id: 102, name: 'Beta Group' },
+]
+
+const ALPHA_PROJECT = {
+  id: 7,
+  name: 'Alpha Project',
+  researchGroupId: 101,
+  researchGroupName: 'Alpha Group',
+}
+
+const BETA_PROJECT = {
+  id: 8,
+  name: 'Beta Project',
+  researchGroupId: 102,
+  researchGroupName: 'Beta Group',
+}
+
+function defaultContextPicker(
+  overrides: Partial<WorkItemProjectPicker> = {},
+): WorkItemProjectPicker {
+  return {
+    researchGroups: CONTEXT_GROUPS,
+    selectedResearchGroupId: null,
+    selectedResearchGroupName: null,
+    researchGroupsLoading: false,
+    researchGroupsError: null,
+    onResearchGroupSelect: vi.fn(),
+    onResearchGroupsRetry: vi.fn(),
+    projects: [ALPHA_PROJECT, BETA_PROJECT],
+    selectedProjectId: null,
+    loading: false,
+    error: null,
+    onSelect: vi.fn(),
+    onRetry: vi.fn(),
+    ...overrides,
+  }
+}
+
+function ContextPickerHarness({
+  picker,
+  configuration,
+  createReady = false,
+}: {
+  picker: WorkItemProjectPicker
+  configuration: ApiProjectWorkItemConfiguration | null
+  createReady?: boolean
+}) {
+  return (
+    <WorkItemDrawer
+      open={true}
+      mode="create"
+      projectName=""
+      item={null}
+      readOnly={false}
+      currentUserId={1}
+      workItemConfiguration={configuration}
+      assignees={ASSIGNEES}
+      parentItems={[]}
+      projectPicker={picker}
+      createReady={createReady}
+      onClose={vi.fn()}
+      onCreate={vi.fn(async () => {})}
+      onPatch={vi.fn(async () => {})}
+    />
+  )
+}
+
+function selectedOptionText(
+  select: HTMLSelectElement,
+): string {
+  const option = Array.from(
+    select.querySelectorAll('option'),
+  ).find(
+    (candidate) => candidate.value === select.value,
+  )
+  return option?.textContent ?? ''
+}
+
+function researchGroupSelect() {
+  return screen.getByLabelText(
+    'Research Group',
+  ) as HTMLSelectElement
+}
+
+function projectSelect() {
+  return screen.getByLabelText(
+    'Project',
+  ) as HTMLSelectElement
+}
+
+describe(
+  'Work Item drawer (create) — explicit Research Group + Project context',
+  () => {
+    it('renders both selectors unselected and keeps creation blocked', () => {
+      renderCreatePanelWithContext()
+
+      const researchGroup = researchGroupSelect()
+      expect(researchGroup).toBeEnabled()
+      expect(selectedOptionText(researchGroup)).toBe(
+        'Select research group…',
+      )
+      // Fresh creation: only the actually accessible Research
+      // Groups are offered (the hidden placeholder is excluded
+      // from the accessible option set) — no phantom
+      // "Unavailable Research Group" fallback option.
+      expect(
+        within(researchGroup)
+          .getAllByRole('option')
+          .map((option) => option.textContent),
+      ).toEqual(['Alpha Group', 'Beta Group'])
+
+      const project = projectSelect()
+      expect(project).toBeDisabled()
+      expect(selectedOptionText(project)).toBe(
+        'Select a Research Group first',
+      )
+
+      expect(
+        screen.getByRole('button', {
+          name: 'Create work item',
+        }),
+      ).toBeDisabled()
+    })
+
+    it('selecting a Research Group reports its id and enables the dependent Project control', () => {
+      const picker = defaultContextPicker()
+      const view = renderCreatePanelWithContext(picker)
+
+      fireEvent.change(screen.getByLabelText('Research Group'), {
+        target: { value: '101' },
+      })
+      expect(picker.onResearchGroupSelect).toHaveBeenCalledWith(
+        101,
+      )
+
+      view.rerender(
+        <ContextPickerHarness
+          picker={defaultContextPicker({
+            selectedResearchGroupId: 101,
+            selectedResearchGroupName: 'Alpha Group',
+            projects: [ALPHA_PROJECT],
+          })}
+          configuration={null}
+        />,
+      )
+
+      const project = projectSelect()
+      expect(project).toBeEnabled()
+      expect(selectedOptionText(project)).toBe(
+        'Select project…',
+      )
+      expect(
+        within(project).getByRole('option', {
+          name: 'Alpha Project',
+        }),
+      ).toBeVisible()
+      // The other Research Group's Project never appears.
+      expect(
+        within(project).queryByRole('option', {
+          name: 'Beta Project',
+        }),
+      ).not.toBeInTheDocument()
+    })
+
+    it('switching Research Group clears the Project selection, keeps the draft, and re-seeds the new Project\'s canonical Task', () => {
+      const alphaConfig = makeConfiguration([
+        {
+          id: 4,
+          name: 'Task',
+          kind: 'task',
+          order: 0,
+          active: true,
+        },
+      ])
+      const betaConfig = makeConfiguration([
+        {
+          id: 9,
+          name: 'Beta task',
+          kind: 'task',
+          order: 0,
+          active: true,
+        },
+      ])
+
+      const view = renderCreatePanelWithContext(
+        defaultContextPicker({
+          selectedResearchGroupId: 101,
+          selectedResearchGroupName: 'Alpha Group',
+          projects: [ALPHA_PROJECT],
+          selectedProjectId: 7,
+        }),
+        alphaConfig,
+      )
+      expect(
+        screen.getByRole('radio', { name: 'Task' }),
+      ).toBeChecked()
+
+      fireEvent.change(screen.getByLabelText('Title'), {
+        target: { value: 'Kept title' },
+      })
+      fireEvent.change(screen.getByLabelText(/Description/), {
+        target: { value: 'Kept description' },
+      })
+
+      // Parent contract: the Project selection is invalidated
+      // while the new Research Group's Projects are unknown.
+      view.rerender(
+        <ContextPickerHarness
+          picker={defaultContextPicker({
+            selectedResearchGroupId: 102,
+            selectedResearchGroupName: 'Beta Group',
+            projects: [BETA_PROJECT],
+          })}
+          configuration={null}
+        />,
+      )
+      expect(
+        screen.queryByRole('radio', { name: 'Task' }),
+      ).not.toBeInTheDocument()
+      expect(selectedOptionText(
+        projectSelect(),
+      )).toBe('Select project…')
+
+      // …and the new Project's context re-seeds ITS canonical
+      // Task while the draft survives.
+      view.rerender(
+        <ContextPickerHarness
+          picker={defaultContextPicker({
+            selectedResearchGroupId: 102,
+            selectedResearchGroupName: 'Beta Group',
+            projects: [BETA_PROJECT],
+            selectedProjectId: 8,
+          })}
+          configuration={betaConfig}
+        />,
+      )
+      expect(
+        screen.getByRole('radio', { name: 'Beta task' }),
+      ).toBeChecked()
+      expect(screen.getByLabelText('Title')).toHaveValue(
+        'Kept title',
+      )
+      expect(screen.getByLabelText(/Description/)).toHaveValue(
+        'Kept description',
+      )
+    })
+
+    it('shows Research Group loading, error, empty, and unavailable states', () => {
+      const picker = defaultContextPicker({
+        researchGroupsLoading: true,
+      })
+      const view = renderCreatePanelWithContext(picker)
+
+      const researchGroup = screen.getByLabelText(
+        'Research Group',
+      ) as HTMLSelectElement
+      expect(researchGroup).toBeDisabled()
+      expect(selectedOptionText(researchGroup)).toBe(
+        'Loading research groups…',
+      )
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+
+      const errorPicker = defaultContextPicker({
+        researchGroupsError: 'Groups unavailable',
+      })
+      view.rerender(
+        <ContextPickerHarness
+          picker={errorPicker}
+          configuration={null}
+        />,
+      )
+      expect(
+        screen.getByRole('alert'),
+      ).toHaveTextContent('Groups unavailable')
+      fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+      expect(errorPicker.onResearchGroupsRetry).toHaveBeenCalledTimes(
+        1,
+      )
+
+      view.rerender(
+        <ContextPickerHarness
+          picker={defaultContextPicker({ researchGroups: [] })}
+          configuration={null}
+        />,
+      )
+      expect(selectedOptionText(researchGroupSelect())).toBe(
+        'No Research Groups',
+      )
+
+      view.rerender(
+        <ContextPickerHarness
+          picker={defaultContextPicker({
+            selectedResearchGroupId: 103,
+            selectedResearchGroupName: 'Ghost Group',
+          })}
+          configuration={null}
+        />,
+      )
+      expect(selectedOptionText(researchGroupSelect())).toBe(
+        'Ghost Group',
+      )
+      expect(
+        screen.getByRole('alert'),
+      ).toHaveTextContent(
+        'The selected Research Group is no longer available.',
+      )
+      // No implicit substitution: the Project control is
+      // blocked while the selected group is unavailable.
+      expect(
+        screen.getByLabelText('Project'),
+      ).toBeDisabled()
+      expect(
+        selectedOptionText(
+          projectSelect(),
+        ),
+      ).toBe('Select project…')
+    })
+
+    it('shows Project loading, error, and missing-writable-Projects states for a selected Research Group', () => {
+      const picker = defaultContextPicker({
+        selectedResearchGroupId: 101,
+        selectedResearchGroupName: 'Alpha Group',
+        loading: true,
+      })
+      const view = renderCreatePanelWithContext(picker)
+
+      const project = screen.getByLabelText(
+        'Project',
+      ) as HTMLSelectElement
+      expect(project).toBeDisabled()
+      expect(selectedOptionText(project)).toBe(
+        'Loading Projects…',
+      )
+
+      const errorPicker = defaultContextPicker({
+        selectedResearchGroupId: 101,
+        selectedResearchGroupName: 'Alpha Group',
+        error: 'Access unavailable',
+      })
+      view.rerender(
+        <ContextPickerHarness
+          picker={errorPicker}
+          configuration={null}
+        />,
+      )
+      expect(
+        screen.getByRole('alert'),
+      ).toHaveTextContent('Access unavailable')
+      fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+      expect(errorPicker.onRetry).toHaveBeenCalledTimes(1)
+
+      view.rerender(
+        <ContextPickerHarness
+          picker={defaultContextPicker({
+            selectedResearchGroupId: 101,
+            selectedResearchGroupName: 'Alpha Group',
+            projects: [],
+          })}
+          configuration={null}
+        />,
+      )
+      expect(project).toBeDisabled()
+      expect(selectedOptionText(project)).toBe(
+        'No writable Projects',
+      )
+      expect(
+        screen.getByText(/owner or member access/),
+      ).toBeVisible()
+    })
+  },
+)
+
+function renderCreatePanelWithContext(
+  picker: WorkItemProjectPicker = defaultContextPicker(),
+  configuration: ApiProjectWorkItemConfiguration | null = null,
+) {
+  return render(
+    <ContextPickerHarness
+      picker={picker}
+      configuration={configuration}
+    />,
+  )
+}
 
 function dueDateField() {
   return screen.getByLabelText(

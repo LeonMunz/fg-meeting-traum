@@ -8,7 +8,6 @@ import {
   useState,
 } from 'react'
 import { createPortal } from 'react-dom'
-import { useLocation } from 'react-router'
 
 import { ApiError } from '../../api/client'
 import {
@@ -29,7 +28,6 @@ import {
   buildCreateWorkItemInput,
 } from '../../features/projects/workItemMapping'
 import { useResearchGroup } from '../../features/research-group/useResearchGroup'
-import { projectIdFromPath } from './projectQuickAccess'
 import { notifyWorkItemCreated } from './workItemInvalidation'
 import { SidebarIcon } from './Sidebar'
 
@@ -49,8 +47,13 @@ type DrawerContext = {
 }
 
 type ProjectLoadState =
-  | { status: 'idle' | 'loading' }
-  | { status: 'ready'; projects: EligibleProject[] }
+  | { status: 'idle' }
+  | { status: 'loading' }
+  | {
+      status: 'ready'
+      researchGroupId: number
+      projects: EligibleProject[]
+    }
   | { status: 'error'; message: string }
 
 const MENU_ITEM_CLASSES =
@@ -125,21 +128,33 @@ export function QuickCreate({
   onOpenChange: (open: boolean) => void
 }) {
   const { user } = useSession()
-  const { groups, loading: groupsLoading, error: groupsError } =
-    useResearchGroup()
-  const location = useLocation()
+  const {
+    groups,
+    loading: groupsLoading,
+    error: groupsError,
+    reloadResearchGroups,
+  } = useResearchGroup()
 
   const containerRef = useRef<HTMLDivElement | null>(null)
   const triggerRef = useRef<HTMLButtonElement | null>(null)
   const actionRef = useRef<HTMLButtonElement | null>(null)
   const projectRequestSeq = useRef(0)
   const contextRequestSeq = useRef(0)
+  const selectedResearchGroupIdRef = useRef<number | null>(null)
+  // Availability transition tracker for the selected Research
+  // Group: distinguishes "group disappeared and came back"
+  // (requires re-loading its Projects) from a harmless list
+  // refresh without any availability change (must NOT re-request).
+  const selectedGroupWasUnavailableRef = useRef(false)
   const selectedProjectIdRef = useRef<number | null>(null)
-  const allowRoutePreselectionRef = useRef(false)
 
   const [projectState, setProjectState] =
     useState<ProjectLoadState>({ status: 'idle' })
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const [selectedResearchGroupId, setSelectedResearchGroupId] =
+    useState<number | null>(null)
+  const [selectedResearchGroupName, setSelectedResearchGroupName] =
+    useState<string | null>(null)
   const [selectedProjectId, setSelectedProjectId] =
     useState<number | null>(null)
   const [contextLoadingProjectId, setContextLoadingProjectId] =
@@ -149,32 +164,33 @@ export function QuickCreate({
     useState<DrawerContext | null>(null)
   const [confirmation, setConfirmation] = useState<string | null>(null)
 
-  const loadEligibleProjects = useCallback(async () => {
-    const seq = ++projectRequestSeq.current
-    setProjectState({ status: 'loading' })
-
-    if (groupsLoading) return
-    if (groupsError) {
-      setProjectState({
-        status: 'error',
-        message: 'Projects could not be loaded.',
-      })
-      return
-    }
-
-    try {
-      const grouped = await Promise.all(
-        groups.map(async (group) => ({
-          group,
-          projects: await listProjects(group.id),
-        })),
+  // Loads only the eligible Projects of ONE explicitly selected
+  // Research Group (never the whole membership). Sequence +
+  // current-Research-Group guards make a delayed response from an
+  // earlier selection a strict no-op.
+  const loadProjectsForGroup = useCallback(
+    async (researchGroupId: number) => {
+      const group = groups.find(
+        (candidate) => candidate.id === researchGroupId,
       )
-      if (seq !== projectRequestSeq.current) return
+      if (!group) return
 
-      setProjectState({
-        status: 'ready',
-        projects: grouped.flatMap(({ group, projects }) =>
-          projects
+      const seq = ++projectRequestSeq.current
+      setProjectState({ status: 'loading' })
+
+      try {
+        const projects = await listProjects(group.id)
+        if (
+          seq !== projectRequestSeq.current ||
+          selectedResearchGroupIdRef.current !== group.id
+        ) {
+          return
+        }
+
+        setProjectState({
+          status: 'ready',
+          researchGroupId: group.id,
+          projects: projects
             .filter(
               (project) =>
                 project.archivedAt === null &&
@@ -185,16 +201,22 @@ export function QuickCreate({
               ...project,
               researchGroupName: group.name,
             })),
-        ),
-      })
-    } catch (error) {
-      if (seq !== projectRequestSeq.current) return
-      setProjectState({
-        status: 'error',
-        message: getErrorMessage(error, 'Projects could not be loaded.'),
-      })
-    }
-  }, [groups, groupsError, groupsLoading])
+        })
+      } catch (error) {
+        if (
+          seq !== projectRequestSeq.current ||
+          selectedResearchGroupIdRef.current !== group.id
+        ) {
+          return
+        }
+        setProjectState({
+          status: 'error',
+          message: getErrorMessage(error, 'Projects could not be loaded.'),
+        })
+      }
+    },
+    [groups],
+  )
 
   const readyProjects = useMemo(
     () =>
@@ -251,10 +273,12 @@ export function QuickCreate({
             'The Work Item form could not be loaded.',
           ),
         )
-        void loadEligibleProjects()
+        if (selectedResearchGroupIdRef.current !== null) {
+          void loadProjectsForGroup(selectedResearchGroupIdRef.current)
+        }
       }
     },
-    [loadEligibleProjects],
+    [loadProjectsForGroup],
   )
 
   const selectProject = useCallback(
@@ -264,7 +288,6 @@ export function QuickCreate({
       )
       if (!project) return
 
-      allowRoutePreselectionRef.current = false
       selectedProjectIdRef.current = project.id
       setSelectedProjectId(project.id)
       void loadProjectContext(project)
@@ -272,28 +295,71 @@ export function QuickCreate({
     [loadProjectContext, readyProjects],
   )
 
+  const selectResearchGroup = useCallback(
+    (researchGroupId: number) => {
+      const group = groups.find(
+        (candidate) => candidate.id === researchGroupId,
+      )
+      if (!group) return
+
+      // A fresh selection is by definition available; clear any
+      // stale unavailability flag left over from a previous
+      // selection.
+      selectedGroupWasUnavailableRef.current = false
+
+      // The previous Research Group context is explicitly
+      // invalidated: no in-flight Project listing or Work Item
+      // context response from it may apply, and the previous
+      // Project selection is discarded — never carried over into
+      // another Research Group.
+      ++projectRequestSeq.current
+      ++contextRequestSeq.current
+      selectedProjectIdRef.current = null
+      setSelectedProjectId(null)
+      setDrawerContext(null)
+      setContextLoadingProjectId(null)
+      setContextError(null)
+
+      selectedResearchGroupIdRef.current = group.id
+      setSelectedResearchGroupId(group.id)
+      setSelectedResearchGroupName(group.name)
+      void loadProjectsForGroup(group.id)
+    },
+    [groups, loadProjectsForGroup],
+  )
+
   const openWorkItemDrawer = useCallback(() => {
-    allowRoutePreselectionRef.current = true
+    // Global creation always starts WITHOUT an implicitly
+    // selected Research Group or Project — regardless of the
+    // current route.
+    ++projectRequestSeq.current
+    ++contextRequestSeq.current
+    selectedResearchGroupIdRef.current = null
+    selectedGroupWasUnavailableRef.current = false
     selectedProjectIdRef.current = null
+    setSelectedResearchGroupId(null)
+    setSelectedResearchGroupName(null)
     setSelectedProjectId(null)
     setDrawerContext(null)
     setContextError(null)
     setContextLoadingProjectId(null)
+    setProjectState({ status: 'idle' })
     setDrawerOpen(true)
     onOpenChange(false)
-    void loadEligibleProjects()
-  }, [loadEligibleProjects, onOpenChange])
+  }, [onOpenChange])
 
   useEffect(() => {
     void import('../../features/projects/WorkItemDrawer')
   }, [])
 
   useEffect(() => {
-    if (!open && !drawerOpen) return
-    void loadEligibleProjects()
-    if (open) requestAnimationFrame(() => actionRef.current?.focus())
-  }, [drawerOpen, loadEligibleProjects, open])
+    if (!open) return
+    requestAnimationFrame(() => actionRef.current?.focus())
+  }, [open])
 
+  // A selected Project must remain eligible in the loaded listing
+  // of its Research Group; if it no longer is (access changed),
+  // the Project-specific context is dropped.
   useEffect(() => {
     if (!drawerOpen || projectState.status !== 'ready') return
 
@@ -309,27 +375,50 @@ export function QuickCreate({
       setDrawerContext(null)
       setContextLoadingProjectId(null)
       setContextError(null)
+    }
+  }, [drawerOpen, projectState])
+
+  // The selected Research Group is part of the authenticated
+  // membership. If it stops being, keep the (stale) selection
+  // visible — never substitute another group — but invalidate the
+  // Project-specific context so creation is impossible. If it
+  // becomes accessible again after being unavailable, reload ONLY
+  // that group's eligible Projects — the Project stays unselected
+  // and must be chosen explicitly. A list refresh without an
+  // availability transition is a strict no-op (no repeated
+  // Project requests).
+  useEffect(() => {
+    const selectedId = selectedResearchGroupIdRef.current
+
+    if (selectedId === null) {
+      selectedGroupWasUnavailableRef.current = false
       return
     }
 
-    if (
-      !allowRoutePreselectionRef.current ||
-      selectedProjectIdRef.current !== null
-    ) {
-      return
-    }
-
-    allowRoutePreselectionRef.current = false
-    const routeProjectId = projectIdFromPath(location.pathname)
-    const routeProject = projectState.projects.find(
-      (project) => project.id === routeProjectId,
+    const available = groups.some(
+      (group) => group.id === selectedId,
     )
-    if (routeProject) {
-      selectedProjectIdRef.current = routeProject.id
-      setSelectedProjectId(routeProject.id)
-      void loadProjectContext(routeProject)
+
+    if (available) {
+      if (selectedGroupWasUnavailableRef.current) {
+        selectedGroupWasUnavailableRef.current = false
+        void loadProjectsForGroup(selectedId)
+      }
+      return
     }
-  }, [drawerOpen, loadProjectContext, location.pathname, projectState])
+
+    if (selectedGroupWasUnavailableRef.current) return
+
+    selectedGroupWasUnavailableRef.current = true
+    ++projectRequestSeq.current
+    ++contextRequestSeq.current
+    selectedProjectIdRef.current = null
+    setSelectedProjectId(null)
+    setDrawerContext(null)
+    setContextLoadingProjectId(null)
+    setContextError(null)
+    setProjectState({ status: 'idle' })
+  }, [groups, loadProjectsForGroup])
 
   useEffect(() => {
     const handleShortcut = (event: KeyboardEvent) => {
@@ -425,13 +514,19 @@ export function QuickCreate({
   }
 
   const closeDrawer = () => {
+    ++projectRequestSeq.current
     ++contextRequestSeq.current
+    selectedResearchGroupIdRef.current = null
+    selectedGroupWasUnavailableRef.current = false
     selectedProjectIdRef.current = null
     setDrawerOpen(false)
+    setSelectedResearchGroupId(null)
+    setSelectedResearchGroupName(null)
     setSelectedProjectId(null)
     setDrawerContext(null)
     setContextLoadingProjectId(null)
     setContextError(null)
+    setProjectState({ status: 'idle' })
   }
 
   return (
@@ -499,6 +594,18 @@ export function QuickCreate({
             assignees={contextReady ? drawerContext.assignees : []}
             parentItems={contextReady ? drawerContext.parentItems : []}
             projectPicker={{
+              researchGroups: groups.map((group) => ({
+                id: group.id,
+                name: group.name,
+              })),
+              selectedResearchGroupId,
+              selectedResearchGroupName,
+              researchGroupsLoading: groupsLoading,
+              researchGroupsError: groupsError,
+              onResearchGroupSelect: selectResearchGroup,
+              onResearchGroupsRetry: () => {
+                void reloadResearchGroups()
+              },
               projects: readyProjects.map((project) => ({
                 id: project.id,
                 name: project.name,
@@ -506,9 +613,7 @@ export function QuickCreate({
                 researchGroupName: project.researchGroupName,
               })),
               selectedProjectId,
-              loading:
-                projectState.status === 'idle' ||
-                projectState.status === 'loading',
+              loading: projectState.status === 'loading',
               error:
                 projectState.status === 'error'
                   ? projectState.message
@@ -518,7 +623,9 @@ export function QuickCreate({
                 if (contextError && selectedProject) {
                   void loadProjectContext(selectedProject)
                 } else {
-                  void loadEligibleProjects()
+                  if (selectedResearchGroupId !== null) {
+                    void loadProjectsForGroup(selectedResearchGroupId)
+                  }
                 }
               },
             }}

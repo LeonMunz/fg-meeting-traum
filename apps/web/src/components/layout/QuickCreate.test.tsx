@@ -26,7 +26,9 @@ const mocks = vi.hoisted(() => ({
   listProjectMemberships: vi.fn(),
   listProjectWorkItems: vi.fn(),
   createWorkItem: vi.fn(),
+  reloadResearchGroups: vi.fn(async () => {}),
   groupsLoading: false,
+  groupsError: null as string | null,
   groups: [
     { id: 11, name: 'FG Example', role: 'member' as const },
     { id: 12, name: 'Other Group', role: 'member' as const },
@@ -65,7 +67,8 @@ vi.mock('../../features/research-group/useResearchGroup', () => ({
   useResearchGroup: () => ({
     groups: mocks.groups,
     loading: mocks.groupsLoading,
-    error: null,
+    error: mocks.groupsError,
+    reloadResearchGroups: mocks.reloadResearchGroups,
   }),
 }))
 
@@ -194,16 +197,47 @@ async function openDrawer() {
   return screen.findByRole('dialog', { name: 'New work item' })
 }
 
-async function selectProject(name = 'Writable Project') {
-  const trigger = screen.getByRole('button', { name: 'Select project' })
-  fireEvent.click(trigger)
-  const listbox = await screen.findByRole('listbox', { name: 'Projects' })
-  fireEvent.click(within(listbox).getByRole('option', { name }))
+function researchGroupSelect() {
+  return screen.getByLabelText('Research Group') as HTMLSelectElement
+}
+
+function projectSelect() {
+  return screen.getByLabelText('Project') as HTMLSelectElement
+}
+
+async function selectResearchGroup(name: string) {
+  const group = mocks.groups.find((candidate) => candidate.name === name)
+  if (!group) throw new Error(`Unknown Research Group: ${name}`)
+  fireEvent.change(researchGroupSelect(), {
+    target: { value: String(group.id) },
+  })
+}
+
+async function selectProject(name: string) {
+  const select = projectSelect()
+  const option = (await within(select).findByRole(
+    'option',
+    { name },
+  )) as HTMLOptionElement
+  fireEvent.change(select, { target: { value: option.value } })
+}
+
+function checkedOption(select: HTMLSelectElement) {
+  return (
+    Array.from(select.querySelectorAll('option')).find(
+      (option) => option.value === select.value,
+    ) ?? null
+  )
 }
 
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.groupsLoading = false
+  mocks.groupsError = null
+  mocks.groups = [
+    { id: 11, name: 'FG Example', role: 'member' },
+    { id: 12, name: 'Other Group', role: 'member' },
+  ]
   vi.spyOn(navigator, 'platform', 'get').mockReturnValue('MacIntel')
   mocks.listProjects.mockImplementation(async (groupId: number) =>
     groupId === 11
@@ -266,32 +300,28 @@ afterEach(() => {
 })
 
 describe('global Work Item Quick Create', () => {
-  it('finishes loading Projects when the drawer opens before Research Groups are ready', async () => {
-    mocks.groupsLoading = true
-    const view = renderQuickCreate()
-
+  it('opens the drawer from the header + with both selectors unselected and no Project request', async () => {
+    renderQuickCreate()
     const dialog = await openDrawer()
-    fireEvent.click(
-      within(dialog).getByRole('button', { name: 'Select project' }),
-    )
-    const listbox = await screen.findByRole('listbox', { name: 'Projects' })
-    expect(within(listbox).getByText('Loading Projects…')).toBeVisible()
 
-    mocks.groupsLoading = false
-    view.rerender(
-      <MemoryRouter initialEntries={['/notes']}>
-        <Harness />
-      </MemoryRouter>,
+    // Neither context is implicitly selected, and no Project
+    // listing is fetched before an explicit Research Group choice.
+    expect(checkedOption(researchGroupSelect())?.textContent).toBe(
+      'Select research group…',
     )
-
-    expect(
-      await within(listbox).findByRole('option', {
-        name: 'Writable Project',
-      }),
-    ).toBeVisible()
+    expect(projectSelect()).toBeDisabled()
+    expect(checkedOption(projectSelect())?.textContent).toBe(
+      'Select a Research Group first',
+    )
+    expect(mocks.listProjects).not.toHaveBeenCalled()
+    expect(within(dialog).getByRole('button', { name: 'Create work item' }))
+      .toBeDisabled()
+    await waitFor(() =>
+      expect(document.activeElement).toBe(within(dialog).getByLabelText('Title')),
+    )
   })
 
-  it('opens the drawer directly from the menu and W without an intermediate selector', async () => {
+  it('opens the same unselected state from the menu W action without an intermediate selector', async () => {
     renderQuickCreate()
 
     const menu = await openActionMenu()
@@ -316,9 +346,12 @@ describe('global Work Item Quick Create', () => {
     const dialog = await screen.findByRole('dialog', {
       name: 'New work item',
     })
-    expect(
-      within(dialog).getByRole('button', { name: 'Select project' }),
-    ).toHaveTextContent('Select project…')
+    expect(checkedOption(researchGroupSelect())?.textContent).toBe(
+      'Select research group…',
+    )
+    expect(checkedOption(projectSelect())?.textContent).toBe(
+      'Select a Research Group first',
+    )
     expect(screen.queryByRole('menu', { name: 'Select Project' }))
       .not.toBeInTheDocument()
     await waitFor(() =>
@@ -326,7 +359,7 @@ describe('global Work Item Quick Create', () => {
     )
   })
 
-  it('opens the drawer directly on the platform shortcut and ignores repeat, IME, editors, and modal states', async () => {
+  it('opens the same unselected state on the platform shortcut and ignores repeat, IME, editors, and modal states', async () => {
     renderQuickCreate()
 
     fireEvent.keyDown(document, {
@@ -366,6 +399,12 @@ describe('global Work Item Quick Create', () => {
     // The shortcut skips the Quick Create menu entirely.
     expect(screen.queryByRole('menu', { name: 'Quick create' }))
       .not.toBeInTheDocument()
+    expect(checkedOption(researchGroupSelect())?.textContent).toBe(
+      'Select research group…',
+    )
+    expect(checkedOption(projectSelect())?.textContent).toBe(
+      'Select a Research Group first',
+    )
     await waitFor(() =>
       expect(document.activeElement).toBe(within(dialog).getByLabelText('Title')),
     )
@@ -389,7 +428,7 @@ describe('global Work Item Quick Create', () => {
     ).toBeVisible()
   })
 
-  it('opens the drawer with Ctrl+Alt+K on Windows and Linux platforms', async () => {
+  it('opens the drawer on Ctrl+Alt+K on Windows and Linux platforms', async () => {
     vi.restoreAllMocks()
     vi.spyOn(navigator, 'platform', 'get').mockReturnValue('Win32')
     renderQuickCreate()
@@ -403,51 +442,269 @@ describe('global Work Item Quick Create', () => {
     ).toBeVisible()
   })
 
-  it('selects only writable active Projects in the searchable grouped header picker and creates once', async () => {
+  it('does NOT preselect a Research Group or Project from the current Project route', async () => {
+    renderQuickCreate('/projects/7/work-items')
+    const dialog = await openDrawer()
+
+    expect(checkedOption(researchGroupSelect())?.textContent).toBe(
+      'Select research group…',
+    )
+    expect(checkedOption(projectSelect())?.textContent).toBe(
+      'Select a Research Group first',
+    )
+    expect(mocks.listProjects).not.toHaveBeenCalled()
+    expect(within(dialog).getByRole('button', { name: 'Create work item' }))
+      .toBeDisabled()
+    expect(screen.getByLabelText('Current location')).toHaveTextContent(
+      '/projects/7/work-items',
+    )
+  })
+
+  it('selecting a Research Group exposes only that group\'s writable active Projects without picking one', async () => {
+    renderQuickCreate('/notes')
+    await openDrawer()
+
+    await selectResearchGroup('FG Example')
+    expect(mocks.listProjects).toHaveBeenCalledWith(11)
+
+    const select = projectSelect()
+    await waitFor(() => expect(select).toBeEnabled())
+    const optionNames = Array.from(
+      select.querySelectorAll('option'),
+    ).map((option) => option.textContent)
+
+    expect(optionNames).toContain('Writable Project')
+    // Viewer / archived Projects are not eligible…
+    expect(optionNames).not.toContain('Viewer Project')
+    expect(optionNames).not.toContain('Archived Project')
+    // …and Projects of other Research Groups never appear.
+    expect(optionNames).not.toContain('Second Project')
+
+    // Selecting the group never implicitly chooses a Project.
+    expect(checkedOption(select)?.textContent).toBe('Select project…')
+    expect(
+      screen.getByRole('button', { name: 'Create work item' }),
+    ).toBeDisabled()
+  })
+
+  it('switching to another Research Group clears the previously selected Project', async () => {
+    renderQuickCreate('/notes')
+    const dialog = await openDrawer()
+    await selectResearchGroup('FG Example')
+    await selectProject('Writable Project')
+    await waitFor(() =>
+      expect(
+        within(dialog).getByRole('radio', { name: 'Experiment step' }),
+      ).toBeChecked(),
+    )
+
+    await selectResearchGroup('Other Group')
+
+    await waitFor(() =>
+      expect(checkedOption(projectSelect())?.textContent).toBe(
+        'Select project…',
+      ),
+    )
+    expect(mocks.listProjects).toHaveBeenLastCalledWith(12)
+    expect(
+      within(dialog).queryByRole('radio', { name: 'Experiment step' }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Create work item' }),
+    ).toBeDisabled()
+
+    await selectProject('Second Project')
+    await waitFor(() =>
+      expect(
+        within(dialog).getByRole('radio', { name: 'Second task' }),
+      ).toBeChecked(),
+    )
+  })
+
+  it('selecting a Project loads its configuration and defaults to its canonical Task', async () => {
+    renderQuickCreate('/notes')
+    const dialog = await openDrawer()
+    await selectResearchGroup('Other Group')
+    await selectProject('Second Project')
+
+    // Project B's own configuration is loaded and its canonical
+    // Task (kind === 'task') is the default type.
+    expect(mocks.getProjectWorkItemConfiguration).toHaveBeenCalledWith(10)
+    await waitFor(() =>
+      expect(
+        within(dialog).getByRole('radio', { name: 'Second task' }),
+      ).toBeChecked(),
+    )
+    expect(
+      within(dialog).queryByRole('radio', { name: 'Milestone' }),
+    ).not.toBeInTheDocument()
+    expect(
+      within(dialog).getByRole('button', { name: 'Create work item' }),
+    ).toBeDisabled()
+
+    // …and a Title unlocks creation in Project B.
+    fireEvent.change(within(dialog).getByLabelText('Title'), {
+      target: { value: 'A task in B' },
+    })
+    expect(
+      within(dialog).getByRole('button', { name: 'Create work item' }),
+    ).toBeEnabled()
+  })
+
+  it('preserves Title/Description across context changes but resets Project-specific selections', async () => {
+    renderQuickCreate('/notes')
+    const dialog = await openDrawer()
+    await selectResearchGroup('FG Example')
+    await selectProject('Writable Project')
+    await waitFor(() =>
+      expect(
+        within(dialog).getByRole('radio', { name: 'Experiment step' }),
+      ).toBeChecked(),
+    )
+
+    fireEvent.change(within(dialog).getByLabelText('Title'), {
+      target: { value: 'Preserved title' },
+    })
+    fireEvent.change(within(dialog).getByLabelText(/Description/), {
+      target: { value: 'Preserved description' },
+    })
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'Milestone' }))
+    fireEvent.change(within(dialog).getByLabelText(/Parent/), {
+      target: { value: '80' },
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add assignee…' }))
+    fireEvent.click(
+      within(dialog).getByRole('checkbox', { name: /Alex Rivera/ }),
+    )
+
+    // Context change: new Research Group → new Project.
+    await selectResearchGroup('Other Group')
+    await selectProject('Second Project')
+
+    await waitFor(() =>
+      expect(
+        within(dialog).getByRole('radio', { name: 'Second task' }),
+      ).toBeChecked(),
+    )
+    expect(within(dialog).getByLabelText('Title')).toHaveValue('Preserved title')
+    expect(within(dialog).getByLabelText(/Description/)).toHaveValue(
+      'Preserved description',
+    )
+    // Project-bound state did not survive the switch.
+    expect(within(dialog).getByLabelText(/Parent/)).toHaveValue('')
+    expect(within(dialog).queryByText('Alex Rivera')).not.toBeInTheDocument()
+    expect(
+      within(dialog).queryByRole('radio', { name: 'Milestone' }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('ignores a delayed Project A context response after switching to Project B', async () => {
+    let resolveFirst:
+      | ((value: ApiProjectWorkItemConfiguration) => void)
+      | undefined
+    mocks.getProjectWorkItemConfiguration.mockImplementation(
+      (projectId: number) =>
+        projectId === 7
+          ? new Promise<ApiProjectWorkItemConfiguration>((resolve) => {
+              resolveFirst = resolve
+            })
+          : Promise.resolve(secondConfiguration),
+    )
+
+    renderQuickCreate()
+    const dialog = await openDrawer()
+    await selectResearchGroup('FG Example')
+    await selectProject('Writable Project')
+
+    // Switch Research Groups while Project A's context is pending.
+    await selectResearchGroup('Other Group')
+    await selectProject('Second Project')
+    await waitFor(() =>
+      expect(
+        within(dialog).getByRole('radio', { name: 'Second task' }),
+      ).toBeChecked(),
+    )
+    expect(checkedOption(projectSelect())?.value).toBe('10')
+
+    // Project A's delayed response must be a strict no-op.
+    await act(async () => resolveFirst?.(configuration))
+    expect(
+      within(dialog).getByRole('radio', { name: 'Second task' }),
+    ).toBeChecked()
+    expect(
+      within(dialog).queryByRole('radio', { name: 'Experiment step' }),
+    ).not.toBeInTheDocument()
+    expect(checkedOption(projectSelect())?.value).toBe('10')
+  })
+
+  it('ignores a delayed Research Group A project listing after switching to Research Group B', async () => {
+    let resolveFirst: ((value: ApiProject[]) => void) | undefined
+    mocks.listProjects.mockImplementation((groupId: number) =>
+      groupId === 11
+        ? new Promise<ApiProject[]>((resolve) => {
+            resolveFirst = resolve
+          })
+        : Promise.resolve([secondProject]),
+    )
+
+    renderQuickCreate()
+    await openDrawer()
+    await selectResearchGroup('FG Example')
+    await selectResearchGroup('Other Group')
+    await selectProject('Second Project')
+    await waitFor(() =>
+      expect(checkedOption(projectSelect())?.value).toBe('10'),
+    )
+
+    // Research Group A's delayed listing must be a strict no-op.
+    await act(async () => resolveFirst?.([writableProject]))
+    expect(checkedOption(researchGroupSelect())?.value).toBe('12')
+    const optionNames = Array.from(
+      projectSelect().querySelectorAll('option'),
+    ).map((option) => option.textContent)
+    expect(optionNames).not.toContain('Writable Project')
+  })
+
+  it('creation is impossible before a valid context exists and possible once it does', async () => {
+    renderQuickCreate('/notes')
+    const dialog = await openDrawer()
+    const createButton = within(dialog).getByRole('button', {
+      name: 'Create work item',
+    })
+
+    // A Title alone never unlocks creation…
+    fireEvent.change(within(dialog).getByLabelText('Title'), {
+      target: { value: 'No context yet' },
+    })
+    expect(createButton).toBeDisabled()
+
+    await selectResearchGroup('FG Example')
+    expect(createButton).toBeDisabled()
+
+    await selectProject('Writable Project')
+    await waitFor(() => expect(createButton).toBeEnabled())
+  })
+
+  it('creates exactly once in the explicitly selected Project and invalidates without navigating', async () => {
     const createdEvents: Event[] = []
     const listener = (event: Event) => createdEvents.push(event)
     window.addEventListener('fg-workspace:work-item-created', listener)
 
     const dialog = await (renderQuickCreate('/notes'), openDrawer())
-    const createButton = within(dialog).getByRole('button', {
-      name: 'Create work item',
-    })
-    expect(createButton).toBeDisabled()
-
-    fireEvent.click(
-      within(dialog).getByRole('button', { name: 'Select project' }),
-    )
-    const listbox = await screen.findByRole('listbox', { name: 'Projects' })
+    await selectResearchGroup('FG Example')
+    await selectProject('Writable Project')
     await waitFor(() =>
       expect(
-        within(listbox).getByRole('group', { name: 'FG Example' }),
-      ).toBeVisible(),
-    )
-    expect(
-      within(listbox).getByRole('group', { name: 'Other Group' }),
-    ).toBeVisible()
-    expect(within(listbox).queryByText('Viewer Project')).not.toBeInTheDocument()
-    expect(within(listbox).queryByText('Archived Project')).not.toBeInTheDocument()
-
-    const search = screen.getByLabelText('Search projects')
-    fireEvent.change(search, { target: { value: 'writable' } })
-    expect(
-      within(listbox).getByRole('option', { name: 'Writable Project' }),
-    ).toBeVisible()
-    expect(
-      within(listbox).queryByRole('option', { name: 'Second Project' }),
-    ).not.toBeInTheDocument()
-
-    fireEvent.click(
-      within(listbox).getByRole('option', { name: 'Writable Project' }),
-    )
-    await waitFor(() =>
-      expect(within(dialog).getByText('Experiment step')).toBeVisible(),
+        within(dialog).getByRole('radio', { name: 'Experiment step' }),
+      ).toBeChecked(),
     )
     expect(within(dialog).queryByText('Vera Viewer')).not.toBeInTheDocument()
 
     fireEvent.change(within(dialog).getByLabelText('Title'), {
       target: { value: 'Global task' },
+    })
+    const createButton = within(dialog).getByRole('button', {
+      name: 'Create work item',
     })
     fireEvent.click(createButton)
     fireEvent.click(createButton)
@@ -468,118 +725,431 @@ describe('global Work Item Quick Create', () => {
     window.removeEventListener('fg-workspace:work-item-created', listener)
   })
 
-  it('preselects a writable Project route while keeping the header picker available', async () => {
-    renderQuickCreate('/projects/7/work-items')
-    const dialog = await openDrawer()
-
-    await waitFor(() =>
-      expect(
-        within(dialog).getByRole('button', { name: 'Select project' }),
-      ).toHaveTextContent('Writable Project'),
-    )
-    expect(screen.getByLabelText('Current location')).toHaveTextContent(
-      '/projects/7/work-items',
-    )
-  })
-
-  it('preserves title and description and resets Project-specific values when switching', async () => {
+  it('closes and reopens with both context selections reset', async () => {
     renderQuickCreate('/notes')
     const dialog = await openDrawer()
+    await selectResearchGroup('FG Example')
     await selectProject('Writable Project')
-    await waitFor(() =>
-      expect(within(dialog).getByText('Experiment step')).toBeVisible(),
-    )
-
     fireEvent.change(within(dialog).getByLabelText('Title'), {
-      target: { value: 'Preserved title' },
+      target: { value: 'Draft from first session' },
     })
-    fireEvent.change(within(dialog).getByLabelText(/Description/), {
-      target: { value: 'Preserved description' },
-    })
-    fireEvent.click(within(dialog).getByRole('radio', { name: 'Milestone' }))
-    fireEvent.change(within(dialog).getByLabelText('Parent'), {
-      target: { value: '80' },
-    })
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Add assignee…' }))
+
     fireEvent.click(
-      within(dialog).getByRole('checkbox', { name: /Alex Rivera/ }),
+      within(dialog).getByRole('button', { name: 'Cancel' }),
     )
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
 
-    await selectProject('Second Project')
-
-    await waitFor(() =>
-      expect(within(dialog).getByText('Second task')).toBeVisible(),
+    const reopened = await openDrawer()
+    expect(checkedOption(researchGroupSelect())?.textContent).toBe(
+      'Select research group…',
     )
-    expect(within(dialog).getByLabelText('Title')).toHaveValue('Preserved title')
-    expect(within(dialog).getByLabelText(/Description/)).toHaveValue(
-      'Preserved description',
+    expect(checkedOption(projectSelect())?.textContent).toBe(
+      'Select a Research Group first',
     )
-    await waitFor(() =>
-      expect(within(dialog).getByRole('radio', { name: 'Second task' }))
-        .toBeChecked(),
-    )
-    expect(within(dialog).getByLabelText('Parent')).toHaveValue('')
-    expect(within(dialog).queryByText('Alex Rivera')).not.toBeInTheDocument()
-  })
-
-  it('operates the header picker by keyboard and dismisses it before the drawer', async () => {
-    renderQuickCreate()
-    const dialog = await openDrawer()
-    const trigger = within(dialog).getByRole('button', {
-      name: 'Select project',
-    })
-
-    trigger.focus()
-    fireEvent.keyDown(trigger, { key: 'ArrowDown' })
+    expect(within(reopened).getByLabelText('Title')).toHaveValue('')
     expect(
-      await screen.findByRole('listbox', { name: 'Projects' }),
-    ).toBeVisible()
-    await waitFor(() =>
-      expect(document.activeElement).toBe(screen.getByLabelText('Search projects')),
-    )
-    fireEvent.keyDown(document.activeElement as Element, { key: 'ArrowDown' })
-    await waitFor(() =>
-      expect(document.activeElement).toBe(
-        screen.getByRole('option', { name: 'Writable Project' }),
-      ),
-    )
-
-    fireEvent.keyDown(document, { key: 'Escape' })
-    expect(screen.queryByRole('listbox', { name: 'Projects' }))
-      .not.toBeInTheDocument()
-    expect(dialog).toBeVisible()
-    await waitFor(() => expect(document.activeElement).toBe(trigger))
+      within(reopened).getByRole('button', { name: 'Create work item' }),
+    ).toBeDisabled()
   })
 
-  it('shows empty and loading-failure states inside the drawer picker without guessing context', async () => {
-    mocks.listProjects.mockResolvedValue([viewerProject, archivedProject])
+  it('shows a loading state and recovers when the drawer opens before Research Groups are ready', async () => {
+    mocks.groupsLoading = true
+    const view = renderQuickCreate()
+
+    await openDrawer()
+    expect(researchGroupSelect()).toBeDisabled()
+    expect(checkedOption(researchGroupSelect())?.textContent).toBe(
+      'Loading research groups…',
+    )
+
+    mocks.groupsLoading = false
+    view.rerender(
+      <MemoryRouter initialEntries={['/notes']}>
+        <Harness />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(researchGroupSelect()).toBeEnabled())
+    expect(
+      within(researchGroupSelect()).getByRole('option', {
+        name: 'FG Example',
+      }),
+    ).toBeVisible()
+    // Still no implicit selection and no Project request.
+    expect(checkedOption(projectSelect())?.textContent).toBe(
+      'Select a Research Group first',
+    )
+    expect(mocks.listProjects).not.toHaveBeenCalled()
+  })
+
+  it('shows an empty Research Group state without guessing context', async () => {
+    mocks.groups = []
     renderQuickCreate('/settings/appearance')
     const dialog = await openDrawer()
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Select project' }))
-    expect(await screen.findByText('No writable Projects')).toBeVisible()
-    expect(mocks.getProjectWorkItemConfiguration).not.toHaveBeenCalled()
-    cleanup()
 
-    mocks.listProjects.mockRejectedValue(new Error('Access unavailable'))
-    renderQuickCreate('/projects/7/work-items')
-    const failedDialog = await openDrawer()
-    fireEvent.click(
-      within(failedDialog).getByRole('button', { name: 'Select project' }),
+    expect(researchGroupSelect()).toBeDisabled()
+    expect(checkedOption(researchGroupSelect())?.textContent).toBe(
+      'No Research Groups',
     )
-    expect(await screen.findByRole('alert')).toHaveTextContent(
+    expect(
+      within(dialog).getByRole('button', { name: 'Create work item' }),
+    ).toBeDisabled()
+    expect(mocks.listProjects).not.toHaveBeenCalled()
+  })
+
+  it('shows a Research Group error with Retry and recovers', async () => {
+    mocks.groupsError = 'Groups unavailable'
+    const view = renderQuickCreate('/notes')
+    const dialog = await openDrawer()
+
+    expect(researchGroupSelect()).toBeDisabled()
+    expect(checkedOption(researchGroupSelect())?.textContent).toBe(
+      'Research groups unavailable',
+    )
+    expect(within(dialog).getByRole('alert')).toHaveTextContent(
+      'Groups unavailable',
+    )
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Try again' }))
+    expect(mocks.reloadResearchGroups).toHaveBeenCalledTimes(1)
+
+    mocks.groupsError = null
+    view.rerender(
+      <MemoryRouter initialEntries={['/notes']}>
+        <Harness />
+      </MemoryRouter>,
+    )
+    await waitFor(() => expect(researchGroupSelect()).toBeEnabled())
+    expect(
+      within(researchGroupSelect()).getByRole('option', {
+        name: 'FG Example',
+      }),
+    ).toBeVisible()
+  })
+
+  it('keeps the selected Research Group visible (never substituted) when it becomes unavailable', async () => {
+    const view = renderQuickCreate('/notes')
+    const dialog = await openDrawer()
+    await selectResearchGroup('FG Example')
+    await waitFor(() => expect(projectSelect()).toBeEnabled())
+
+    // The group disappears from the authenticated membership.
+    mocks.groups = [
+      { id: 12, name: 'Other Group', role: 'member' },
+    ]
+    view.rerender(
+      <MemoryRouter initialEntries={['/notes']}>
+        <Harness />
+      </MemoryRouter>,
+    )
+
+    // The stale selection stays visible and selectable context is
+    // gone — no other Research Group is implicitly chosen.
+    expect(checkedOption(researchGroupSelect())?.textContent).toBe(
+      'FG Example',
+    )
+    expect(checkedOption(researchGroupSelect())?.disabled).toBe(true)
+    expect(
+      within(dialog).getByRole('alert'),
+    ).toHaveTextContent('The selected Research Group is no longer available.')
+    expect(projectSelect()).toBeDisabled()
+    expect(
+      within(dialog).getByRole('button', { name: 'Create work item' }),
+    ).toBeDisabled()
+  })
+
+  it('restores usable Project selection after a failed Research Group reload is retried successfully', async () => {
+    // Project A's context request is deferred so the response in
+    // flight at the moment the reload fails can be held back as a
+    // stale candidate for the recovery assertions.
+    let resolveProjectAContext:
+      | ((value: ApiProjectWorkItemConfiguration) => void)
+      | undefined
+    mocks.getProjectWorkItemConfiguration.mockImplementation(
+      (projectId: number) => {
+        if (projectId === 7 && resolveProjectAContext === undefined) {
+          return new Promise<ApiProjectWorkItemConfiguration>(
+            (resolve) => {
+              resolveProjectAContext = resolve
+            },
+          )
+        }
+        return projectId === 10
+          ? secondConfiguration
+          : configuration
+      },
+    )
+
+    const view = renderQuickCreate('/notes')
+    const dialog = await openDrawer()
+
+    // The Work Item draft is entered before any context exists and
+    // must survive the whole failure/recovery sequence.
+    fireEvent.change(within(dialog).getByLabelText('Title'), {
+      target: { value: 'Surviving title' },
+    })
+    fireEvent.change(within(dialog).getByLabelText(/Description/), {
+      target: { value: 'Surviving description' },
+    })
+
+    // Research Group A and Project A are initially selected.
+    await selectResearchGroup('FG Example')
+    await selectProject('Writable Project')
+    expect(checkedOption(researchGroupSelect())?.textContent).toBe(
+      'FG Example',
+    )
+    expect(checkedOption(projectSelect())?.textContent).toBe(
+      'Writable Project',
+    )
+
+    // The provider's reload fails: the group list becomes empty
+    // and the failure is surfaced.
+    mocks.groups = []
+    mocks.groupsError = 'Research groups could not be loaded'
+    view.rerender(
+      <MemoryRouter initialEntries={['/notes']}>
+        <Harness />
+      </MemoryRouter>,
+    )
+
+    // Project A is invalidated and creation is impossible; the
+    // last known Research Group name stays visible — no other
+    // group is silently substituted.
+    expect(checkedOption(researchGroupSelect())?.textContent).toBe(
+      'FG Example',
+    )
+    expect(checkedOption(researchGroupSelect())?.disabled).toBe(true)
+    expect(researchGroupSelect()).toBeDisabled()
+    expect(projectSelect()).toBeDisabled()
+    expect(checkedOption(projectSelect())?.textContent).toBe(
+      'Select project…',
+    )
+    expect(
+      within(dialog).getByRole('button', { name: 'Create work item' }),
+    ).toBeDisabled()
+    expect(within(dialog).getByRole('alert')).toHaveTextContent(
+      'Research groups could not be loaded',
+    )
+
+    // The retry restores Group A.
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Try again' }),
+    )
+    expect(mocks.reloadResearchGroups).toHaveBeenCalledTimes(1)
+    mocks.groups = [
+      { id: 11, name: 'FG Example', role: 'member' },
+      { id: 12, name: 'Other Group', role: 'member' },
+    ]
+    mocks.groupsError = null
+    view.rerender(
+      <MemoryRouter initialEntries={['/notes']}>
+        <Harness />
+      </MemoryRouter>,
+    )
+
+    // Only Group A's eligible Projects are loaded again — and NO
+    // Project is selected automatically.
+    expect(mocks.listProjects).toHaveBeenCalledTimes(2)
+    expect(mocks.listProjects).toHaveBeenLastCalledWith(11)
+    await waitFor(() => expect(projectSelect()).toBeEnabled())
+    expect(researchGroupSelect()).toBeEnabled()
+    expect(checkedOption(researchGroupSelect())?.textContent).toBe(
+      'FG Example',
+    )
+    expect(checkedOption(projectSelect())?.textContent).toBe(
+      'Select project…',
+    )
+    expect(
+      within(dialog).getByRole('button', { name: 'Create work item' }),
+    ).toBeDisabled()
+
+    // The stale Project A context response from before the
+    // failure is a strict no-op: it neither resurrects the old
+    // context nor auto-selects Project A.
+    await act(async () => resolveProjectAContext?.(configuration))
+    expect(checkedOption(projectSelect())?.textContent).toBe(
+      'Select project…',
+    )
+    expect(
+      within(dialog).queryByRole('radio', { name: 'Experiment step' }),
+    ).not.toBeInTheDocument()
+    expect(
+      within(dialog).getByRole('button', { name: 'Create work item' }),
+    ).toBeDisabled()
+
+    // Explicitly choosing Project A again restores its canonical
+    // Task default and re-enables creation.
+    await selectProject('Writable Project')
+    await waitFor(() =>
+      expect(
+        within(dialog).getByRole('radio', { name: 'Experiment step' }),
+      ).toBeChecked(),
+    )
+    expect(
+      within(dialog).getByRole('button', { name: 'Create work item' }),
+    ).toBeEnabled()
+
+    // The draft survived the entire sequence.
+    expect(within(dialog).getByLabelText('Title')).toHaveValue(
+      'Surviving title',
+    )
+    expect(within(dialog).getByLabelText(/Description/)).toHaveValue(
+      'Surviving description',
+    )
+  })
+
+  it('keeps a permanently unavailable Research Group blocked without substituting or re-requesting', async () => {
+    const view = renderQuickCreate('/notes')
+    const dialog = await openDrawer()
+    await selectResearchGroup('FG Example')
+    await waitFor(() => expect(projectSelect()).toBeEnabled())
+    expect(mocks.listProjects).toHaveBeenCalledTimes(1)
+
+    // A failed reload empties the group list.
+    mocks.groups = []
+    mocks.groupsError = 'Research groups could not be loaded'
+    view.rerender(
+      <MemoryRouter initialEntries={['/notes']}>
+        <Harness />
+      </MemoryRouter>,
+    )
+
+    expect(checkedOption(researchGroupSelect())?.textContent).toBe(
+      'FG Example',
+    )
+    expect(projectSelect()).toBeDisabled()
+    expect(
+      within(dialog).getByRole('button', { name: 'Create work item' }),
+    ).toBeDisabled()
+
+    // A retry that fails again does NOT substitute another group,
+    // does NOT select a Project, and does NOT issue another
+    // Project request.
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Try again' }),
+    )
+    expect(mocks.reloadResearchGroups).toHaveBeenCalledTimes(1)
+    mocks.groups = []
+    view.rerender(
+      <MemoryRouter initialEntries={['/notes']}>
+        <Harness />
+      </MemoryRouter>,
+    )
+
+    expect(checkedOption(researchGroupSelect())?.textContent).toBe(
+      'FG Example',
+    )
+    expect(researchGroupSelect()).toBeDisabled()
+    expect(projectSelect()).toBeDisabled()
+    expect(checkedOption(projectSelect())?.textContent).toBe(
+      'Select project…',
+    )
+    expect(
+      within(dialog).queryByRole('option', { name: 'Other Group' }),
+    ).not.toBeInTheDocument()
+    expect(mocks.listProjects).toHaveBeenCalledTimes(1)
+    expect(
+      within(dialog).getByRole('button', { name: 'Create work item' }),
+    ).toBeDisabled()
+  })
+
+  it('does not repeat Project requests on a harmless Research Group list refresh', async () => {
+    const view = renderQuickCreate('/notes')
+    const dialog = await openDrawer()
+    await selectResearchGroup('FG Example')
+    await selectProject('Writable Project')
+    await waitFor(() =>
+      expect(
+        within(dialog).getByRole('radio', { name: 'Experiment step' }),
+      ).toBeChecked(),
+    )
+    expect(mocks.listProjects).toHaveBeenCalledTimes(1)
+
+    // A successful provider refresh produces a NEW groups array
+    // with the SAME membership — no availability transition.
+    mocks.groups = [
+      { id: 11, name: 'FG Example', role: 'member' },
+      { id: 12, name: 'Other Group', role: 'member' },
+    ]
+    view.rerender(
+      <MemoryRouter initialEntries={['/notes']}>
+        <Harness />
+      </MemoryRouter>,
+    )
+
+    // Selection and loaded context are untouched and no repeated
+    // Project listing request is issued.
+    expect(checkedOption(researchGroupSelect())?.textContent).toBe(
+      'FG Example',
+    )
+    expect(checkedOption(projectSelect())?.textContent).toBe(
+      'Writable Project',
+    )
+    expect(
+      within(dialog).getByRole('radio', { name: 'Experiment step' }),
+    ).toBeChecked()
+    expect(mocks.listProjects).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows a missing-writable-Projects state for a selected Research Group', async () => {
+    mocks.listProjects.mockResolvedValue([viewerProject, archivedProject])
+    renderQuickCreate('/notes')
+    const dialog = await openDrawer()
+
+    await selectResearchGroup('FG Example')
+    await waitFor(() =>
+      expect(checkedOption(projectSelect())?.textContent).toBe(
+        'No writable Projects',
+      ),
+    )
+    expect(projectSelect()).toBeDisabled()
+    expect(within(dialog).getByText(/owner or member access/)).toBeVisible()
+    expect(mocks.getProjectWorkItemConfiguration).not.toHaveBeenCalled()
+  })
+
+  it('shows a Project listing failure with Retry and recovers', async () => {
+    let shouldFail = true
+    mocks.listProjects.mockImplementation(async (groupId: number) => {
+      if (shouldFail && groupId === 11) {
+        throw new Error('Access unavailable')
+      }
+      return groupId === 11
+        ? [writableProject]
+        : [secondProject]
+    })
+
+    renderQuickCreate('/notes')
+    const dialog = await openDrawer()
+    await selectResearchGroup('FG Example')
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
       'Access unavailable',
     )
+    expect(projectSelect()).toBeDisabled()
     expect(mocks.getProjectWorkItemConfiguration).not.toHaveBeenCalled()
+
+    shouldFail = false
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Try again' }))
+    await waitFor(() => expect(projectSelect()).toBeEnabled())
+    expect(
+      within(projectSelect()).getByRole('option', {
+        name: 'Writable Project',
+      }),
+    ).toBeVisible()
   })
 
   it('keeps entered values and the drawer open after a submission error', async () => {
     mocks.createWorkItem.mockRejectedValueOnce(
       new Error('Your Project access changed.'),
     )
-    renderQuickCreate('/projects/7/work-items')
+    renderQuickCreate('/notes')
     const dialog = await openDrawer()
+    await selectResearchGroup('FG Example')
+    await selectProject('Writable Project')
     await waitFor(() =>
-      expect(within(dialog).getByText('Experiment step')).toBeVisible(),
+      expect(
+        within(dialog).getByRole('radio', { name: 'Experiment step' }),
+      ).toBeChecked(),
     )
 
     const title = within(dialog).getByLabelText('Title')
@@ -593,31 +1163,5 @@ describe('global Work Item Quick Create', () => {
     )
     expect(title).toHaveValue('Keep this draft')
     expect(dialog).toBeVisible()
-  })
-
-  it('ignores a stale Project context response after switching Projects', async () => {
-    let resolveFirst:
-      | ((value: ApiProjectWorkItemConfiguration) => void)
-      | undefined
-    mocks.getProjectWorkItemConfiguration.mockImplementation(
-      (projectId: number) =>
-        projectId === 7
-          ? new Promise<ApiProjectWorkItemConfiguration>((resolve) => {
-              resolveFirst = resolve
-            })
-          : Promise.resolve(secondConfiguration),
-    )
-
-    renderQuickCreate()
-    const dialog = await openDrawer()
-    await selectProject('Writable Project')
-    await selectProject('Second Project')
-    await waitFor(() =>
-      expect(within(dialog).getByText('Second task')).toBeVisible(),
-    )
-
-    await act(async () => resolveFirst?.(configuration))
-    expect(within(dialog).getByText('Second task')).toBeVisible()
-    expect(within(dialog).queryByText('Experiment step')).not.toBeInTheDocument()
   })
 })

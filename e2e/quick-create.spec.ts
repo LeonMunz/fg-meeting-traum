@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test'
 
 import { login, openProject, openProjects } from './helpers'
 
-test('global Quick Create opens the Work Item drawer directly and refreshes My Work', async ({
+test('global Quick Create opens the Work Item drawer with explicit Research Group + Project selection and refreshes My Work', async ({
   page,
 }) => {
   const title = `Quick Create ${Date.now()}`
@@ -46,12 +46,46 @@ test('global Quick Create opens the Work Item drawer directly and refreshes My W
   const dialog = page.getByRole('dialog', { name: 'New work item' })
   await expect(dialog).toBeVisible()
   await expect(dialog.getByLabel('Title')).toBeFocused()
-  await dialog.getByRole('button', { name: 'Select project' }).click()
-  const projectPicker = dialog.getByRole('listbox', { name: 'Projects' })
-  await expect(projectPicker).toBeVisible()
-  await dialog.getByLabel('Search projects').fill('Paper XYZ')
-  await projectPicker.getByRole('option', { name: 'Paper XYZ' }).click()
-  await expect(dialog.getByText('Paper XYZ', { exact: true })).toBeVisible()
+
+  // Global creation starts WITHOUT any implicit context: both
+  // selectors are unselected and the Project control is dependent
+  // on the Research Group choice.
+  const researchGroupSelect = dialog.getByRole('combobox', {
+    name: 'Research Group',
+    exact: true,
+  })
+  const projectSelect = dialog.getByRole('combobox', {
+    name: 'Project',
+    exact: true,
+  })
+  await expect(researchGroupSelect).toBeEnabled()
+  await expect(
+    researchGroupSelect.locator('option:checked'),
+  ).toHaveText('Select research group…')
+  await expect(projectSelect).toBeDisabled()
+  await expect(projectSelect.locator('option:checked')).toHaveText(
+    'Select a Research Group first',
+  )
+  // Creation is impossible before a valid context exists.
+  await expect(
+    dialog.getByRole('button', { name: 'Create work item' }),
+  ).toBeDisabled()
+
+  // Explicit Research Group selection exposes only that group's
+  // writable Projects — and never preselects one of them.
+  await researchGroupSelect.selectOption({ label: 'FG Example' })
+  await expect(projectSelect).toBeEnabled()
+  await expect(projectSelect.locator('option:checked')).toHaveText(
+    'Select project…',
+  )
+  await expect(
+    projectSelect.locator('option', { hasText: 'Paper XYZ' }),
+  ).toHaveCount(1)
+
+  await projectSelect.selectOption({ label: 'Paper XYZ' })
+  await expect(projectSelect.locator('option:checked')).toHaveText(
+    'Paper XYZ',
+  )
   await dialog.getByLabel('Title').fill(title)
 
   await dialog.getByRole('button', { name: 'Add assignee…' }).click()
@@ -70,6 +104,9 @@ test('global Quick Create opens the Work Item drawer directly and refreshes My W
   await expect(page).toHaveURL(/\/my-work$/)
   expect(createRequests).toBe(1)
 
+  // Opening the same global Quick Create from a writable Project
+  // route still starts WITHOUT preselection (no implicit context
+  // from the route).
   await openProjects(page)
   await openProject(page, 'Paper XYZ')
   await page.getByRole('button', { name: /Quick create/ }).click()
@@ -83,11 +120,18 @@ test('global Quick Create opens the Work Item drawer directly and refreshes My W
   })
   await expect(projectDialog).toBeVisible()
   await expect(
-    projectDialog.getByText('Paper XYZ', { exact: true }),
-  ).toBeVisible()
+    projectDialog
+      .getByRole('combobox', { name: 'Research Group', exact: true })
+      .locator('option:checked'),
+  ).toHaveText('Select research group…')
   await expect(
-    projectDialog.getByRole('button', { name: 'Select project' }),
-  ).toHaveText(/Paper XYZ/)
+    projectDialog
+      .getByRole('combobox', { name: 'Project', exact: true })
+      .locator('option:checked'),
+  ).toHaveText('Select a Research Group first')
+  await expect(
+    projectDialog.getByRole('button', { name: 'Create work item' }),
+  ).toBeDisabled()
 
   await projectDialog.getByRole('button', { name: 'Cancel' }).click()
   expect(createRequests).toBe(1)

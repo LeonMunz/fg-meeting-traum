@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -75,7 +76,26 @@ export type WorkItemProjectOption = {
   researchGroupName: string
 }
 
+export type WorkItemResearchGroupOption = {
+  id: number
+  name: string
+}
+
 export type WorkItemProjectPicker = {
+  // Explicit Research Group context (global create flow): the
+  // group is chosen by the user, never preselected. Project
+  // options depend on this selection.
+  researchGroups: WorkItemResearchGroupOption[]
+  selectedResearchGroupId: number | null
+  // Last known name of the selected group; retained for display
+  // when the group becomes unavailable (it is never silently
+  // substituted by another group).
+  selectedResearchGroupName: string | null
+  researchGroupsLoading: boolean
+  researchGroupsError: string | null
+  onResearchGroupSelect: (researchGroupId: number) => void
+  onResearchGroupsRetry: () => void
+  // Project context scoped to the selected Research Group.
   projects: WorkItemProjectOption[]
   selectedProjectId: number | null
   loading: boolean
@@ -1047,15 +1067,6 @@ function CreateWorkItemPanel({
 }) {
   const formRef =
     useRef<HTMLFormElement>(null)
-  const projectPickerRef =
-    useRef<HTMLDivElement>(null)
-  const projectTriggerRef =
-    useRef<HTMLButtonElement>(null)
-  const projectSearchRef =
-    useRef<HTMLInputElement>(null)
-  const projectOptionRefs = useRef(
-    new Map<number, HTMLButtonElement>(),
-  )
   const previousProjectIdRef = useRef(
     projectPicker?.selectedProjectId ?? null,
   )
@@ -1079,10 +1090,6 @@ function CreateWorkItemPanel({
     setAssigneeIds,
   ] = useState<string[]>([])
   const [parentId, setParentId] =
-    useState('')
-  const [projectPickerOpen, setProjectPickerOpen] =
-    useState(false)
-  const [projectQuery, setProjectQuery] =
     useState('')
   const [dueDate, setDueDate] =
     useState('')
@@ -1197,59 +1204,6 @@ function CreateWorkItemPanel({
       [parentItems],
     )
 
-  const groupedProjects = useMemo(() => {
-    const normalizedQuery = projectQuery.trim().toLowerCase()
-    const groups = new Map<
-      string,
-      WorkItemProjectOption[]
-    >()
-
-    for (const project of projectPicker?.projects ?? []) {
-      if (
-        normalizedQuery &&
-        !project.name.toLowerCase().includes(normalizedQuery) &&
-        !project.researchGroupName
-          .toLowerCase()
-          .includes(normalizedQuery)
-      ) {
-        continue
-      }
-
-      const current = groups.get(project.researchGroupName) ?? []
-      current.push(project)
-      groups.set(project.researchGroupName, current)
-    }
-
-    return Array.from(groups, ([researchGroupName, projects]) => ({
-      researchGroupName,
-      projects,
-    }))
-  }, [projectPicker?.projects, projectQuery])
-  const visibleProjects = useMemo(
-    () => groupedProjects.flatMap((group) => group.projects),
-    [groupedProjects],
-  )
-
-  const moveProjectFocus = (
-    projectId: number,
-    direction: 1 | -1,
-  ) => {
-    const currentIndex = visibleProjects.findIndex(
-      (project) => project.id === projectId,
-    )
-    if (currentIndex < 0 || visibleProjects.length === 0) return
-
-    const nextIndex =
-      (currentIndex + direction + visibleProjects.length) %
-      visibleProjects.length
-    projectOptionRefs.current.get(visibleProjects[nextIndex].id)?.focus()
-  }
-
-  const focusProjectAt = (index: number) => {
-    const project = visibleProjects.at(index)
-    if (project) projectOptionRefs.current.get(project.id)?.focus()
-  }
-
   useEffect(() => {
     const projectId = projectPicker?.selectedProjectId ?? null
 
@@ -1266,12 +1220,6 @@ function CreateWorkItemPanel({
     setAssigneeQuery('')
     setSubmitError(null)
   }, [projectPicker?.selectedProjectId])
-
-  useEffect(() => {
-    if (projectPickerOpen) {
-      requestAnimationFrame(() => projectSearchRef.current?.focus())
-    }
-  }, [projectPickerOpen])
 
   // Seed type/status once the Project's Work Item configuration arrives.
   // The default type is the Project's ACTIVE canonical Task definition,
@@ -1319,25 +1267,6 @@ function CreateWorkItemPanel({
   }, [])
 
   useEffect(() => {
-    if (!projectPickerOpen) {
-      return
-    }
-
-    const handlePointerDown = (event: MouseEvent) => {
-      if (
-        event.target instanceof Node &&
-        !projectPickerRef.current?.contains(event.target)
-      ) {
-        setProjectPickerOpen(false)
-        setProjectQuery('')
-      }
-    }
-
-    document.addEventListener('mousedown', handlePointerDown)
-    return () => document.removeEventListener('mousedown', handlePointerDown)
-  }, [projectPickerOpen])
-
-  useEffect(() => {
     const handleKeyDown = (
       event: KeyboardEvent,
     ) => {
@@ -1345,14 +1274,6 @@ function CreateWorkItemPanel({
         event.key === 'Escape' &&
         !submitting
       ) {
-        if (projectPickerOpen) {
-          event.preventDefault()
-          setProjectPickerOpen(false)
-          setProjectQuery('')
-          requestAnimationFrame(() => projectTriggerRef.current?.focus())
-          return
-        }
-
         if (assigneePickerOpen) {
           setAssigneePickerOpen(
             false,
@@ -1391,7 +1312,6 @@ function CreateWorkItemPanel({
   }, [
     assigneePickerOpen,
     onClose,
-    projectPickerOpen,
     submitting,
   ])
 
@@ -1552,7 +1472,7 @@ function CreateWorkItemPanel({
           className="flex min-h-0 flex-1 flex-col"
         >
           <header className="flex shrink-0 items-start justify-between gap-6 border-b border-border-structural px-7 py-5">
-            <div className="relative min-w-0" ref={projectPickerRef}>
+            <div className="min-w-0 flex-1">
               <h2
                 id="work-item-drawer-title"
                 className="text-lg font-semibold tracking-tight text-work-content-text"
@@ -1561,162 +1481,10 @@ function CreateWorkItemPanel({
               </h2>
 
               {projectPicker ? (
-                <>
-                  <button
-                    ref={projectTriggerRef}
-                    type="button"
-                    aria-label="Select project"
-                    aria-haspopup="listbox"
-                    aria-expanded={projectPickerOpen}
-                    disabled={submitting}
-                    onClick={() => {
-                      setProjectPickerOpen((current) => !current)
-                      setProjectQuery('')
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key === 'ArrowDown') {
-                        event.preventDefault()
-                        setProjectPickerOpen(true)
-                      }
-                    }}
-                    className="mt-1 flex max-w-full items-center gap-1.5 rounded text-sm text-text-secondary transition hover:text-work-content-text focus-visible:outline-2 focus-visible:outline focus-visible:outline-focus focus-visible:outline-offset-2 disabled:cursor-wait disabled:opacity-50"
-                  >
-                    <span
-                      aria-hidden="true"
-                      className="material-symbols-outlined text-[16px]"
-                    >
-                      folder
-                    </span>
-                    <span className="truncate">
-                      {projectName || 'Select project…'}
-                    </span>
-                    <span
-                      aria-hidden="true"
-                      className="material-symbols-outlined text-[14px]"
-                    >
-                      arrow_drop_down
-                    </span>
-                  </button>
-
-                  {projectPickerOpen && (
-                    <div
-                      className="absolute left-0 top-full z-20 mt-2 w-80 overflow-hidden rounded-lg border border-border-structural bg-surface shadow-xl shadow-color"
-                    >
-                      <div className="border-b border-border-subtle p-2">
-                        <label className="sr-only" htmlFor="work-item-project-search">
-                          Search projects
-                        </label>
-                        <input
-                          ref={projectSearchRef}
-                          id="work-item-project-search"
-                          type="search"
-                          value={projectQuery}
-                          onChange={(event) => setProjectQuery(event.target.value)}
-                          onKeyDown={(event) => {
-                            if (event.key === 'ArrowDown') {
-                              event.preventDefault()
-                              focusProjectAt(0)
-                            } else if (event.key === 'ArrowUp') {
-                              event.preventDefault()
-                              focusProjectAt(-1)
-                            }
-                          }}
-                          placeholder="Search projects…"
-                          className="h-9 w-full rounded-md border border-border-structural bg-surface px-3 text-sm text-work-content-text outline-none placeholder:text-text-work-faded-55 focus:border-focus-ring-primary focus:ring-2 focus:ring-focus-ring-primary/15"
-                        />
-                      </div>
-
-                      <div
-                        role="listbox"
-                        aria-label="Projects"
-                        className="max-h-72 overflow-y-auto p-1.5"
-                      >
-                        {projectPicker.loading ? (
-                          <div role="status" className="flex min-h-10 items-center gap-2 px-2 text-[13px] text-text-work-faded-70">
-                            <span aria-hidden="true" className="material-symbols-outlined animate-spin text-[16px]">
-                              progress_activity
-                            </span>
-                            Loading Projects…
-                          </div>
-                        ) : projectPicker.error ? (
-                          <div className="space-y-2 px-2 py-2">
-                            <p role="alert" className="text-[13px] leading-[18px] text-danger">
-                              {projectPicker.error}
-                            </p>
-                            <button type="button" onClick={projectPicker.onRetry} className="text-[13px] font-medium text-work-content-text underline-offset-2 hover:underline">
-                              Try again
-                            </button>
-                          </div>
-                        ) : projectPicker.projects.length === 0 ? (
-                          <div className="px-2 py-3">
-                            <p className="text-[13px] font-medium leading-[18px] text-work-content-text">
-                              No writable Projects
-                            </p>
-                            <p className="mt-1 text-[12px] leading-4 text-text-work-faded-70">
-                              You need owner or member access to an active Project.
-                            </p>
-                          </div>
-                        ) : groupedProjects.length === 0 ? (
-                          <p className="px-2 py-3 text-[13px] text-text-work-faded-70">
-                            No Projects match your search.
-                          </p>
-                        ) : (
-                          groupedProjects.map((group) => (
-                            <div key={group.researchGroupName} role="group" aria-label={group.researchGroupName}>
-                              <div className="px-2 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wider text-text-work-faded-60">
-                                {group.researchGroupName}
-                              </div>
-                              {group.projects.map((project) => (
-                                <button
-                                  key={project.id}
-                                  ref={(node) => {
-                                    if (node) {
-                                      projectOptionRefs.current.set(project.id, node)
-                                    } else {
-                                      projectOptionRefs.current.delete(project.id)
-                                    }
-                                  }}
-                                  type="button"
-                                  role="option"
-                                  aria-selected={project.id === projectPicker.selectedProjectId}
-                                  onKeyDown={(event) => {
-                                    if (event.key === 'ArrowDown') {
-                                      event.preventDefault()
-                                      moveProjectFocus(project.id, 1)
-                                    } else if (event.key === 'ArrowUp') {
-                                      event.preventDefault()
-                                      moveProjectFocus(project.id, -1)
-                                    } else if (event.key === 'Home') {
-                                      event.preventDefault()
-                                      focusProjectAt(0)
-                                    } else if (event.key === 'End') {
-                                      event.preventDefault()
-                                      focusProjectAt(-1)
-                                    }
-                                  }}
-                                  onClick={() => {
-                                    projectPicker.onSelect(project.id)
-                                    setProjectPickerOpen(false)
-                                    setProjectQuery('')
-                                    requestAnimationFrame(() => projectTriggerRef.current?.focus())
-                                  }}
-                                  className="flex min-h-9 w-full items-center gap-2 rounded px-2 text-left text-[13px] text-work-content-text transition hover:bg-work-surface-row-hover focus-visible:bg-work-surface-row-hover focus-visible:outline-2 focus-visible:outline focus-visible:outline-focus"
-                                >
-                                  <span className="min-w-0 flex-1 truncate">{project.name}</span>
-                                  {project.id === projectPicker.selectedProjectId && (
-                                    <span aria-hidden="true" className="material-symbols-outlined text-[16px] text-interaction-primary">
-                                      check
-                                    </span>
-                                  )}
-                                </button>
-                              ))}
-                            </div>
-                          ))
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </>
+                <CreateContextPicker
+                  picker={projectPicker}
+                  submitting={submitting}
+                />
               ) : (
                 <div className="mt-1 flex items-center gap-1.5 text-sm text-text-secondary">
                   <span aria-hidden="true" className="material-symbols-outlined text-[16px]">
@@ -2253,6 +2021,256 @@ function CreateWorkItemPanel({
       </div>
     </div>,
     document.body,
+  )
+}
+
+/* ── Create mode: explicit Research Group + Project context ─────── */
+
+const CONTEXT_SELECT_CLASSES =
+  'h-10 w-full min-w-0 rounded-lg border border-border-structural bg-surface px-3 text-sm text-work-content-text outline-none transition focus:border-focus-ring-primary focus:ring-2 focus:ring-focus-ring-primary/15 disabled:cursor-default disabled:bg-work-surface-row-hover disabled:text-text-work-faded-70'
+
+function ContextPickerStatus({
+  message,
+  onRetry,
+}: {
+  message: string
+  onRetry: () => void
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+      <p
+        role="alert"
+        className="text-[13px] leading-[18px] text-danger"
+      >
+        {message}
+      </p>
+
+      <button
+        type="button"
+        onClick={onRetry}
+        className="text-[13px] font-medium text-work-content-text underline-offset-2 hover:underline"
+      >
+        Try again
+      </button>
+    </div>
+  )
+}
+
+// Explicit, parent-owned create context: two visible, labeled
+// selects — Research Group first, then the dependent Project.
+// Neither selection is implicit; the parent (global Quick
+// Create) owns all loading, race protection, and
+// authorization-aware eligibility. This component is stateless
+// presentation over the WorkItemProjectPicker contract.
+function CreateContextPicker({
+  picker,
+  submitting,
+}: {
+  picker: WorkItemProjectPicker
+  submitting: boolean
+}) {
+  const researchGroupId = useId()
+  const projectId = useId()
+
+  const researchGroupSelected =
+    picker.selectedResearchGroupId !== null
+  const selectedGroupAvailable =
+    picker.researchGroups.some(
+      (group) =>
+        group.id === picker.selectedResearchGroupId,
+    )
+
+  const projectBlocked = !researchGroupSelected
+    || !selectedGroupAvailable
+
+  const projectsSettledEmpty =
+    !projectBlocked &&
+    !picker.loading &&
+    picker.error === null &&
+    picker.projects.length === 0
+
+  return (
+    <div className="mt-3 space-y-2">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div className="block min-w-0">
+          <label
+            htmlFor={researchGroupId}
+            className="mb-1.5 block text-sm font-medium text-work-content-text"
+          >
+            Research Group
+          </label>
+
+          <select
+            id={researchGroupId}
+            value={
+              picker.selectedResearchGroupId == null
+                ? ''
+                : String(picker.selectedResearchGroupId)
+            }
+            disabled={
+              submitting ||
+              picker.researchGroupsLoading ||
+              picker.researchGroupsError !== null ||
+              picker.researchGroups.length === 0
+            }
+            onChange={(event) => {
+              picker.onResearchGroupSelect(
+                Number(event.target.value),
+              )
+            }}
+            className={CONTEXT_SELECT_CLASSES}
+          >
+            {picker.researchGroupsLoading ? (
+              <option value="" disabled>
+                Loading research groups…
+              </option>
+            ) : picker.researchGroupsError !== null ||
+            picker.researchGroups.length === 0 ? (
+              <>
+                <option value="" disabled>
+                  {picker.researchGroupsError !== null
+                    ? 'Research groups unavailable'
+                    : 'No Research Groups'}
+                </option>
+
+                {/* The last known selection stays visible while the
+                    list is empty or failed — never substituted. */}
+                {researchGroupSelected &&
+                  !selectedGroupAvailable && (
+                    <option
+                      value={String(
+                        picker.selectedResearchGroupId,
+                      )}
+                      disabled
+                    >
+                      {picker.selectedResearchGroupName ??
+                        'Unavailable Research Group'}
+                    </option>
+                  )}
+              </>
+            ) : (
+              <>
+                <option value="" disabled hidden>
+                  Select research group…
+                </option>
+
+                {picker.researchGroups.map((group) => (
+                  <option
+                    key={group.id}
+                    value={group.id}
+                  >
+                    {group.name}
+                  </option>
+                ))}
+
+                {researchGroupSelected &&
+                  !selectedGroupAvailable && (
+                    <option
+                      value={String(
+                        picker.selectedResearchGroupId,
+                      )}
+                      disabled
+                    >
+                      {picker.selectedResearchGroupName ??
+                        'Unavailable Research Group'}
+                    </option>
+                  )}
+              </>
+            )}
+          </select>
+        </div>
+
+        <div className="block min-w-0">
+          <label
+            htmlFor={projectId}
+            className="mb-1.5 block text-sm font-medium text-work-content-text"
+          >
+            Project
+          </label>
+
+          <select
+            id={projectId}
+            value={
+              picker.selectedProjectId == null
+                ? ''
+                : String(picker.selectedProjectId)
+            }
+            disabled={
+              submitting ||
+              projectBlocked ||
+              picker.loading ||
+              picker.error !== null ||
+              projectsSettledEmpty
+            }
+            onChange={(event) => {
+              picker.onSelect(Number(event.target.value))
+            }}
+            className={CONTEXT_SELECT_CLASSES}
+          >
+            {projectBlocked ? (
+              <option value="" disabled>
+                {researchGroupSelected
+                  ? 'Select project…'
+                  : 'Select a Research Group first'}
+              </option>
+            ) : picker.loading ? (
+              <option value="" disabled>
+                Loading Projects…
+              </option>
+            ) : picker.error !== null ? (
+              <option value="" disabled>
+                Select project…
+              </option>
+            ) : picker.projects.length === 0 ? (
+              <option value="" disabled>
+                No writable Projects
+              </option>
+            ) : (
+              <>
+                <option value="" disabled hidden>
+                  Select project…
+                </option>
+
+                {picker.projects.map((project) => (
+                  <option
+                    key={project.id}
+                    value={project.id}
+                  >
+                    {project.name}
+                  </option>
+                ))}
+              </>
+            )}
+          </select>
+        </div>
+      </div>
+
+      {picker.researchGroupsError !== null ? (
+        <ContextPickerStatus
+          message={picker.researchGroupsError}
+          onRetry={picker.onResearchGroupsRetry}
+        />
+      ) : !selectedGroupAvailable &&
+      researchGroupSelected ? (
+        <ContextPickerStatus
+          message="The selected Research Group is no longer available."
+          onRetry={picker.onResearchGroupsRetry}
+        />
+      ) : picker.error !== null ? (
+        <ContextPickerStatus
+          message={picker.error}
+          onRetry={picker.onRetry}
+        />
+      ) : projectBlocked ||
+      picker.loading ||
+      picker.projects.length > 0 ? (
+        null
+      ) : (
+        <p className="text-xs leading-4 text-text-work-faded-70">
+          You need owner or member access to an active Project in this Research Group.
+        </p>
+      )}
+    </div>
   )
 }
 
