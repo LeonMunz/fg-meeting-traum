@@ -104,7 +104,23 @@ type WorkItemDrawerProps = {
   onPatch: (
     workItemId: number,
     patch: ApiUpdateWorkItemInput,
+    // The selection identity the parent recorded at the
+    // moment this PATCH was ENQUEUED (user initiation),
+    // carried through the serialized queue. Undefined when
+    // the parent provides no selection identity.
+    selectionIdentityAtEnqueue?: number,
   ) => Promise<void>
+  // Optional parent-owned selection identity (e.g. a
+  // monotonically increasing selection generation). It is
+  // read at the moment a PATCH is ENQUEUED — i.e. when the
+  // user initiates it — and passed through the serialized
+  // queue to `onPatch` when the PATCH actually starts. This
+  // binds each PATCH to the selection state that was current
+  // at initiation, not the state active when a queued request
+  // eventually starts, so a parent that re-selects (or
+  // reopens) the same Work Item while PATCHes are queued can
+  // still tell a stale response from a fresh one.
+  getSelectionIdentity?: () => number
   onDelete?: (workItemId: number) => Promise<void>
   onRequestDelete?: (workItemId: number) => void
   deleteDialogOpen?: boolean
@@ -947,6 +963,7 @@ export function WorkItemDrawer({
   onClose,
   onCreate,
   onPatch,
+  getSelectionIdentity,
   onDelete,
   onRequestDelete,
   deleteDialogOpen,
@@ -977,6 +994,7 @@ export function WorkItemDrawer({
         parentItems={parentItems}
         onClose={onClose}
         onPatch={onPatch}
+        getSelectionIdentity={getSelectionIdentity}
         onDelete={onDelete}
         onRequestDelete={onRequestDelete}
         deleteDialogOpen={deleteDialogOpen}
@@ -2288,6 +2306,7 @@ export function WorkItemInspector({
   parentItems,
   onClose,
   onPatch,
+  getSelectionIdentity,
   onDelete,
   onRequestDelete,
   deleteDialogOpen,
@@ -2307,7 +2326,13 @@ export function WorkItemInspector({
   onPatch: (
     workItemId: number,
     patch: ApiUpdateWorkItemInput,
+    // The selection identity recorded at ENQUEUE time (see
+    // `patchField`), undefined when the parent provides no
+    // selection identity.
+    selectionIdentityAtEnqueue?: number,
   ) => Promise<void>
+  // Read at PATCH enqueue time; see WorkItemDrawerProps.
+  getSelectionIdentity?: () => number
   onDelete?: (workItemId: number) => Promise<void>
   onRequestDelete?: (workItemId: number) => void
   deleteDialogOpen?: boolean
@@ -3237,6 +3262,17 @@ export function WorkItemInspector({
   ): Promise<boolean> {
     const workItemId = item.id
 
+    // Selection identity bound at ENQUEUE time (user
+    // initiation), not when the queued PATCH eventually
+    // starts: a parent that re-selects or reopens the same
+    // Work Item while this PATCH is queued must still
+    // recognize this PATCH's response as belonging to the
+    // superseded selection. The serialized queue is
+    // untouched — the captured value simply rides along in
+    // `runPatch`'s closure and is handed to `onPatch` below.
+    const selectionIdentityAtEnqueue =
+      getSelectionIdentity?.()
+
     queuedPatchCountRef.current += 1
 
     const runPatch =
@@ -3284,6 +3320,7 @@ export function WorkItemInspector({
           await onPatch(
             workItemId,
             patch,
+            selectionIdentityAtEnqueue,
           )
 
           queuedPatchCountRef.current -= 1

@@ -1239,6 +1239,19 @@ export function MeetingDetailPage() {
     inspectorLoading,
     setInspectorLoading,
   ] = useState(false)
+  // Selection-generation guard for asynchronous Inspector
+  // responses (Work Item PATCH results). Every selection
+  // transition — opening a Work Item or closing the Inspector —
+  // advances the generation. A PATCH response is accepted into
+  // the visible Inspector state only if it was initiated under
+  // the CURRENT generation and still belongs to the Work Item
+  // the Inspector currently shows: a delayed response for an
+  // older selection must never replace a different or more
+  // recently opened Work Item.
+  const inspectorSelectionGenerationRef =
+    useRef(0)
+  const inspectorSelectionIdRef =
+    useRef<number | null>(null)
   const quickAddInputRef =
     useRef<HTMLInputElement>(null)
 
@@ -3355,6 +3368,13 @@ export function MeetingDetailPage() {
       return
     }
 
+    // A new selection is a new generation: every PATCH
+    // response initiated under an older generation is stale
+    // from here on, even for the same Work Item (a reopen
+    // performs its own authoritative fetch).
+    inspectorSelectionGenerationRef.current += 1
+    inspectorSelectionIdRef.current = linked.id
+
     setInspectorWorkItemId(linked.id)
     setInspectorItem(null)
     setInspectorProject(null)
@@ -3456,6 +3476,13 @@ export function MeetingDetailPage() {
   }
 
   const closeLinkedWorkInspector = () => {
+    // Closing is a selection transition as well: an in-flight
+    // PATCH response must not resurrect the displayed Work
+    // Item after the Inspector is closed — and, after a
+    // reopen, must not overwrite the fresh selection.
+    inspectorSelectionGenerationRef.current += 1
+    inspectorSelectionIdRef.current = null
+
     setInspectorWorkItemId(null)
     setInspectorItem(null)
     setInspectorProject(null)
@@ -3512,6 +3539,19 @@ export function MeetingDetailPage() {
         )
       ) {
         return
+      }
+
+      // A close that actually applies (the selection still
+      // belongs to the Work Item open when the effect ran)
+      // advances the generation like any other transition;
+      // a queued switch to another Work Item already owns a
+      // newer generation and is left untouched.
+      if (
+        inspectorSelectionIdRef.current ===
+        openItemId
+      ) {
+        inspectorSelectionGenerationRef.current += 1
+        inspectorSelectionIdRef.current = null
       }
 
       setInspectorWorkItemId((current) =>
@@ -3731,14 +3771,45 @@ export function MeetingDetailPage() {
     async (
       workItemId: number,
       patch: ApiUpdateWorkItemInput,
+      generationAtInitiation?: number,
     ) => {
+      // The selection generation is bound to this PATCH by
+      // the shared Inspector at ENQUEUE time — i.e. when the
+      // user INITIATED it — and carried through the
+      // serialized queue to this callback. Capturing it here
+      // (when a queued request eventually starts) would be
+      // wrong: a PATCH that starts only after the Inspector
+      // was reopened would silently adopt the new
+      // selection's generation. If the Inspector provides no
+      // identity (never the case for this wiring), fall back
+      // to the generation active when this request started.
+      //
+      // The PATCH itself is sent and persisted unconditionally;
+      // only the DISPLAY reconciliation is identity-checked.
+      // A delayed response may replace the visible Inspector
+      // state only if the selection has not been superseded
+      // (opened or closed since initiation) and still belongs
+      // to the Work Item that was patched. A rejection
+      // propagates to the shared Inspector's save feedback,
+      // which never touches the item state.
+      const generation =
+        generationAtInitiation ??
+        inspectorSelectionGenerationRef.current
+
       const updated =
         await updateWorkItem(
           workItemId,
           patch,
         )
 
-      setInspectorItem(updated)
+      if (
+        inspectorSelectionGenerationRef.current ===
+          generation &&
+        inspectorSelectionIdRef.current ===
+          workItemId
+      ) {
+        setInspectorItem(updated)
+      }
     }
 
   if (loading) {
@@ -6355,6 +6426,15 @@ export function MeetingDetailPage() {
               }
               onPatch={
                 handleInspectorPatch
+              }
+              // Bind each queued PATCH to the selection
+              // generation active when the user INITIATED it
+              // (the Inspector reads this at enqueue time),
+              // so a PATCH that starts only after the
+              // Inspector was reopened cannot adopt the new
+              // selection's generation.
+              getSelectionIdentity={() =>
+                inspectorSelectionGenerationRef.current
               }
             />
           </Suspense>
