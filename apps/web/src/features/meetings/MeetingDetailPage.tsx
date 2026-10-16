@@ -6317,10 +6317,17 @@ export function MeetingDetailPage() {
                 ''
               }
               item={inspectorItem}
+              // The shared Inspector's established read-only
+              // contract: a viewer, or a Work Item whose
+              // Project is archived (the same rule the Project
+              // Work Items surface and the My Work drawer
+              // apply). The server remains authoritative.
               readOnly={
                 inspectorProject
                   ?.currentUserRole ===
-                'viewer'
+                'viewer' ||
+                inspectorProject
+                  ?.archivedAt != null
               }
               currentUserId={
                 user ? user.id : null
