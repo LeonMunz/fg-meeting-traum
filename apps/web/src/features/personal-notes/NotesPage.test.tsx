@@ -1590,13 +1590,18 @@ describe('save failure', () => {
       expect(
         screen.queryByRole('alert'),
       ).not.toBeInTheDocument()
+      // The alert is gone the moment the retry save STARTS (the status
+      // then shows the in-flight save); the terminal 'Saved' state only
+      // lands once the (mocked) PATCH has settled. It must therefore be
+      // part of the wait — asserting it right after the alert
+      // disappears races with the in-flight save.
+      expect(screen.getByRole('status')).toHaveTextContent(
+        'Saved',
+      )
     })
 
     expect(updatePersonalNote).toHaveBeenCalledTimes(2)
     expect(noteContent()).toHaveTextContent('Alpha kept')
-    expect(screen.getByRole('status')).toHaveTextContent(
-      'Saved',
-    )
   })
 })
 
