@@ -41,7 +41,7 @@ function suggestTitleFromNote(
     : line
 }
 
-type CreateMeetingWorkItemDialogProps = {
+export type CreateMeetingWorkItemDialogProps = {
   open: boolean
   researchGroupId: number
   meetingItem: ApiMeetingItem | null
@@ -367,11 +367,22 @@ export function CreateMeetingWorkItemDialog({
         setStatusDefinitions(activeStatuses)
         setTypeDefinitions(activeTypes)
 
-        // The Type defaults to the first active type definition.
+        // The Type defaults to the Project's ACTIVE canonical
+        // Task definition, resolved by the machine-readable
+        // `kind` — never by the display `name` and never by
+        // position, so a renamed canonical Task still wins while
+        // a custom type that merely says "Task" (`kind = null`)
+        // never does. Without an active canonical Task the type
+        // is deliberately left unselected: the Create validation
+        // then requires an explicit valid type choice instead of
+        // silently creating some other type.
+        const defaultType = activeTypes.find(
+          (typeDefinition) =>
+            typeDefinition.kind === 'task',
+        )
+
         setTypeDefinitionId(
-          activeTypes.length > 0
-            ? activeTypes[0].id
-            : null,
+          defaultType ? defaultType.id : null,
         )
 
         // The Status defaults to the Project's canonical default
@@ -677,14 +688,24 @@ export function CreateMeetingWorkItemDialog({
                     : 'No work item types available'}
                 </option>
               ) : (
-                typeDefinitions.map((typeDefinition) => (
-                  <option
-                    key={typeDefinition.id}
-                    value={typeDefinition.id}
-                  >
-                    {typeDefinition.name}
+                <>
+                  {/* Disabled: the type may be left unselected
+                      only until an active canonical Task has
+                      been resolved; it can never be selected
+                      itself. */}
+                  <option value="" disabled>
+                    Select a type…
                   </option>
-                ))
+
+                  {typeDefinitions.map((typeDefinition) => (
+                    <option
+                      key={typeDefinition.id}
+                      value={typeDefinition.id}
+                    >
+                      {typeDefinition.name}
+                    </option>
+                  ))}
+                </>
               )}
             </select>
           </label>

@@ -694,6 +694,33 @@ test(
         label: projectName,
       })
 
+    // The default Work Item type is the Project's active
+    // canonical Task — resolved by semantic kind, so it wins
+    // even though the starter configuration lists Epic first.
+    // An explicit alternative selection is preserved (never
+    // silently reset to Task); switching back to Task keeps
+    // this scenario's canonical Task artifact.
+    const typeSelect =
+      workItemDialog.getByLabel('Type')
+
+    await expect(
+      typeSelect.locator('option:checked'),
+    ).toHaveText('Task')
+
+    await typeSelect.selectOption({
+      label: 'Epic',
+    })
+    await expect(
+      typeSelect.locator('option:checked'),
+    ).toHaveText('Epic')
+
+    await typeSelect.selectOption({
+      label: 'Task',
+    })
+    await expect(
+      typeSelect.locator('option:checked'),
+    ).toHaveText('Task')
+
     await expect(
       workItemDialog.getByLabel('Title'),
     ).toHaveValue(taskTitle)
