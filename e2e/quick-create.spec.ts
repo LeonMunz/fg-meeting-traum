@@ -40,12 +40,21 @@ test('global Quick Create opens the Work Item drawer with explicit Research Grou
 
   // Global shortcut: opens the canonical Work Item drawer directly,
   // without showing the menu.
-  await page.keyboard.press(isMac ? 'Meta+Alt+K' : 'Control+Alt+K')
+  await page.keyboard.press(isMac ? 'Meta+Period' : 'Control+Alt+K')
   await expect(quickMenu).not.toBeVisible()
 
   const dialog = page.getByRole('dialog', { name: 'New work item' })
   await expect(dialog).toBeVisible()
   await expect(dialog.getByLabel('Title')).toBeFocused()
+
+  // Re-pressing the shortcut while the drawer is open (Title
+  // focused) is a no-op: no second drawer, no reset of the draft.
+  await dialog.getByLabel('Title').fill('Draft before re-press')
+  await page.keyboard.press(isMac ? 'Meta+Period' : 'Control+Alt+K')
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByLabel('Title')).toHaveValue(
+    'Draft before re-press',
+  )
 
   // Global creation starts WITHOUT any implicit context: both
   // selectors are unselected and the Project control is dependent
@@ -108,6 +117,25 @@ test('global Quick Create opens the Work Item drawer with explicit Research Grou
   // route still starts WITHOUT preselection (no implicit context
   // from the route).
   await openProjects(page)
+
+  // A different AppShell route: the SAME global shortcut opens the
+  // SAME drawer again — still WITHOUT any implicit context from the
+  // route.
+  await page.keyboard.press(isMac ? 'Meta+Period' : 'Control+Alt+K')
+  await expect(dialog).toBeVisible()
+  await expect(
+    dialog
+      .getByRole('combobox', { name: 'Research Group', exact: true })
+      .locator('option:checked'),
+  ).toHaveText('Select research group…')
+  await expect(
+    dialog
+      .getByRole('combobox', { name: 'Project', exact: true })
+      .locator('option:checked'),
+  ).toHaveText('Select a Research Group first')
+  await page.keyboard.press('Escape')
+  await expect(dialog).not.toBeVisible()
+
   await openProject(page, 'Paper XYZ')
   await page.getByRole('button', { name: /Quick create/ }).click()
   await page

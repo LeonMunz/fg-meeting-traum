@@ -115,19 +115,34 @@ function isMacPlatform() {
   )
 }
 
-function isQuickCreateKey(event: KeyboardEvent) {
-  // Physical key first: macOS Option-key transformations report
-  // `key: '˜'` (US layout) for Option+K, while `code` stays `KeyK`.
-  // The key-character check is the compatibility fallback for
-  // environments without `event.code`.
+function isKeyK(event: KeyboardEvent) {
   return event.code === 'KeyK' || event.key.toLowerCase() === 'k'
 }
 
+// Physical key first: `event.code` is layout-independent. The
+// key-character check is the fallback for layouts where the key
+// that types `.` does not report `code: 'Period'` (e.g. AZERTY)
+// and for environments without `event.code`.
+function isPeriodKey(event: KeyboardEvent) {
+  return event.code === 'Period' || event.key === '.'
+}
+
 function isQuickCreateShortcut(event: KeyboardEvent) {
-  if (!isQuickCreateKey(event) || !event.altKey) return false
-  return isMacPlatform()
-    ? event.metaKey && !event.ctrlKey
-    : event.ctrlKey && !event.metaKey
+  if (isMacPlatform()) {
+    // macOS: Cmd + Period. No additional modifier (Shift, Ctrl,
+    // Option) may join the combination — those must never open
+    // the drawer.
+    return (
+      event.metaKey &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      !event.shiftKey &&
+      isPeriodKey(event)
+    )
+  }
+  // Windows/Linux: the existing Ctrl+Alt+K binding stays
+  // unchanged in this slice.
+  return event.ctrlKey && event.altKey && !event.metaKey && isKeyK(event)
 }
 
 export function QuickCreate({
@@ -530,7 +545,11 @@ export function QuickCreate({
         event.defaultPrevented ||
         event.repeat ||
         event.isComposing ||
-        isEditableTarget(event.target) ||
+        // The Windows/Linux binding keeps ignoring editable
+        // targets; the macOS Cmd + Period binding deliberately
+        // also works from a focused text field or rich-text
+        // editor.
+        (!isMacPlatform() && isEditableTarget(event.target)) ||
         hasConflictingModal() ||
         !isQuickCreateShortcut(event)
       ) {
@@ -625,7 +644,7 @@ export function QuickCreate({
   }, [confirmation])
 
   const shortcutLabel = useMemo(
-    () => (isMacPlatform() ? '⌘⌥K' : 'Ctrl+Alt+K'),
+    () => (isMacPlatform() ? '⌘.' : 'Ctrl+Alt+K'),
     [],
   )
   const contextReady =

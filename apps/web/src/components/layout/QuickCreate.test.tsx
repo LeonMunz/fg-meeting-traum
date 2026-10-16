@@ -334,7 +334,7 @@ describe('global Work Item Quick Create', () => {
     })
     // The visible hint documents the global shortcut (platform label);
     // the in-menu W action stays functional without a visible hint.
-    expect(action).toHaveTextContent('⌘⌥K')
+    expect(action).toHaveTextContent('⌘.')
     await waitFor(() => expect(document.activeElement).toBe(action))
 
     fireEvent.keyDown(document, { key: 'Escape' })
@@ -363,27 +363,19 @@ describe('global Work Item Quick Create', () => {
     )
   })
 
-  it('opens the same unselected state on the platform shortcut and ignores repeat, IME, editors, and modal states', async () => {
+  it('opens the same unselected state on Cmd+Period and ignores repeat, IME, and modal states — also from a focused input', async () => {
     renderQuickCreate()
 
     fireEvent.keyDown(document, {
-      key: 'k',
+      key: '.',
       metaKey: true,
-      altKey: true,
       repeat: true,
     })
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
 
-    const input = document.createElement('input')
-    document.body.append(input)
-    fireEvent.keyDown(input, { key: 'k', metaKey: true, altKey: true })
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-    input.remove()
-
     fireEvent.keyDown(document, {
-      key: 'k',
+      key: '.',
       metaKey: true,
-      altKey: true,
       isComposing: true,
     })
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
@@ -391,14 +383,20 @@ describe('global Work Item Quick Create', () => {
     const modal = document.createElement('div')
     modal.setAttribute('aria-modal', 'true')
     document.body.append(modal)
-    fireEvent.keyDown(document, { key: 'k', metaKey: true, altKey: true })
+    fireEvent.keyDown(document, { key: '.', metaKey: true })
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     modal.remove()
 
-    fireEvent.keyDown(document, { key: 'k', metaKey: true, altKey: true })
+    // Unlike the Windows/Linux binding, the macOS shortcut works
+    // even while a plain text field is focused.
+    const input = document.createElement('input')
+    document.body.append(input)
+    input.focus()
+    fireEvent.keyDown(input, { key: '.', metaKey: true })
     const dialog = await screen.findByRole('dialog', {
       name: 'New work item',
     })
+    input.remove()
     expect(dialog).toBeVisible()
     // The shortcut skips the Quick Create menu entirely.
     expect(screen.queryByRole('menu', { name: 'Quick create' }))
@@ -414,22 +412,108 @@ describe('global Work Item Quick Create', () => {
     )
   })
 
-  it('opens the drawer on the physical KeyK when macOS transforms the Option-key value', async () => {
+  it('does not open the drawer on the removed macOS Cmd+Option+K binding', async () => {
     renderQuickCreate()
 
-    // macOS Option+K reports `key: '˜'` (tilde) on US-layout
-    // keyboards while the physical key remains `code: 'KeyK'`;
-    // the shortcut must match the physical key, not the transformed
-    // key character.
+    fireEvent.keyDown(document, {
+      key: 'k',
+      metaKey: true,
+      altKey: true,
+    })
     fireEvent.keyDown(document, {
       key: '˜',
       code: 'KeyK',
       metaKey: true,
       altKey: true,
     })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('ignores Cmd+Period with additional modifiers (Shift, Ctrl, Option)', async () => {
+    renderQuickCreate()
+
+    // US layout: Shift+Period reports the key character ">".
+    fireEvent.keyDown(document, {
+      key: '>',
+      code: 'Period',
+      metaKey: true,
+      shiftKey: true,
+    })
+    fireEvent.keyDown(document, {
+      key: '.',
+      code: 'Period',
+      metaKey: true,
+      ctrlKey: true,
+    })
+    fireEvent.keyDown(document, {
+      key: '.',
+      code: 'Period',
+      metaKey: true,
+      altKey: true,
+    })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('opens the drawer on the physical Period key even when the key character is layout-transformed', async () => {
+    renderQuickCreate()
+
+    // The physical `code: 'Period'` key takes precedence over a
+    // layout-transformed key character.
+    fireEvent.keyDown(document, {
+      key: '˙',
+      code: 'Period',
+      metaKey: true,
+    })
     expect(
       await screen.findByRole('dialog', { name: 'New work item' }),
     ).toBeVisible()
+  })
+
+  it('opens the drawer on the "." key character when event.code is unavailable', async () => {
+    renderQuickCreate()
+
+    // Environments without a reliable `event.code` (and layouts
+    // where the dot key reports a different physical code, e.g.
+    // AZERTY) still match through the key-character fallback.
+    fireEvent.keyDown(document, { key: '.', metaKey: true })
+    expect(
+      await screen.findByRole('dialog', { name: 'New work item' }),
+    ).toBeVisible()
+  })
+
+  it('does not re-open or reset an already open create drawer when the shortcut is pressed again', async () => {
+    renderQuickCreate()
+
+    fireEvent.keyDown(document, { key: '.', metaKey: true })
+    const dialog = await screen.findByRole('dialog', {
+      name: 'New work item',
+    })
+    await selectResearchGroup('FG Example')
+    await selectProject('Writable Project')
+    fireEvent.change(within(dialog).getByLabelText('Title'), {
+      target: { value: 'Keep this draft' },
+    })
+
+    // Re-press while the drawer is open (focused Title input):
+    // the open modal must make the shortcut a strict no-op —
+    // no second drawer, no reset of context or draft.
+    fireEvent.keyDown(within(dialog).getByLabelText('Title'), {
+      key: '.',
+      metaKey: true,
+    })
+
+    expect(
+      screen.getAllByRole('dialog', { name: 'New work item' }),
+    ).toHaveLength(1)
+    expect(within(dialog).getByLabelText('Title')).toHaveValue(
+      'Keep this draft',
+    )
+    expect(checkedOption(researchGroupSelect())?.textContent).toBe(
+      'FG Example',
+    )
+    expect(checkedOption(projectSelect())?.textContent).toBe(
+      'Writable Project',
+    )
   })
 
   it('opens the drawer on Ctrl+Alt+K on Windows and Linux platforms', async () => {
@@ -438,6 +522,18 @@ describe('global Work Item Quick Create', () => {
     renderQuickCreate()
 
     fireEvent.keyDown(document, { key: 'k', metaKey: true, altKey: true })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+
+    // The Windows/Linux binding keeps ignoring editable targets
+    // (unchanged in this slice).
+    const input = document.createElement('input')
+    document.body.append(input)
+    fireEvent.keyDown(input, { key: 'k', ctrlKey: true, altKey: true })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    input.remove()
+
+    // The new macOS key character never triggers this binding.
+    fireEvent.keyDown(document, { key: '.', metaKey: true })
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
 
     fireEvent.keyDown(document, { key: 'k', ctrlKey: true, altKey: true })
