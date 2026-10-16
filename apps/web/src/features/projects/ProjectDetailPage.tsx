@@ -3258,7 +3258,6 @@ export function ProjectDetailPage() {
               (item) => ({
                 id: item.id,
                 title: item.title,
-                type: item.type,
               }),
             )}
             onClose={() =>

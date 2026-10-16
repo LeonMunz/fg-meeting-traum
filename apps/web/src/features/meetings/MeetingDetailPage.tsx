@@ -112,7 +112,6 @@ import type {
   ApiProjectWorkItemConfiguration,
   ApiUpdateWorkItemInput,
   ApiWorkItem,
-  ApiWorkItemType,
 } from '../../api/types'
 import { useSyncResearchGroupContext } from '../research-group/useSyncResearchGroupContext'
 
@@ -1232,7 +1231,6 @@ export function MeetingDetailPage() {
     Array<{
       id: string
       title: string
-      type: ApiWorkItemType
     }>
   >([])
   const [
@@ -3455,9 +3453,6 @@ export function MeetingDetailPage() {
               ),
               title:
                 workItem.title,
-              type:
-                workItem.type ??
-                'task',
             }),
           ),
         )

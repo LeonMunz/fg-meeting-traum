@@ -18,7 +18,6 @@ import type {
   ApiProjectWorkItemConfiguration,
   ApiUpdateWorkItemInput,
   ApiWorkItemStatus,
-  ApiWorkItemType,
   ApiWorkItemTypeKind,
 } from '../../api/types'
 import {
@@ -45,7 +44,6 @@ import type { WorkItemFormInput } from '../projects/WorkItemDrawer'
 import { WorkItemDeleteDialog } from '../projects/workItemDelete'
 import {
   buildCreateWorkItemInput,
-  resolveWorkItemType,
 } from '../projects/workItemMapping'
 import {
   orderMyWorkBoardColumn,
@@ -191,7 +189,6 @@ type DrawerAssigneeOption = {
 type DrawerParentOption = {
   id: string
   title: string
-  type: ApiWorkItemType
 }
 
 // Lazy per-Project drawer context: loaded ONLY when a card of that
@@ -1036,10 +1033,6 @@ export function MyWorkPage() {
               (item) => ({
                 id: String(item.id),
                 title: item.title,
-                type: resolveWorkItemType(
-                  item.typeDefinitionId,
-                  configuration,
-                ),
               }),
             ),
           }

@@ -21,14 +21,12 @@ import type {
   ApiProjectMembership,
   ApiProjectWorkItemConfiguration,
   ApiWorkItem,
-  ApiWorkItemType,
 } from '../../api/types'
 import { useSession } from '../../api/useSession'
 import { createWorkItem, listProjectWorkItems } from '../../api/work-items'
 import type { WorkItemFormInput } from '../../features/projects/WorkItemDrawer'
 import {
   buildCreateWorkItemInput,
-  resolveWorkItemType,
 } from '../../features/projects/workItemMapping'
 import { useResearchGroup } from '../../features/research-group/useResearchGroup'
 import { projectIdFromPath } from './projectQuickAccess'
@@ -47,7 +45,7 @@ type DrawerContext = {
   projectId: number
   configuration: ApiProjectWorkItemConfiguration
   assignees: Array<{ id: string; name: string; initials: string }>
-  parentItems: Array<{ id: string; title: string; type: ApiWorkItemType }>
+  parentItems: Array<{ id: string; title: string }>
 }
 
 type ProjectLoadState =
@@ -241,10 +239,6 @@ export function QuickCreate({
           parentItems: workItems.map((item: ApiWorkItem) => ({
             id: String(item.id),
             title: item.title,
-            type: resolveWorkItemType(
-              item.typeDefinitionId,
-              configuration,
-            ),
           })),
         })
         setContextLoadingProjectId(null)

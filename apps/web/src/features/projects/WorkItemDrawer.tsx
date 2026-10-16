@@ -66,7 +66,6 @@ type AssigneeOption = {
 type ParentOption = {
   id: string
   title: string
-  type: ApiWorkItemType
 }
 
 export type WorkItemProjectOption = {

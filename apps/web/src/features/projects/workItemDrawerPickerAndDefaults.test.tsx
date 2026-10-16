@@ -43,6 +43,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from '@testing-library/react'
 import {
   afterEach,
@@ -149,6 +150,7 @@ function renderCreatePanel(
   configuration: ApiProjectWorkItemConfiguration =
     makeConfiguration(CANONICAL_TYPES),
   readOnly = false,
+  parentItems: Array<{ id: string; title: string }> = [],
 ) {
   const onClose = vi.fn()
   const onCreate = vi.fn(async () => {})
@@ -163,7 +165,7 @@ function renderCreatePanel(
       currentUserId={1}
       workItemConfiguration={configuration}
       assignees={ASSIGNEES}
-      parentItems={[]}
+      parentItems={parentItems}
       onClose={onClose}
       onCreate={onCreate}
       onPatch={vi.fn(async () => {})}
@@ -179,6 +181,7 @@ function renderInspectorPanel(
   item: ApiWorkItem = makeItem(),
   assignees = ASSIGNEES,
   readOnly = false,
+  parentItems: Array<{ id: string; title: string }> = [],
 ) {
   const onClose = vi.fn()
   const patches: Array<{
@@ -203,7 +206,7 @@ function renderInspectorPanel(
       currentUserId={1}
       workItemConfiguration={configuration}
       assignees={assignees}
-      parentItems={[]}
+      parentItems={parentItems}
       onClose={onClose}
       onPatch={onPatch}
     />,
@@ -1406,3 +1409,126 @@ describe(
     })
   },
 )
+
+// ── Parent selection (shared contract) ────────────────────────────
+//
+// The shared Drawer ParentOption contract carries only `id` and
+// `title`. This regression pins the observable parent-selection
+// behavior that contract serves: the create form renders the
+// candidates in title order and the selected (or cleared) value
+// becomes the submitted `parentId`; the edit inspector excludes the
+// item itself from its candidates and issues single-field
+// `parentId` PATCHes for select and clear.
+
+const PARENT_OPTIONS = [
+  { id: '9', title: 'Zeta parent' },
+  { id: '8', title: 'Alpha parent' },
+]
+
+describe('WorkItemDrawer — Parent selection (shared contract)', () => {
+  it('create: renders the Parent candidates in title order and submits the selected parentId', async () => {
+    const { onCreate } = renderCreatePanel(
+      makeConfiguration(CANONICAL_TYPES),
+      false,
+      PARENT_OPTIONS,
+    )
+
+    const parentSelect = screen.getByLabelText('Parent')
+    expect(parentSelect).toHaveValue('')
+    expect(
+      within(parentSelect)
+        .getAllByRole('option')
+        .map((option) => option.textContent),
+    ).toEqual(['No parent', 'Alpha parent', 'Zeta parent'])
+
+    fireEvent.change(parentSelect, { target: { value: '9' } })
+    fireEvent.change(
+      screen.getByPlaceholderText('What needs to be done?'),
+      { target: { value: 'Child task' } },
+    )
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Create work item' }),
+    )
+
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1))
+    expect(onCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Child task',
+        parentId: '9',
+      }),
+    )
+  })
+
+  it('create: clearing the selected Parent submits no parentId', async () => {
+    const { onCreate } = renderCreatePanel(
+      makeConfiguration(CANONICAL_TYPES),
+      false,
+      PARENT_OPTIONS,
+    )
+
+    const parentSelect = screen.getByLabelText('Parent')
+    fireEvent.change(parentSelect, { target: { value: '9' } })
+    fireEvent.change(parentSelect, { target: { value: '' } })
+    fireEvent.change(
+      screen.getByPlaceholderText('What needs to be done?'),
+      { target: { value: 'Child task' } },
+    )
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Create work item' }),
+    )
+
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1))
+    expect(onCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Child task',
+        parentId: null,
+      }),
+    )
+  })
+
+  it('edit: excludes the item itself from the candidates and PATCHes the selected / cleared parentId', async () => {
+    const item = makeItem({ parentId: 8 })
+    const { patches, onPatch } = renderInspectorPanel(
+      makeConfiguration(CANONICAL_TYPES),
+      item,
+      ASSIGNEES,
+      false,
+      [
+        ...PARENT_OPTIONS,
+        // The item itself (id 42) must never be a candidate.
+        { id: '42', title: 'Ship the report' },
+      ],
+    )
+
+    const parentSelect = screen.getByLabelText('Parent')
+    expect(parentSelect).toHaveValue('8')
+    expect(
+      within(parentSelect)
+        .getAllByRole('option')
+        .map((option) => option.textContent),
+    ).toEqual(['No parent', 'Alpha parent', 'Zeta parent'])
+
+    // Clearing the existing parent PATCHes a null parentId.
+    fireEvent.change(parentSelect, { target: { value: '' } })
+    await waitFor(() => expect(onPatch).toHaveBeenCalledTimes(1))
+    expect(patches).toEqual([
+      { workItemId: 42, patch: { parentId: null } },
+    ])
+
+    // Selecting a different candidate PATCHes that id.
+    fireEvent.change(parentSelect, { target: { value: '9' } })
+    await waitFor(() => expect(onPatch).toHaveBeenCalledTimes(2))
+    expect(patches).toEqual([
+      { workItemId: 42, patch: { parentId: null } },
+      { workItemId: 42, patch: { parentId: 9 } },
+    ])
+
+    // No-op guard: choosing the item's CURRENT parent issues nothing.
+    fireEvent.change(parentSelect, { target: { value: '8' } })
+    // Flush the serialized PATCH queue before asserting the
+    // negative: a buggy enqueue would land onPatch in a
+    // microtask.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(onPatch).toHaveBeenCalledTimes(2)
+  })
+})
