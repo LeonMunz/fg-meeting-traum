@@ -375,16 +375,25 @@ class WorkItemReorderView(APIView):
     """POST /api/work-items/{work_item_id}/reorder/
 
     Single atomic Board drag/drop operation: moves the Work Item to an
-    exact position inside a Board column. When the target column differs
-    from the Work Item's current column, the canonical status_definition
-    moves with it, so a cross-column drop is never split into a race-prone
-    status PATCH followed by a position PATCH.
+    exact position inside a Board column. A Board column is one semantic
+    status CATEGORY of the Project: all Work Items whose current
+    StatusDefinition belongs to that category share the one column and
+    the one project-wide ordering. When the target column is a
+    DIFFERENT category than the Work Item's current status, the
+    canonical status_definition moves with it (the target definition
+    must be active), so a cross-column drop is never split into a
+    race-prone status PATCH followed by a position PATCH. A move within
+    the same category is a pure reorder: the Work Item's concrete
+    StatusDefinition is never changed.
 
     Body (both fields optional):
-    - statusDefinitionId: target column (Project status definition ID).
-      Omit to keep the Work Item's current status.
-    - beforeWorkItemId: Work Item that should follow the moved one in the
-      target column. Omit / null to place it at the end of the column.
+    - statusDefinitionId: target column (Project StatusDefinition ID;
+      selects the column by that definition's semantic category).
+      Omit to keep the Work Item's current status category.
+    - beforeWorkItemId: Work Item that should follow the moved one in
+      the target column; may reference any concrete StatusDefinition
+      of the target category. Omit / null to place the item at the
+      end of the column.
 
     Requires ProjectMembership owner/member (not viewer).
     """

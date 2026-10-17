@@ -530,3 +530,111 @@ class StatusTransitionAPITest(_TransitionBase, TestCase):
             content_type="application/json",
         )
         self.assertEqual(resp.status_code, 403)
+
+
+class MultiDefinitionCategoryTransitionTest(TestCase):
+    """Status-only transitions against a category column holding
+    MULTIPLE concrete StatusDefinitions (AP-01 shared category
+    ordering): the preserved board_position is a shared ordering key
+    within the target category column, siblings are never renumbered."""
+
+    def setUp(self):
+        self.data = _create_test_scenario()
+        self.project = self.data["paper_xyz"]
+        self.alex = self.data["alex"]
+        self.task_type = self.data["task_type"]
+        self.status_ids = {
+            status.category: status.pk
+            for status in self.project.status_definitions.all()
+        }
+        self.open_def = self.project.status_definitions.get(name="Todo")
+        self.planned = WorkItemStatusDefinition.objects.create(
+            project=self.project, name="Planned",
+            category="todo", order=1,
+        )
+
+    def _create_in(self, title, status_def, position=None):
+        wi = create_work_item(
+            project=self.project,
+            actor=self.alex,
+            type_definition_id=self.task_type.pk,
+            title=title,
+            status_definition_id=(
+                status_def.pk if hasattr(status_def, "pk") else status_def
+            ),
+        )
+        if position is not None:
+            wi.board_position = position
+            wi.save(update_fields=["board_position"])
+        return wi
+
+    def _category_titles(self, category):
+        from django.db.models import F
+
+        return list(
+            WorkItem.objects.filter(
+                project=self.project,
+                status_definition__category=category,
+            )
+            .order_by(F("board_position").asc(nulls_last=True),
+                      "created_at", "id")
+            .values_list("title", flat=True)
+        )
+
+    def test_transition_into_multi_definition_category_preserves_position(
+        self,
+    ):
+        a = self._create_in("A", self.open_def, position=1)
+        c = self._create_in("C", self.planned, position=1)  # legacy overlap
+        b = self._create_in("B", self.open_def, position=2)
+        d = self._create_in("D", self.status_ids["in_progress"], position=2)
+        before = _board_state(self.project)
+
+        transition_work_item_status(
+            work_item=d,
+            actor=self.alex,
+            status_definition_id=self.planned.pk,
+        )
+
+        d.refresh_from_db()
+        self.assertEqual(d.status_definition_id, self.planned.pk)
+        self.assertEqual(d.board_position, 2)
+        # No sibling is renumbered; no position is written at all.
+        after = _board_state(self.project)
+        for pk, (status, pos) in before.items():
+            if pk != d.pk:
+                self.assertEqual(after[pk], (status, pos))
+        # Deterministic shared order within the todo category:
+        # A(1), C(1, created after A), B(2), D(2, created last).
+        self.assertEqual(self._category_titles("todo"), ["A", "C", "B", "D"])
+
+    def test_transition_same_category_definition_change_preserves_position(
+        self,
+    ):
+        """An explicit status transition may still change the concrete
+        definition within the same category — position preserved, one
+        history event."""
+        self._create_in("A", self.open_def, position=1)
+        e = self._create_in("E", self.open_def, position=3)
+
+        transition_work_item_status(
+            work_item=e,
+            actor=self.alex,
+            status_definition_id=self.planned.pk,
+        )
+
+        e.refresh_from_db()
+        self.assertEqual(e.status_definition_id, self.planned.pk)
+        self.assertEqual(e.board_position, 3)
+        events = AuditEvent.objects.filter(
+            work_item=e,
+            event_type=WorkItemAuditEventType.UPDATED,
+        )
+        self.assertEqual(events.count(), 1)
+        changes = events.first().data["changes"]
+        self.assertEqual(
+            changes["statusDefinition"]["from"]["id"], self.open_def.pk,
+        )
+        self.assertEqual(
+            changes["statusDefinition"]["to"]["id"], self.planned.pk,
+        )

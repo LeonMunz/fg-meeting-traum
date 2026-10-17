@@ -70,6 +70,7 @@ from work_items.services import (
     WorkItemDomainError,
     create_work_item,
     delete_work_item,
+    reposition_work_item,
     transition_work_item_status,
 )
 
@@ -586,6 +587,47 @@ class AtomicRollbackTest(_MyWorkBoardOrderBase, TestCase):
         self.assertFalse(
             MyWorkBoardPosition.objects.filter(user=self.alex).exists()
         )
+
+    def test_project_board_reorder_never_changes_personal_order(self):
+        """A Project Board reorder may renumber the project-local
+        board_position — it must never create, move, or delete the
+        user's personal My Work positions."""
+        a = self._create("A")
+        b = self._create("B")
+        c = self._create("C")
+        move_my_work_item(
+            user=self.alex, work_item=c,
+            status_category="todo", before_work_item_id=b.pk,
+        )
+        personal_before = self._rows(self.alex)
+        self.assertEqual(personal_before, {
+            a.pk: ("todo", 1), c.pk: ("todo", 2), b.pk: ("todo", 3),
+        })
+
+        # Pure same-category Project Board reorder: B before A.
+        reposition_work_item(
+            work_item=b,
+            actor=self.alex,
+            before_work_item_id=a.pk,
+        )
+
+        # The Project Board column is now B, A, C — but the personal
+        # rows are value-for-value identical, and the personal column
+        # still renders A, C, B.
+        self.assertEqual(self._rows(self.alex), personal_before)
+        self.assertEqual(
+            self._effective_column(self.alex, "todo"),
+            [a.pk, c.pk, b.pk],
+        )
+        from django.db.models import F
+
+        project_order = list(
+            WorkItem.objects.filter(project=self.project)
+            .order_by(F("board_position").asc(nulls_last=True),
+                      "created_at", "id")
+            .values_list("title", flat=True)
+        )
+        self.assertEqual(project_order, ["B", "A", "C"])
         self.assertEqual(self._history_events(c), [])
 
     def test_anchor_in_wrong_category_rejected_without_change(self):

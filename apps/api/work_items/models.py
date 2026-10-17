@@ -41,7 +41,9 @@ class WorkItem(models.Model):
         null=True,
         blank=True,
     )
-    # Manual Board position within the Project/status-definition column.
+    # Manual Board position within the Project's semantic status
+    # category column (a Board column spans ALL concrete
+    # StatusDefinitions of one category, shared by the whole Project).
     #
     # NULL = unsorted (server appends to the end of its column, ordered by
     # (board_position, created_at, id)). Reordering within a column is an

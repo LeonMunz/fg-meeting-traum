@@ -210,15 +210,39 @@ def update_status_definition(definition, actor, name=None, order=None,
     """Update an existing StatusDefinition.
 
     Owner only. Enforces all status invariants.
+
+    Concurrency: Board reorder / status operations
+    (``reposition_work_item``, ``transition_work_item_status``) read
+    a target StatusDefinition's category, activity, and reference
+    state to decide the move, then commit under the Project row
+    lock. They lock rows in the order Project -> Work Item(s),
+    never taking the Definition row lock. To stay in one global
+    lock order (Project -> Definition) and make a category change
+    serialize against those operations, this mutation acquires the
+    same Project row lock FIRST and re-loads the definition under
+    that lock. Every invariant below (owner, name uniqueness,
+    category immutability while referenced, default rules,
+    deactivation rules) is then revalidated against fresh, locked
+    rows before the change commits in the same transaction.
     """
     _require_owner(definition.project, actor)
 
     with transaction.atomic():
-        definition = WorkItemStatusDefinition.objects.select_for_update().get(
-            pk=definition.pk
+        # Canonical Project write lock FIRST — the same row lock the
+        # Work-Item status/reorder operations hold around their
+        # decisions, so the two operations can never interleave.
+        project = Project.objects.select_for_update().get(
+            pk=definition.project_id
         )
-        _require_owner(definition.project, actor)
-        project = definition.project
+        _require_owner(project, actor)
+        # Then reload and lock the definition itself (a definition
+        # deleted or re-parented after the caller's snapshot is
+        # rejected by the Project-scoped lookup).
+        definition = (
+            WorkItemStatusDefinition.objects.select_for_update()
+            .filter(pk=definition.pk, project=project)
+            .get()
+        )
 
         if name is not None:
             name = _validate_name(name)

@@ -770,8 +770,12 @@ def _apply_work_item_fields(
 
         # Non-drag status change (Work Item Editor): no explicit
         # insertion target, so the item deterministically goes to the
-        # end of the target column. Board drag/drop uses
-        # reposition_work_item instead, which never reaches here.
+        # end of the target Board column. A Board column is the full
+        # semantic status category of the target definition, so the
+        # WHOLE target category is normalized and the item is appended
+        # behind its last entry (see reposition_work_item). Board
+        # drag/drop uses reposition_work_item instead, which never
+        # reaches here.
         if status_changing:
             # The item goes to the end of the target column's render
             # order. Normalize the column to explicit positions first
@@ -780,7 +784,7 @@ def _apply_work_item_fields(
             target_column = list(
                 WorkItem.objects.filter(
                     project=project,
-                    status_definition_id=status_def.pk,
+                    status_definition__category=status_def.category,
                 )
                 .exclude(pk=work_item.pk)
                 .order_by(
@@ -1088,77 +1092,144 @@ def reposition_work_item(
     """Move a Work Item to an exact position inside a Board column.
 
     This is the single Board drag/drop operation: it changes the
-    Work Item's canonical status_definition (when the target column
-    differs from the current one) and its persisted board_position in
-    one atomic transaction, so a cross-column drop can never be split
-    into a race-prone status PATCH followed by a position PATCH.
+    Work Item's canonical status_definition (only when the target
+    column is a DIFFERENT semantic category) and its persisted
+    board_position in one atomic transaction, so a cross-column drop
+    can never be split into a race-prone status PATCH followed by a
+    position PATCH.
+
+    A Board column is one semantic status CATEGORY of the Project
+    (todo / in_progress / review / done), not one concrete
+    StatusDefinition: every Work Item whose current StatusDefinition
+    belongs to the category shares the one column and the one
+    project-local, project-wide ordering.
 
     Semantics:
-    - Ordering is meaningful within one Project/status-definition
+    - ``status_definition_id`` selects the target column by its
+      semantic category.
+      - Same category as the Work Item's current status: a PURE
+        reorder. The Work Item's status_definition is NEVER changed —
+        not to the requested same-category definition, not to
+        anything — even if the Work Item currently references an
+        inactive definition. No functional status change happens and
+        no status history event is recorded.
+      - Different category: a real canonical status change to the
+        requested definition, which must be ACTIVE. completed_at and
+        history follow the canonical status-change rules.
+    - Ordering is meaningful within one Project/status-category
       column. The list endpoint renders each column by
       (board_position ASC NULLS LAST, created_at, id): items with an
       explicit position first, unpositioned items after in canonical
-      creation order.
+      creation order. Pre-existing position values that predate the
+      shared column (or never received one) keep that stable,
+      deterministic order; the first reorder of the column
+      normalizes it to explicit positions 1..N.
     - ``before_work_item_id`` is the Work Item that should follow the
-      moved one; None means "end of the target column" (which also
-      covers the empty-column case).
+      moved one; it may reference ANY concrete StatusDefinition of
+      the target category; None means "end of the target column"
+      (which also covers the empty-column case).
     - The insertion position is anchored to a stable id, so the moved
       item lands exactly at the intended gap even if concurrent drags
       run in parallel.
-    - On every reorder the target column is normalized: all of its
-      items receive explicit positions 1..N in their current render
-      order, and the move is applied on top. This keeps the column
-      fully position-based, so hidden (filtered-out) items are never
-      scrambled relative to each other and reload is deterministic.
+    - On every reorder the full target category column is
+      normalized: all of its items receive explicit positions 1..N
+      in their current render order, and the move is applied on top.
+      This keeps the column fully position-based, so hidden
+      (filtered-out) items are never scrambled relative to each other
+      and reload is deterministic.
+
+    Concurrency: the caller's Work Item may be a STALE snapshot — a
+    concurrent status change may have committed after the caller's
+    read. Every decision of this operation (the current concrete
+    status, its current semantic category, the requested target
+    category, the same- vs. cross-category distinction, the active
+    target StatusDefinition, and the drop anchor's membership in the
+    target column) is therefore derived from fresh rows loaded under
+    the Project lock inside this single atomic transaction; the
+    stable lock order (Project row, moved Work Item row, then the
+    target-column rows) and the transaction boundary are unchanged.
+    A stale snapshot never silently selects the column: without an
+    explicit target StatusDefinition the move stays in the Work
+    Item's CURRENT (fresh) category; with one, the requested
+    definition is re-resolved under the lock (existing, same
+    Project) and the same- vs. cross-category decision is made
+    against the fresh current category; a cross-category move then
+    additionally requires the requested definition to be active. A
+    stale or otherwise invalid
+    anchor is rejected with a WorkItemDomainError and the
+    transaction rolls back — never a silent alternative placement,
+    never an unhandled internal error.
     """
     project = work_item.project
-    target_status = (
-        _resolve_status_definition(project, status_definition_id)
-        if status_definition_id is not None
-        else work_item.status_definition
-    )
-
-    before_item: Optional[WorkItem] = None
-    if before_work_item_id is not None:
-        before_item = (
-            WorkItem.objects.filter(pk=before_work_item_id)
-            .select_related("status_definition")
-            .first()
-        )
-        if (
-            before_item is None
-            or before_item.project_id != project.pk
-            or before_item.pk == work_item.pk
-        ):
-            raise WorkItemDomainError(
-                "beforeWorkItemId does not reference a Work Item "
-                "in this Project."
-            )
-        if before_item.status_definition_id != target_status.pk:
-            raise WorkItemDomainError(
-                "beforeWorkItemId is not in the target status column."
-            )
 
     with transaction.atomic():
         locked_project = Project.objects.select_for_update().get(
             pk=project.pk
         )
-        work_item = WorkItem.objects.select_for_update().get(
-            pk=work_item.pk
+        work_item = (
+            WorkItem.objects.select_for_update()
+            .select_related("status_definition")
+            .get(pk=work_item.pk)
         )
         if actor is not None:
             _require_project_write_access(locked_project, actor)
 
-        before_state = _snapshot_work_item_state(work_item)
+        # ── Move decisions, all from the fresh, locked state ──
+        # The caller's Work Item snapshot may be stale (a concurrent
+        # status change may have committed after the caller's read);
+        # only the rows loaded under the Project lock below are
+        # authoritative for every decision of this operation.
+        current_status = work_item.status_definition
+        current_category = current_status.category
 
-        # Lock the full target column (excluding the moved item) and
-        # render it in Board order (positioned first, then unpositioned
-        # in creation order). This is the list the Board shows.
+        # An explicitly requested target column is re-resolved under
+        # the lock, so a definition that was removed after the
+        # caller's snapshot is rejected here, and the target category
+        # is the one the definition actually has now. A stale
+        # snapshot must not silently fix the target semantics.
+        requested_status = None
+        if status_definition_id is not None:
+            requested_status = _resolve_status_definition(
+                locked_project, status_definition_id
+            )
+            target_category = requested_status.category
+        else:
+            # No explicit target: a pure reorder that stays in the
+            # Work Item's CURRENT (freshly loaded) semantic category.
+            target_category = current_category
+
+        same_category = target_category == current_category
+        if same_category:
+            # Pure reorder: the concrete StatusDefinition is never
+            # changed — the requested same-category definition only
+            # selects the column (even when inactive; it is not
+            # transitioned to). No functional status change and no
+            # status history event happens.
+            target_status = current_status
+        else:
+            # Cross-category: a real canonical status change to the
+            # requested definition. Only an ACTIVE StatusDefinition
+            # of the Work Item's own Project is a valid target; the
+            # fresh (under-lock) state is decisive, so a definition
+            # deactivated after the caller's snapshot is rejected
+            # here.
+            target_status = requested_status
+            if not target_status.active:
+                raise WorkItemDomainError(
+                    "Target status definition is not active and cannot be "
+                    "selected as a Board move target."
+                )
+
+        # Lock the full target category column (ALL concrete Status
+        # Definitions of that category, excluding the moved item) and
+        # render it in Board order (positioned first, then
+        # unpositioned in creation order). This is the list the
+        # Board shows.
         column = list(
             WorkItem.objects.select_for_update()
             .filter(
                 project=locked_project,
-                status_definition_id=target_status.pk,
+                status_definition__category=target_category,
             )
             .exclude(pk=work_item.pk)
             .order_by(
@@ -1169,6 +1240,34 @@ def reposition_work_item(
             .select_related("status_definition")
         )
 
+        # ── Drop anchor, validated against the fresh, locked state ──
+        # Covers an anchor that moved to a different category, was
+        # deleted, or was never in this Project since the caller's
+        # snapshot. Rejected below with a controlled domain error.
+        anchor: Optional[WorkItem] = None
+        if before_work_item_id is not None:
+            anchor = (
+                WorkItem.objects.select_for_update()
+                .filter(pk=before_work_item_id)
+                .select_related("status_definition")
+                .first()
+            )
+            if (
+                anchor is None
+                or anchor.project_id != locked_project.pk
+                or anchor.pk == work_item.pk
+            ):
+                raise WorkItemDomainError(
+                    "beforeWorkItemId does not reference a Work Item "
+                    "in this Project."
+                )
+            if anchor.status_definition.category != target_category:
+                raise WorkItemDomainError(
+                    "beforeWorkItemId is not in the target status column."
+                )
+
+        before_state = _snapshot_work_item_state(work_item)
+
         # Normalize: assign explicit positions 1..N in render order so
         # the whole column is position-based.
         for index, item in enumerate(column, start=1):
@@ -1178,11 +1277,19 @@ def reposition_work_item(
 
         # Compute the new render order: the column with the moved item
         # inserted before the anchor (or at the end when no anchor).
-        if before_item is not None:
+        if anchor is not None:
             anchor_index = next(
-                i for i, item in enumerate(column)
-                if item.pk == before_item.pk
+                (i for i, item in enumerate(column)
+                 if item.pk == anchor.pk),
+                None,
             )
+            if anchor_index is None:
+                # The anchor is guaranteed to belong to the locked
+                # column above; keep the failure controlled (never
+                # an unhandled StopIteration) regardless.
+                raise WorkItemDomainError(
+                    "beforeWorkItemId is not in the target status column."
+                )
             new_order = (
                 column[:anchor_index]
                 + [work_item]
@@ -1192,17 +1299,20 @@ def reposition_work_item(
             new_order = column + [work_item]
 
         # Persist the resulting order: the moved item and any item
-        # whose slot changed.
+        # whose slot changed. The concrete StatusDefinition changes
+        # ONLY on a cross-category move.
         for index, item in enumerate(new_order, start=1):
             if item is work_item:
-                work_item.status_definition = target_status
+                if not same_category:
+                    work_item.status_definition = target_status
                 work_item.board_position = index
                 continue
             if item.board_position != index:
                 item.board_position = index
                 item.save(update_fields=["board_position"])
 
-        _apply_status_completion(work_item, target_status)
+        if not same_category:
+            _apply_status_completion(work_item, target_status)
         work_item.save(
             update_fields=[
                 "status_definition",

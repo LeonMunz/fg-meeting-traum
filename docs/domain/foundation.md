@@ -1301,11 +1301,15 @@ Invariants:
 
 - **Distinct from Project Board ordering.** `WorkItem.board_position`
   is Project-local Board state, meaningful only within one
-  Project/status-definition column. My Work spans multiple Projects,
-  so Project `board_position` is never a My Work ordering input: a
-  My Work move neither reads nor writes it, and Project Board
-  semantics (column render order, manual ordering, cross-column
-  drag, status-only transition) are unchanged.
+  Project/status-CATEGORY column (the shared team order of all
+  Work Items in that semantic category, Section 15). My Work spans
+  multiple Projects, so Project `board_position` is never a My Work
+  ordering input: a My Work move neither reads nor writes it, and a
+  Project Board reorder never reads nor writes personal
+  `MyWorkBoardPosition` rows — neither direction of the boundary may
+  leak. Project Board semantics (column render order, manual ordering,
+  cross-column drag, status-only transition) are unchanged by My Work
+  moves.
 - **A position applies only in the semantic category it was created
   for** (the row's `status_category`). If the Work Item's status is
   changed outside My Work (Project Board, editor, status-only
@@ -1419,43 +1423,98 @@ The Project Board is a projection over the same canonical Project Work Items
 shown by the Project List and My Work. Board and List are views over one data
 source; switching views must not create separate state.
 
-### Columns
+### Columns (semantic status categories)
 
-A Board column corresponds to a **Status Definition**
-(`WorkItemStatusDefinition`), identified by `statusDefinitionId`. An item is
-placed in the column of its current `statusDefinitionId`.
+A Board column corresponds to a **semantic status category**
+(`WorkItemStatusDefinition.category`: `todo` / `in_progress` / `review` /
+`done`), not to one concrete Status Definition. An item is placed in the
+column of the category of its current `statusDefinitionId`.
 
-### Manual ordering (persisted)
+Projects may configure SEVERAL concrete StatusDefinitions with individual
+names per category (each with its own `order`, `active`, `is_default`);
+all Work Items whose current StatusDefinition belongs to a category share
+the ONE column and the ONE ordering.
+
+### Manual ordering (persisted, project-wide per category)
 
 Manual ordering is persisted on the Work Item via `board_position`
 (`Integer`, nullable). Ordering is meaningful within one Project/status
-column. A column renders by `(board_position ASC NULLS LAST, created_at, id)`:
+CATEGORY column, and it is a SHARED team order: it belongs to the
+Project, is identical for every authorized Project member, and is never
+personal state (the personal My Work order is separate — Section 14b).
+A column renders by `(board_position ASC NULLS LAST, created_at, id)`:
 explicitly positioned items first, then unpositioned items in canonical
 creation order. `board_position = NULL` means "unsorted".
 
 - Items can be reordered within a column.
 - An item can be inserted at an exact position, including across columns
   (a cross-column drag).
+- **Multiple definitions per category share one order.** A
+  `board_position` is a category-wide ordering key, not a
+  per-StatusDefinition key.
+- **Pre-existing and unsorted data stay deterministic without a
+  backfill.** Position values created while columns were per Status
+  Definition may overlap within a category (and new or never-moved
+  items may be `NULL`): the render order above remains the stable,
+  deterministic order for that data. The next reorder of the column
+  normalizes the FULL category column to explicit positions `1..N` in
+  render order (see below).
+- **Sorting never mutates status.** A reorder within a category changes
+  positions only — never the Work Item's concrete StatusDefinition,
+  `completed_at`, `blocked_reason`, or any other property, and never a
+  history event.
 
-### Cross-column drag (one atomic operation)
+### Shared column normalization
 
-`reposition_work_item` performs a single atomic Board operation that changes
-the Work Item's `status_definition` (when the target column differs) and its
-`board_position` together, so a cross-column drop can never be split into a
-racy status update followed by a separate position update. On each reorder the
-target column is normalized to explicit positions 1…N in render order.
+On every reorder of a category column, ALL items of the Project in that
+category (every concrete StatusDefinition of the category, including
+items filtered out of the current view) receive explicit positions
+`1..N` in their resulting render order. This keeps the column fully
+position-based, so hidden items are never scrambled relative to each
+other and reload is deterministic for every member.
+
+### Board drag / reorder (one atomic operation)
+
+`reposition_work_item` performs a single atomic Board operation that
+changes the Work Item's `board_position` — and its `status_definition`
+ONLY when the target column is a different semantic category — together,
+so a cross-column drop can never be split into a racy status update
+followed by a separate position update. On each reorder the full target
+category column is normalized to explicit positions 1…N in render order.
 The server remains authoritative for status and ordering.
+
+The target column is selected by the request's `statusDefinitionId` (its
+semantic category; omitting it keeps the Work Item's current category):
+
+- **Same category as the Work Item's current status: a pure reorder.**
+  The Work Item's concrete `statusDefinitionId` is NEVER changed — not
+  to the requested same-category definition, not to anything — even if
+  the Work Item currently references an inactive StatusDefinition. No
+  functional status change happens and no status history event is
+  recorded. A reorder endpoint call must never change a Status
+  Definition merely because two concrete definitions share a category.
+- **Different category: a real canonical status change.** The target
+  must be an ACTIVE `WorkItemStatusDefinition` of the Work Item's own
+  Project (inactive, foreign, or unknown targets are rejected with no
+  partial change). The status change, the exact target position, the
+  completion semantics (`completed_at`), and the exactly-one
+  `work_item.updated` history event are applied in the same atomic
+  operation, under the canonical Project write authorization and
+  archiving rules.
 
 `before_work_item_id` (API: `beforeWorkItemId`) anchors the insertion: the
 moved item is placed immediately before that Work Item; `null` means the end
-of the target column.
+of the target column. The anchor may reference ANY concrete
+StatusDefinition of the target category (it must belong to the same
+Project; anchoring on the moved item itself is rejected).
 
 ### Board ↔ Editor invariant
 
 The Board column, the Work Item Editor status, the Work Item's
 `statusDefinitionId`, and the persisted backend state must always agree.
 Changing the status in the Editor moves the item to the target column;
-changing the column on the Board updates the canonical status.
+changing the column on the Board updates the canonical status ONLY on a
+cross-category move (a same-category drag is a pure reorder).
 
 ### Editor status change placement (implemented)
 
@@ -1465,11 +1524,15 @@ editor's options are the Project's active StatusDefinitions in configured
 order, valued by concrete definition ID, and the editor's current selection
 is resolved from the Work Item's canonical `statusDefinitionId` (never from
 display names or semantic categories). Two definitions that share a category
-therefore remain independently selectable, and re-selecting the currently
-referenced definition issues no PATCH. The editor never sends an insertion
-anchor; the server then appends the item to the **end** of the target
-column. Board drag/drop uses `reposition_work_item` instead, which honors an
-explicit insertion anchor.
+therefore remain independently selectable (an explicit PATCH to a different
+concrete definition of the same category is a real status change), and
+re-selecting the currently referenced definition issues no PATCH. The
+editor never sends an insertion anchor; the server then appends the item
+to the **end** of the target column — i.e. behind the LAST item of the
+WHOLE target category (the full category column is normalized first, so
+the placement is the visible column end regardless of how many concrete
+definitions the category contains). Board drag/drop uses
+`reposition_work_item` instead, which honors an explicit insertion anchor.
 
 ### Status-only transition (preserves board position, implemented)
 
@@ -1487,7 +1550,11 @@ never inferred from caller identity:
   `POST /api/work-items/{id}/transition-status/`) changes the concrete
   `statusDefinitionId` **without** changing the Work Item's
   `board_position`, without reordering or renumbering any sibling, and
-  without performing a Project-board reposition.
+  without performing a Project-board reposition. The preserved
+  `board_position` is a shared category-wide ordering key: in the target
+  category column the item renders by the same
+  `(board_position ASC NULLS LAST, created_at, id)` rule, and no other
+  item's position is touched.
 
 The status-only transition exists because a global cross-category status
 change (for example, from My Work) must move the canonical Work Item status
