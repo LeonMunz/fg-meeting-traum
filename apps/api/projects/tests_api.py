@@ -16,6 +16,10 @@ from rest_framework.test import APIClient, APITestCase
 from research_groups.models import ResearchGroup, ResearchGroupMembership
 from projects.models import Project, ProjectMembership
 from projects.services import create_project, add_project_membership
+from projects.configuration_services import (
+    create_status_definition,
+    update_status_definition,
+)
 
 User = get_user_model()
 
@@ -705,3 +709,135 @@ class AssignmentProtectionAPITest(_AuthMixin, APITestCase):
             HTTP_X_CSRFTOKEN=csrf,
         )
         self.assertEqual(response.status_code, 200)
+
+
+class StatusDefaultCategoryProtectionAPITest(_AuthMixin, APITestCase):
+    """API: PATCH /work-item-configuration/statuses/{id}/ must reject a
+    recategorization of the active default status away from 'todo' AND a
+    default assignment whose effective final state is inactive, each with
+    a controlled 400 and no changes (atomic rejection).
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.alex = User.objects.create_user(
+            username="prot_alex", password="DevPass1!",
+        )
+        cls.group = ResearchGroup.objects.create(
+            name="FG Protection", created_by=cls.alex,
+        )
+        ResearchGroupMembership.objects.create(
+            research_group=cls.group,
+            user=cls.alex,
+            role=ResearchGroupMembership.Role.ADMIN,
+        )
+        cls.project = create_project(
+            research_group=cls.group,
+            creator=cls.alex,
+            name="Protection Project",
+        )
+        from projects.models import WorkItemStatusDefinition
+
+        cls.default_status = WorkItemStatusDefinition.objects.get(
+            project=cls.project, is_default=True, active=True,
+        )
+
+    def _patch_status(self, payload, definition=None):
+        definition = definition or self.default_status
+        csrf = self._get_csrf_token()
+        return self.client.patch(
+            f"/api/projects/{self.project.pk}"
+            f"/work-item-configuration/statuses/{definition.pk}/",
+            data=payload,
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=csrf,
+        )
+
+    def test_recategory_active_default_returns_400(self):
+        """8) Recategorizing the active default to 'done' is a controlled
+        400 and leaves category / active / is_default unchanged."""
+        self._login("prot_alex")
+
+        response = self._patch_status({"category": "done"})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("error", response.json())
+        self.default_status.refresh_from_db()
+        self.assertEqual(self.default_status.category, "todo")
+        self.assertTrue(self.default_status.active)
+        self.assertTrue(self.default_status.is_default)
+
+    def test_inactive_default_target_returns_400(self):
+        """An inactive todo status requested as the default in a PATCH is
+        a controlled 400 (its effective final state is inactive) and
+        leaves the previous active default untouched."""
+        self._login("prot_alex")
+
+        backlog = create_status_definition(
+            self.project, self.alex, "Backlog", "todo",
+        )
+        update_status_definition(backlog, self.alex, active=False)
+
+        response = self._patch_status(
+            {"isDefault": True}, definition=backlog,
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("error", response.json())
+        self.default_status.refresh_from_db()
+        self.assertEqual(self.default_status.category, "todo")
+        self.assertTrue(self.default_status.active)
+        self.assertTrue(self.default_status.is_default)
+        backlog.refresh_from_db()
+        self.assertFalse(backlog.is_default)
+        self.assertFalse(backlog.active)
+
+    def test_combined_activation_and_default_assignment_accepted(self):
+        """The combined payload that activates the inactive todo status
+        and makes it the default in one PATCH is accepted: it becomes
+        the single active default, and the previous default remains a
+        regular active status."""
+        self._login("prot_alex")
+
+        backlog = create_status_definition(
+            self.project, self.alex, "Backlog", "todo",
+        )
+        update_status_definition(backlog, self.alex, active=False)
+
+        response = self._patch_status(
+            {"isDefault": True, "active": True}, definition=backlog,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["active"])
+        self.assertTrue(body["isDefault"])
+        backlog.refresh_from_db()
+        self.assertTrue(backlog.active)
+        self.assertTrue(backlog.is_default)
+        self.default_status.refresh_from_db()
+        self.assertTrue(self.default_status.active)
+        self.assertFalse(self.default_status.is_default)
+
+        from projects.models import WorkItemStatusDefinition
+
+        defaults = WorkItemStatusDefinition.objects.filter(
+            project=self.project, active=True, is_default=True,
+        )
+        self.assertEqual(defaults.count(), 1)
+        self.assertEqual(defaults.first().pk, backlog.pk)
+
+    def test_combined_isdefault_false_returns_400(self):
+        """The combined payload must not bypass the protection either."""
+        self._login("prot_alex")
+
+        response = self._patch_status(
+            {"category": "done", "isDefault": False},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("error", response.json())
+        self.default_status.refresh_from_db()
+        self.assertEqual(self.default_status.category, "todo")
+        self.assertTrue(self.default_status.active)
+        self.assertTrue(self.default_status.is_default)

@@ -10,8 +10,10 @@ Covers:
 - Final-owner invariant for active projects
 """
 
+from unittest import mock
+
 from django.contrib.auth import get_user_model
-from django.db import IntegrityError
+from django.db import DatabaseError, IntegrityError
 from django.test import TestCase
 
 from research_groups.models import ResearchGroup, ResearchGroupMembership
@@ -1427,6 +1429,339 @@ class ConfigurationServiceTest(_ConfigSetupMixin, TestCase):
         update_label_definition(l, self.alex, active=False)
         with self.assertRaises(ConfigurationError):
             create_label_definition(self.project, self.alex, "RESERVED")
+
+
+class DefaultStatusCategoryProtectionTest(_ConfigSetupMixin, TestCase):
+    """Regression: the active Project default can never be recategorized
+    away from category 'todo' (exactly-one-active-default invariant,
+    foundation.md §3a.2).
+
+    The pre-fix bug: update_status_definition() silently cleared
+    ``is_default`` when the current default's category changed away from
+    'todo', leaving the Project WITHOUT any active default status and
+    breaking Work Item creation without an explicit status. Combined
+    payloads (``isDefault=False`` in the same PATCH) additionally bypassed
+    the replacement check because the in-memory category had already
+    changed when the ``is_default`` branch ran.
+    """
+
+    def _default_status(self):
+        return WorkItemStatusDefinition.objects.get(
+            project=self.project, is_default=True, active=True,
+        )
+
+    def _assert_single_active_default(self, pk):
+        defaults = WorkItemStatusDefinition.objects.filter(
+            project=self.project, is_default=True, active=True,
+        )
+        self.assertEqual(defaults.count(), 1)
+        self.assertEqual(defaults.first().pk, pk)
+
+    def test_recategory_active_unreferenced_default_rejected(self):
+        """1) Fresh Project, current unreferenced todo default ->
+        category change to 'done' is rejected."""
+        default_status = self._default_status()
+        self.assertEqual(default_status.category, "todo")
+        self.assertFalse(default_status.work_items.exists())
+
+        with self.assertRaises(ConfigurationError) as ctx:
+            update_status_definition(
+                default_status, self.alex, category="done",
+            )
+        self.assertIn("default", ctx.exception.message)
+
+    def test_rejection_leaves_definition_and_defaults_unchanged(self):
+        """2) After the rejection, category / active / is_default and the
+        default population are exactly as before."""
+        default_status = self._default_status()
+        pk = default_status.pk
+        before = (
+            default_status.category,
+            default_status.active,
+            default_status.is_default,
+            default_status.name,
+        )
+
+        with self.assertRaises(ConfigurationError):
+            update_status_definition(
+                default_status, self.alex, category="done",
+            )
+
+        default_status.refresh_from_db()
+        self.assertEqual(
+            (
+                default_status.category,
+                default_status.active,
+                default_status.is_default,
+                default_status.name,
+            ),
+            before,
+        )
+        self._assert_single_active_default(pk)
+
+    def test_work_item_creation_without_status_after_rejection(self):
+        """3) A Work Item created without an explicit status still works
+        after the failed recategorization (default still resolvable)."""
+        default_status = self._default_status()
+        with self.assertRaises(ConfigurationError):
+            update_status_definition(
+                default_status, self.alex, category="done",
+            )
+
+        wi = create_work_item(
+            project=self.project,
+            actor=self.alex,
+            type_definition_id=self.project.type_definitions.get(
+                name="Task"
+            ).pk,
+            title="After Rejection",
+        )
+        self.assertEqual(wi.status_definition_id, default_status.pk)
+
+    def test_combined_isdefault_false_cannot_bypass_protection(self):
+        """4) The same recategorization combined with isDefault=false in
+        one PATCH must not bypass the protection."""
+        default_status = self._default_status()
+        pk = default_status.pk
+
+        with self.assertRaises(ConfigurationError) as ctx:
+            update_status_definition(
+                default_status, self.alex,
+                category="done", is_default=False,
+            )
+        self.assertIn("default", ctx.exception.message)
+
+        default_status.refresh_from_db()
+        self.assertEqual(default_status.category, "todo")
+        self.assertTrue(default_status.active)
+        self.assertTrue(default_status.is_default)
+        self._assert_single_active_default(pk)
+
+    def test_combined_active_false_cannot_bypass_protection(self):
+        """4b) The same recategorization combined with active=false in one
+        PATCH must not bypass the protection either (the current default
+        cannot be deactivated under the guise of a category change)."""
+        default_status = self._default_status()
+        pk = default_status.pk
+
+        with self.assertRaises(ConfigurationError):
+            update_status_definition(
+                default_status, self.alex,
+                category="done", active=False,
+            )
+
+        default_status.refresh_from_db()
+        self.assertEqual(default_status.category, "todo")
+        self.assertTrue(default_status.active)
+        self.assertTrue(default_status.is_default)
+        self._assert_single_active_default(pk)
+
+    def test_other_active_todo_status_can_become_default(self):
+        """5) A different active todo status can be made the default; the
+        old default keeps its category and becomes a normal status."""
+        old_default = self._default_status()
+        other = create_status_definition(
+            self.project, self.alex, "Backlog", "todo", is_default=True,
+        )
+
+        old_default.refresh_from_db()
+        self.assertFalse(old_default.is_default)
+        self.assertEqual(old_default.category, "todo")
+        self.assertTrue(old_default.active)
+        self._assert_single_active_default(other.pk)
+
+    def test_former_default_can_be_recategorized_after_replacement(self):
+        """6) Once the former default is no longer the default, it may be
+        recategorized (unreferenced) like any other status."""
+        old_default = self._default_status()
+        create_status_definition(
+            self.project, self.alex, "Backlog", "todo", is_default=True,
+        )
+
+        updated = update_status_definition(
+            old_default, self.alex, category="in_progress",
+        )
+        self.assertEqual(updated.category, "in_progress")
+        self.assertFalse(updated.is_default)
+        self.assertTrue(updated.active)
+        self._assert_single_active_default(
+            WorkItemStatusDefinition.objects.get(
+                project=self.project, name="Backlog"
+            ).pk
+        )
+
+    def test_non_todo_status_cannot_be_made_default(self):
+        """7) Making a non-todo status the default stays forbidden,
+        including combined payloads whose FINAL category is non-todo."""
+        done_status = self.project.status_definitions.get(category="done")
+
+        # Plain isDefault=true on a non-todo status (pre-existing rule).
+        with self.assertRaises(ConfigurationError) as ctx:
+            update_status_definition(
+                done_status, self.alex, is_default=True,
+            )
+        self.assertIn("todo", ctx.exception.message)
+
+        # Combined: recategorizing a non-default status to 'done' while
+        # claiming default in the same PATCH ends in a non-todo final
+        # category and must stay rejected.
+        in_progress = self.project.status_definitions.get(
+            category="in_progress",
+        )
+        with self.assertRaises(ConfigurationError):
+            update_status_definition(
+                in_progress, self.alex,
+                category="done", is_default=True,
+            )
+        self.assertIn("todo", ctx.exception.message)
+
+        default_status = self._default_status()
+        self._assert_single_active_default(default_status.pk)
+
+    def test_todo_default_category_unchange_patch_is_noop(self):
+        """Re-patching the current default with its own category ('todo')
+        remains allowed and changes nothing (no false positive)."""
+        default_status = self._default_status()
+        updated = update_status_definition(
+            default_status, self.alex, category="todo",
+        )
+        self.assertEqual(updated.category, "todo")
+        self.assertTrue(updated.is_default)
+        self._assert_single_active_default(default_status.pk)
+
+    def test_inactive_todo_cannot_become_default_without_activation(self):
+        """9) An inactive todo status cannot become the default without
+        activation — the Project must not be left without an active
+        default (the previous default is not silently demoted)."""
+        default_status = self._default_status()
+        backlog = create_status_definition(
+            self.project, self.alex, "Backlog", "todo",
+        )
+        update_status_definition(backlog, self.alex, active=False)
+        backlog.refresh_from_db()
+        self.assertFalse(backlog.active)
+
+        with self.assertRaises(ConfigurationError) as ctx:
+            update_status_definition(
+                backlog, self.alex, is_default=True,
+            )
+        self.assertIn("default", ctx.exception.message)
+
+        default_status.refresh_from_db()
+        self.assertTrue(default_status.active)
+        self.assertTrue(default_status.is_default)
+        backlog.refresh_from_db()
+        self.assertFalse(backlog.is_default)
+        self._assert_single_active_default(default_status.pk)
+
+    def test_inactive_todo_with_combined_activation_becomes_default(self):
+        """10) An inactive todo status combined with isDefault=true +
+        active=true is valid: it is activated and becomes the new
+        default, and the previous default remains a regular active
+        status."""
+        default_status = self._default_status()
+        backlog = create_status_definition(
+            self.project, self.alex, "Backlog", "todo",
+        )
+        update_status_definition(backlog, self.alex, active=False)
+
+        updated = update_status_definition(
+            backlog, self.alex, is_default=True, active=True,
+        )
+        self.assertTrue(updated.active)
+        self.assertTrue(updated.is_default)
+
+        default_status.refresh_from_db()
+        self.assertEqual(default_status.category, "todo")
+        self.assertTrue(default_status.active)
+        self.assertFalse(default_status.is_default)
+        self._assert_single_active_default(updated.pk)
+
+    def test_active_todo_with_combined_deactivation_rejected(self):
+        """11) An active todo status combined with isDefault=true +
+        active=false is rejected: the target would end up inactive in
+        its effective final state, and the previous active default is
+        left untouched."""
+        default_status = self._default_status()
+        backlog = create_status_definition(
+            self.project, self.alex, "Backlog", "todo",
+        )
+
+        with self.assertRaises(ConfigurationError) as ctx:
+            update_status_definition(
+                backlog, self.alex, is_default=True, active=False,
+            )
+        self.assertIn("default", ctx.exception.message)
+
+        default_status.refresh_from_db()
+        self.assertTrue(default_status.active)
+        self.assertTrue(default_status.is_default)
+        backlog.refresh_from_db()
+        self.assertFalse(backlog.is_default)
+        self.assertTrue(backlog.active)
+        self._assert_single_active_default(default_status.pk)
+
+    def test_valid_default_switch_via_update_keeps_default_resolvable(self):
+        """12) The valid default switch is exercised explicitly through
+        update_status_definition() (not only create_status_definition()):
+        an active todo status becomes the single active default and
+        Work Item creation without an explicit status resolves it."""
+        old_default = self._default_status()
+        backlog = create_status_definition(
+            self.project, self.alex, "Backlog", "todo",
+        )
+
+        updated = update_status_definition(
+            backlog, self.alex, is_default=True,
+        )
+        self.assertTrue(updated.active)
+        self.assertTrue(updated.is_default)
+        self._assert_single_active_default(updated.pk)
+
+        old_default.refresh_from_db()
+        self.assertTrue(old_default.active)
+        self.assertFalse(old_default.is_default)
+
+        wi = create_work_item(
+            project=self.project,
+            actor=self.alex,
+            type_definition_id=self.project.type_definitions.get(
+                name="Task"
+            ).pk,
+            title="After Valid Update Switch",
+        )
+        self.assertEqual(wi.status_definition_id, updated.pk)
+
+    def test_failed_final_save_rolls_back_default_reset(self):
+        """13) If the final save fails AFTER the previous default was
+        already demoted within the same transaction, the whole
+        operation rolls back: the previous active default keeps
+        is_default=True and no other configuration row changed.
+
+        The failure is injected at the final persistence step only
+        (mocked model save); no production logic is modified."""
+        default_status = self._default_status()
+        backlog = create_status_definition(
+            self.project, self.alex, "Backlog", "todo",
+        )
+
+        with mock.patch.object(
+            WorkItemStatusDefinition, "save",
+            side_effect=DatabaseError("injected save failure"),
+        ):
+            with self.assertRaises(DatabaseError):
+                update_status_definition(
+                    backlog, self.alex, is_default=True,
+                )
+
+        default_status.refresh_from_db()
+        self.assertEqual(default_status.category, "todo")
+        self.assertTrue(default_status.active)
+        self.assertTrue(default_status.is_default)
+        backlog.refresh_from_db()
+        self.assertFalse(backlog.is_default)
+        self.assertTrue(backlog.active)
+        self._assert_single_active_default(default_status.pk)
 
 
 class ConfigurationServiceLockingTest(_ConfigSetupMixin, TestCase):

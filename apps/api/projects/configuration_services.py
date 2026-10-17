@@ -265,10 +265,27 @@ def update_status_definition(definition, actor, name=None, order=None,
                 raise ConfigurationError(
                     "Cannot change category of a Status referenced by WorkItems."
                 )
-            # If changing away from todo and this is the default, clear default
-            if (is_default or definition.is_default and
-                    category != WorkItemStatusDefinition.Category.TODO):
-                definition.is_default = False
+            # The Project must always retain exactly one active default
+            # status, and it must be in category 'todo'. Recategorizing
+            # the active default away from 'todo' would leave the
+            # Project without a valid default, so it is rejected BEFORE
+            # any mutation — the surrounding atomic() block then
+            # guarantees that nothing is persisted. The check runs
+            # against the locked, fresh definition state, so combined
+            # PATCH payloads (isDefault/active in the same request)
+            # cannot bypass it: the category branch always evaluates
+            # first, before the is_default/active branches mutate the
+            # in-memory row.
+            if (
+                definition.active
+                and definition.is_default
+                and category != WorkItemStatusDefinition.Category.TODO
+            ):
+                raise ConfigurationError(
+                    "Cannot change the category of the active default "
+                    "status away from 'todo'. Set another active 'todo' "
+                    "status as default first."
+                )
             definition.category = category
 
         if is_default is not None:
@@ -280,6 +297,22 @@ def update_status_definition(definition, actor, name=None, order=None,
                 if cat != WorkItemStatusDefinition.Category.TODO:
                     raise ConfigurationError(
                         "Default status must have category 'todo'."
+                    )
+                # The new default must be active in its EFFECTIVE FINAL
+                # state: the requested `active` override if present,
+                # otherwise the locked row's current value. This check
+                # runs BEFORE the previous default is demoted below, so
+                # a rejected operation cannot leave the Project without
+                # an active default — and the surrounding atomic() block
+                # rolls back any partial mutation if a later step in the
+                # same transaction fails.
+                effective_active = (
+                    active if active is not None else definition.active
+                )
+                if not effective_active:
+                    raise ConfigurationError(
+                        "Cannot make an inactive status the default "
+                        "status. Activate the status first."
                     )
                 WorkItemStatusDefinition.objects.filter(
                     project=project, active=True, is_default=True
