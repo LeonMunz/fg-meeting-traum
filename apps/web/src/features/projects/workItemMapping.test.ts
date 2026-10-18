@@ -344,6 +344,136 @@ describe('resolveStatusDefinitionIdByCategory — board/status category to defin
   it('returns null when the config is missing', () => {
     expect(resolveStatusDefinitionIdByCategory('review', null)).toBeNull()
   })
+
+  it('picks the first ACTIVE definition of the category by `order`, with a stable `id` tie-break', () => {
+    const multi: ApiProjectWorkItemConfiguration = {
+      ...config,
+      statuses: [
+        {
+          id: 110,
+          name: 'Planned',
+          category: 'todo',
+          order: 1,
+          active: true,
+          isDefault: false,
+        },
+        {
+          id: 10,
+          name: 'Todo',
+          category: 'todo',
+          order: 0,
+          active: true,
+          isDefault: true,
+        },
+        {
+          id: 120,
+          name: 'Queued',
+          category: 'todo',
+          order: 2,
+          active: true,
+          isDefault: false,
+        },
+        ...config.statuses.filter(
+          (s) => s.category !== 'todo',
+        ),
+      ],
+    }
+
+    // The payload order is deliberately NOT sorted: the minimum
+    // over (order, id) is explicit, so Planned (1) and Queued (2)
+    // must never beat Todo (0) despite their list position.
+    expect(
+      resolveStatusDefinitionIdByCategory('todo', multi),
+    ).toBe(10)
+    expect(
+      resolveStatusDefinitionIdByCategory('in_progress', multi),
+    ).toBe(11)
+  })
+
+  it('breaks equal `order` values by the stable definition `id`', () => {
+    const tied: ApiProjectWorkItemConfiguration = {
+      ...config,
+      statuses: [
+        {
+          id: 91,
+          name: 'Review Late',
+          category: 'review',
+          order: 7,
+          active: true,
+          isDefault: false,
+        },
+        {
+          id: 90,
+          name: 'Review Early',
+          category: 'review',
+          order: 7,
+          active: true,
+          isDefault: false,
+        },
+        ...config.statuses.filter(
+          (s) => s.category !== 'review',
+        ),
+      ],
+    }
+
+    expect(
+      resolveStatusDefinitionIdByCategory('review', tied),
+    ).toBe(90)
+  })
+
+  it('skips INACTIVE definitions and returns null when none of the category is active', () => {
+    const onlyInactive: ApiProjectWorkItemConfiguration = {
+      ...config,
+      statuses: [
+        {
+          id: 10,
+          name: 'Todo',
+          category: 'todo',
+          order: 0,
+          active: false,
+          isDefault: false,
+        },
+        {
+          id: 110,
+          name: 'Planned',
+          category: 'todo',
+          order: 1,
+          active: true,
+          isDefault: false,
+        },
+        ...config.statuses.filter(
+          (s) => s.category !== 'todo',
+        ),
+      ],
+    }
+
+    // The inactive default (10) is skipped; the first ACTIVE todo
+    // definition (Planned, 110) is the cross-category target.
+    expect(
+      resolveStatusDefinitionIdByCategory('todo', onlyInactive),
+    ).toBe(110)
+
+    const noneActive: ApiProjectWorkItemConfiguration = {
+      ...config,
+      statuses: [
+        {
+          id: 12,
+          name: 'Review',
+          category: 'review',
+          order: 2,
+          active: false,
+          isDefault: false,
+        },
+        ...config.statuses.filter(
+          (s) => s.category !== 'review',
+        ),
+      ],
+    }
+
+    expect(
+      resolveStatusDefinitionIdByCategory('review', noneActive),
+    ).toBeNull()
+  })
 })
 
 

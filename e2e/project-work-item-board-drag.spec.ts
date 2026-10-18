@@ -721,3 +721,412 @@ test(
     ).toHaveText('Review')
   },
 )
+
+// ------------------------------------------------------------------
+// Category columns with SEVERAL concrete StatusDefinitions.
+//
+// Verifies the canonical AP-01/AP-02 contract in the browser:
+//  1. two concrete todo definitions ("Todo" + "Planned") render in
+//     the ONE visible todo column;
+//  2. dragging between the definitions is a pure reorder — the
+//     concrete statusDefinitionId is preserved (visible through the
+//     editor), also after reload;
+//  3. the exact order persists after reload;
+//  4. a cross-category drop uses a valid active target status;
+//  5. a same-category drop to the column END persists (a missing
+//     anchor is not a no-op).
+// ------------------------------------------------------------------
+
+const CATEGORY_PROJECT_NAME =
+  'E2E Board Category Project'
+
+/**
+ * Create an additional concrete StatusDefinition of an existing
+ * category through the canonical Project configuration API using the
+ * browser's authenticated session (the configuration surface is the
+ * owner-managed backend contract, not a dedicated page flow in these
+ * scenarios).
+ */
+async function createStatusDefinition(
+  page: import('@playwright/test').Page,
+  name: string,
+  category: string,
+): Promise<number> {
+  const projectId = currentProjectId(page)
+
+  const created = await page.evaluate(
+    async ({ projectId, name, category }) => {
+      let csrf = document.cookie
+        .split(';')
+        .map((c) => c.trim())
+        .find((c) => c.startsWith('csrftoken='))
+        ?.split('=')[1]
+
+      if (!csrf) {
+        await fetch('/api/auth/csrf/', {
+          credentials: 'same-origin',
+        })
+        csrf = document.cookie
+          .split(';')
+          .map((c) => c.trim())
+          .find((c) => c.startsWith('csrftoken='))
+          ?.split('=')[1]
+      }
+
+      const res = await fetch(
+        `/api/projects/${projectId}/work-item-configuration/statuses/`,
+        {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+            'X-CSRFToken': csrf ?? '',
+          },
+          body: JSON.stringify({ name, category }),
+        },
+      )
+
+      return { status: res.status, data: await res.json() }
+    },
+    { projectId, name, category },
+  )
+
+  expect(created.status).toBe(201)
+  return created.data.id as number
+}
+
+function currentProjectId(
+  page: import('@playwright/test').Page,
+): number {
+  const match = page
+    .url()
+    .match(/\/projects\/(\d+)/)
+
+  if (!match) {
+    throw new Error(
+      `No project id in URL: ${page.url()}`,
+    )
+  }
+
+  return Number(match[1])
+}
+
+async function setEditorStatus(
+  page: import('@playwright/test').Page,
+  title: string,
+  statusLabel: string,
+) {
+  await page
+    .getByRole('button', { name: `Open ${title}` })
+    .click()
+
+  const inspector = page.getByRole('region', {
+    name: 'Work item',
+    exact: true,
+  })
+  await expect(inspector).toBeVisible()
+
+  await inspector
+    .getByLabel('Status', { exact: true })
+    .selectOption({ label: statusLabel })
+
+  await page.keyboard.press('Escape')
+}
+
+test(
+  'Board category column: two concrete definitions share one column, ' +
+    'dragging between them keeps the concrete status (also after reload), ' +
+    'cross-category drops use a valid target, and end-of-column drops persist',
+  async ({ page }) => {
+    await login(page, 'alex')
+    await openProjects(page)
+
+    await page
+      .getByRole('button', { name: /New project/ })
+      .click()
+
+    const createProjectDialog = page.getByRole(
+      'dialog',
+      { name: 'Create project' },
+    )
+    await createProjectDialog
+      .getByLabel('Project name')
+      .fill(CATEGORY_PROJECT_NAME)
+    await createProjectDialog
+      .getByRole('button', { name: /Create project/ })
+      .click()
+    await expect(
+      page.getByText(CATEGORY_PROJECT_NAME, { exact: true }),
+    ).toBeVisible()
+
+    await openProject(page, CATEGORY_PROJECT_NAME)
+
+    // Add a SECOND concrete todo definition ("Planned"). The server
+    // assigns the next configuration order; "Todo" stays the first
+    // active todo definition and remains the default.
+    await createStatusDefinition(
+      page,
+      'Planned',
+      'todo',
+    )
+
+    // Reload so the Project page picks up the new configuration
+    // (the editor must now offer "Planned" as an option).
+    await page.reload()
+    await expect(
+      page.getByRole('heading', {
+        name: 'Work Items',
+        exact: true,
+      }),
+    ).toBeVisible()
+
+    // 1. Create A and B (both on the default "Todo" definition).
+    await createWorkItemInProject(page, 'Card A')
+    await createWorkItemInProject(page, 'Card B')
+
+    // Move B to the OTHER todo definition ("Planned") through the
+    // editor — a real status change that appends B to the end of
+    // the shared todo category column (B is already last: A, B).
+    await setEditorStatus(page, 'Card B', 'Planned')
+
+    // 2. Create C (default "Todo" definition): appended to the end
+    //    of the ONE todo category column.
+    await createWorkItemInProject(page, 'Card C')
+
+    const todo = () => boardColumnTitles(page, 'todo')
+
+    // Both definitions render in the SAME visible column: A, B, C.
+    await expect.poll(todo).toEqual([
+      'Card A',
+      'Card B',
+      'Card C',
+    ])
+
+    // --------------------------------------------------------
+    // 3. Drag C between A and B (before B — a different
+    //    concrete definition of the same category).
+    // --------------------------------------------------------
+    await dragCardToGap(page, 'Card C', 'todo', 'Card B')
+
+    // The exact visual order is A, C, B — immediately, before the
+    // server settles.
+    await expect.poll(todo).toEqual([
+      'Card A',
+      'Card C',
+      'Card B',
+    ])
+
+    // The pure same-category reorder must NOT have changed C's
+    // concrete status: the editor still reads "Todo" (not
+    // "Planned").
+    await page
+      .getByRole('button', { name: 'Open Card C' })
+      .click()
+    const inspectorC = page.getByRole('region', {
+      name: 'Work item',
+      exact: true,
+    })
+    await expect(inspectorC).toBeVisible()
+    await expect(
+      inspectorC
+        .getByLabel('Status', { exact: true })
+        .locator('option:checked'),
+    ).toHaveText('Todo')
+    await page.keyboard.press('Escape')
+
+    // --------------------------------------------------------
+    // 4. Reload: the order AND the concrete statuses persist.
+    // --------------------------------------------------------
+    await page.reload()
+    await expect.poll(todo).toEqual([
+      'Card A',
+      'Card C',
+      'Card B',
+    ])
+
+    await page
+      .getByRole('button', { name: 'Open Card C' })
+      .click()
+    await expect(
+      page
+        .getByRole('region', {
+          name: 'Work item',
+          exact: true,
+        })
+        .getByLabel('Status', { exact: true })
+        .locator('option:checked'),
+    ).toHaveText('Todo')
+
+    // B still reads "Planned" (its own definition, untouched).
+    await page
+      .getByRole('button', { name: 'Open Card B' })
+      .click()
+    await expect(
+      page
+        .getByRole('region', {
+          name: 'Work item',
+          exact: true,
+        })
+        .getByLabel('Status', { exact: true })
+        .locator('option:checked'),
+    ).toHaveText('Planned')
+    await page.keyboard.press('Escape')
+
+    // --------------------------------------------------------
+    // 5. Cross-category drop: B (Planned, todo) into In progress —
+    //    the target is the Project's valid active "In Progress"
+    //    definition.
+    // --------------------------------------------------------
+    await dragCardToGap(
+      page,
+      'Card B',
+      'in_progress',
+      null,
+    )
+
+    const inProgress = () =>
+      boardColumnTitles(page, 'in_progress')
+
+    await expect.poll(inProgress).toEqual(['Card B'])
+    await expect.poll(todo).toEqual([
+      'Card A',
+      'Card C',
+    ])
+
+    // The editor now reads the valid target status.
+    await page
+      .getByRole('button', { name: 'Open Card B' })
+      .click()
+    await expect(
+      page
+        .getByRole('region', {
+          name: 'Work item',
+          exact: true,
+        })
+        .getByLabel('Status', { exact: true })
+        .locator('option:checked'),
+    ).toHaveText('In Progress')
+    await page.keyboard.press('Escape')
+
+    // --------------------------------------------------------
+    // 6. Same-category drop to the column END: A (first card) to
+    //    the end of the todo column. A missing anchor must be a
+    //    REAL move, not a no-op.
+    // --------------------------------------------------------
+    await dragCardToGap(page, 'Card A', 'todo', null)
+
+    await expect.poll(todo).toEqual([
+      'Card C',
+      'Card A',
+    ])
+
+    // --------------------------------------------------------
+    // 7. Reload: cross-category target and end-of-column order
+    //    persist.
+    // --------------------------------------------------------
+    await page.reload()
+    await expect.poll(todo).toEqual([
+      'Card C',
+      'Card A',
+    ])
+    await expect.poll(inProgress).toEqual(['Card B'])
+  },
+)
+
+// ------------------------------------------------------------------
+// Failed reorder: the optimistic move is rolled back exactly, the
+// existing error is shown, and a subsequent drop succeeds.
+// ------------------------------------------------------------------
+
+const ROLLBACK_PROJECT_NAME =
+  'E2E Board Rollback Project'
+
+test(
+  'Board drag failure: a failed reorder rolls the card back to its ' +
+    'exact position, shows the error, and the next drop succeeds',
+  async ({ page }) => {
+    await login(page, 'alex')
+    await openProjects(page)
+
+    await page
+      .getByRole('button', { name: /New project/ })
+      .click()
+
+    const createProjectDialog = page.getByRole(
+      'dialog',
+      { name: 'Create project' },
+    )
+    await createProjectDialog
+      .getByLabel('Project name')
+      .fill(ROLLBACK_PROJECT_NAME)
+    await createProjectDialog
+      .getByRole('button', { name: /Create project/ })
+      .click()
+    await expect(
+      page.getByText(ROLLBACK_PROJECT_NAME, { exact: true }),
+    ).toBeVisible()
+
+    await openProject(page, ROLLBACK_PROJECT_NAME)
+
+    await createWorkItemInProject(page, 'Card X')
+    await createWorkItemInProject(page, 'Card Y')
+
+    const todo = () => boardColumnTitles(page, 'todo')
+
+    await expect.poll(todo).toEqual([
+      'Card X',
+      'Card Y',
+    ])
+
+    // Fail every Board reorder request with a server error.
+    await page.route(
+      /\/api\/work-items\/\d+\/reorder\//,
+      (route) =>
+        route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            error: 'Simulated server failure.',
+          }),
+        }),
+    )
+
+    // Drag X (first card) to the END of the todo column — a real
+    // move that fails on the server.
+    await dragCardToGap(page, 'Card X', 'todo', null)
+
+    // The existing drop error surface shows the server message...
+    await expect(
+      page.getByRole('alert'),
+    ).toContainText('Simulated server failure.')
+
+    // ...and the card is back at its EXACT original position
+    // (X, Y) — the optimistic move was rolled back.
+    await expect.poll(todo).toEqual([
+      'Card X',
+      'Card Y',
+    ])
+
+    // Dismiss, lift the failure, and drop again: the same move now
+    // succeeds and persists.
+    await page
+      .getByRole('button', { name: 'Dismiss' })
+      .click()
+    await page.unroute(
+      /\/api\/work-items\/\d+\/reorder\//,
+    )
+
+    await dragCardToGap(page, 'Card X', 'todo', null)
+    await expect.poll(todo).toEqual([
+      'Card Y',
+      'Card X',
+    ])
+
+    await page.reload()
+    await expect.poll(todo).toEqual([
+      'Card Y',
+      'Card X',
+    ])
+  },
+)

@@ -232,11 +232,21 @@ export function buildCreateWorkItemInput(
 }
 
 /**
- * Resolve the status definition ID for a Board column's status category.
- * The Board columns are fixed status categories (todo/in_progress/review/
- * done); a Project's configured status definition that maps to that
- * category is the canonical target for a status change. Returns null when
- * the Project has no matching active status definition.
+ * Resolve the concrete StatusDefinition that a CROSS-category Board drop
+ * moves a Work Item to. The Board columns are fixed status categories
+ * (todo/in_progress/review/done), and a category may hold SEVERAL
+ * concrete active StatusDefinitions; the canonical provisional target is
+ * the first ACTIVE definition of the category by configured `order`,
+ * with a stable `id` tie-break (foundation.md Section 15). The result is
+ * the explicit `statusDefinitionId` of the reorder request — the server
+ * re-validates it under the Project lock. Returns null when the Project
+ * has no matching ACTIVE status definition (the drop must be prevented,
+ * never guessed).
+ *
+ * The minimum is taken over (order, id) explicitly; the payload order is
+ * not assumed. This function is the cross-category target resolution
+ * only — a SAME-category drop keeps the item's own StatusDefinition and
+ * must never resolve through it.
  */
 export function resolveStatusDefinitionIdByCategory(
   statusCategory: DemoWorkItemStatus,
@@ -245,10 +255,25 @@ export function resolveStatusDefinitionIdByCategory(
   if (!config) {
     return null
   }
-  const match = config.statuses.find(
-    (candidate) =>
-      candidate.active &&
-      candidate.category === statusCategory,
-  )
+
+  let match: ApiWorkItemStatusDefinition | null = null
+
+  for (const candidate of config.statuses) {
+    if (
+      !candidate.active ||
+      candidate.category !== statusCategory
+    ) {
+      continue
+    }
+    if (
+      match === null ||
+      candidate.order < match.order ||
+      (candidate.order === match.order &&
+        candidate.id < match.id)
+    ) {
+      match = candidate
+    }
+  }
+
   return match ? match.id : null
 }

@@ -32,7 +32,10 @@ import {
   WorkItemActionMenuTrigger,
   WorkItemDeleteDialog,
 } from './workItemDelete'
-import { applyWorkItemBoardMove } from './workItemBoardMove'
+import {
+  applyWorkItemBoardMove,
+  compareWorkItemBoardOrder,
+} from './workItemBoardMove'
 import { ApiError } from '../../api/client'
 import {
   addProjectMembership,
@@ -60,6 +63,7 @@ import {
 import {
   resolveStatusDefinitionIdByCategory,
   resolveWorkItemDisplay,
+  resolveWorkItemStatus,
 } from './workItemMapping'
 
 import type {
@@ -175,6 +179,9 @@ type DemoWorkItem = {
   parentId: string | null
   // Manual Board position (canonical, from the server). null = unsorted.
   boardPosition: number | null
+  // Canonical creation timestamp (from the server) — the Board's
+  // created_at tie-break for equal or NULL positions.
+  createdAt: string
 }
 
 type OverviewAttentionItem = {
@@ -569,6 +576,7 @@ function mapApiWorkItem(
         ? null
         : String(item.parentId),
     boardPosition: item.boardPosition ?? null,
+    createdAt: item.createdAt,
   }
 }
 
@@ -719,6 +727,67 @@ export function ProjectDetailPage() {
   // roll the Board back, so a late failure of a superseded drop can
   // never clobber a newer drop's optimistic state.
   const workItemDropSequenceRef = useRef(0)
+  // Drop sequences whose server mutation is STILL in flight (added
+  // when the optimistic move is applied, removed when the mutation
+  // settles, success or failure). A revalidation triggered by an
+  // already-settled drop can answer while a newer drop is still
+  // pending: its server snapshot then lacks that drop's mutation,
+  // and applying the answer would roll the newer card back. Such an
+  // answer is skipped — the pending drop settles the collection
+  // through its own reconciliation, so nothing is lost.
+  const workItemDropPendingSequencesRef = useRef<Set<number>>(
+    new Set(),
+  )
+  // The drop sequence that triggered the currently requested
+  // revalidation; 0 for revalidations not triggered by a drop. A
+  // revalidation answer may supersede drops OLDER than its trigger
+  // (a superseded drop's late failure never rolls back, so the
+  // answer is its only correction), but never drops NEWER than it
+  // (they still own the Board state; see
+  // workItemDropPendingSequencesRef).
+  const workItemDropRevalidationOriginRef = useRef(0)
+  // CANONICAL RECONCILIATION DEBT of overlapping drops: while this
+  // flag is set, the drop cohort that is (or was) in flight
+  // contains a failure whose optimistic change no snapshot rollback
+  // alone can remove — a superseded drop's rollback is skipped
+  // entirely, and the newest drop's rollback restores a snapshot
+  // that still contains an OLDER failed drop's change. The moment
+  // the LAST in-flight drop settles (success or failure), exactly
+  // ONE canonical revalidation must adopt the authoritative server
+  // state, so a snapshot of failed predecessors never persists as
+  // truth. The debt is cleared when a canonical list answer is
+  // actually APPLIED (the board then equals the server state) or
+  // when the Project context switches (the debt belongs to the
+  // abandoned context). It cannot loop: only a new failed drop
+  // re-arms it, and a revalidation itself never fails a drop.
+  const workItemDropReconciliationNeededRef = useRef(false)
+
+  // Work Items PROJECT GENERATION: the Board's data context is the
+  // Project named by the route parameter, and the SAME mounted page
+  // instance serves every project switch (no route key). Every
+  // parameter change therefore starts a new generation — and the
+  // bump happens during the render that sees the new parameter,
+  // before any effect or in-flight callback of the old context can
+  // settle. A Board drop captures the generation of the context it
+  // started in; its settle callbacks (success revalidation, failure
+  // rollback) may only touch state while that generation is still
+  // current. This is what makes a fast A → B → A safe: the second A
+  // is a NEW generation, so callbacks of the first A can never
+  // compare equal to it — a plain captured project-id comparison
+  // would treat them as the same context.
+  const workItemsContextProjectIdRef = useRef<string | null>(null)
+  const workItemsProjectGenerationRef = useRef(0)
+
+  const contextProjectId = projectId ?? null
+
+  if (workItemsContextProjectIdRef.current !== contextProjectId) {
+    workItemsContextProjectIdRef.current = contextProjectId
+    workItemsProjectGenerationRef.current += 1
+    // The reconciliation debt belongs to the abandoned context:
+    // the fresh context loads its own canonical state.
+    workItemDropReconciliationNeededRef.current = false
+  }
+
   const [workItemsError, setWorkItemsError] =
     useState<string | null>(null)
   const [
@@ -1072,15 +1141,76 @@ export function ProjectDetailPage() {
       setWorkItemsRefreshing(true)
     }
 
+    // A drop that starts AFTER this request is issued owns the Board
+    // state from that moment on: a late response of this (older)
+    // revalidation must never roll back a newer pending optimistic
+    // move. The newer drop settles the collection through its own
+    // reconciliation, so skipping this stale response loses nothing.
+    const dropSequenceAtRequest =
+      workItemDropSequenceRef.current
+    // The drop that triggered THIS revalidation (0 for a revalidation
+    // triggered by a non-drop flow such as a cross-flow creation
+    // event). Captured at request time; only the revalidation that
+    // survives to its answer (the newest one — every newer trigger
+    // supersedes it via the effect cleanup) is ever applied, so the
+    // captured value is the value of its own trigger.
+    const revalidationOrigin =
+      workItemDropRevalidationOriginRef.current
+
     listProjectWorkItems(numericProjectId)
       .then((items) => {
         if (cancelled) return
+        if (
+          workItemDropSequenceRef.current !==
+          dropSequenceAtRequest
+        ) {
+          return
+        }
+        // A drop NEWER than this revalidation's trigger is still in
+        // flight: the snapshot may lack its mutation, and applying
+        // the answer would roll its optimistic card back. The drop's
+        // own reconciliation settles the collection, so skipping
+        // this stale answer loses nothing. (An initial load renders
+        // no Board yet and has nothing to regress.)
+        if (
+          !isInitialLoad &&
+          Array.from(
+            workItemDropPendingSequencesRef.current,
+          ).some((seq) => seq > revalidationOrigin)
+        ) {
+          return
+        }
 
         workItemsLoadedProjectIdRef.current = numericProjectId
+        // An APPLIED canonical answer is the server state itself:
+        // it settles any reconciliation debt owed by a failed-drop
+        // cohort, so no further reconciliation refresh can follow
+        // this answer.
+        workItemDropReconciliationNeededRef.current = false
         setApiWorkItems(items)
       })
       .catch((error) => {
         if (cancelled) return
+        if (
+          workItemDropSequenceRef.current !==
+          dropSequenceAtRequest
+        ) {
+          // A newer drop is in flight and revalidates on its own; a
+          // stale failure must not surface over its optimistic state.
+          return
+        }
+        // The same protection for the error surface of a stale
+        // revalidation: the pending newer drop revalidates on its
+        // own (or rolls back with its own drop error), so a failure
+        // of the stale request must not surface over its state.
+        if (
+          !isInitialLoad &&
+          Array.from(
+            workItemDropPendingSequencesRef.current,
+          ).some((seq) => seq > revalidationOrigin)
+        ) {
+          return
+        }
 
         if (isInitialLoad) {
           // First load failed: existing behavior — empty list +
@@ -1138,6 +1268,12 @@ export function ProjectDetailPage() {
         return
       }
 
+      // This revalidation is NOT triggered by a drop: use the
+      // current max sequence as origin so the pending-newer-drop
+      // guard above is inert for it — the existing sequence guard
+      // keeps its established behavior for creation-driven refreshes.
+      workItemDropRevalidationOriginRef.current =
+        workItemDropSequenceRef.current
       requestWorkItemsRefresh()
     }
 
@@ -2138,52 +2274,87 @@ export function ProjectDetailPage() {
       return
     }
 
-    const statusDefinitionId =
-      resolveStatusDefinitionIdByCategory(
-        newStatus,
-        workItemConfig,
-      )
+    // The item's CURRENT semantic category comes from the canonical
+    // `statusDefinitionId` resolved against the Project configuration —
+    // never from the optional legacy `status` string.
+    const currentCategory = resolveWorkItemStatus(
+      previous.statusDefinitionId,
+      workItemConfig,
+    )
 
-    if (statusDefinitionId == null) {
-      setBoardStatusDropError(
-        'No matching status is configured for this Project.',
-      )
-      return
-    }
+    let targetStatusDefinitionId: number
 
-    // Same status + no explicit target = no-op (drop on own column with
-    // no meaningful gap).
-    if (previous.status === newStatus && beforeWorkItemId == null) {
-      return
+    if (newStatus === currentCategory) {
+      // Same-category drop: a PURE reorder. The request targets the
+      // item's OWN concrete StatusDefinition, which selects the
+      // column — the server never flips a same-category reorder to
+      // another definition of the category (even an inactive one).
+      targetStatusDefinitionId = previous.statusDefinitionId
+    } else {
+      // Cross-category drop: a real status change to the concrete
+      // target — the first ACTIVE definition of the target category
+      // by configured order (stable id tie-break). Without an active
+      // target the drop is prevented with the existing error; no
+      // invalid request is ever sent.
+      const crossCategoryTarget =
+        resolveStatusDefinitionIdByCategory(
+          newStatus,
+          workItemConfig,
+        )
+
+      if (crossCategoryTarget == null) {
+        setBoardStatusDropError(
+          'No matching status is configured for this Project.',
+        )
+        return
+      }
+
+      targetStatusDefinitionId = crossCategoryTarget
     }
 
     // Optimistic Board move: the card must land at the dropped
     // position immediately, before the server mutation resolves. The
     // transform operates on the FULL collection (active Board filters
-    // never corrupt the canonical state) and mirrors the server's
-    // atomic reposition + target-column normalization. A move the
-    // client already knows the server would reject resolves to the
-    // SAME array, so no state update is needed.
+    // never corrupt the canonical state), groups the target column by
+    // the semantic CATEGORY, and mirrors the server's atomic
+    // reposition + full-category normalization. It returns the SAME
+    // array for drops the server would reject (unknown item, unknown
+    // or category-foreign anchor) and for a same-category drop whose
+    // desired order already holds (genuine no-op) — both skip the
+    // state update AND the mutation request.
     const snapshot = apiWorkItems
     const optimisticItems = applyWorkItemBoardMove(
       snapshot,
+      workItemConfig,
       workItemId,
-      statusDefinitionId,
+      targetStatusDefinitionId,
       beforeWorkItemId,
     )
+
+    if (optimisticItems === snapshot) {
+      return
+    }
+
     const dropSequence =
       ++workItemDropSequenceRef.current
 
-    setBoardStatusDropError(null)
+    // The project context this drop belongs to: its settle
+    // callbacks may only touch state while this context is still
+    // the current one (see workItemsProjectGenerationRef).
+    const dropProjectGeneration =
+      workItemsProjectGenerationRef.current
 
-    if (optimisticItems !== snapshot) {
-      setApiWorkItems(optimisticItems)
-    }
+    workItemDropPendingSequencesRef.current.add(
+      dropSequence,
+    )
+
+    setBoardStatusDropError(null)
+    setApiWorkItems(optimisticItems)
 
     void (async () => {
       try {
         await reorderWorkItem(workItemId, {
-          statusDefinitionId,
+          statusDefinitionId: targetStatusDefinitionId,
           beforeWorkItemId,
         })
 
@@ -2191,8 +2362,73 @@ export function ProjectDetailPage() {
         // the full collection against the canonical list. This is a
         // SILENT background revalidation — the rendered Board is
         // never cleared or re-shelled while it is in flight.
+        //
+        // This drop has settled: clear its pending flag BEFORE the
+        // revalidation request is issued, and record this drop as
+        // the revalidation's origin, so its answer may only
+        // supersede drops older than it.
+        workItemDropPendingSequencesRef.current.delete(
+          dropSequence,
+        )
+        // The user may have switched to another project (or back to
+        // a fresh context of this one) while the mutation was in
+        // flight: the rendered Board now belongs to the CURRENT
+        // context. This drop's revalidation would re-fetch and
+        // re-set the abandoned context's Work Items, so it may only
+        // trigger the refresh if its own context is still current.
+        if (
+          workItemsProjectGenerationRef.current !==
+          dropProjectGeneration
+        ) {
+          return
+        }
+        workItemDropRevalidationOriginRef.current =
+          dropSequence
         requestWorkItemsRefresh()
       } catch (error) {
+        workItemDropPendingSequencesRef.current.delete(
+          dropSequence,
+        )
+        // The user may have left this project while the mutation was
+        // in flight (A → B, or A → B → A into a fresh A context):
+        // the rendered Board now belongs to the CURRENT context.
+        // Restoring the abandoned pre-drop snapshot — or surfacing
+        // the abandoned drop's error — would clobber the other
+        // project's Board, so both writes are dropped.
+        const inCurrentProjectContext =
+          workItemsProjectGenerationRef.current ===
+          dropProjectGeneration
+
+        // While OTHER drops are still in flight, this failed drop's
+        // optimistic change cannot be removed by snapshot rollback
+        // alone: the superseded drop's rollback is skipped entirely,
+        // and the newest drop's rollback restores a snapshot that
+        // still contains an OLDER failed drop's change. The cohort
+        // then owes a canonical reconciliation once its LAST drop
+        // settles.
+        if (
+          inCurrentProjectContext &&
+          workItemDropPendingSequencesRef.current.size > 0
+        ) {
+          workItemDropReconciliationNeededRef.current = true
+        }
+        // This drop is the LAST in-flight one and the cohort owes a
+        // canonical reconciliation: adopt the authoritative server
+        // state exactly ONCE (silent revalidation, the Board stays
+        // mounted; the existing stale-answer guards decide whether
+        // THIS answer or a newer drop's own reconciliation is the
+        // one applied).
+        const owesCanonicalReconciliation =
+          inCurrentProjectContext &&
+          workItemDropPendingSequencesRef.current.size === 0 &&
+          workItemDropReconciliationNeededRef.current
+
+        const settleOwedReconciliation = () => {
+          workItemDropRevalidationOriginRef.current =
+            workItemDropSequenceRef.current
+          requestWorkItemsRefresh()
+        }
+
         // A newer drop may have started after this one; it already
         // owns the Board state, and its reconciliation will settle
         // the collection on canonical data. Only the newest drop may
@@ -2201,6 +2437,17 @@ export function ProjectDetailPage() {
           workItemDropSequenceRef.current !==
           dropSequence
         ) {
+          // Its settlement still ends the cohort: if the failed
+          // cohort owes a canonical reconciliation, this last
+          // settled drop must issue it (its own rollback was
+          // skipped, so nothing else would fetch the server state).
+          if (owesCanonicalReconciliation) {
+            settleOwedReconciliation()
+          }
+          return
+        }
+
+        if (!inCurrentProjectContext) {
           return
         }
 
@@ -2214,6 +2461,10 @@ export function ProjectDetailPage() {
             'Work item could not be moved.',
           ),
         )
+
+        if (owesCanonicalReconciliation) {
+          settleOwedReconciliation()
+        }
       }
     })()
   }
@@ -3531,33 +3782,14 @@ function ProjectWorkItemsPanel({
     [eligibleAssignees],
   )
 
-  // Stable Board order: manual position first (NULLs last, in creation
-  // order), mirroring the server list ordering. This keeps the Board in
-  // canonical order even after an optimistic reorder update, and stays
-  // stable when filters hide items.
+  // Stable Board order: the canonical column order the backend renders
+  // with (`boardPosition ASC NULLS LAST, createdAt ASC, id ASC` —
+  // foundation.md Section 15), via the SAME comparator the optimistic
+  // transform uses, so rendering and drop reconciliation cannot drift
+  // apart on unnormalized legacy positions. Stays stable when filters
+  // hide items.
   const orderedItems = useMemo(() => {
-    const numericId = (item: DemoWorkItem) => Number(item.id)
-
-    return [...items].sort((left, right) => {
-      const leftPosition = left.boardPosition
-      const rightPosition = right.boardPosition
-
-      const leftHas = leftPosition != null
-      const rightHas = rightPosition != null
-
-      if (leftHas && rightHas) {
-        if (leftPosition !== rightPosition) {
-          return leftPosition - rightPosition
-        }
-      } else if (leftHas !== rightHas) {
-        // Positioned items render before unpositioned ones.
-        return leftHas ? -1 : 1
-      }
-
-      // Unpositioned (or equal-position) items fall back to creation
-      // order (server id), matching the list endpoint.
-      return numericId(left) - numericId(right)
-    })
+    return [...items].sort(compareWorkItemBoardOrder)
   }, [items])
 
   const filteredItems = useMemo(() => {
