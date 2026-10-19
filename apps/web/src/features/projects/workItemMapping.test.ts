@@ -85,14 +85,14 @@ describe('workItemMapping — definition-based resolution', () => {
     expect(out.typeLabel).toBe('Epic')
   })
 
-  it('falls back to task/todo for unknown definition IDs', () => {
+  it('keeps the neutral type fallback but marks an unknown STATUS id explicitly unresolved (no todo fallback)', () => {
     const out = resolveWorkItemDisplay(
       { typeDefinitionId: 999, statusDefinitionId: 999 },
       config,
     )
 
     expect(out.type).toBe('task')
-    expect(out.status).toBe('todo')
+    expect(out.status).toBeNull()
     expect(out.typeLabel).toBe('Task')
   })
 
@@ -114,8 +114,8 @@ describe('workItemMapping — definition-based resolution', () => {
     }
   })
 
-  it('resolves to safe defaults when the config is missing', () => {
-    expect(resolveWorkItemStatus(10, null)).toBe('todo')
+  it('resolves to a null status when the config is missing (type keeps its neutral fallback)', () => {
+    expect(resolveWorkItemStatus(10, null)).toBeNull()
     expect(resolveWorkItemType(4, null)).toBe('task')
 
     const out = resolveWorkItemDisplay(
@@ -124,9 +124,70 @@ describe('workItemMapping — definition-based resolution', () => {
     )
     expect(out).toEqual({
       type: 'task',
-      status: 'todo',
+      status: null,
       typeLabel: 'Task',
     })
+  })
+})
+
+
+describe('resolveWorkItemStatus — unresolved status is explicit, never guessed', () => {
+  it('resolves every configured category unchanged', () => {
+    expect(resolveWorkItemStatus(10, config)).toBe('todo')
+    expect(resolveWorkItemStatus(11, config)).toBe('in_progress')
+    expect(resolveWorkItemStatus(12, config)).toBe('review')
+    expect(resolveWorkItemStatus(13, config)).toBe('done')
+  })
+
+  it('resolves an INACTIVE but still referenced definition (deactivation keeps it attached to existing WorkItems)', () => {
+    const withInactive: ApiProjectWorkItemConfiguration = {
+      ...config,
+      statuses: [
+        ...config.statuses,
+        {
+          id: 99,
+          name: 'Archived review',
+          category: 'review',
+          order: 9,
+          active: false,
+          isDefault: false,
+        },
+      ],
+    }
+
+    expect(resolveWorkItemStatus(99, withInactive)).toBe('review')
+  })
+
+  it('returns null for an unknown statusDefinitionId (no todo fallback)', () => {
+    expect(resolveWorkItemStatus(999, config)).toBeNull()
+  })
+
+  it('returns null for a missing statusDefinitionId', () => {
+    expect(resolveWorkItemStatus(null, config)).toBeNull()
+    expect(resolveWorkItemStatus(undefined, config)).toBeNull()
+  })
+
+  it('returns null when the configuration is missing (a failed Config-GET is not an empty configuration)', () => {
+    expect(resolveWorkItemStatus(10, null)).toBeNull()
+  })
+
+  it('returns null when the referenced category is not one of the four fixed semantic categories', () => {
+    const invalidCategory: ApiProjectWorkItemConfiguration = {
+      ...config,
+      statuses: [
+        ...config.statuses,
+        {
+          id: 77,
+          name: 'Blocked forever',
+          category: 'blocked',
+          order: 9,
+          active: true,
+          isDefault: false,
+        },
+      ],
+    }
+
+    expect(resolveWorkItemStatus(77, invalidCategory)).toBeNull()
   })
 })
 

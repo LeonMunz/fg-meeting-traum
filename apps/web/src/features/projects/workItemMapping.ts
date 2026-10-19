@@ -6,6 +6,11 @@
  * they are unit-tested in isolation to guarantee a WorkItem that only
  * carries definition IDs (the canonical backend contract) never maps to
  * `undefined` — which used to crash the List view.
+ *
+ * STATUS CONTRACT: an item whose status cannot be resolved (missing
+ * configuration, unknown ID, or an invalid category) is explicitly
+ * `null` — never folded into a guessed category. Rendering keeps it
+ * out of every Board column and status-dependent mutation path.
  */
 
 import type {
@@ -27,6 +32,15 @@ export type DemoWorkItemStatus =
   | 'review'
   | 'done'
 
+/**
+ * The resolved semantic category of a Work Item's concrete
+ * StatusDefinition. `null` = UNRESOLVED: the configuration is missing
+ * (e.g. a failed Config-GET) or the referenced definition cannot be
+ * resolved. Callers must keep such items out of every status column
+ * and status-dependent mutation — they are never guessed into `todo`.
+ */
+export type ResolvedWorkItemStatus = DemoWorkItemStatus | null
+
 export const workItemTypeLabels: Record<
   DemoWorkItemType,
   string
@@ -37,10 +51,20 @@ export const workItemTypeLabels: Record<
   task: 'Task',
 }
 
+/**
+ * Resolve a Work Item's concrete `statusDefinitionId` against the
+ * Project's Work Item configuration and return its fixed semantic
+ * category. An INACTIVE definition an existing Work Item still
+ * references is valid and resolves to its stored category.
+ *
+ * Returns `null` — never a guessed category — when the configuration
+ * is missing, the ID is unknown, or the definition's category is not
+ * one of the four fixed semantic categories.
+ */
 export function resolveWorkItemStatus(
   statusDefinitionId: number | null | undefined,
   config: ApiProjectWorkItemConfiguration | null,
-): DemoWorkItemStatus {
+): ResolvedWorkItemStatus {
   if (config && statusDefinitionId != null) {
     const def = config.statuses.find(
       (candidate) => candidate.id === statusDefinitionId,
@@ -57,7 +81,10 @@ export function resolveWorkItemStatus(
       }
     }
   }
-  return 'todo'
+  // Unresolvable: no configuration (a failed Config-GET is NOT an
+  // empty configuration), an unknown ID, or a category outside the
+  // four fixed semantic categories. Nothing is invented.
+  return null
 }
 
 /**
@@ -149,7 +176,7 @@ export function resolveWorkItemStatusDefinition(
 
 export interface ResolvedWorkItemDisplay {
   type: DemoWorkItemType
-  status: DemoWorkItemStatus
+  status: ResolvedWorkItemStatus
   typeLabel: string
 }
 
@@ -157,6 +184,7 @@ export interface ResolvedWorkItemDisplay {
  * Resolve a WorkItem's display type/status/typeLabel from its definition
  * IDs and the Project configuration. Always returns a fully populated
  * value (never `undefined`), so the Board and List can render it safely.
+ * An unresolved status is reported as `null`, not a guessed category.
  */
 export function resolveWorkItemDisplay(
   item: Pick<ApiWorkItem, 'typeDefinitionId' | 'statusDefinitionId'>,

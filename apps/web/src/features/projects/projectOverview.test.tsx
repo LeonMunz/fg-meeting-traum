@@ -17,6 +17,7 @@ import {
 } from 'react-router'
 import {
   afterEach,
+  beforeEach,
   describe,
   expect,
   it,
@@ -3053,5 +3054,428 @@ describe('Project Board canonical order for unnormalized (legacy) positions', ()
       '402',
       '403',
     ])
+  })
+})
+
+
+describe('Project Work Items status configuration safety', () => {
+  // The panel persists the user's Board/List view preference under a
+  // fixed user+project key; a test that switches the view must not
+  // leak that preference into the next test's mount.
+  beforeEach(() => {
+    window.localStorage.clear()
+  })
+
+  const CONFIG_WITH_DONE: ApiProjectWorkItemConfiguration = {
+    ...CONFIGURATION,
+    statuses: [
+      ...CONFIGURATION.statuses,
+      {
+        id: 13,
+        name: 'Done',
+        category: 'done',
+        order: 2,
+        active: true,
+        isDefault: false,
+      },
+    ],
+  }
+
+  function mockFailedConfigurationGet(
+    workItems: ApiWorkItem[],
+  ) {
+    vi.mocked(getProject).mockResolvedValue(makeProject())
+    vi.mocked(getProjectWorkItemConfiguration).mockRejectedValue(
+      new Error('configuration unavailable'),
+    )
+    vi.mocked(listProjectWorkItems).mockResolvedValue(
+      workItems,
+    )
+    vi.mocked(listProjectMemberships).mockResolvedValue([
+      makeMembership('owner'),
+    ])
+    vi.mocked(listResearchGroupMembers).mockResolvedValue(
+      GROUP_MEMBERS,
+    )
+  }
+
+  function renderWorkItemsTab() {
+    return render(
+      <MemoryRouter
+        initialEntries={['/projects/7/work-items']}
+      >
+        <Routes>
+          <Route
+            path="/projects/:projectId/:tab"
+            element={<ProjectDetailPage />}
+          />
+        </Routes>
+      </MemoryRouter>,
+    )
+  }
+
+  it('shows a done work item in the done column when the configuration loads', async () => {
+    mockProjectData({
+      configuration: CONFIG_WITH_DONE,
+      workItems: [
+        makeWorkItem({
+          id: 501,
+          title: 'Shipped',
+          statusDefinitionId: 13,
+          boardPosition: 1,
+        }),
+      ],
+    })
+
+    const { container } = await renderWorkItemsBoard('Shipped')
+
+    expect(columnCardIds(container, 'done')).toEqual(['501'])
+    expect(columnCardIds(container, 'todo')).toEqual([])
+  })
+
+  it('shows a retryable error state — never a guessed Todo card — when the configuration GET fails', async () => {
+    mockFailedConfigurationGet([
+      makeWorkItem({
+        id: 502,
+        title: 'Orphan',
+        statusDefinitionId: 10,
+        boardPosition: 1,
+      }),
+    ])
+
+    const { container } = renderWorkItemsTab()
+
+    // The Work Items fetch settled, the configuration GET failed:
+    // the surface is in the explicit error state with a retry.
+    await screen.findByRole('button', { name: 'Retry' })
+
+    // No guessed column membership: the item is on NO column, the
+    // board offers no drop targets, and nothing is sent.
+    expect(
+      screen.queryByRole('button', { name: 'Open Orphan' }),
+    ).not.toBeInTheDocument()
+    expect(
+      container.querySelector('[data-board-column]'),
+    ).toBeNull()
+    expect(screen.getByRole('alert')).toBeInTheDocument()
+    expect(reorderWorkItem).not.toHaveBeenCalled()
+  })
+
+  it('recovers through Retry: the configuration is fetched again and the item lands in its real column', async () => {
+    vi.mocked(getProject).mockResolvedValue(makeProject())
+    vi.mocked(getProjectWorkItemConfiguration)
+      .mockRejectedValueOnce(
+        new Error('first attempt fails'),
+      )
+      .mockResolvedValueOnce(CONFIG_WITH_DONE)
+    vi.mocked(listProjectWorkItems).mockResolvedValue([
+      makeWorkItem({
+        id: 503,
+        title: 'Finished',
+        statusDefinitionId: 13,
+        boardPosition: 1,
+      }),
+    ])
+    vi.mocked(listProjectMemberships).mockResolvedValue([
+      makeMembership('owner'),
+    ])
+    vi.mocked(listResearchGroupMembers).mockResolvedValue(
+      GROUP_MEMBERS,
+    )
+
+    const { container } = renderWorkItemsTab()
+
+    const retry = await screen.findByRole(
+      'button',
+      { name: 'Retry' },
+    )
+
+    expect(
+      screen.queryByRole('button', {
+        name: 'Open Finished',
+      }),
+    ).not.toBeInTheDocument()
+
+    await act(async () => {
+      fireEvent.click(retry)
+    })
+
+    await screen.findByRole('button', {
+      name: 'Open Finished',
+    })
+
+    // Exactly one retry request — no page reload, no double fetch.
+    expect(getProjectWorkItemConfiguration).toHaveBeenCalledTimes(2)
+    expect(columnCardIds(container, 'done')).toEqual(['503'])
+  })
+
+  it('keeps the error state when the retry fails again', async () => {
+    mockFailedConfigurationGet([
+      makeWorkItem({
+        id: 504,
+        title: 'Still here',
+        statusDefinitionId: 10,
+        boardPosition: 1,
+      }),
+    ])
+
+    const { container } = renderWorkItemsTab()
+
+    const retry = await screen.findByRole(
+      'button',
+      { name: 'Retry' },
+    )
+
+    await act(async () => {
+      fireEvent.click(retry)
+    })
+
+    await waitFor(() => {
+      expect(
+        getProjectWorkItemConfiguration,
+      ).toHaveBeenCalledTimes(2)
+    })
+
+    // Still the explicit error state — no guessed card, no board.
+    expect(screen.getByRole('alert')).toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', {
+        name: 'Open Still here',
+      }),
+    ).not.toBeInTheDocument()
+    expect(
+      container.querySelector('[data-board-column]'),
+    ).toBeNull()
+    expect(reorderWorkItem).not.toHaveBeenCalled()
+  })
+
+  it('an unknown statusDefinitionId never lands in a guessed Todo column', async () => {
+    mockProjectData({
+      configuration: CONFIG_WITH_DONE,
+      workItems: [
+        makeWorkItem({
+          id: 505,
+          title: 'Mystery',
+          statusDefinitionId: 999,
+          boardPosition: 1,
+        }),
+        makeWorkItem({
+          id: 506,
+          title: 'Ordinary',
+          statusDefinitionId: 10,
+          boardPosition: 2,
+        }),
+      ],
+    })
+
+    const { container } = await renderWorkItemsBoard('Ordinary')
+
+    expect(columnCardIds(container, 'todo')).toEqual(['506'])
+    // The unresolved item belongs to NO column on the Board.
+    expect(
+      container.querySelector('[data-work-item-id="505"]'),
+    ).toBeNull()
+
+    // The List names the condition instead of inventing a status.
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole('button', { name: 'List' }),
+      )
+    })
+    expect(
+      screen.getByText('Status unavailable'),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Open Mystery' }),
+    ).toBeInTheDocument()
+  })
+
+  it('an inactive but referenced status definition still resolves to its category', async () => {
+    const configWithInactiveDone: ApiProjectWorkItemConfiguration = {
+      ...CONFIGURATION,
+      statuses: [
+        ...CONFIGURATION.statuses,
+        {
+          id: 13,
+          name: 'Done (legacy)',
+          category: 'done',
+          order: 2,
+          active: false,
+          isDefault: false,
+        },
+      ],
+    }
+
+    mockProjectData({
+      configuration: configWithInactiveDone,
+      workItems: [
+        makeWorkItem({
+          id: 507,
+          title: 'Legacy done',
+          statusDefinitionId: 13,
+          boardPosition: 1,
+        }),
+      ],
+    })
+
+    const { container } =
+      await renderWorkItemsBoard('Legacy done')
+
+    expect(columnCardIds(container, 'done')).toEqual(['507'])
+    expect(columnCardIds(container, 'todo')).toEqual([])
+  })
+
+  it('sends no reorder request while status resolution is unavailable', async () => {
+    // A failed configuration GET leaves no rendered Board at all:
+    // no columns, no cards, no drop targets — a drag sequence fired
+    // at the surface must not produce a single mutation request.
+    mockFailedConfigurationGet([
+      makeWorkItem({
+        id: 508,
+        title: 'Untouchable',
+        statusDefinitionId: 10,
+        boardPosition: 1,
+      }),
+    ])
+
+    const { container } = renderWorkItemsTab()
+
+    await screen.findByRole('button', { name: 'Retry' })
+
+    expect(
+      container.querySelector('[data-board-column]'),
+    ).toBeNull()
+    expect(
+      screen.queryByRole('button', {
+        name: 'Open Untouchable',
+      }),
+    ).not.toBeInTheDocument()
+    expect(reorderWorkItem).not.toHaveBeenCalled()
+  })
+
+  it('a late configuration answer from the abandoned project never changes the new project', async () => {
+    // Project A maps status definition 10 to `todo`; Project B maps
+    // the SAME id to `done`. A's delayed answer must not re-map B's
+    // items into foreign Board data (and must not import an error).
+    const PROJECT_A = makeProject({
+      id: 7,
+      name: 'Project A',
+    })
+    const PROJECT_B = makeProject({
+      id: 8,
+      name: 'Project B',
+    })
+
+    const CONFIG_A: ApiProjectWorkItemConfiguration = {
+      ...CONFIGURATION,
+      statuses: [
+        {
+          id: 10,
+          name: 'Todo A',
+          category: 'todo',
+          order: 0,
+          active: true,
+          isDefault: true,
+        },
+      ],
+    }
+    const CONFIG_B: ApiProjectWorkItemConfiguration = {
+      ...CONFIGURATION,
+      statuses: [
+        {
+          id: 10,
+          name: 'Done B',
+          category: 'done',
+          order: 0,
+          active: true,
+          isDefault: true,
+        },
+      ],
+    }
+
+    const aItem = makeWorkItem({
+      id: 301,
+      title: 'A item',
+      projectId: 7,
+      statusDefinitionId: 10,
+      boardPosition: 1,
+    })
+    const bItem = makeWorkItem({
+      id: 302,
+      title: 'B item',
+      projectId: 8,
+      statusDefinitionId: 10,
+      boardPosition: 1,
+    })
+
+    let releaseAConfig:
+      | ((value: ApiProjectWorkItemConfiguration) => void)
+      | null = null
+
+    vi.mocked(getProject).mockImplementation((id) =>
+      Promise.resolve(id === 7 ? PROJECT_A : PROJECT_B),
+    )
+    vi.mocked(getProjectWorkItemConfiguration).mockImplementation(
+      (id) =>
+        id === 7
+          ? new Promise(
+              (resolve) => {
+                releaseAConfig = resolve
+              },
+            )
+          : Promise.resolve(CONFIG_B),
+    )
+    vi.mocked(listProjectMemberships).mockResolvedValue([
+      makeMembership('owner'),
+    ])
+    vi.mocked(listResearchGroupMembers).mockResolvedValue(
+      GROUP_MEMBERS,
+    )
+    vi.mocked(listProjectWorkItems).mockImplementation((id) =>
+      Promise.resolve(id === 7 ? [aItem] : [bItem]),
+    )
+
+    let navigateTo: ((to: string) => void) | null = null
+
+    function NavigationProbe() {
+      navigateTo = useNavigate()
+      return null
+    }
+
+    const { container } = render(
+      <MemoryRouter
+        initialEntries={['/projects/7/work-items']}
+      >
+        <NavigationProbe />
+
+        <Routes>
+          <Route
+            path="/projects/:projectId/:tab"
+            element={<ProjectDetailPage />}
+          />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    // Switch to Project B and wait until B's Board is loaded with
+    // B's OWN configuration answer.
+    await act(async () => {
+      navigateTo?.('/projects/8/work-items')
+    })
+    await screen.findByRole('button', { name: 'Open B item' })
+
+    // B's item resolves through B's configuration (10 = done).
+    expect(columnCardIds(container, 'done')).toEqual(['302'])
+
+    // Now the abandoned Project A's configuration finally answers.
+    await act(async () => {
+      releaseAConfig?.(CONFIG_A)
+    })
+
+    // B's Board is unchanged: same item, same column — no foreign
+    // data and no imported error state.
+    expect(columnCardIds(container, 'done')).toEqual(['302'])
+    expect(columnCardIds(container, 'todo')).toEqual([])
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 })

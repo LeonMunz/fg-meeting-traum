@@ -126,18 +126,28 @@ export function applyWorkItemBoardMove(
 
   // Both categories come from the canonical `statusDefinitionId`
   // resolved against the Project configuration — never from the
-  // optional legacy `status` string. An unresolvable definition
-  // falls back to `todo`, exactly like the Board column the card is
-  // rendered in (resolveWorkItemDisplay).
-  const categoryOf = (item: ApiWorkItem) =>
-    resolveWorkItemStatus(item.statusDefinitionId, config)
-
+  // optional legacy `status` string.
   const targetCategory = resolveWorkItemStatus(
     statusDefinitionId,
     config,
   )
-  const sameCategory =
-    targetCategory === categoryOf(moved)
+  const movedCategory =
+    targetCategory === null
+      ? null
+      : resolveWorkItemStatus(moved.statusDefinitionId, config)
+
+  if (targetCategory === null || movedCategory === null) {
+    // Status resolution is unavailable for this move (configuration
+    // missing/failed, or an unresolvable definition): neither the
+    // current nor the target category can be trusted, so the move is
+    // NOT applied and the caller must not send a request.
+    return items
+  }
+
+  const sameCategory = targetCategory === movedCategory
+
+  const categoryOf = (item: ApiWorkItem) =>
+    resolveWorkItemStatus(item.statusDefinitionId, config)
 
   // The FULL target category column in canonical render order
   // (covers same-category reorders and cross-category moves; every

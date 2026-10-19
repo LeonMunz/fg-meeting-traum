@@ -64,6 +64,7 @@ import {
   resolveStatusDefinitionIdByCategory,
   resolveWorkItemDisplay,
   resolveWorkItemStatus,
+  type ResolvedWorkItemStatus,
 } from './workItemMapping'
 
 import type {
@@ -170,7 +171,11 @@ type DemoWorkItem = {
   id: string
   title: string
   type: DemoWorkItemType
-  status: DemoWorkItemStatus
+  // Resolved semantic category of the item's concrete StatusDefinition.
+  // `null` = UNRESOLVED (configuration missing/failed, or an ID the
+  // configuration cannot resolve): the item belongs to NO Board column
+  // and no status-dependent mutation may act on it. Never guessed.
+  status: ResolvedWorkItemStatus
   typeLabel: string
   assignees: DemoWorkItemAssignee[]
   dueInDays: number | null
@@ -209,12 +214,52 @@ type ProjectDetail = {
   updatedLabel: string
 }
 
+/**
+ * Load state of the Project's Work Item configuration — the ONLY
+ * input to Work Item status resolution. A failed Config-GET lands in
+ * `error` (never in `ready` with an empty configuration, and never
+ * silently in `loading`): while the state is not `ready`, no Work
+ * Item may be assigned to a status column and no status-dependent
+ * mutation is offered.
+ */
+type WorkItemConfigLoadState =
+  | { status: 'loading' }
+  | { status: 'ready' }
+  | { status: 'error'; message: string }
+
 
 const workItemStatusLabels: Record<DemoWorkItemStatus, string> = {
   todo: 'To do',
   in_progress: 'In progress',
   review: 'Review',
   done: 'Done',
+}
+
+// Unresolved status (missing configuration or an ID the configuration
+// cannot resolve): a NEUTRAL presentation — the same "never crash,
+// never guess" contract as the type icon. The label reuses the Work
+// Item inspector's unavailable-state copy.
+const workItemStatusUnresolvedDisplay = {
+  glyph: '?',
+  className: 'text-text-tertiary',
+}
+
+function getWorkItemStatusDisplay(
+  status: ResolvedWorkItemStatus,
+): { glyph: string; className: string } {
+  if (status === null) {
+    return workItemStatusUnresolvedDisplay
+  }
+
+  return workItemStatusDisplay[status]
+}
+
+function getWorkItemStatusLabel(
+  status: ResolvedWorkItemStatus,
+): string {
+  return status === null
+    ? 'Status unavailable'
+    : workItemStatusLabels[status]
 }
 
 
@@ -703,6 +748,16 @@ export function ProjectDetailPage() {
     useState<ApiWorkItem[]>([])
   const [workItemConfig, setWorkItemConfig] =
     useState<ApiProjectWorkItemConfiguration | null>(null)
+  // Explicit failure of the Work Item configuration GET. `null` means
+  // "no error" — a failed fetch is never represented by a null config
+  // (which would be indistinguishable from the loading state and from
+  // a successful empty configuration).
+  const [workItemConfigError, setWorkItemConfigError] =
+    useState<string | null>(null)
+  // Bumped by the Work Items surface Retry button to re-issue the
+  // configuration fetch for the CURRENT project (no page reload).
+  const [workItemConfigRetryKey, setWorkItemConfigRetryKey] =
+    useState(0)
   // Bumped by the cross-flow "work-item-created" event so that an
   // already-mounted Project page re-fetches its canonical WorkItem
   // list without requiring a hard reload.
@@ -1297,13 +1352,17 @@ export function ProjectDetailPage() {
   useEffect(() => {
     if (!project) {
       setWorkItemConfig(null)
+      setWorkItemConfigError(null)
       return
     }
 
     const numericProjectId = Number(project.id)
     let cancelled = false
 
+    // A fresh fetch for this Project starts in the loading state:
+    // drop any stale value (including a previous error) first.
     setWorkItemConfig(null)
+    setWorkItemConfigError(null)
 
     getProjectWorkItemConfiguration(numericProjectId)
       .then((config) => {
@@ -1311,16 +1370,40 @@ export function ProjectDetailPage() {
           setWorkItemConfig(config)
         }
       })
-      .catch(() => {
+      .catch((error) => {
+        // A failed Config-GET is NOT an empty configuration: record
+        // the explicit error so the Work Items surface can show its
+        // error state with a retry instead of rendering guessed
+        // statuses.
         if (!cancelled) {
-          setWorkItemConfig(null)
+          setWorkItemConfigError(
+            getWorkItemErrorMessage(
+              error,
+              'The work item status configuration could not be loaded.',
+            ),
+          )
         }
       })
 
     return () => {
       cancelled = true
     }
-  }, [project])
+  }, [project, workItemConfigRetryKey])
+
+  // Retry re-issues the configuration fetch for the CURRENT project
+  // only (no page reload): bumping the key re-runs the load effect,
+  // whose cancelled-flag guard keeps answers of an abandoned project
+  // from touching the current state.
+  const requestWorkItemConfigRetry = useCallback(() => {
+    setWorkItemConfigRetryKey((current) => current + 1)
+  }, [])
+
+  const workItemConfigState: WorkItemConfigLoadState =
+    workItemConfigError !== null
+      ? { status: 'error', message: workItemConfigError }
+      : workItemConfig !== null
+        ? { status: 'ready' }
+        : { status: 'loading' }
 
   useEffect(() => {
     setAddMemberDialogOpen(false)
@@ -2266,6 +2349,14 @@ export function ProjectDetailPage() {
       return
     }
 
+    // Status resolution must be reliable before a drop can be
+    // classified as same- or cross-category. While the configuration
+    // is missing (loading or failed) NO reorder request is sent —
+    // the Board surface disables dragging in this state as well.
+    if (workItemConfig === null) {
+      return
+    }
+
     const previous = apiWorkItems.find(
       (item) => item.id === workItemId,
     )
@@ -2888,6 +2979,10 @@ export function ProjectDetailPage() {
               : null
           }
           inspectorOpen={workItemDrawerState?.mode === 'edit'}
+          workItemConfigState={workItemConfigState}
+          onRetryWorkItemConfig={
+            requestWorkItemConfigRetry
+          }
         />
       )}
 
@@ -3510,7 +3605,7 @@ function OverviewWorkItemRow({
   onOpen: (item: DemoWorkItem) => void
 }) {
   const status =
-    workItemStatusDisplay[item.status]
+    getWorkItemStatusDisplay(item.status)
 
   const due =
     getWorkItemDueDisplay(item)
@@ -3589,7 +3684,7 @@ function OverviewWorkItemRow({
         </span>
 
         <span className="text-text-muted">
-          {workItemStatusLabels[item.status]}
+          {getWorkItemStatusLabel(item.status)}
         </span>
       </div>
 
@@ -3625,6 +3720,8 @@ function ProjectWorkItemsPanel({
   preferencesKey,
   inspectorOpen,
   loading = false,
+  workItemConfigState,
+  onRetryWorkItemConfig,
 }: {
   items: DemoWorkItem[]
   eligibleAssignees: ProjectMember[]
@@ -3653,6 +3750,14 @@ function ProjectWorkItemsPanel({
   // continuous surface from first mount — never a temporary
   // foreign (e.g. legacy white) surface in the header region.
   loading?: boolean
+  // Load state of the Project's Work Item configuration (the input
+  // to status resolution). While it is not `ready`, no Work Item is
+  // assigned to a status column and status-dependent mutations are
+  // not offered: `error` shows the retryable error state,
+  // `loading` a compact placeholder for the body.
+  workItemConfigState: WorkItemConfigLoadState
+  // Re-issues the configuration fetch for the current project.
+  onRetryWorkItemConfig: () => void
 }) {
   const [view, setView] = useState<WorkItemsView>('board')
   const [draggedItemId, setDraggedItemId] =
@@ -3861,6 +3966,20 @@ function ProjectWorkItemsPanel({
     })),
   ]
 
+  // Board drag & drop (and every other status-dependent mutation)
+  // requires reliable status resolution: it is offered only while
+  // the configuration is `ready` and the project is editable.
+  const boardInteractionsEnabled =
+    !readOnly && workItemConfigState.status === 'ready'
+
+  // Items whose statusDefinitionId cannot be resolved against the
+  // loaded configuration belong to NO Board column (columns filter
+  // by the resolved category); the board names them instead of
+  // silently hiding them.
+  const unresolvedStatusCount = items.filter(
+    (item) => item.status === null,
+  ).length
+
   if (loading) {
     return (
       <section
@@ -3935,6 +4054,74 @@ function ProjectWorkItemsPanel({
               </div>
             ))}
           </div>
+        </div>
+      </section>
+    )
+  }
+
+  // A failed configuration GET: the Work Items surface stays
+  // mounted with its frame, but its body is the explicit error
+  // state with a retry — no Work Item is rendered into a guessed
+  // status column, and no status-dependent mutation is offered.
+  if (workItemConfigState.status === 'error') {
+    return (
+      <section
+        aria-label="Work item status configuration error"
+        className={[
+          'mt-6 overflow-hidden rounded-xl border border-border-structural bg-surface-quiet shadow-sm',
+          inspectorOpen ? 'xl:mr-[520px]' : '',
+        ].join(' ')}
+      >
+        <div className="flex flex-wrap items-start justify-between gap-8 border-b border-border-structural bg-work-items-header px-6 py-5">
+          <div>
+            <h2 className="text-lg font-semibold tracking-tight text-work-content-text">
+              Work Items
+            </h2>
+
+            <p className="mt-1 text-sm text-work-content-muted">
+              Plan and track the work that belongs to this project.
+            </p>
+          </div>
+        </div>
+
+        <div
+          role="alert"
+          className="flex min-h-64 flex-col items-center justify-center px-6 py-12 text-center"
+        >
+          <div className="flex h-11 w-11 items-center justify-center rounded-full bg-work-item-error-bg text-work-item-error">
+            <span
+              aria-hidden="true"
+              className="material-symbols-outlined text-[22px]"
+            >
+              error
+            </span>
+          </div>
+
+          <h3 className="mt-4 text-sm font-semibold text-work-content-text">
+            Work item status configuration unavailable
+          </h3>
+
+          <p className="mt-1 max-w-sm text-sm leading-6 text-work-content-muted">
+            {workItemConfigState.message}
+          </p>
+
+          <p className="mt-1 max-w-sm text-sm leading-6 text-work-content-muted">
+            Work items stay hidden until it loads again.
+          </p>
+
+          <button
+            type="button"
+            onClick={onRetryWorkItemConfig}
+            className="mt-5 inline-flex h-9 items-center gap-2 rounded-lg bg-action px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-action-hover-solid"
+          >
+            <span
+              aria-hidden="true"
+              className="material-symbols-outlined text-[18px]"
+            >
+              refresh
+            </span>
+            Retry
+          </button>
         </div>
       </section>
     )
@@ -4185,7 +4372,26 @@ function ProjectWorkItemsPanel({
         </div>
       )}
 
-      {filteredItems.length === 0 ? (
+      {workItemConfigState.status === 'loading' ? (
+        // Items are already on screen but status resolution is
+        // still in flight: nothing may be assigned to a guessed
+        // column, so the body shows a compact placeholder instead.
+        <div
+          role="status"
+          className="flex min-h-64 flex-col items-center justify-center px-6 py-12 text-center"
+        >
+          <span
+            aria-hidden="true"
+            className="material-symbols-outlined animate-spin text-[22px] text-work-content-muted"
+          >
+            spinner
+          </span>
+
+          <p className="mt-4 text-sm font-medium text-work-content-text">
+            Resolving work item statuses…
+          </p>
+        </div>
+      ) : filteredItems.length === 0 ? (
         <div className="flex min-h-64 flex-col items-center justify-center px-6 py-12 text-center">
           <div className="flex h-11 w-11 items-center justify-center rounded-full bg-work-surface-support text-work-content-muted">
             <span className="material-symbols-outlined text-[22px]">
@@ -4214,6 +4420,26 @@ function ProjectWorkItemsPanel({
         </div>
       ) : view === 'board' ? (
         <div className="overflow-x-auto bg-workspace">
+          {unresolvedStatusCount > 0 && (
+            <div
+              role="note"
+              className="flex items-start gap-2.5 border-b border-border-subtle px-6 py-3 text-sm text-text-muted"
+            >
+              <span
+                aria-hidden="true"
+                className="material-symbols-outlined mt-0.5 text-[18px]"
+              >
+                help
+              </span>
+
+              <p className="flex-1">
+                {unresolvedStatusCount === 1
+                  ? '1 work item is not shown because its status could not be resolved.'
+                  : `${unresolvedStatusCount} work items are not shown because their status could not be resolved.`}
+              </p>
+            </div>
+          )}
+
           <div
             className="grid gap-3 p-4"
             style={{
@@ -4229,7 +4455,7 @@ function ProjectWorkItemsPanel({
             )
 
             const isDragOver =
-              !readOnly &&
+              boardInteractionsEnabled &&
               draggedItemId !== null &&
               dragIndicator?.status === column.status
 
@@ -4241,7 +4467,10 @@ function ProjectWorkItemsPanel({
                 : null
 
             const handleColumnDragOver = (event: React.DragEvent) => {
-              if (readOnly || draggedItemId === null) {
+              if (
+                !boardInteractionsEnabled ||
+                draggedItemId === null
+              ) {
                 return
               }
 
@@ -4299,7 +4528,7 @@ function ProjectWorkItemsPanel({
               setDragIndicator(null)
               setDraggedItemId(null)
 
-              if (readOnly || !droppedId) {
+              if (!boardInteractionsEnabled || !droppedId) {
                 return
               }
 
@@ -4379,6 +4608,9 @@ function ProjectWorkItemsPanel({
                               draggedItemId === item.id
                             }
                             readOnly={readOnly}
+                            dragDisabled={
+                              !boardInteractionsEnabled
+                            }
                             onOpen={onOpen}
                             onRequestDelete={onRequestDelete}
                             onDragHandleStart={(itemId) =>
@@ -4491,6 +4723,7 @@ function WorkItemBoardCard({
   selected,
   dragging,
   readOnly,
+  dragDisabled,
   onOpen,
   onRequestDelete,
   onDragHandleStart,
@@ -4500,6 +4733,10 @@ function WorkItemBoardCard({
   selected: boolean
   dragging: boolean
   readOnly: boolean
+  // Board drag is unavailable (read-only project OR status
+  // resolution not ready): the card stays openable and deletable,
+  // but can never start a status-dependent move.
+  dragDisabled: boolean
   onOpen: (item: DemoWorkItem) => void
   onRequestDelete: (workItemId: number) => void
   onDragHandleStart: (itemId: string) => void
@@ -4524,7 +4761,7 @@ function WorkItemBoardCard({
       role="button"
       tabIndex={0}
       aria-label={`Open ${item.title}`}
-      draggable={!readOnly}
+      draggable={!dragDisabled}
       onClick={() => onOpen(item)}
       onKeyDown={(event) => {
         if (
@@ -4536,7 +4773,7 @@ function WorkItemBoardCard({
         }
       }}
       onDragStart={(event) => {
-        if (readOnly) {
+        if (dragDisabled) {
           return
         }
 
@@ -4560,7 +4797,9 @@ function WorkItemBoardCard({
           ? 'outline outline-2 -outline-offset-2 outline-card-selected-ring bg-card-selected-bg shadow-sm'
           : '',
         dragging ? 'opacity-40' : '',
-        readOnly ? '' : 'cursor-grab active:cursor-grabbing',
+        dragDisabled
+          ? ''
+          : 'cursor-grab active:cursor-grabbing',
       ].join(' ')}
     >
       <div className="flex items-start gap-2">
@@ -4720,7 +4959,7 @@ function WorkItemsList({
 
         <div className="border-t border-border-structural/40">
           {items.map((item, index) => {
-            const status = workItemStatusDisplay[item.status]
+            const status = getWorkItemStatusDisplay(item.status)
             const due = getWorkItemDueDisplay(item)
 
             return (
@@ -4789,7 +5028,7 @@ function WorkItemsList({
                   </span>
 
                   <span className="text-work-content-muted">
-                    {workItemStatusLabels[item.status]}
+                    {getWorkItemStatusLabel(item.status)}
                   </span>
                 </div>
 
@@ -4928,6 +5167,8 @@ function ProjectDetailSkeleton() {
         onDismissStatusDropError={() => {}}
         preferencesKey={null}
         inspectorOpen={false}
+        workItemConfigState={{ status: 'loading' }}
+        onRetryWorkItemConfig={() => {}}
       />
     </div>
   )
