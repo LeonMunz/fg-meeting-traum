@@ -6169,6 +6169,681 @@ describe('My Work Kanban — exact positional drag and drop', () => {
   })
 })
 
+// ── AP-06: failed revalidation + competing GET responses ─────
+// A FAILED revalidation after a successful mutation must never
+// disappear silently (visible + repeatable), and a delayed stale
+// GET /api/me/work-items/ response must never overwrite a newer
+// authoritative snapshot (the same monotonic request-sequence
+// contract the Home Activity rail applies to its feed).
+describe(
+  'My Work Kanban — refetch failure and response races',
+  () => {
+    it('surfaces a failed refetch after a successful drop as a visible retryable notice — never as a failed move', async () => {
+      const a = todoItem({
+        id: 101,
+        title: 'A',
+        createdAt: '2026-09-01T01:00:00Z',
+        myWorkBoardPosition: 1,
+      })
+      const b = todoItem({
+        id: 102,
+        title: 'B',
+        createdAt: '2026-09-01T02:00:00Z',
+        myWorkBoardPosition: 2,
+      })
+
+      // Initial load, then the POST-drop refetch FAILS, then the
+      // retry succeeds with the moved order.
+      vi.mocked(listMyWork)
+        .mockResolvedValueOnce([a, b])
+        .mockRejectedValueOnce(
+          new ApiError(503, {
+            error:
+              'My Work could not be refreshed (simulated).',
+          }),
+        )
+        .mockResolvedValueOnce([
+          { ...b, myWorkBoardPosition: 1 },
+          { ...a, myWorkBoardPosition: 2 },
+        ])
+
+      vi.mocked(reorderMyWorkItem).mockResolvedValue(b)
+
+      const { container } = renderPage()
+      const cardB = await waitForCard(container, 102)
+
+      // The mutation SUCCEEDS; only the authoritative refetch
+      // fails.
+      await dragCardToColumn(
+        container,
+        cardB,
+        'todo',
+        STUB_CARD_TOP,
+      )
+
+      await waitFor(() => {
+        expect(listMyWork).toHaveBeenCalledTimes(2)
+      })
+      await waitFor(() => {
+        expect(
+          container.querySelector('[role="alert"]'),
+        ).not.toBeNull()
+      })
+
+      // No optimistic relocation: the last authoritative
+      // payload stays on screen.
+      expect(columnCardIds(container, 'todo')).toEqual([
+        '101',
+        '102',
+      ])
+
+      // The failed REVALIDATION is visible — and the successful
+      // mutation is never reported as a failed move.
+      const alert = container.querySelector(
+        '[role="alert"]',
+      ) as HTMLElement
+      expect(alert.textContent).toContain(
+        'My Work could not be refreshed (simulated).',
+      )
+      expect(alert.textContent).not.toContain(
+        'Work item could not be moved.',
+      )
+
+      // Repeatable: the retry re-runs the authoritative
+      // refetch, applies the moved order, and clears the notice.
+      await act(async () => {
+        fireEvent.click(
+          within(alert).getByRole('button', {
+            name: 'Retry',
+          }),
+        )
+      })
+
+      await waitFor(() => {
+        expect(columnCardIds(container, 'todo')).toEqual([
+          '102',
+          '101',
+        ])
+      })
+      expect(
+        container.querySelector('[role="alert"]'),
+      ).toBeNull()
+      expect(listMyWork).toHaveBeenCalledTimes(3)
+    })
+
+    it('surfaces a failed refetch after a successful drawer PATCH and recovers on retry', async () => {
+      mockDrawerContext()
+
+      const updated = makeItem({
+        id: 100,
+        projectId: PROJECT_A,
+        title: 'Patched title',
+      })
+
+      vi.mocked(listMyWork)
+        .mockResolvedValueOnce([
+          makeItem({ id: 100, projectId: PROJECT_A }),
+        ])
+        .mockRejectedValueOnce(
+          new ApiError(500, {
+            error: 'Refresh failed (simulated).',
+          }),
+        )
+        .mockResolvedValueOnce([updated])
+      vi.mocked(updateWorkItem).mockResolvedValue(updated)
+
+      const { getByRole, container } = renderPage()
+
+      await waitFor(() => {
+        expect(
+          getByRole('button', {
+            name: 'Open Prepare samples',
+          }),
+        ).toBeInTheDocument()
+      })
+
+      await act(async () => {
+        fireEvent.click(
+          getByRole('button', {
+            name: 'Open Prepare samples',
+          }),
+        )
+      })
+
+      const drawer = () =>
+        container.querySelector(
+          '[data-testid="work-item-drawer"]',
+        ) as HTMLElement
+
+      await waitFor(() => {
+        expect(drawer()).not.toBeNull()
+      })
+
+      // The PATCH succeeds; only the refetch fails.
+      await act(async () => {
+        fireEvent.click(
+          drawer().querySelector(
+            '[data-testid="drawer-apply-patch"]',
+          ) as HTMLElement,
+        )
+      })
+
+      await waitFor(() => {
+        expect(listMyWork).toHaveBeenCalledTimes(2)
+      })
+
+      // The card keeps the last authoritative payload (the
+      // patched title is not visible yet) ...
+      expect(
+        getByRole('button', {
+          name: 'Open Prepare samples',
+        }),
+      ).toBeInTheDocument()
+
+      // ... and the failed revalidation is visible + retryable
+      // (never swallowed silently).
+      await waitFor(() => {
+        expect(
+          container.querySelector('[role="alert"]'),
+        ).not.toBeNull()
+      })
+      const alert = container.querySelector(
+        '[role="alert"]',
+      ) as HTMLElement
+      expect(alert.textContent).toContain(
+        'Refresh failed (simulated).',
+      )
+
+      await act(async () => {
+        fireEvent.click(
+          within(alert).getByRole('button', {
+            name: 'Retry',
+          }),
+        )
+      })
+
+      await waitFor(() => {
+        expect(
+          getByRole('button', {
+            name: 'Open Patched title',
+          }),
+        ).toBeInTheDocument()
+      })
+      expect(
+        container.querySelector('[role="alert"]'),
+      ).toBeNull()
+      expect(listMyWork).toHaveBeenCalledTimes(3)
+    })
+
+    it('completes a successful delete even when the refetch fails, with a retryable notice', async () => {
+      mockDrawerContext()
+
+      vi.mocked(listMyWork)
+        .mockResolvedValueOnce([
+          makeItem({ id: 100, projectId: PROJECT_A }),
+        ])
+        .mockRejectedValueOnce(
+          new ApiError(502, {
+            error: 'Refresh failed (simulated).',
+          }),
+        )
+        .mockResolvedValueOnce([])
+      vi.mocked(deleteWorkItem).mockResolvedValue(undefined)
+
+      const { getByRole, container } = renderPage()
+
+      await waitFor(() => {
+        expect(
+          getByRole('button', {
+            name: 'Open Prepare samples',
+          }),
+        ).toBeInTheDocument()
+      })
+
+      await act(async () => {
+        fireEvent.click(
+          getByRole('button', {
+            name: 'Open Prepare samples',
+          }),
+        )
+      })
+
+      const drawer = () =>
+        container.querySelector(
+          '[data-testid="work-item-drawer"]',
+        ) as HTMLElement
+
+      await waitFor(() => {
+        expect(drawer()).not.toBeNull()
+      })
+
+      await act(async () => {
+        fireEvent.click(
+          drawer().querySelector(
+            '[data-testid="drawer-request-delete"]',
+          ) as HTMLElement,
+        )
+      })
+
+      // The shared confirmation overlay is portaled to
+      // document.body (the layer ownership contract).
+      const deleteDialog = () =>
+        Array.from(
+          document.querySelectorAll('[role="dialog"]'),
+        ).find(
+          (dialog) => {
+            const labelId = dialog.getAttribute(
+              'aria-labelledby',
+            )
+            return (
+              labelId != null &&
+              document
+                .getElementById(labelId)
+                ?.textContent ===
+                'Delete work item?'
+            )
+          },
+        ) as HTMLElement | null
+
+      const deleteConfirm = () =>
+        Array.from(
+          deleteDialog()?.querySelectorAll(
+            'button',
+          ) ?? [],
+        ).find(
+          (button) =>
+            button.textContent ===
+            'Delete work item',
+        ) as HTMLElement
+
+      await waitFor(() => {
+        expect(deleteConfirm()).toBeDefined()
+      })
+
+      // The DELETE succeeds; only the refetch fails.
+      await act(async () => {
+        fireEvent.click(deleteConfirm())
+      })
+
+      await waitFor(() => {
+        expect(listMyWork).toHaveBeenCalledTimes(2)
+      })
+      await waitFor(() => {
+        expect(
+          container.querySelector('[role="alert"]'),
+        ).not.toBeNull()
+      })
+
+      // The delete flow COMPLETES: the mutation is successful,
+      // so the confirmation dialog closes (find() resolves to
+      // undefined — no dialog is mounted at all) ...
+      expect(deleteDialog()).toBeFalsy()
+      // ... the item is still visible (last authoritative
+      // payload) ...
+      expect(
+        container.querySelector(
+          '[data-work-item-id="100"]',
+        ),
+      ).not.toBeNull()
+      // ... and the failed revalidation is visible.
+      const alert = container.querySelector(
+        '[role="alert"]',
+      ) as HTMLElement
+      expect(alert.textContent).toContain(
+        'Refresh failed (simulated).',
+      )
+
+      // Retry: the refetched empty payload removes the card.
+      await act(async () => {
+        fireEvent.click(
+          within(alert).getByRole('button', {
+            name: 'Retry',
+          }),
+        )
+      })
+
+      await waitFor(() => {
+        expect(
+          container.querySelector(
+            '[data-work-item-id="100"]',
+          ),
+        ).toBeNull()
+      })
+      expect(
+        container.querySelector('[role="alert"]'),
+      ).toBeNull()
+    })
+
+    it('surfaces a failed WORK_ITEM_CREATED_EVENT refetch instead of swallowing it', async () => {
+      vi.mocked(listMyWork)
+        .mockResolvedValueOnce([
+          todoItem({
+            id: 101,
+            title: 'A',
+            myWorkBoardPosition: 1,
+          }),
+        ])
+        .mockRejectedValueOnce(
+          new ApiError(503, {
+            error: 'Refresh failed (simulated).',
+          }),
+        )
+        .mockResolvedValueOnce([
+          todoItem({
+            id: 102,
+            title: 'Created from Quick Create',
+            myWorkBoardPosition: 1,
+          }),
+          todoItem({
+            id: 101,
+            title: 'A',
+            myWorkBoardPosition: 2,
+          }),
+        ])
+
+      const { container } = renderPage()
+
+      await waitFor(() => {
+        expect(columnCardIds(container, 'todo')).toEqual([
+          '101',
+        ])
+      })
+
+      window.dispatchEvent(
+        new CustomEvent('fg-workspace:work-item-created', {
+          detail: { projectId: PROJECT_A },
+        }),
+      )
+
+      await waitFor(() => {
+        expect(listMyWork).toHaveBeenCalledTimes(2)
+      })
+      await waitFor(() => {
+        expect(
+          container.querySelector('[role="alert"]'),
+        ).not.toBeNull()
+      })
+
+      // The last authoritative payload is preserved ...
+      expect(columnCardIds(container, 'todo')).toEqual([
+        '101',
+      ])
+      const alert = container.querySelector(
+        '[role="alert"]',
+      ) as HTMLElement
+      expect(alert.textContent).toContain(
+        'Refresh failed (simulated).',
+      )
+
+      // ... and the retry reconciles the created item.
+      await act(async () => {
+        fireEvent.click(
+          within(alert).getByRole('button', {
+            name: 'Retry',
+          }),
+        )
+      })
+
+      await waitFor(() => {
+        expect(columnCardIds(container, 'todo')).toEqual([
+          '102',
+          '101',
+        ])
+      })
+      expect(
+        container.querySelector('[role="alert"]'),
+      ).toBeNull()
+    })
+
+    it('never applies a stale refresh response after a newer one has settled', async () => {
+      const a = todoItem({
+        id: 101,
+        title: 'A',
+        myWorkBoardPosition: 1,
+      })
+      const b = todoItem({
+        id: 102,
+        title: 'B',
+        myWorkBoardPosition: 2,
+      })
+      const c = todoItem({
+        id: 103,
+        title: 'C',
+        myWorkBoardPosition: 3,
+      })
+
+      // The first post-drop refetch is a deferred promise the
+      // test resolves LAST (the delayed stale response).
+      let resolveStale: (
+        items: ApiPersonalWorkItem[],
+      ) => void = () => {
+        throw new Error('not called')
+      }
+      const stalePromise = new Promise<ApiPersonalWorkItem[]>(
+        (resolve) => {
+          resolveStale = resolve
+        },
+      )
+
+      vi.mocked(listMyWork)
+        .mockResolvedValueOnce([a, b, c])
+        .mockReturnValueOnce(stalePromise)
+        .mockResolvedValueOnce([
+          { ...c, myWorkBoardPosition: 1 },
+          { ...b, myWorkBoardPosition: 2 },
+          { ...a, myWorkBoardPosition: 3 },
+        ])
+
+      vi.mocked(reorderMyWorkItem).mockResolvedValue(c)
+
+      const { container } = renderPage()
+      const cardC = await waitForCard(container, 103)
+
+      // Move C before A: the first refetch stays in flight.
+      await dragCardToColumn(
+        container,
+        cardC,
+        'todo',
+        STUB_CARD_TOP,
+      )
+      await waitFor(() => {
+        expect(listMyWork).toHaveBeenCalledTimes(2)
+      })
+
+      // Second move (a different card — the pending guard is
+      // per-card): B before A. Its refetch settles the board.
+      const cardB = container.querySelector(
+        '[data-work-item-id="102"]',
+      ) as HTMLElement
+      await dragCardToColumn(
+        container,
+        cardB,
+        'todo',
+        STUB_CARD_TOP,
+      )
+
+      await waitFor(() => {
+        expect(listMyWork).toHaveBeenCalledTimes(3)
+        expect(columnCardIds(container, 'todo')).toEqual([
+          '103',
+          '102',
+          '101',
+        ])
+      })
+
+      // Now the first (stale) refetch resolves — its snapshot
+      // (C, A, B) must NOT overwrite the newer one.
+      await act(async () => {
+        resolveStale([
+          { ...c, myWorkBoardPosition: 1 },
+          { ...a, myWorkBoardPosition: 2 },
+          { ...b, myWorkBoardPosition: 3 },
+        ])
+      })
+
+      expect(columnCardIds(container, 'todo')).toEqual([
+        '103',
+        '102',
+        '101',
+      ])
+      expect(
+        container.querySelector('[role="alert"]'),
+      ).toBeNull()
+    })
+
+    it('never surfaces a stale refresh failure after a newer refresh succeeded', async () => {
+      const a = todoItem({
+        id: 101,
+        title: 'A',
+        myWorkBoardPosition: 1,
+      })
+      const b = todoItem({
+        id: 102,
+        title: 'B',
+        myWorkBoardPosition: 2,
+      })
+
+      let rejectStale: (error: unknown) => void = () => {
+        throw new Error('not called')
+      }
+      const stalePromise = new Promise<ApiPersonalWorkItem[]>(
+        (_resolve, reject) => {
+          rejectStale = reject
+        },
+      )
+
+      vi.mocked(listMyWork)
+        .mockResolvedValueOnce([a, b])
+        .mockReturnValueOnce(stalePromise)
+        .mockResolvedValueOnce([
+          { ...b, myWorkBoardPosition: 1 },
+          { ...a, myWorkBoardPosition: 2 },
+        ])
+
+      vi.mocked(reorderMyWorkItem).mockResolvedValue(a)
+
+      const { container } = renderPage()
+      const cardA = await waitForCard(container, 101)
+
+      // Move B before A: the first refetch stays in flight.
+      const cardB = container.querySelector(
+        '[data-work-item-id="102"]',
+      ) as HTMLElement
+      await dragCardToColumn(
+        container,
+        cardB,
+        'todo',
+        STUB_CARD_TOP,
+      )
+      await waitFor(() => {
+        expect(listMyWork).toHaveBeenCalledTimes(2)
+      })
+
+      // Move A to the end of the column: its refetch settles the
+      // board (the visible order is still the pre-move snapshot —
+      // no optimistic relocation is made).
+      await dragCardToColumn(
+        container,
+        cardA,
+        'todo',
+      )
+
+      await waitFor(() => {
+        expect(columnCardIds(container, 'todo')).toEqual([
+          '102',
+          '101',
+        ])
+      })
+
+      // The stale first refetch now FAILS late — it must not
+      // surface a notice (the board is already reconciled) and
+      // must not report a failed move.
+      await act(async () => {
+        rejectStale(
+          new ApiError(503, {
+            error:
+              'My Work could not be refreshed (simulated).',
+          }),
+        )
+      })
+
+      expect(
+        container.querySelector('[role="alert"]'),
+      ).toBeNull()
+      expect(columnCardIds(container, 'todo')).toEqual([
+        '102',
+        '101',
+      ])
+    })
+
+    it('never applies a stale initial-load response after a newer refresh settled the snapshot', async () => {
+      const a = todoItem({
+        id: 101,
+        title: 'A',
+        myWorkBoardPosition: 1,
+      })
+
+      let resolveStaleLoad: (
+        items: ApiPersonalWorkItem[],
+      ) => void = () => {
+        throw new Error('not called')
+      }
+      const staleLoadPromise =
+        new Promise<ApiPersonalWorkItem[]>((resolve) => {
+          resolveStaleLoad = resolve
+        })
+
+      // The initial load's list GET stays in flight ...
+      vi.mocked(listMyWork)
+        .mockReturnValueOnce(staleLoadPromise)
+        // ... and a global Work Item creation triggers a
+        // refresh that settles with the newer payload first.
+        .mockResolvedValueOnce([
+          todoItem({
+            id: 102,
+            title: 'Created from Quick Create',
+            myWorkBoardPosition: 1,
+          }),
+          todoItem({
+            id: 101,
+            title: 'A',
+            myWorkBoardPosition: 2,
+          }),
+        ])
+
+      const { container } = renderPage()
+
+      window.dispatchEvent(
+        new CustomEvent('fg-workspace:work-item-created', {
+          detail: { projectId: PROJECT_A },
+        }),
+      )
+
+      // The refresh settles first, while the initial load is
+      // still in flight.
+      await waitFor(() => {
+        expect(listMyWork).toHaveBeenCalledTimes(2)
+      })
+      await act(async () => {
+        // Flush the refresh's microtasks so its snapshot is
+        // applied before the stale load response arrives.
+      })
+
+      // The stale initial-load response resolves LAST — it must
+      // not wipe the newer refresh result.
+      await act(async () => {
+        resolveStaleLoad([a])
+      })
+
+      await waitFor(() => {
+        expect(columnCardIds(container, 'todo')).toEqual([
+          '102',
+          '101',
+        ])
+      })
+    })
+  })
+
 // SCOPE: happy-dom has no layout engine and no real text-selection
 // engine, so a "drag the selection across the drawer's edge" is
 // simulated at the event level: a PRIMARY pointerdown inside the

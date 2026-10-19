@@ -707,11 +707,36 @@ export function MyWorkPage() {
     string | null
   >(null)
 
+  // The established non-fatal error treatment for a failed
+  // POST-MUTATION revalidation (page-local, dismissible, plus an
+  // explicit retry of the authoritative refetch). The mutation
+  // itself succeeded — only the revalidation failed, so the last
+  // authoritative payload stays on screen (no optimistic state was
+  // introduced, so nothing false is rendered).
+  const [refreshError, setRefreshError] = useState<
+    string | null
+  >(null)
+
+  // Monotonic request guard for GET /api/me/work-items/ (shared by
+  // the initial `loadMyWork` and every `refreshMyWork`): each
+  // request takes the next sequence number, and only the MOST
+  // RECENT request may settle the items state — a delayed stale
+  // response (success OR failure) must never overwrite a newer
+  // authoritative snapshot (the same contract the Home Activity
+  // rail applies to its feed).
+  const itemsRequestSeq = useRef(0)
+
   const loadMyWork = useCallback(
     async () => {
+      // The load takes the next list-request sequence number; a
+      // delayed (stale) response must never settle the items state
+      // over a newer authoritative snapshot.
+      const seq = ++itemsRequestSeq.current
+
       setLoading(true)
       setError(null)
       setPreferenceSaveError(null)
+      setRefreshError(null)
 
       try {
         // One canonical request — the personal projection across
@@ -733,7 +758,14 @@ export function MyWorkPage() {
           fetchMyWorkPreferences(),
         ])
 
-        setItems(loadedItems)
+        if (seq === itemsRequestSeq.current) {
+          setItems(loadedItems)
+        }
+        // The preference snapshot has exactly one writer (the load
+        // — a refetch never fetches it), so it applies regardless
+        // of a superseding list request; keeping it out of the
+        // sequence guard guarantees the final view (viewMode) is
+        // known as soon as any load settles.
         setPreferences(loadedPreferences)
         // The GET snapshot is what the server currently persists —
         // the baseline a changed local snapshot is diffed against
@@ -741,16 +773,26 @@ export function MyWorkPage() {
         // preference-related is cached across users or mounts).
         setSavedPreferences(loadedPreferences)
       } catch (loadError) {
-        setItems([])
-        setPreferences(null)
-        setSavedPreferences(null)
-        setError(
-          getErrorMessage(
-            loadError,
-            'My Work could not be loaded.',
-          ),
-        )
+        // A superseded load's failure must not blank the payload
+        // or surface the page-level error (the newer request owns
+        // the state).
+        if (seq === itemsRequestSeq.current) {
+          setItems([])
+          setPreferences(null)
+          setSavedPreferences(null)
+          setError(
+            getErrorMessage(
+              loadError,
+              'My Work could not be loaded.',
+            ),
+          )
+        }
       } finally {
+        // `loadMyWork` is the only writer of the page-level
+        // loading flag (a refetch never sets it), and a new load
+        // can only start from the settled error state — so the
+        // flag always clears here, even if a refetch superseded
+        // this load's list response in the meantime.
         setLoading(false)
       }
     },
@@ -762,18 +804,52 @@ export function MyWorkPage() {
   }, [loadMyWork])
 
   // Authoritative, SILENT refetch of the canonical personal
-  // projection, used after a successful Kanban status mutation.
-  // Unlike `loadMyWork` it does not toggle the page-level loading
-  // state — the rest of the board is preserved while the server
-  // result replaces the payload.
+  // projection, used after a successful Work Item mutation (and on
+  // the global Work Item creation event). Unlike `loadMyWork` it
+  // does not toggle the page-level loading state — the rest of the
+  // board is preserved while the server result replaces the
+  // payload.
+  //
+  // Mutation and revalidation are handled separately: a failure
+  // here NEVER undoes or re-reports the already successful
+  // mutation — it surfaces as the visible, retryable
+  // `refreshError` notice while the last authoritative payload
+  // stays on screen. A delayed stale response — success OR
+  // failure — never overwrites a newer authoritative snapshot (the
+  // shared monotonic request guard). This function never throws,
+  // so every call site (including the fire-and-forget
+  // `WORK_ITEM_CREATED_EVENT` listener) is safe.
   const refreshMyWork = useCallback(async () => {
+    const seq = ++itemsRequestSeq.current
+
     try {
-      setItems(await listMyWork())
+      const nextItems = await listMyWork()
+
+      // A newer request owns the snapshot now — this response is
+      // stale and must not overwrite its result.
+      if (seq !== itemsRequestSeq.current) {
+        return
+      }
+
+      setItems(nextItems)
+      // A fresh authoritative snapshot supersedes any earlier
+      // page-level load error and any earlier refresh failure.
       setError(null)
-    } catch {
-      // The mutation already succeeded; keep the last authoritative
-      // payload (no optimistic state was introduced, so nothing
-      // false is rendered) — the next load reconciles.
+      setRefreshError(null)
+    } catch (refreshFailure) {
+      // A superseded (stale) failure must not surface either.
+      if (seq !== itemsRequestSeq.current) {
+        return
+      }
+
+      // Visible + repeatable: the notice offers an explicit retry
+      // of the authoritative refetch.
+      setRefreshError(
+        getErrorMessage(
+          refreshFailure,
+          'My Work could not be refreshed.',
+        ),
+      )
     }
   }, [])
 
@@ -1623,6 +1699,12 @@ export function MyWorkPage() {
         // payload — not local inference — decides the persisted
         // order and the card's final column / concrete
         // statusName that remain on screen.
+        //
+        // Mutation and revalidation are handled separately:
+        // `refreshMyWork` never throws, so only a FAILED MOVE can
+        // reach the catch below. A failed revalidation is surfaced
+        // by `refreshMyWork` itself (visible + retryable) and is
+        // never reported as a failed move.
         await refreshMyWork()
       } catch (mutationError) {
         // No optimistic relocation was made, so the previous
@@ -2293,6 +2375,50 @@ export function MyWorkPage() {
               setPreferenceSaveError(null)
             }
             className="shrink-0 text-xs font-semibold text-work-item-error underline-offset-2 hover:underline"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      {/* Non-fatal post-mutation revalidation failure: the
+       * mutation itself succeeded — only the authoritative
+       * refetch failed. The established page-local dismissible
+       * error treatment, plus an explicit retry of the refetch.
+       * Shown in BOTH views (a revalidation can fail from any
+       * mutation entry or the global creation event). */}
+      {refreshError !== null && (
+        <div
+          role="alert"
+          className="mt-4 flex items-start gap-2.5 rounded-md border border-work-item-error-border bg-work-item-error-bg px-4 py-3 text-sm text-work-item-error"
+        >
+          <span
+            aria-hidden="true"
+            className="material-symbols-outlined mt-0.5 text-[18px]"
+          >
+            error
+          </span>
+
+          <p className="flex-1">
+            {refreshError}
+          </p>
+
+          <button
+            type="button"
+            onClick={() =>
+              void refreshMyWork()
+            }
+            className="shrink-0 text-xs font-semibold text-work-item-error underline-offset-2 hover:underline"
+          >
+            Retry
+          </button>
+
+          <button
+            type="button"
+            onClick={() =>
+              setRefreshError(null)
+            }
+            className="ml-2 shrink-0 text-xs font-semibold text-work-item-error underline-offset-2 hover:underline"
           >
             Dismiss
           </button>

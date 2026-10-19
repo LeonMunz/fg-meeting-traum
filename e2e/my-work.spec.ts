@@ -36,7 +36,10 @@ import {
  * LAST test in this file (the specs that run afterwards only assert
  * card visibility, never its category). The Playwright webServer
  * resets the E2E schema before the run, so the mutation never leaks
- * into a later run.
+ * into a later run. The very last test (the failed-revalidation
+ * scenario) drags the same item back into its opposite column and
+ * therefore mutates it again — for the same reason it must stay the
+ * final test in this file.
  *
  * That drag test proves the canonical wire contract: exactly one
  * atomic My Work board move `POST /api/me/work-items/{id}/reorder/`
@@ -1995,4 +1998,354 @@ test('My Work Kanban drag: cross-category drop mutates the canonical status from
       name: 'Work item',
     }),
   ).toBeHidden()
+})
+
+test('My Work Kanban drag: a failed revalidation after a successful move stays visible and retryable (the move is never reported as failed)', async ({ page }, testInfo) => {
+  // AP-06: mutation and revalidation are handled separately. The
+  // atomic reorder POST succeeds, and the subsequent authoritative
+  // GET /api/me/work-items/ revalidation is failed by route
+  // interception. The failed revalidation must be VISIBLE (a
+  // page-local dismissible notice carrying the server error), must
+  // NEVER be reported as a failed move, and must be REPEATABLE
+  // (the notice's Retry re-runs ONLY the revalidation and the
+  // board renders the authoritative moved position). No optimistic
+  // relocation is made, so the card stays in its last
+  // authoritative column until the revalidation succeeds.
+  //
+  // Seed-state independence: in a full sequential run the previous
+  // test has moved "First Draft Complete" into In progress; in an
+  // isolated run (-g) it is still in Todo — the target column is
+  // therefore derived from the item's CURRENT payload category.
+  type StatusTarget = {
+    statusCategory: string
+    statusDefinitionId: number
+    statusName: string
+  }
+
+  // Mirrors the canonical GET /api/me/work-items/ item payload
+  // (the backend PersonalMyWorkListView + the frontend
+  // ApiPersonalWorkItem contract): the concrete statusName is
+  // display metadata for the canonical statusDefinitionId.
+  type PersonalWorkItem = {
+    id: number
+    title: string
+    statusCategory: string
+    statusName: string
+    statusTargets: StatusTarget[]
+  }
+
+  let myWorkPayload: PersonalWorkItem[] = []
+
+  // Wire ledger — the explicit mapping of what happened on the
+  // wire: every canonical list READ (GET) with its HTTP status,
+  // and every canonical My Work board move (reorder POST) with
+  // its exact payload. No positional request counting.
+  const listGetResponses: Array<{
+    url: string
+    status: number
+  }> = []
+  const reorderPostRequests: Array<{
+    url: string
+    payload: Record<string, unknown>
+  }> = []
+
+  // Identity-based interception decision: the simulated outage
+  // applies to a list GET only once the reorder mutation itself
+  // has been dispatched. The initial load (and any other
+  // pre-mutation read) is necessarily earlier than the reorder,
+  // so it always passes through — and the reorder POST never
+  // matches the intercepted list URL in the first place.
+  let reorderDispatched = false
+
+  page.on('request', (request) => {
+    const pathname = new URL(request.url()).pathname
+
+    if (
+      request.method() === 'POST' &&
+      /\/api\/me\/work-items\/\d+\/reorder\/$/.test(pathname)
+    ) {
+      reorderDispatched = true
+      reorderPostRequests.push({
+        url: request.url(),
+        payload: JSON.parse(
+          request.postData() ?? '{}',
+        ) as Record<string, unknown>,
+      })
+    }
+  })
+
+  page.on('response', (response) => {
+    if (
+      response.url().endsWith(
+        '/api/me/work-items/',
+      ) &&
+      response.request().method() === 'GET'
+    ) {
+      listGetResponses.push({
+        url: response.url(),
+        status: response.status(),
+      })
+      void response
+        .json()
+        .then((payload) => {
+          if (Array.isArray(payload)) {
+            myWorkPayload =
+              payload as PersonalWorkItem[]
+          }
+        })
+        .catch(() => {
+          // Non-JSON body (e.g. the simulated 503): keep the
+          // last successful payload.
+        })
+    }
+  })
+
+  // The outage is armed BEFORE the initial load, so this test
+  // proves the route passes the initial GET through — it fails
+  // only the post-mutation revalidation (keyed to the reorder
+  // dispatch, never to a request position).
+  await page.route(/\/api\/me\/work-items\/$/, (route) => {
+    if (
+      route.request().method() === 'GET' &&
+      reorderDispatched
+    ) {
+      return route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          error: 'Simulated refetch outage.',
+        }),
+      })
+    }
+    return route.continue()
+  })
+
+  // Wide enough that all four columns are visible at once, so the
+  // drag source and drop target are both on-screen (the same
+  // convention the Project Board drag spec uses).
+  await page.setViewportSize({
+    width: 1920,
+    height: 1000,
+  })
+
+  await login(page, 'alex')
+  await page.goto('/my-work')
+
+  const cardName = 'Open First Draft Complete'
+  await expect(
+    page.getByRole('button', { name: cardName }),
+  ).toBeVisible()
+  await expect
+    .poll(() => myWorkPayload.length)
+    .toBeGreaterThan(0)
+
+  const item = myWorkPayload.find(
+    (candidate) =>
+      candidate.title === 'First Draft Complete',
+  )
+  if (!item) {
+    throw new Error(
+      'Seeded "First Draft Complete" missing from the My Work payload.',
+    )
+  }
+
+  // Cross-category target: the opposite of the item's CURRENT
+  // category — the seeded Paper XYZ configuration resolves a
+  // concrete status target for each semantic category (the
+  // previous test already moved this item cross-category).
+  const targetCategory =
+    item.statusCategory === 'todo'
+      ? 'in_progress'
+      : 'todo'
+  const target = item.statusTargets.find(
+    (candidate) =>
+      candidate.statusCategory === targetCategory,
+  )
+  if (!target) {
+    throw new Error(
+      `Seeded item has no ${targetCategory} statusTarget.`,
+    )
+  }
+
+  const sourceColumn = page.locator(
+    `[data-board-column="${item.statusCategory}"]`,
+  )
+  const targetColumn = page.locator(
+    `[data-board-column="${targetCategory}"]`,
+  )
+
+  // Baseline ledger: every list GET so far (the initial load)
+  // succeeded as a 200 passthrough, and no mutation happened yet.
+  expect(listGetResponses.length).toBeGreaterThan(0)
+  expect(
+    listGetResponses.every(
+      (entry) => entry.status === 200,
+    ),
+  ).toBe(true)
+  expect(reorderPostRequests).toEqual([])
+  const listGetsAfterLoad = listGetResponses.length
+
+  // --------------------------------------------------------
+  // 1. Drag the card into the target column: a real
+  //    cross-category move — the atomic reorder POST reaches
+  //    the backend and succeeds (it never matches the
+  //    intercepted list URL).
+  // --------------------------------------------------------
+
+  const reorderResponsePromise = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'POST' &&
+      /\/api\/me\/work-items\/\d+\/reorder\/$/.test(
+        new URL(response.url()).pathname,
+      ),
+  )
+
+  await targetColumn.scrollIntoViewIfNeeded()
+  const cardLocator = page.getByRole('button', {
+    name: cardName,
+  })
+  const cardBox = await cardLocator.boundingBox()
+  const targetBox = await targetColumn.boundingBox()
+  if (!cardBox || !targetBox) {
+    throw new Error(
+      'Card or target column bounding box not found.',
+    )
+  }
+
+  // Native HTML5 drag-and-drop needs a real mouse gesture (not
+  // locator.dragTo's single jump) for Chromium to recognize the
+  // drag threshold and dispatch dragstart/dragover/drop.
+  await page.mouse.move(
+    cardBox.x + cardBox.width / 2,
+    cardBox.y + cardBox.height / 2,
+  )
+  await page.mouse.down()
+  await page.mouse.move(
+    targetBox.x + targetBox.width / 2,
+    targetBox.y + targetBox.height / 2,
+    { steps: 20 },
+  )
+  await page.mouse.up()
+
+  // The atomic reorder reached the backend and SUCCEEDED —
+  // exactly once, at the canonical endpoint, carrying exactly
+  // the target column plus the positional anchor (null = end of
+  // the column); no boardPosition, no status definition, no My
+  // Work state.
+  const reorderResponse = await reorderResponsePromise
+  expect(reorderResponse.status()).toBeLessThan(300)
+  expect(reorderPostRequests).toHaveLength(1)
+  expect(reorderPostRequests[0].url).toBe(
+    `http://127.0.0.1:4173/api/me/work-items/${item.id}/reorder/`,
+  )
+  expect(
+    Object.keys(reorderPostRequests[0].payload).sort(),
+  ).toEqual([
+    'beforeWorkItemId',
+    'statusCategory',
+  ])
+  expect(
+    reorderPostRequests[0].payload.statusCategory,
+  ).toBe(targetCategory)
+
+  // --------------------------------------------------------
+  // 2. The post-mutation revalidation GET received the
+  //    simulated outage (HTTP 503): no optimistic relocation
+  //    (the card stays in its source column) and the failure
+  //    is visible — never reported as a failed move.
+  // --------------------------------------------------------
+
+  const sourceCard = sourceColumn.getByRole('button', {
+    name: cardName,
+  })
+  const targetCard = targetColumn.getByRole('button', {
+    name: cardName,
+  })
+  await expect(sourceCard).toBeVisible()
+  // No optimistic relocation: the card is NOT in the target
+  // column yet.
+  await expect(targetCard).toHaveCount(0)
+
+  // Exactly one revalidation read since the load — and the wire
+  // ledger records it as the simulated outage, not a passthrough.
+  await expect
+    .poll(() => listGetResponses.length)
+    .toBe(listGetsAfterLoad + 1)
+  expect(
+    listGetResponses.slice(listGetsAfterLoad),
+  ).toEqual([
+    {
+      url: 'http://127.0.0.1:4173/api/me/work-items/',
+      status: 503,
+    },
+  ])
+
+  const alertLocator = page.locator('[role="alert"]')
+  await expect(alertLocator).toHaveCount(1)
+  await expect(alertLocator).toContainText(
+    'Simulated refetch outage.',
+  )
+  await expect(alertLocator).not.toContainText(
+    'Work item could not be moved.',
+  )
+
+  await page.screenshot({
+    path: testInfo.outputPath(
+      'my-work-drag-refetch-failed.png',
+    ),
+  })
+
+  // --------------------------------------------------------
+  // 3. Repeatable: lift the failure and retry from the notice —
+  //    the retry re-runs ONLY the authoritative GET (no second
+  //    reorder POST), the board renders the authoritative moved
+  //    position, and the notice clears.
+  // --------------------------------------------------------
+
+  await page.unroute(/\/api\/me\/work-items\/$/)
+  const listGetsBeforeRetry = listGetResponses.length
+  await alertLocator
+    .getByRole('button', { name: 'Retry' })
+    .click()
+
+  await expect(targetCard).toBeVisible()
+  await expect(sourceCard).toHaveCount(0)
+  await expect(alertLocator).toHaveCount(0)
+
+  // The retry is a pure re-read: exactly one more canonical
+  // list GET (succeeded) and the reorder ledger still holds
+  // exactly one POST — the retry never re-sends the move.
+  await expect
+    .poll(() => listGetResponses.length)
+    .toBe(listGetsBeforeRetry + 1)
+  expect(
+    listGetResponses.slice(listGetsBeforeRetry),
+  ).toEqual([
+    {
+      url: 'http://127.0.0.1:4173/api/me/work-items/',
+      status: 200,
+    },
+  ])
+  expect(reorderPostRequests).toHaveLength(1)
+
+  // The refetched payload is authoritative: the item now reports
+  // the target category with the concrete target status name.
+  await expect
+    .poll(() =>
+      myWorkPayload.find(
+        (candidate) => candidate.id === item.id,
+      )?.statusCategory,
+    )
+    .toBe(targetCategory)
+  expect(
+    myWorkPayload.find(
+      (candidate) => candidate.id === item.id,
+    )?.statusName,
+  ).toBe(target.statusName)
+
+  await page.screenshot({
+    path: testInfo.outputPath(
+      'my-work-drag-refetch-retried.png',
+    ),
+  })
 })
