@@ -60,4 +60,19 @@ RUN DJANGO_SECRET_KEY=fg-image-build-check-only \
 
 EXPOSE 8000
 
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--access-logfile", "-", "--error-logfile", "-", "config.wsgi:application"]
+# Gunicorn entry point (private 0.0.0.0:8000, config.settings_production).
+# RT-02 (docs/architecture.md, Realtime -> Capacity model / Required
+# deployment changes): `--threads 32` (> 1) makes Gunicorn (pinned 23.x)
+# resolve the default sync worker to its built-in gthread worker, with no
+# new dependency. Thread capacity: W = 1 worker (the Gunicorn default; the
+# worker count stays an operator choice, not an image constant), T = 32
+# covers up to 31 concurrent live SSE streams on this worker plus
+# R = 1 ordinary-request headroom (T >= S + R, R >= 1), so a live stream
+# can never block ordinary REST requests or the container healthcheck.
+# Assumed workload: local research group, one stream per open browser tab,
+# single API instance. PostgreSQL: each live stream holds one dedicated
+# listener connection; the worst-case formula S + W x T + M <=
+# max_connections stays satisfied (31 + 32 + M; the default
+# max_connections = 100 leaves at least 37 for migrations/psql/healthchecks).
+# The thread count is an operator-tunable deployment constant recorded here.
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--threads", "32", "--access-logfile", "-", "--error-logfile", "-", "config.wsgi:application"]

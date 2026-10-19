@@ -27,6 +27,11 @@
 #     (UID 10001), no test files and no .env files in /app, no build
 #     tooling (uv) in the runtime stage, and the CMD remains the
 #     Gunicorn startup contract (container startup never runs migrations)
+#   * the RT-02 gthread deployment prerequisite: the CMD carries the
+#     capacity-model-sized thread count (--threads 32), and a briefly
+#     started container of the built image reports `Using worker:
+#     gthread` in the Gunicorn startup log (safe test-only env, no
+#     database needed — Django connects to PostgreSQL lazily)
 #   * the guard is generic: a build context whose INSTALLED_APPS
 #     registers an app that is not packaged must fail the build with a
 #     ModuleNotFoundError — a pre-publication failure, not a runtime
@@ -51,10 +56,12 @@ NEGATIVE_TAG="${IMAGE_TAG}:negative"
 WORK=""
 PG_CONTAINER=""
 PG_NETWORK=""
+GTHREAD_CONTAINER=""
 
 cleanup() {
   if [ -n "$WORK" ]; then rm -rf -- "$WORK"; fi
   if [ -n "$PG_CONTAINER" ]; then docker rm -f -- "$PG_CONTAINER" >/dev/null 2>&1 || true; fi
+  if [ -n "$GTHREAD_CONTAINER" ]; then docker rm -f -- "$GTHREAD_CONTAINER" >/dev/null 2>&1 || true; fi
   if [ -n "$PG_NETWORK" ]; then docker network rm -- "$PG_NETWORK" >/dev/null 2>&1 || true; fi
   docker rmi --quiet -- "$IMAGE_TAG" >/dev/null 2>&1 || true
   docker rmi --quiet -- "$NEGATIVE_TAG" >/dev/null 2>&1 || true
@@ -143,6 +150,47 @@ case "$entry_json" in
   *migrate*) fail "container entrypoint must not run migrations: $entry_json" ;;
 esac
 printf 'ok   CMD remains the Gunicorn startup contract (no automatic migrations)\n'
+
+# RT-02: the capacity-model-sized gthread thread count must be part of
+# the deployed entry point (docs/architecture.md, Realtime -> Capacity
+# model). docker inspect JSON-encodes the CMD as ["--threads","32"], so
+# the assertion matches that exact adjacency.
+case "$cmd_json" in
+  *'"--threads","32"'*) ;;
+  *) fail "CMD must carry the capacity-model-sized gthread thread count (--threads 32): $cmd_json" ;;
+esac
+printf 'ok   CMD carries the capacity-model gthread thread count (--threads 32)\n'
+
+# ------------------------------------- gthread worker (runtime) --------
+# The actual worker mode is a runtime property: start the built image
+# briefly with the safe test-only environment and require the Gunicorn
+# startup log to report the gthread worker. No database is needed:
+# Django connects to PostgreSQL lazily, so the WSGI app imports and the
+# workers boot without one.
+printf '== runtime Gunicorn worker mode in the built image (isolated container)\n'
+GTHREAD_CONTAINER="fg-api-gthread-$$"
+docker run -d --name "$GTHREAD_CONTAINER" "${CHECK_ENV[@]}" "$IMAGE_TAG" \
+  || fail "could not start the built image for the Gunicorn worker-mode check"
+worker_line=""
+for _ in $(seq 1 30); do
+  if [ "$(docker inspect --format '{{.State.Running}}' -- "$GTHREAD_CONTAINER" 2>/dev/null || true)" != "true" ]; then
+    docker logs --tail 40 -- "$GTHREAD_CONTAINER" >&2 || true
+    fail "the image container exited before Gunicorn reported its worker (logs above)"
+  fi
+  worker_line="$(docker logs --tail 40 -- "$GTHREAD_CONTAINER" 2>&1 | grep 'Using worker:' | head -n 1 || true)"
+  [ -n "$worker_line" ] && break
+  sleep 1
+done
+case "$worker_line" in
+  *gthread*) ;;
+  *)
+    docker logs --tail 40 -- "$GTHREAD_CONTAINER" >&2 || true
+    fail "Gunicorn startup log does not report the gthread worker (observed: ${worker_line:-no worker line within 30s})"
+    ;;
+esac
+printf 'ok   Gunicorn startup log reports the gthread worker: %s\n' "$worker_line"
+docker rm -f -- "$GTHREAD_CONTAINER" >/dev/null 2>&1 || true
+GTHREAD_CONTAINER=""
 
 # --------------------------------------------- generic guard (negative) ---
 printf '== negative control: an INSTALLED_APPS entry that is not packaged must fail the build\n'
@@ -235,5 +283,6 @@ printf '\nproduction-api-image tests: PASS\n'
 printf '  image build (build-time packaging acceptance inside the Dockerfile)\n'
 printf '  in-image: import personal_notes, django.setup(), manage.py check (production settings, safe test-only env)\n'
 printf '  security: uid 10001, no tests/.env in /app, no uv in runtime, Gunicorn CMD contract\n'
+printf '  RT-02: CMD carries --threads 32; a started container reports the gthread worker\n'
 printf '  negative guard: un-packaged app fails the build pre-publication\n'
 printf '  isolated PostgreSQL: migrate + migrate --check + makemigrations --check\n'
