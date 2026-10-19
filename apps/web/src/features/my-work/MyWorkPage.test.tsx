@@ -110,6 +110,18 @@ vi.mock('../projects/WorkItemDrawer', () => ({
       data-testid="work-item-drawer"
       data-project-name={props.projectName}
       data-read-only={String(Boolean(props.readOnly))}
+      data-assignee-names={(props.assignees ?? [])
+        .map((assignee: { name: string }) =>
+          assignee.name)
+        .join('|')}
+      data-parent-titles={(props.parentItems ?? [])
+        .map((parent: { title: string }) =>
+          parent.title)
+        .join('|')}
+      data-status-ids={(props.workItemConfiguration
+        ?.statuses ?? [])
+        .map((status: { id: number }) => status.id)
+        .join('|')}
       data-work-item-inspector-boundary="true"
     >
       {props.item ? (
@@ -3247,6 +3259,568 @@ describe('My Work Kanban — lazy Project drawer context', () => {
       ),
     ).toBeNull()
     expect(card()).toBeInTheDocument()
+  })
+})
+
+describe('My Work Kanban — drawer context race across Projects', () => {
+  // Per-Project fixtures with deliberately distinguishable
+  // content: every drawer-context read returns values keyed by
+  // Project, so a test can tell Project A's context from
+  // Project B's in the props the page actually passes to the
+  // drawer.
+  const ALPHA_PROJECT = makeProject(PROJECT_A)
+  const BETA_PROJECT = makeProject(PROJECT_B)
+
+  const ALPHA_CONFIGURATION: ApiProjectWorkItemConfiguration = {
+    types: [
+      {
+        id: 4,
+        name: 'Sample Batch',
+        kind: null,
+        order: 0,
+        active: true,
+      },
+    ],
+    statuses: [
+      {
+        id: 11,
+        name: 'Ready for Lab',
+        category: 'in_progress',
+        order: 0,
+        active: true,
+        isDefault: false,
+      },
+    ],
+    labels: [],
+  }
+
+  const BETA_CONFIGURATION: ApiProjectWorkItemConfiguration = {
+    types: [
+      {
+        id: 5,
+        name: 'Beta Type',
+        kind: null,
+        order: 0,
+        active: true,
+      },
+    ],
+    statuses: [
+      {
+        id: 99,
+        name: 'Beta Status',
+        category: 'todo',
+        order: 0,
+        active: true,
+        isDefault: false,
+      },
+    ],
+    labels: [],
+  }
+
+  const ALPHA_MEMBERSHIPS = makeMemberships()
+
+  const BETA_MEMBERSHIPS: ApiProjectMembership[] = [
+    {
+      id: 4,
+      role: 'owner',
+      addedAt: null,
+      user: {
+        id: 7,
+        username: 'cy',
+        firstName: 'Cy',
+        lastName: 'Cee',
+      },
+    },
+    {
+      id: 5,
+      role: 'viewer',
+      addedAt: null,
+      user: {
+        id: 8,
+        username: 'dee',
+        firstName: 'Dee',
+        lastName: 'Deem',
+      },
+    },
+  ]
+
+  const ALPHA_PROJECT_ITEMS = makeProjectWorkItems()
+
+  const BETA_PROJECT_ITEMS: ApiWorkItem[] = [
+    {
+      ...makeProjectWorkItems()[0],
+      id: 901,
+      title: 'Parent beta item',
+    },
+  ]
+
+  // Wire the four lazy drawer-context reads to the per-Project
+  // fixtures. `betaProject` lets a test hold (or fail)
+  // Project B's context request open with a controlled promise.
+  function wireDrawerContexts(options: {
+    betaProject?: Promise<ApiProject>
+  } = {}) {
+    vi.mocked(getProject).mockImplementation(
+      (projectId) =>
+        projectId === PROJECT_A
+          ? Promise.resolve(ALPHA_PROJECT)
+          : options.betaProject ??
+            Promise.resolve(BETA_PROJECT),
+    )
+    vi.mocked(
+      getProjectWorkItemConfiguration,
+    ).mockImplementation(
+      (projectId) =>
+        Promise.resolve(
+          projectId === PROJECT_A
+            ? ALPHA_CONFIGURATION
+            : BETA_CONFIGURATION,
+        ),
+    )
+    vi.mocked(listProjectMemberships).mockImplementation(
+      (projectId) =>
+        Promise.resolve(
+          projectId === PROJECT_A
+            ? ALPHA_MEMBERSHIPS
+            : BETA_MEMBERSHIPS,
+        ),
+    )
+    vi.mocked(listProjectWorkItems).mockImplementation(
+      (projectId) =>
+        Promise.resolve(
+          projectId === PROJECT_A
+            ? ALPHA_PROJECT_ITEMS
+            : BETA_PROJECT_ITEMS,
+        ),
+    )
+  }
+
+  // The two-project board: one card per Project.
+  function twoProjectItems(): ApiPersonalWorkItem[] {
+    return [
+      makeItem({
+        id: 1,
+        title: 'Alpha item',
+        projectId: PROJECT_A,
+      }),
+      makeItem({
+        id: 2,
+        title: 'Beta item',
+        projectId: PROJECT_B,
+      }),
+    ]
+  }
+
+  function renderTwoProjectBoard() {
+    vi.mocked(listMyWork).mockResolvedValue(
+      twoProjectItems(),
+    )
+
+    return renderPage()
+  }
+
+  it('a late second-Project response never overwrites a cached first-Project selection', async () => {
+    let resolveBeta: (project: ApiProject) => void =
+      () => {}
+
+    wireDrawerContexts({
+      betaProject: new Promise<ApiProject>(
+        (resolve) => {
+          resolveBeta = resolve
+        },
+      ),
+    })
+
+    const { getByRole, container } =
+      renderTwoProjectBoard()
+
+    const alphaCard = () =>
+      getByRole('button', {
+        name: 'Open Alpha item',
+      })
+    const betaCard = () =>
+      getByRole('button', {
+        name: 'Open Beta item',
+      })
+    const drawer = () =>
+      container.querySelector(
+        '[data-testid="work-item-drawer"]',
+      ) as HTMLElement | null
+
+    // 1) Load (and cache) Project A's context.
+    await waitFor(() => {
+      expect(alphaCard()).toBeInTheDocument()
+    })
+
+    await act(async () => {
+      fireEvent.click(alphaCard())
+    })
+
+    await waitFor(() => {
+      expect(drawer()).not.toBeNull()
+    })
+
+    expect(
+      drawer()!.getAttribute('data-project-name'),
+    ).toBe('Drawer Project 7')
+
+    // 2) Open a Project B card: its context request
+    // stays OPEN.
+    await act(async () => {
+      fireEvent.click(betaCard())
+    })
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          '[data-my-work-drawer-shell]',
+        ),
+      ).not.toBeNull()
+    })
+
+    // 3) Re-select the Project A card: cache hit,
+    // no new request.
+    await act(async () => {
+      fireEvent.click(alphaCard())
+    })
+
+    await waitFor(() => {
+      expect(drawer()).not.toBeNull()
+    })
+
+    expect(
+      drawer()!.getAttribute('data-project-name'),
+    ).toBe('Drawer Project 7')
+    expect(getProject).toHaveBeenCalledTimes(2)
+
+    // 4) The Project B request resolves LATE.
+    await act(async () => {
+      resolveBeta(BETA_PROJECT)
+    })
+
+    await act(async () => {})
+
+    // 5) Only Project A is displayed — with A's own
+    // status definitions, assignees, and parent
+    // items.
+    expect(drawer()).not.toBeNull()
+    expect(
+      drawer()!.getAttribute('data-project-name'),
+    ).toBe('Drawer Project 7')
+    expect(
+      drawer()!
+        .querySelector(
+          '[data-testid="work-item-drawer-title"]',
+        )
+        ?.textContent,
+    ).toBe('Alpha item')
+    expect(
+      drawer()!.getAttribute('data-status-ids'),
+    ).toBe('11')
+    expect(
+      drawer()!.getAttribute('data-assignee-names'),
+    ).toBe('Alex Lange|Bee Bo')
+    expect(
+      drawer()!.getAttribute('data-parent-titles'),
+    ).toBe('Parent sample item')
+    expect(
+      container.querySelector('[role="alert"]'),
+    ).toBeNull()
+  })
+
+  it('a late second-Project failure never overwrites a cached first-Project selection', async () => {
+    let rejectBeta: (error: unknown) => void =
+      () => {}
+
+    wireDrawerContexts({
+      betaProject: new Promise<ApiProject>(
+        (_resolve, reject) => {
+          rejectBeta = reject
+        },
+      ),
+    })
+
+    const { getByRole, container } =
+      renderTwoProjectBoard()
+
+    const alphaCard = () =>
+      getByRole('button', {
+        name: 'Open Alpha item',
+      })
+    const betaCard = () =>
+      getByRole('button', {
+        name: 'Open Beta item',
+      })
+    const drawer = () =>
+      container.querySelector(
+        '[data-testid="work-item-drawer"]',
+      ) as HTMLElement | null
+
+    await waitFor(() => {
+      expect(alphaCard()).toBeInTheDocument()
+    })
+
+    await act(async () => {
+      fireEvent.click(alphaCard())
+    })
+
+    await waitFor(() => {
+      expect(drawer()).not.toBeNull()
+    })
+
+    await act(async () => {
+      fireEvent.click(betaCard())
+    })
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          '[data-my-work-drawer-shell]',
+        ),
+      ).not.toBeNull()
+    })
+
+    await act(async () => {
+      fireEvent.click(alphaCard())
+    })
+
+    await waitFor(() => {
+      expect(drawer()).not.toBeNull()
+    })
+
+    // The Project B request fails LATE.
+    await act(async () => {
+      rejectBeta(new Error('boom'))
+    })
+
+    await act(async () => {})
+
+    // No error panel — the drawer still shows
+    // Project A.
+    expect(
+      container.querySelector('[role="alert"]'),
+    ).toBeNull()
+    expect(drawer()).not.toBeNull()
+    expect(
+      drawer()!.getAttribute('data-project-name'),
+    ).toBe('Drawer Project 7')
+  })
+
+  it('closing the drawer discards still-running context loads', async () => {
+    let resolveBeta: (project: ApiProject) => void =
+      () => {}
+
+    wireDrawerContexts({
+      betaProject: new Promise<ApiProject>(
+        (resolve) => {
+          resolveBeta = resolve
+        },
+      ),
+    })
+
+    const { getByRole, container } =
+      renderTwoProjectBoard()
+
+    const alphaCard = () =>
+      getByRole('button', {
+        name: 'Open Alpha item',
+      })
+    const betaCard = () =>
+      getByRole('button', {
+        name: 'Open Beta item',
+      })
+    const drawer = () =>
+      container.querySelector(
+        '[data-testid="work-item-drawer"]',
+      ) as HTMLElement | null
+
+    await waitFor(() => {
+      expect(alphaCard()).toBeInTheDocument()
+    })
+
+    // Open A (cached), switch to B (in flight),
+    // back to A (cache hit) — then close while B
+    // is still running.
+    await act(async () => {
+      fireEvent.click(alphaCard())
+    })
+
+    await waitFor(() => {
+      expect(drawer()).not.toBeNull()
+    })
+
+    await act(async () => {
+      fireEvent.click(betaCard())
+    })
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          '[data-my-work-drawer-shell]',
+        ),
+      ).not.toBeNull()
+    })
+
+    await act(async () => {
+      fireEvent.click(alphaCard())
+    })
+
+    await waitFor(() => {
+      expect(drawer()).not.toBeNull()
+    })
+
+    await act(async () => {
+      fireEvent.click(
+        drawer()!.querySelector(
+          'button',
+        ) as HTMLElement,
+      )
+    })
+
+    await waitFor(() => {
+      expect(drawer()).toBeNull()
+    })
+
+    // Re-open the Project A card (cache hit) and
+    // let the Project B request resolve late.
+    await act(async () => {
+      fireEvent.click(alphaCard())
+    })
+
+    await waitFor(() => {
+      expect(drawer()).not.toBeNull()
+    })
+
+    await act(async () => {
+      resolveBeta(BETA_PROJECT)
+    })
+
+    await act(async () => {})
+
+    // The late response restores no stale visible
+    // state.
+    expect(drawer()).not.toBeNull()
+    expect(
+      drawer()!.getAttribute('data-project-name'),
+    ).toBe('Drawer Project 7')
+    expect(
+      container.querySelector(
+        '[data-my-work-drawer-shell]',
+      ),
+    ).toBeNull()
+    expect(
+      container.querySelector('[role="alert"]'),
+    ).toBeNull()
+  })
+
+  it('re-opening a second-Project item after a discarded late response loads it fresh', async () => {
+    let resolveBeta: (project: ApiProject) => void =
+      () => {}
+
+    wireDrawerContexts({
+      betaProject: new Promise<ApiProject>(
+        (resolve) => {
+          resolveBeta = resolve
+        },
+      ),
+    })
+
+    const { getByRole, container } =
+      renderTwoProjectBoard()
+
+    const alphaCard = () =>
+      getByRole('button', {
+        name: 'Open Alpha item',
+      })
+    const betaCard = () =>
+      getByRole('button', {
+        name: 'Open Beta item',
+      })
+    const drawer = () =>
+      container.querySelector(
+        '[data-testid="work-item-drawer"]',
+      ) as HTMLElement | null
+
+    await waitFor(() => {
+      expect(alphaCard()).toBeInTheDocument()
+    })
+
+    await act(async () => {
+      fireEvent.click(alphaCard())
+    })
+
+    await waitFor(() => {
+      expect(drawer()).not.toBeNull()
+    })
+
+    await act(async () => {
+      fireEvent.click(betaCard())
+    })
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          '[data-my-work-drawer-shell]',
+        ),
+      ).not.toBeNull()
+    })
+
+    await act(async () => {
+      fireEvent.click(alphaCard())
+    })
+
+    await waitFor(() => {
+      expect(drawer()).not.toBeNull()
+    })
+
+    await act(async () => {
+      resolveBeta(BETA_PROJECT)
+    })
+
+    await act(async () => {})
+
+    // The drawer still shows Project A.
+    expect(
+      drawer()!.getAttribute('data-project-name'),
+    ).toBe('Drawer Project 7')
+
+    // Close, then re-open the Project B card: the
+    // discarded response never entered the cache,
+    // so B's context loads fresh and opens.
+    await act(async () => {
+      fireEvent.click(
+        drawer()!.querySelector(
+          'button',
+        ) as HTMLElement,
+      )
+    })
+
+    await waitFor(() => {
+      expect(drawer()).toBeNull()
+    })
+
+    await act(async () => {
+      fireEvent.click(betaCard())
+    })
+
+    await waitFor(() => {
+      expect(drawer()).not.toBeNull()
+      expect(
+        drawer()!.getAttribute(
+          'data-project-name',
+        ),
+      ).toBe('Drawer Project 12')
+    })
+
+    expect(
+      drawer()!.getAttribute('data-status-ids'),
+    ).toBe('99')
+    expect(
+      drawer()!.getAttribute('data-assignee-names'),
+    ).toBe('Cy Cee')
+    expect(
+      drawer()!.getAttribute('data-parent-titles'),
+    ).toBe('Parent beta item')
   })
 })
 

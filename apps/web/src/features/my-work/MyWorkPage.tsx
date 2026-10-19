@@ -913,10 +913,20 @@ export function MyWorkPage() {
     Record<number, MyWorkDrawerContext>
   >({})
 
-  // Monotonic guard: only the most recent open action may resolve
-  // into state (a fast card switch must never let a stale in-flight
-  // load clobber the newer one).
+  // Monotonic guard: only the most recent drawer intent (card open
+  // — including a cache hit — or close) may resolve into state, so
+  // a fast card switch or a close must never let a stale in-flight
+  // load clobber the newer selection or resurrect a closed
+  // drawer.
   const drawerLoadSeqRef = useRef(0)
+
+  // The Project of the currently selected drawer item, tracked
+  // synchronously by the selection mutators below: an in-flight
+  // context response is identity-checked against it at apply time
+  // (a response for Project X must never resolve into a selection
+  // of Project Y). The render re-checks the same identity before
+  // mounting the drawer.
+  const selectedDrawerProjectIdRef = useRef<number | null>(null)
 
   // The selected drawer item, re-resolved against the AUTHORITATIVE
   // My Work payload after every refresh — exactly how the Project
@@ -951,6 +961,11 @@ export function MyWorkPage() {
       : 'A viewer cannot edit Work Items.'
 
   const closeDrawer = useCallback(() => {
+    // Closing is a new intent: an in-flight context load must not
+    // restore a closed drawer (or leave its context in state) when
+    // it resolves late.
+    drawerLoadSeqRef.current += 1
+    selectedDrawerProjectIdRef.current = null
     setOpenWorkItemId(null)
     setDrawerState({ status: 'idle' })
   }, [])
@@ -988,6 +1003,17 @@ export function MyWorkPage() {
           ])
 
           if (seq !== drawerLoadSeqRef.current) {
+            return
+          }
+
+          // Project identity: this context may only resolve into
+          // drawer state for the Project of the currently selected
+          // Work Item (the render re-checks the same identity
+          // before mounting the drawer).
+          if (
+            selectedDrawerProjectIdRef.current !==
+            projectId
+          ) {
             return
           }
 
@@ -1049,6 +1075,15 @@ export function MyWorkPage() {
             return
           }
 
+          // A late failure for a Project that is no longer
+          // selected must not surface as the drawer error.
+          if (
+            selectedDrawerProjectIdRef.current !==
+            projectId
+          ) {
+            return
+          }
+
           // Failure stays page-local: no navigation, the board
           // underneath is untouched, and Retry / re-open
           // re-issues the reads.
@@ -1072,6 +1107,14 @@ export function MyWorkPage() {
   const openWorkItemCard = useCallback(
     (item: ApiPersonalWorkItem) => {
       setOpenWorkItemId(item.id)
+
+      // A new selection is a new intent: it invalidates every
+      // older in-flight context load — INCLUDING a cache hit, where
+      // no new request (and thus no seq bump inside
+      // loadDrawerContext) would supersede a stale response.
+      drawerLoadSeqRef.current += 1
+      selectedDrawerProjectIdRef.current =
+        item.projectId
 
       const cached =
         drawerContextCacheRef.current[item.projectId]
@@ -1190,8 +1233,7 @@ export function MyWorkPage() {
         return
       }
 
-      setOpenWorkItemId(null)
-      setDrawerState({ status: 'idle' })
+      closeDrawer()
     }
 
     document.addEventListener(
@@ -1219,7 +1261,11 @@ export function MyWorkPage() {
         true,
       )
     }
-  }, [selectedDrawerItem, drawerState.status])
+  }, [
+    selectedDrawerItem,
+    drawerState.status,
+    closeDrawer,
+  ])
 
   // ── Drawer mutations: canonical Project-board semantics ──
   // The drawer edits through the ordinary Work Item API (PATCH /
@@ -2493,7 +2539,9 @@ export function MyWorkPage() {
        * context was lazy-loaded. */}
       {selectedDrawerItem != null &&
         drawerState.status === 'ready' &&
-        drawerContext != null && (
+        drawerContext != null &&
+        drawerState.projectId ===
+          selectedDrawerItem.projectId && (
           <Suspense fallback={<DrawerLoadingShell />}>
             <WorkItemDrawer
               open={true}
@@ -2537,13 +2585,18 @@ export function MyWorkPage() {
        * underneath and the page never navigates. */}
       {selectedDrawerItem != null &&
         drawerState.status === 'loading' &&
-        <DrawerLoadingShell />}
+        drawerState.projectId ===
+          selectedDrawerItem.projectId && (
+          <DrawerLoadingShell />
+        )}
 
       {/* Lazy drawer-context failure: stays on /my-work with the
        * established page-local error pattern — Retry re-issues the
        * reads, Dismiss returns to the board. Never navigates. */}
       {selectedDrawerItem != null &&
-        drawerState.status === 'error' && (
+        drawerState.status === 'error' &&
+        drawerState.projectId ===
+          selectedDrawerItem.projectId && (
           <div
             role="alert"
             className="fixed inset-y-0 right-0 z-40 flex w-full flex-col items-start gap-3 overflow-y-auto border-l border-outline-variant bg-surface-container-lowest p-6 shadow-2xl sm:w-[520px]"
