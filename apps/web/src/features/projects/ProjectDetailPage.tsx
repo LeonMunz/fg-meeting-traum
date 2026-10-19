@@ -64,8 +64,15 @@ import {
   resolveStatusDefinitionIdByCategory,
   resolveWorkItemDisplay,
   resolveWorkItemStatus,
+  resolveWorkItemTypeDefinition,
   type ResolvedWorkItemStatus,
 } from './workItemMapping'
+import {
+  WorkItemAssignees,
+  WorkItemCard,
+  type WorkItemCardTypeKind,
+} from '../work-items/WorkItemCard'
+import { getWorkItemDueFields } from '../work-items/workItemDue'
 
 import type {
   ApiProjectMembership,
@@ -177,9 +184,17 @@ type DemoWorkItem = {
   // and no status-dependent mutation may act on it. Never guessed.
   status: ResolvedWorkItemStatus
   typeLabel: string
+  // Stored semantic kind of the concrete TypeDefinition —
+  // `null` for a custom / unresolvable definition, presented
+  // neutrally; never inferred from the display name. Drives the
+  // shared card's type-label color.
+  typeKind: WorkItemCardTypeKind
   assignees: DemoWorkItemAssignee[]
   dueInDays: number | null
   dueLabel: string | null
+  // Canonical due date (the raw API value) — the shared board
+  // card derives its due presentation from it (workItemDue).
+  dueDate: string | null
   blockedReason: string | null
   parentId: string | null
   // Manual Board position (canonical, from the server). null = unsorted.
@@ -407,66 +422,6 @@ function mapResearchGroupMember(
   }
 }
 
-function getWorkItemDueFields(
-  dueDate: string | null,
-) {
-  if (!dueDate) {
-    return {
-      dueInDays: null,
-      dueLabel: null,
-    }
-  }
-
-  const [year, month, day] = dueDate
-    .split('-')
-    .map(Number)
-
-  if (
-    !Number.isInteger(year) ||
-    !Number.isInteger(month) ||
-    !Number.isInteger(day)
-  ) {
-    return {
-      dueInDays: null,
-      dueLabel: null,
-    }
-  }
-
-  const targetDate = new Date(
-    year,
-    month - 1,
-    day,
-  )
-
-  const now = new Date()
-
-  const today = new Date(
-    now.getFullYear(),
-    now.getMonth(),
-    now.getDate(),
-  )
-
-  const dueInDays = Math.round(
-    (targetDate.getTime() - today.getTime()) /
-      86_400_000,
-  )
-
-  const dueLabel =
-    dueInDays === 0
-      ? 'Today'
-      : dueInDays === 1
-        ? 'Tomorrow'
-        : new Intl.DateTimeFormat('en', {
-            month: 'short',
-            day: 'numeric',
-          }).format(targetDate)
-
-  return {
-    dueInDays,
-    dueLabel,
-  }
-}
-
 function compareWorkItemIds(
   left: DemoWorkItem,
   right: DemoWorkItem,
@@ -589,6 +544,14 @@ function mapApiWorkItem(
 ): DemoWorkItem {
   const due = getWorkItemDueFields(item.dueDate)
   const display = resolveWorkItemDisplay(item, config)
+  // Presentation kind from the stored definition kind ONLY — a
+  // custom (kind null) or unresolvable definition stays null and
+  // is presented neutrally; never inferred from the display name.
+  const typeKind =
+    resolveWorkItemTypeDefinition(
+      item.typeDefinitionId,
+      config,
+    )?.kind ?? null
 
   return {
     id: String(item.id),
@@ -596,6 +559,7 @@ function mapApiWorkItem(
     type: display.type,
     status: display.status,
     typeLabel: display.typeLabel,
+    typeKind,
     assignees: item.assigneeIds.map(
       (assigneeId) => {
         const member = members.find(
@@ -615,6 +579,7 @@ function mapApiWorkItem(
     ),
     dueInDays: due.dueInDays,
     dueLabel: due.dueLabel,
+    dueDate: item.dueDate,
     blockedReason: item.blockedReason,
     parentId:
       item.parentId == null
@@ -4599,27 +4564,49 @@ function ProjectWorkItemsPanel({
                           className="flex flex-col gap-2"
                         >
                           {renderIndicator(itemIndex)}
-                          <WorkItemBoardCard
-                            item={item}
+                          <WorkItemCard
+                            id={item.id}
+                            title={item.title}
+                            typeName={item.typeLabel}
+                            typeKind={item.typeKind}
+                            statusCategory={item.status}
+                            dueDate={item.dueDate}
+                            blockedReason={item.blockedReason}
+                            assignees={item.assignees}
                             selected={
                               selectedWorkItemId === item.id
                             }
                             dragging={
                               draggedItemId === item.id
                             }
-                            readOnly={readOnly}
                             dragDisabled={
                               !boardInteractionsEnabled
                             }
-                            onOpen={onOpen}
-                            onRequestDelete={onRequestDelete}
-                            onDragHandleStart={(itemId) =>
-                              setDraggedItemId(itemId)
+                            onOpen={() => onOpen(item)}
+                            onDragStart={() =>
+                              setDraggedItemId(item.id)
                             }
-                            onDragHandleEnd={() => {
+                            onDragEnd={() => {
                               setDraggedItemId(null)
                               setDragIndicator(null)
                             }}
+                            actions={
+                              readOnly
+                                ? undefined
+                                : (
+                                    <WorkItemActionMenuTrigger
+                                      label="Work item actions"
+                                      size="sm"
+                                      onAction={(action) => {
+                                        if (action === 'delete') {
+                                          onRequestDelete(
+                                            Number(item.id),
+                                          )
+                                        }
+                                      }}
+                                    />
+                                  )
+                            }
                           />
                         </div>
                       )
@@ -4661,6 +4648,8 @@ const workItemTypeIcons: Record<DemoWorkItemType, string> = {
 // Defensive lookup: a type key that is not one of the built-in
 // DemoWorkItemType values (e.g. a project-configured type definition whose
 // canonical key we cannot resolve) must never crash the icon lookup.
+// Used by the List/Overview rows — the shared Kanban card renders the
+// type as text only (no icon).
 function workItemTypeIcon(
   type: string | null | undefined,
 ): string {
@@ -4716,201 +4705,6 @@ function getWorkItemDueDisplay(item: DemoWorkItem) {
     label: item.dueLabel ?? '—',
     attention: false,
   }
-}
-
-function WorkItemBoardCard({
-  item,
-  selected,
-  dragging,
-  readOnly,
-  dragDisabled,
-  onOpen,
-  onRequestDelete,
-  onDragHandleStart,
-  onDragHandleEnd,
-}: {
-  item: DemoWorkItem
-  selected: boolean
-  dragging: boolean
-  readOnly: boolean
-  // Board drag is unavailable (read-only project OR status
-  // resolution not ready): the card stays openable and deletable,
-  // but can never start a status-dependent move.
-  dragDisabled: boolean
-  onOpen: (item: DemoWorkItem) => void
-  onRequestDelete: (workItemId: number) => void
-  onDragHandleStart: (itemId: string) => void
-  onDragHandleEnd: () => void
-}) {
-  const isOverdue =
-    item.status !== 'done' &&
-    item.dueInDays != null &&
-    item.dueInDays < 0
-
-  const dueText = isOverdue
-    ? `${Math.abs(item.dueInDays as number)}d overdue`
-    : item.status !== 'done'
-      ? item.dueLabel
-      : null
-
-  const isBlocked = item.blockedReason !== null
-  const needsEmphasis = isBlocked || isOverdue
-
-  return (
-    <article
-      role="button"
-      tabIndex={0}
-      aria-label={`Open ${item.title}`}
-      draggable={!dragDisabled}
-      onClick={() => onOpen(item)}
-      onKeyDown={(event) => {
-        if (
-          event.key === 'Enter' ||
-          event.key === ' '
-        ) {
-          event.preventDefault()
-          onOpen(item)
-        }
-      }}
-      onDragStart={(event) => {
-        if (dragDisabled) {
-          return
-        }
-
-        event.dataTransfer.setData('text/plain', item.id)
-        event.dataTransfer.effectAllowed = 'move'
-        onDragHandleStart(item.id)
-      }}
-      onDragEnd={() => onDragHandleEnd()}
-      data-work-item-id={item.id}
-      data-selected={
-        selected
-          ? 'true'
-          : undefined
-      }
-      className={[
-        'relative rounded-lg border bg-surface px-3 py-2.5 transition hover:bg-work-surface-hover',
-        needsEmphasis
-          ? 'border-work-item-error-border'
-          : 'border-border-structural/50',
-        selected
-          ? 'outline outline-2 -outline-offset-2 outline-card-selected-ring bg-card-selected-bg shadow-sm'
-          : '',
-        dragging ? 'opacity-40' : '',
-        dragDisabled
-          ? ''
-          : 'cursor-grab active:cursor-grabbing',
-      ].join(' ')}
-    >
-      <div className="flex items-start gap-2">
-        <span
-          title={item.typeLabel}
-          aria-label={item.typeLabel}
-          className="material-symbols-outlined mt-0.5 shrink-0 text-[15px] text-work-content-muted"
-        >
-          {workItemTypeIcon(item.type)}
-        </span>
-
-        <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-start gap-2">
-            <h3 className="min-w-0 flex-1 truncate text-sm font-semibold leading-5 text-work-content-text">
-              {item.title}
-            </h3>
-
-            {isBlocked && (
-              <span
-                title={item.blockedReason ?? undefined}
-                className="mt-0.5 shrink-0 text-[11px] font-semibold text-work-item-error"
-              >
-                · Blocked
-              </span>
-            )}
-
-            {!readOnly && (
-              // The trigger stops propagation (and pointer-down) so it
-              // never opens the card drawer and never starts a Board drag.
-              <div
-                onClick={(event) => event.stopPropagation()}
-                onPointerDown={(event) => event.stopPropagation()}
-                onDragStart={(event) => {
-                  event.preventDefault()
-                  event.stopPropagation()
-                }}
-                className="shrink-0"
-              >
-                <WorkItemActionMenuTrigger
-                  label="Work item actions"
-                  size="sm"
-                  onAction={(action) => {
-                    if (action === 'delete') {
-                      onRequestDelete(Number(item.id))
-                    }
-                  }}
-                />
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      <div className="mt-2.5 flex min-h-[22px] items-center justify-between gap-3 pl-[23px]">
-        <WorkItemAssignees assignees={item.assignees} />
-
-        {dueText && (
-          <span
-            className={[
-              'shrink-0 text-[11px]',
-              isOverdue
-                ? 'font-semibold text-work-item-error'
-                : 'font-normal text-work-content-muted',
-            ].join(' ')}
-          >
-            {dueText}
-          </span>
-        )}
-      </div>
-    </article>
-  )
-}
-
-function WorkItemAssignees({
-  assignees,
-}: {
-  assignees: DemoWorkItemAssignee[]
-}) {
-  if (assignees.length === 0) {
-    return (
-      <span className="text-xs font-normal text-work-content-muted">
-        Unassigned
-      </span>
-    )
-  }
-
-  const visibleAssignees = assignees.slice(0, 2)
-  const additionalCount = assignees.length - 1
-
-  return (
-    <div
-      className="flex min-w-0 items-center gap-2"
-      title={assignees.map((assignee) => assignee.name).join(', ')}
-    >
-      <div className="flex shrink-0 -space-x-1.5">
-        {visibleAssignees.map((assignee) => (
-          <div
-            key={assignee.id}
-            className="flex h-[22px] w-[22px] items-center justify-center rounded-full border border-surface bg-work-surface-support text-[8px] font-semibold text-work-content-text"
-          >
-            {assignee.initials}
-          </div>
-        ))}
-      </div>
-
-      <span className="truncate text-xs font-normal text-work-content-muted">
-        {assignees[0].name}
-        {additionalCount > 0 ? ` +${additionalCount}` : ''}
-      </span>
-    </div>
-  )
 }
 
 function WorkItemsList({

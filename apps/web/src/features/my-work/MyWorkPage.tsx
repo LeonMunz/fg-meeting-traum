@@ -41,10 +41,15 @@ import { useSession } from '../../api/useSession'
 import { useResearchGroup } from '../research-group/useResearchGroup'
 import { WORK_ITEM_CREATED_EVENT } from '../../components/layout/workItemInvalidation'
 import type { WorkItemFormInput } from '../projects/WorkItemDrawer'
-import { WorkItemDeleteDialog } from '../projects/workItemDelete'
+import {
+  WorkItemActionMenuTrigger,
+  WorkItemDeleteDialog,
+} from '../projects/workItemDelete'
 import {
   buildCreateWorkItemInput,
 } from '../projects/workItemMapping'
+import { WorkItemCard } from '../work-items/WorkItemCard'
+import { getWorkItemDueFields } from '../work-items/workItemDue'
 import {
   orderMyWorkBoardColumn,
   resolveMyWorkBoardDrop,
@@ -121,17 +126,31 @@ const EMPTY_WORK_ITEM_TYPES: readonly ApiWorkItemTypeKind[] = []
  * persisted ordering is the server's personal
  * `myWorkBoardPosition` state — no client-side order copy.
  *
- * Kanban card presentation (the approved compact personal-board
- * visual contract): column = semantic status, icon + label = Work
- * Item type, breadcrumb = provenance (`Research Group › Project`),
- * footer = exceptions only. The type icon + secondary label are
- * driven by the machine-readable `typeKind` ONLY (task / epic /
- * milestone / deliverable; `null` = the neutral Work Item
- * presentation) — never inferred from the `typeName` display name,
- * which is always shown as the type label text. The concrete
- * `statusName` is NOT rendered on Kanban cards: the column already
- * communicates the semantic status (it stays in the data contract
- * and in the List View).
+ * Kanban card presentation: the shared `WorkItemCard`
+ * (features/work-items) renders the card — the SAME component the
+ * Project Work Items Board uses — so the card surface, title,
+ * exception footer, and geometry are ONE cross-board contract. On
+ * My Work the card shows: the title, the concrete `typeName` as
+ * type TEXT, the provenance breadcrumb (`Research Group › Project`),
+ * and the exception footer (Blocked and/or due state). No type
+ * icon: the type text is colored by the machine-readable
+ * `typeKind` ONLY (task / epic / milestone / deliverable; `null` =
+ * neutral) — never inferred from the `typeName` display name. The
+ * concrete `statusName` is NOT rendered on Kanban cards: the column
+ * already communicates the semantic status (it stays in the data
+ * contract and in the List View). The shared compact action menu
+ * (the three-dot "Work item actions" / "Delete work item" — the SAME
+ * `WorkItemActionMenuTrigger` + `WorkItemDeleteDialog` the Project
+ * board uses) renders on a card ONLY when that item's own
+ * server-derived `actionPermissions.canDelete` is true: the My Work
+ * projection structurally guarantees a current owner/member
+ * membership, so the payload flag (which mirrors the canonical
+ * delete guard, incl. the archived-Project read-only rule) is the
+ * ONLY permission input — never the open drawer's read-only state
+ * (which describes the open card's Project, not the card's) and
+ * never a per-Project request. A card-originated delete confirms
+ * through the SAME page-level dialog + delete operation, minus the
+ * drawer-context guard.
  *
  * List rows navigate to the item's canonical Project Work Items
  * surface (the same navigation the cross-project Home rows use) —
@@ -210,6 +229,15 @@ type MyWorkDrawerState =
       projectId: number
       context: MyWorkDrawerContext
     }
+
+// Which surface requested the page-level delete confirmation:
+// 'drawer' requests keep the drawer context's read-only guard (the
+// drawer is open IN exactly that item's Project context); 'card'
+// requests come from a board card already gated by that item's own
+// server-derived actionPermissions.canDelete and must NEVER consult
+// the drawer's read-only state (it describes the OPEN card's
+// Project — possibly a different one — not this item's).
+type WorkItemDeleteOrigin = 'drawer' | 'card'
 
 // Quiet placeholder for the brief window while the selected card's
 // lazy Project drawer context (and, on first open, the drawer chunk
@@ -310,10 +338,11 @@ const statusGlyphs: Record<
   },
 }
 
-/** Neutral generic Work Item icon (see page doc). The concrete
- * `typeName` is rendered as row text; the icon intentionally stays
- * neutral for types WITHOUT a canonical kind; the semantic type
- * icon mapping is driven by `typeKind` (WORK_TYPE_PRESENTATION). */
+/** Neutral generic Work Item icon for the My Work LIST rows. The
+ * Kanban card no longer renders a type icon at all — the concrete
+ * `typeName` is card text, semantically colored by the shared
+ * card's machine-readable `typeKind` handling. The List keeps its
+ * established neutral icon + type-name row text. */
 const WORK_ITEM_TYPE_ICON = 'assignment'
 
 // Semantic presentation of the four fixed global columns: icon +
@@ -344,109 +373,6 @@ const COLUMN_PRESENTATION: Record<
   },
 }
 
-// Semantic Work Item type presentation, keyed ONLY by the
-// machine-readable `typeKind` — never by the `typeName` display
-// string. A `typeKind` of `null` (custom / unclassified project
-// type) keeps the existing neutral Work Item icon + neutral text: a
-// custom type named e.g. "Epic" stays visually neutral.
-const WORK_TYPE_PRESENTATION: Record<
-  ApiWorkItemTypeKind,
-  {
-    icon: string
-    iconClassName: string
-    labelClassName: string
-  }
-> = {
-  task: {
-    icon: 'assignment',
-    iconClassName: 'text-work-type-task',
-    labelClassName: 'text-work-type-task',
-  },
-  epic: {
-    icon: 'account_tree',
-    iconClassName: 'text-work-type-epic',
-    labelClassName: 'text-work-type-epic',
-  },
-  milestone: {
-    icon: 'flag',
-    iconClassName: 'text-work-type-milestone',
-    labelClassName: 'text-work-type-milestone',
-  },
-  deliverable: {
-    icon: 'deployed_code',
-    iconClassName: 'text-work-type-deliverable',
-    labelClassName: 'text-work-type-deliverable',
-  },
-}
-
-// Neutral fallback for `typeKind === null` (custom / unclassified
-// types): the existing neutral Work Item icon + tertiary text.
-const NEUTRAL_WORK_TYPE_PRESENTATION = {
-  icon: WORK_ITEM_TYPE_ICON,
-  iconClassName: 'text-text-tertiary',
-  labelClassName: 'text-text-tertiary',
-}
-
-function getWorkItemDueFields(
-  dueDate: string | null,
-) {
-  if (!dueDate) {
-    return {
-      dueInDays: null,
-      dueLabel: null,
-    }
-  }
-
-  const [year, month, day] =
-    dueDate.split('-').map(Number)
-
-  if (
-    !Number.isInteger(year) ||
-    !Number.isInteger(month) ||
-    !Number.isInteger(day)
-  ) {
-    return {
-      dueInDays: null,
-      dueLabel: null,
-    }
-  }
-
-  const targetDate = new Date(
-    year,
-    month - 1,
-    day,
-  )
-
-  const now = new Date()
-
-  const today = new Date(
-    now.getFullYear(),
-    now.getMonth(),
-    now.getDate(),
-  )
-
-  const dueInDays = Math.round(
-    (targetDate.getTime() -
-      today.getTime()) /
-      86_400_000,
-  )
-
-  const dueLabel =
-    dueInDays === 0
-      ? 'Today'
-      : dueInDays === 1
-        ? 'Tomorrow'
-        : new Intl.DateTimeFormat('en', {
-            month: 'short',
-            day: 'numeric',
-          }).format(targetDate)
-
-  return {
-    dueInDays,
-    dueLabel,
-  }
-}
-
 // Due-cell convention of the Project Work Items List: completed items
 // show '—', overdue items show 'Nd overdue' with attention tone,
 // otherwise the short date label — '—' when absent.
@@ -474,57 +400,6 @@ function getDueDisplay(
   return {
     label: due.dueLabel ?? '—',
     attention: false,
-  }
-}
-
-// Due-date presentation for the Kanban card's exception footer —
-// reuses the repository's existing date logic (getWorkItemDueFields),
-// no second date interpretation. No due date (or a completed item)
-// renders NOTHING; a future due date is neutral metadata; due today
-// and due tomorrow are explicit warnings; overdue is an explicit
-// danger. The due state is text-only (no icon); the written label
-// carries the meaning, so color is never the sole carrier.
-type CardDueState =
-  | { kind: 'none' }
-  | { kind: 'future'; label: string }
-  | { kind: 'today' }
-  | { kind: 'tomorrow' }
-  | { kind: 'overdue'; label: string }
-
-function getCardDueState(
-  item: ApiPersonalWorkItem,
-): CardDueState {
-  // Completed items carry no due exception (the List keeps its
-  // established '—' convention for them).
-  if (item.statusCategory === 'done') {
-    return { kind: 'none' }
-  }
-
-  const due =
-    getWorkItemDueFields(item.dueDate)
-
-  if (due.dueInDays == null) {
-    return { kind: 'none' }
-  }
-
-  if (due.dueInDays < 0) {
-    return {
-      kind: 'overdue',
-      label: `${Math.abs(due.dueInDays)}d overdue`,
-    }
-  }
-
-  if (due.dueInDays === 0) {
-    return { kind: 'today' }
-  }
-
-  if (due.dueInDays === 1) {
-    return { kind: 'tomorrow' }
-  }
-
-  return {
-    kind: 'future',
-    label: due.dueLabel ?? '',
   }
 }
 
@@ -1354,9 +1229,14 @@ export function MyWorkPage() {
   // second copy.
 
   // Single, page-level Work Item deletion confirmation — the same
-  // shared dialog + flow the Project board uses.
+  // shared dialog + flow the Project board uses. The origin
+  // (drawer vs. board card) decides whether the confirm path keeps
+  // the drawer-context read-only guard (see WorkItemDeleteOrigin).
   const [workItemDeleteTarget, setWorkItemDeleteTarget] =
-    useState<number | null>(null)
+    useState<{
+      workItemId: number
+      origin: WorkItemDeleteOrigin
+    } | null>(null)
   const [isDeletingWorkItem, setIsDeletingWorkItem] =
     useState(false)
   const [deleteWorkItemError, setDeleteWorkItemError] =
@@ -1429,12 +1309,15 @@ export function MyWorkPage() {
     ],
   )
 
-  const handleDrawerDeleteWorkItem = useCallback(
+  // Core delete operation shared by BOTH request origins: the
+  // canonical delete API call + ONE authoritative My Work refresh
+  // (the refetched payload decides the card's presence). NO
+  // drawer-context gate here: `drawerReadOnly` describes the OPEN
+  // card's Project, not the deleted item's Project, so it must
+  // never gate a card-originated delete (and the drawer-originated
+  // path applies its own guard below).
+  const performWorkItemDelete = useCallback(
     async (workItemId: number) => {
-      if (drawerReadOnly) {
-        throw new Error(drawerReadOnlyMessage)
-      }
-
       if (!Number.isInteger(workItemId)) {
         throw new Error('Invalid Work Item ID.')
       }
@@ -1459,17 +1342,38 @@ export function MyWorkPage() {
       await refreshMyWork()
       setWorkItemDeleteTarget(null)
     },
+    [refreshMyWork],
+  )
+
+  const handleDrawerDeleteWorkItem = useCallback(
+    async (workItemId: number) => {
+      // Drawer-originated deletes keep the drawer context's
+      // read-only guard: the drawer is open IN exactly this item's
+      // Project context, so its state IS the item's permission
+      // context.
+      if (drawerReadOnly) {
+        throw new Error(drawerReadOnlyMessage)
+      }
+
+      await performWorkItemDelete(workItemId)
+    },
     [
       drawerReadOnly,
       drawerReadOnlyMessage,
-      refreshMyWork,
+      performWorkItemDelete,
     ],
   )
 
   const requestWorkItemDelete = useCallback(
-    (workItemId: number) => {
+    (
+      workItemId: number,
+      origin: WorkItemDeleteOrigin = 'drawer',
+    ) => {
       setDeleteWorkItemError(null)
-      setWorkItemDeleteTarget(workItemId)
+      setWorkItemDeleteTarget({
+        workItemId,
+        origin,
+      })
     },
     [],
   )
@@ -1487,10 +1391,20 @@ export function MyWorkPage() {
       return
     }
 
-    const targetId = workItemDeleteTarget
+    const {
+      workItemId: targetId,
+      origin,
+    } = workItemDeleteTarget
 
     try {
-      await handleDrawerDeleteWorkItem(targetId)
+      if (origin === 'drawer') {
+        await handleDrawerDeleteWorkItem(targetId)
+      } else {
+        // Card-originated: the item's own server-derived
+        // actionPermissions.canDelete gated the menu; the server
+        // remains the authoritative final gate.
+        await performWorkItemDelete(targetId)
+      }
     } catch {
       // Already surfaced via setDeleteWorkItemError.
     } finally {
@@ -1500,6 +1414,7 @@ export function MyWorkPage() {
     isDeletingWorkItem,
     workItemDeleteTarget,
     handleDrawerDeleteWorkItem,
+    performWorkItemDelete,
   ])
 
   // Server ordering (`created_at`, ID tie-break) is authoritative.
@@ -2480,6 +2395,12 @@ export function MyWorkPage() {
           <MyWorkBoard
             columns={kanbanColumns}
             onOpen={openWorkItemCard}
+            onRequestDelete={(item) =>
+              requestWorkItemDelete(
+                item.id,
+                'card',
+              )
+            }
             draggedItemId={draggedItemId}
             pendingItemIds={pendingMoveItemIds}
             statusDropError={statusDropError}
@@ -2829,6 +2750,7 @@ export function MyWorkPage() {
 function MyWorkBoard({
   columns,
   onOpen,
+  onRequestDelete,
   draggedItemId,
   pendingItemIds,
   statusDropError,
@@ -2843,6 +2765,7 @@ function MyWorkBoard({
     items: ApiPersonalWorkItem[]
   }>
   onOpen: (item: ApiPersonalWorkItem) => void
+  onRequestDelete: (item: ApiPersonalWorkItem) => void
   draggedItemId: number | null
   pendingItemIds: ReadonlySet<number>
   statusDropError: string | null
@@ -3161,22 +3084,51 @@ function MyWorkBoard({
                         />
                       ) : null}
 
-                      <MyWorkBoardCard
-                        item={item}
-                        onOpen={onOpen}
+                      <WorkItemCard
+                        id={String(item.id)}
+                        title={item.title}
+                        typeName={item.typeName}
+                        typeKind={item.typeKind}
+                        statusCategory={item.statusCategory}
+                        dueDate={item.dueDate}
+                        blockedReason={item.blockedReason}
+                        provenance={{
+                          researchGroupName:
+                            item.researchGroupName,
+                          projectName: item.projectName,
+                        }}
                         dragging={
                           draggedItemId === item.id
                         }
-                        pendingMove={
+                        pending={
                           pendingItemIds.has(
                             item.id,
                           )
                         }
-                        onDragStart={onDragStart}
+                        onOpen={() => onOpen(item)}
+                        onDragStart={() =>
+                          onDragStart(item.id)
+                        }
                         onDragEnd={() => {
                           setDragIndicator(null)
                           onDragEnd()
                         }}
+                        actions={
+                          item.actionPermissions
+                            ?.canDelete === true
+                            ? (
+                                <WorkItemActionMenuTrigger
+                                  label="Work item actions"
+                                  size="sm"
+                                  onAction={(action) => {
+                                    if (action === 'delete') {
+                                      onRequestDelete(item)
+                                    }
+                                  }}
+                                />
+                              )
+                            : undefined
+                        }
                       />
                     </div>
                   ))
@@ -3188,205 +3140,5 @@ function MyWorkBoard({
         </div>
       </div>
     </section>
-  )
-}
-
-/**
- * My Work Kanban card with exact-positional drag.
- *
- * Compact personal-board card with exactly four information
- * groups, in order:
- *   1. type icon (semantic per `typeKind`; neutral for a null kind)
- *      + title
- *   2. the concrete project-local `typeName` as a secondary label
- *   3. provenance breadcrumb `Research Group › Project` (one line)
- *   4. exception footer — ONLY when an exception exists (blocked
- *      and/or a due date): due state and/or Blocked, icon + text.
- *
- * The concrete `statusName` is NOT rendered: the column already
- * communicates the semantic status, so a card inside "Todo" must
- * not also say "Todo" (the status stays in the data contract and in
- * the List View). No assignee UI.
- *
- * Opening (click / Enter / Space) calls `onOpen`, which opens the
- * canonical WorkItemDrawer IN PLACE over My Work (the List rows keep
- * their navigation behavior — see the page doc).
- *
- * Drag reuses the Project Work Items Board card's native HTML5
- * convention: the whole card is `draggable` (grab cursor),
- * `dragstart` carries the Work Item id on `dataTransfer`, and the
- * drag ghost is browser-native (the card dims to ~0.85 and takes an
- * accent border while the drag is active). A native HTML5 drag never
- * dispatches a trailing "click", so click/Enter/Space keep opening
- * the item exactly as before. A pending mutation shows restrained
- * feedback (dimmed + progress cursor) without moving the card
- * optimistically.
- */
-function MyWorkBoardCard({
-  item,
-  onOpen,
-  dragging,
-  pendingMove,
-  onDragStart,
-  onDragEnd,
-}: {
-  item: ApiPersonalWorkItem
-  onOpen: (item: ApiPersonalWorkItem) => void
-  dragging: boolean
-  pendingMove: boolean
-  onDragStart: (itemId: number) => void
-  onDragEnd: () => void
-}) {
-  // Type presentation from the machine-readable kind ONLY — a null
-  // kind stays neutral, whatever the type is named.
-  const typePresentation =
-    item.typeKind != null
-      ? WORK_TYPE_PRESENTATION[item.typeKind]
-      : NEUTRAL_WORK_TYPE_PRESENTATION
-
-  const dueState = getCardDueState(item)
-
-  // The exception footer renders ONLY when at least one
-  // exception-relevant property exists; a normal item keeps its
-  // density (no reserved empty footer).
-  const hasExceptions =
-    item.blockedReason != null ||
-    dueState.kind !== 'none'
-
-  return (
-    <article
-      role="button"
-      tabIndex={0}
-      aria-label={`Open ${item.title}`}
-      data-work-item-id={item.id}
-      draggable
-      onClick={() => onOpen(item)}
-      onKeyDown={(event) => {
-        if (
-          event.key === 'Enter' ||
-          event.key === ' '
-        ) {
-          event.preventDefault()
-          onOpen(item)
-        }
-      }}
-      onDragStart={(event) => {
-        event.dataTransfer.setData(
-          'text/plain',
-          String(item.id),
-        )
-        event.dataTransfer.effectAllowed = 'move'
-        onDragStart(item.id)
-      }}
-      onDragEnd={onDragEnd}
-      className={[
-        // Functional card surface, 1px subtle border, no shadow.
-        // Hover = slightly raised surface + stronger border (no
-        // lift/scale animation). Transitions: background/border only,
-        // ~120ms. Keyboard focus gets a real focus outline.
-        'min-h-[88px] rounded-md border bg-work-card px-3 py-2.5 transition-[background-color,border-color] duration-120',
-        'hover:border-border-default hover:bg-work-card-hover',
-        'focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus',
-        dragging
-          ? 'border-accent opacity-[0.85]'
-          : pendingMove
-            ? 'cursor-progress border-work-card-border opacity-60'
-            : 'cursor-grab border-work-card-border active:cursor-grabbing',
-      ].join(' ')}
-    >
-      {/* 1. Type + title — the icon is the semantic type
-          (shape + color), the title dominates. */}
-      <div className="flex items-start gap-2">
-        <span
-          aria-hidden="true"
-          className={`material-symbols-outlined w-4 shrink-0 text-[16px] ${typePresentation.iconClassName}`}
-        >
-          {typePresentation.icon}
-        </span>
-
-        <h3 className="min-w-0 flex-1 truncate text-[13px] font-semibold leading-[18px] text-text">
-          {item.title}
-        </h3>
-      </div>
-
-      {/* 2. Type label — the concrete project-local name, indented
-          under the title. Same semantic color as the icon (neutral
-          for a null kind); identifiable by shape + text + color,
-          never color alone. */}
-      <div className={`mt-[3px] truncate pl-6 text-[10px] font-medium leading-[14px] ${typePresentation.labelClassName}`}>
-        {item.typeName}
-      </div>
-
-      {/* 3. Provenance breadcrumb: Research Group › Project (group
-          first). One line with truncation; the native tooltip
-          carries the complete string. */}
-      <div
-        className="mt-2 flex min-w-0 items-center pl-6 text-[10px] leading-[15px]"
-        title={`${item.researchGroupName} › ${item.projectName}`}
-      >
-        <span className="min-w-0 truncate text-text-tertiary">
-          {item.researchGroupName}
-        </span>
-
-        <span
-          aria-hidden="true"
-          className="shrink-0 text-control-disabled-foreground"
-        >
-          {' › '}
-        </span>
-
-        <span className="min-w-0 truncate font-medium text-text-muted">
-          {item.projectName}
-        </span>
-      </div>
-
-      {/* 4. Exception footer — only when an exception exists.
-          Blocked keeps icon + text; the due state is text-only (no
-          warning icon) — the written label carries the meaning, so
-          color is never the sole carrier. Blocked and due state may
-          coexist. */}
-      {hasExceptions && (
-        <div className="mt-2 flex min-w-0 flex-wrap items-center gap-3 border-t border-work-lane-divider pt-[7px]">
-          {item.blockedReason != null && (
-            <span
-              title={item.blockedReason}
-              className="flex items-center gap-1 text-[10px] font-medium leading-[15px] text-work-exception-warning"
-            >
-              <span
-                aria-hidden="true"
-                className="material-symbols-outlined text-[13px]"
-              >
-                block
-              </span>
-              Blocked
-            </span>
-          )}
-
-          {dueState.kind === 'overdue' && (
-            <span className="text-[10px] font-medium leading-[15px] text-work-exception-danger">
-              {dueState.label}
-            </span>
-          )}
-
-          {dueState.kind === 'today' && (
-            <span className="text-[10px] font-medium leading-[15px] text-work-exception-warning">
-              Due today
-            </span>
-          )}
-
-          {dueState.kind === 'tomorrow' && (
-            <span className="text-[10px] font-medium leading-[15px] text-work-exception-warning">
-              Tomorrow
-            </span>
-          )}
-
-          {dueState.kind === 'future' && (
-            <span className="text-[10px] font-medium leading-[15px] text-text-muted">
-              {dueState.label}
-            </span>
-          )}
-        </div>
-      )}
-    </article>
   )
 }

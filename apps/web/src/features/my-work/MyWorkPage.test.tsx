@@ -243,6 +243,10 @@ function makeItem(
     // Unpositioned by default (no personal board row yet) — the
     // deterministic canonical fallback order applies.
     myWorkBoardPosition: null,
+    // Deletable by default (non-archived Project + owner/member,
+    // which the projection structurally guarantees) — tests that
+    // exercise the denied state override per item.
+    actionPermissions: { canDelete: true },
     ...overrides,
   } as ApiPersonalWorkItem
 }
@@ -882,8 +886,11 @@ describe('My Work List View — status and type presentation', () => {
       }),
     ])
 
-    const { container, getByText } =
-      renderPage()
+    const {
+      container,
+      getByRole,
+      getByText,
+    } = renderPage()
 
     await waitFor(() => {
       expect(
@@ -891,9 +898,13 @@ describe('My Work List View — status and type presentation', () => {
       ).toBeInTheDocument()
     })
 
-    // Canonical presentation: the neutral Work Item icon is shown —
-    // no semantic type icon (epic / milestone / deliverable glyph)
-    // is derived from the configured type name.
+    // The neutral-icon contract is a LIST-row contract: the
+    // Kanban card renders the type as text only (no icon).
+    await switchView({ getByRole }, 'List')
+
+    // Canonical presentation: the neutral Work Item icon is shown
+    // on the row — no semantic type icon (epic / milestone /
+    // deliverable glyph) is derived from the configured type name.
     const icons = Array.from(
       container.querySelectorAll(
         '.material-symbols-outlined',
@@ -1655,12 +1666,26 @@ describe('My Work Kanban — visual contract', () => {
     ) as HTMLElement
   }
 
-  // The type icon is the FIRST material symbol in the card (the
-  // top type/title row); exception-footer icons come after it.
-  function typeIcon(card: HTMLElement) {
-    return card.querySelector(
-      '.material-symbols-outlined',
-    ) as HTMLElement
+  // The type TEXT label is the card's second direct child
+  // (title row, type label, breadcrumb[, exception footer]).
+  function typeLabel(card: HTMLElement) {
+    return card.children[1] as HTMLElement
+  }
+
+  // Every material symbol on the card, in DOM order. The card
+  // renders NO type icon: with the shared compact action menu the
+  // only legitimate symbol is the trigger's `more_horiz` (plus an
+  // exception-footer symbol when an exception is present).
+  function cardIconGlyphs(
+    card: HTMLElement,
+  ): string[] {
+    return Array.from(
+      card.querySelectorAll(
+        '.material-symbols-outlined',
+      ),
+    ).map(
+      (icon) => icon.textContent?.trim() ?? '',
+    )
   }
 
   it('renders a lane container for all four semantic categories', async () => {
@@ -1932,26 +1957,33 @@ describe('My Work Kanban — visual contract', () => {
     })
 
     // The semantic presentation is keyed by typeKind: each kind
-    // gets its own icon + semantic token.
+    // gets its semantic token on the type TEXT label — the card
+    // renders no type icon (the type is text only).
     const expected: Array<
-      [id: number, icon: string, token: string, typeName: string]
+      [id: number, token: string, typeName: string]
     > = [
-      [1, 'assignment', 'text-work-type-task', 'Tasky'],
-      [2, 'account_tree', 'text-work-type-epic', 'Big Push'],
-      [3, 'flag', 'text-work-type-milestone', 'M1'],
-      [4, 'deployed_code', 'text-work-type-deliverable', 'Handoff'],
+      [1, 'text-work-type-task', 'Tasky'],
+      [2, 'text-work-type-epic', 'Big Push'],
+      [3, 'text-work-type-milestone', 'M1'],
+      [4, 'text-work-type-deliverable', 'Handoff'],
     ]
 
     for (
-      const [id, icon, token, typeName] of
+      const [id, token, typeName] of
         expected
     ) {
       const card = cardFor(container, id)
-      const iconSpan = typeIcon(card)
+      const label = typeLabel(card)
 
-      expect(iconSpan.textContent?.trim()).toBe(icon)
-      // The semantic type token (not an inline color).
-      expect(iconSpan.className).toContain(token)
+      // The semantic type token (not an inline color) on the
+      // type label.
+      expect(label.className).toContain(token)
+      expect(label.textContent?.trim()).toBe(typeName)
+      // The card renders no type icon: the ONLY symbol on the
+      // card is the action trigger's `more_horiz`.
+      expect(cardIconGlyphs(card)).toEqual([
+        'more_horiz',
+      ])
       // The displayed type text remains the concrete typeName.
       expect(card.textContent).toContain(typeName)
     }
@@ -1976,19 +2008,23 @@ describe('My Work Kanban — visual contract', () => {
       100,
     )
 
-    const iconSpan = typeIcon(card)
+    const label = typeLabel(card)
 
-    // The neutral Work Item icon + neutral (tertiary) color —
-    // never the semantic epic presentation.
-    expect(iconSpan.textContent?.trim()).toBe(
-      'assignment',
-    )
-    expect(iconSpan.className).toContain(
+    // The neutral (tertiary) type label — never the semantic epic
+    // presentation — and no icon at all.
+    expect(label.className).toContain(
       'text-text-tertiary',
     )
-    expect(iconSpan.className).not.toContain(
+    expect(label.className).not.toContain(
       'text-work-type-',
     )
+    expect(label.textContent?.trim()).toBe(
+      'Epic',
+    )
+    // No type icon: only the action trigger's `more_horiz`.
+    expect(cardIconGlyphs(card)).toEqual([
+      'more_horiz',
+    ])
 
     // The real configured name is displayed.
     expect(card.textContent).toContain('Epic')
@@ -2208,19 +2244,18 @@ describe('My Work Kanban — visual contract', () => {
       expect(
         dueLabel.className,
       ).toContain(colorClass)
-      // Text-only: no warning/due icon inside the label, and no
-      // exception icon anywhere in the card — the type icon in the
-      // top row is the only one.
+      // Text-only: no warning/due icon inside the label, and the
+      // ONLY icon on the whole card is the action trigger's
+      // `more_horiz` (the card renders the type as text, and a
+      // due state never carries a symbol).
       expect(
         dueLabel.querySelector(
           '.material-symbols-outlined',
         ),
       ).toBeNull()
-      expect(
-        card.querySelectorAll(
-          '.material-symbols-outlined',
-        ).length,
-      ).toBe(1)
+      expect(cardIconGlyphs(card)).toEqual([
+        'more_horiz',
+      ])
     }
   })
 
@@ -2284,15 +2319,14 @@ describe('My Work Kanban — visual contract', () => {
       100,
     )
 
-    // Exactly three information groups (type+title, type label,
-    // breadcrumb) — no reserved empty footer — and only the type
-    // icon (no exception icons).
+    // Exactly three information groups (title row, type label,
+    // breadcrumb) — no reserved empty footer — and the ONLY icon
+    // is the action trigger's `more_horiz` (the type is text;
+    // there are no exceptions).
     expect(card.children.length).toBe(3)
-    expect(
-      card.querySelectorAll(
-        '.material-symbols-outlined',
-      ).length,
-    ).toBe(1)
+    expect(cardIconGlyphs(card)).toEqual([
+      'more_horiz',
+    ])
   })
 
   it('keeps empty semantic columns rendered (header + count, no cards)', async () => {

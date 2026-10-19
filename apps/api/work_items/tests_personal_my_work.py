@@ -4,6 +4,7 @@ from datetime import date, datetime, timezone
 
 from django.contrib.auth import get_user_model
 from django.db import connection
+from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 
 from rest_framework.test import APIClient, APITestCase
@@ -13,13 +14,16 @@ from projects.models import (
     WorkItemTypeDefinition,
     WorkItemStatusDefinition,
 )
-from projects.services import create_project
+from projects.services import archive_project, create_project
 from research_groups.models import (
     ResearchGroup,
     ResearchGroupMembership,
 )
 from work_items.models import WorkItem, WorkItemAssignee
-from work_items.services import create_work_item
+from work_items.services import (
+    create_work_item,
+    work_item_action_permissions,
+)
 
 User = get_user_model()
 
@@ -955,6 +959,15 @@ class PersonalMyWorkQueryCountTest(APITestCase):
             self.assertIn("typeKind", item)
             self.assertEqual(item["typeKind"], "task")
 
+        # The server-derived action permissions ride the same bulk
+        # Project-scope resolution — presence in every item must not
+        # add any query either.
+        for item in response.json():
+            self.assertIn("actionPermissions", item)
+            self.assertIn(
+                "canDelete", item["actionPermissions"]
+            )
+
         # Invariant: 3x the represented Projects add ZERO queries —
         # the per-category status targets (like the Project /
         # Research Group / definition context and the Meeting origin
@@ -1492,3 +1505,282 @@ class PersonalMyWorkStatusTargetsTest(APITestCase):
             for entry in item["statusTargets"]
         }
         self.assertNotIn(probe.pk, exposed_ids)
+
+
+# ── My Work action permissions (read contract) ──
+
+
+class PersonalMyWorkActionPermissionsTest(APITestCase):
+    """Behavioral coverage for the personal My Work
+    ``actionPermissions`` read contract.
+
+    Every returned Work Item carries server-derived
+    ``actionPermissions.canDelete`` mirroring the EXACT guard of
+    the canonical delete operation: a NON-archived Project plus
+    ``PROJECT_WORK`` (owner/member) resolved through the
+    authorization kernel. The client renders the personal action
+    menu on this value ONLY — it never infers permissions from
+    visibility, assignment, or Project roles.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.chris = User.objects.create_user(
+            username="perms_chris",
+            password="TestPass1!",
+        )
+        cls.mona = User.objects.create_user(
+            username="perms_mona",
+            password="TestPass1!",
+        )
+
+        cls.group_a = ResearchGroup.objects.create(
+            name="Perms FG A",
+            created_by=cls.chris,
+        )
+        cls.group_b = ResearchGroup.objects.create(
+            name="Perms FG B",
+            created_by=cls.chris,
+        )
+
+        ResearchGroupMembership.objects.create(
+            research_group=cls.group_a,
+            user=cls.chris,
+            role=ResearchGroupMembership.Role.MEMBER,
+        )
+        ResearchGroupMembership.objects.create(
+            research_group=cls.group_b,
+            user=cls.chris,
+            role=ResearchGroupMembership.Role.MEMBER,
+        )
+        ResearchGroupMembership.objects.create(
+            research_group=cls.group_a,
+            user=cls.mona,
+            role=ResearchGroupMembership.Role.MEMBER,
+        )
+
+        cls.project_a = create_project(
+            research_group=cls.group_a,
+            creator=cls.chris,
+            name="Perms Active",
+        )
+        cls.project_b = create_project(
+            research_group=cls.group_b,
+            creator=cls.chris,
+            name="Perms Archived",
+        )
+
+        # mona is a MEMBER (not owner) of project_a only.
+        ProjectMembership.objects.create(
+            project=cls.project_a,
+            user=cls.mona,
+            role=ProjectMembership.Role.MEMBER,
+            added_by=cls.chris,
+        )
+
+        cls.work_a = create_work_item(
+            project=cls.project_a,
+            actor=cls.chris,
+            type_definition_id=(
+                cls.project_a.type_definitions
+                .get(name="Task").pk
+            ),
+            title="Perms work A",
+            assignee_ids=[cls.chris.pk],
+        )
+        cls.work_b = create_work_item(
+            project=cls.project_b,
+            actor=cls.chris,
+            type_definition_id=(
+                cls.project_b.type_definitions
+                .get(name="Task").pk
+            ),
+            title="Perms work B",
+            assignee_ids=[cls.chris.pk],
+        )
+        cls.work_mona = create_work_item(
+            project=cls.project_a,
+            actor=cls.chris,
+            type_definition_id=(
+                cls.project_a.type_definitions
+                .get(name="Task").pk
+            ),
+            title="Perms work mona",
+            assignee_ids=[cls.mona.pk],
+        )
+
+    def setUp(self):
+        self.client = APIClient()
+
+    def login(self, user):
+        self.client.get("/api/auth/csrf/")
+        csrf_token = (
+            self.client.cookies
+            .get("csrftoken")
+            .value
+        )
+        response = self.client.post(
+            "/api/auth/login/",
+            data={
+                "username": user.username,
+                "password": "TestPass1!",
+            },
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=csrf_token,
+        )
+        self.assertEqual(response.status_code, 200)
+
+    def fetch_items(self):
+        response = self.client.get("/api/me/work-items/")
+        self.assertEqual(response.status_code, 200)
+        return {
+            item["id"]: item for item in response.json()
+        }
+
+    def test_every_item_carries_action_permissions(self):
+        self.login(self.chris)
+        items = self.fetch_items()
+
+        self.assertEqual(
+            set(items), {self.work_a.pk, self.work_b.pk}
+        )
+        for item in items.values():
+            self.assertEqual(
+                set(item["actionPermissions"]),
+                {"canDelete"},
+            )
+            self.assertIsInstance(
+                item["actionPermissions"]["canDelete"],
+                bool,
+            )
+
+    def test_owner_of_active_project_can_delete(self):
+        self.login(self.chris)
+        items = self.fetch_items()
+
+        self.assertTrue(
+            items[self.work_a.pk]["actionPermissions"]["canDelete"]
+        )
+
+    def test_member_of_active_project_can_delete(self):
+        self.login(self.mona)
+        items = self.fetch_items()
+
+        self.assertEqual(set(items), {self.work_mona.pk})
+        self.assertTrue(
+            items[self.work_mona.pk]["actionPermissions"]["canDelete"]
+        )
+
+    def test_archived_project_item_stays_visible_but_denied(self):
+        archive_project(
+            project=self.project_b,
+            actor=self.chris,
+        )
+        self.login(self.chris)
+        items = self.fetch_items()
+
+        # Archiving removes no membership: the item stays in My
+        # Work (current assignment + current membership survive)
+        # ...
+        self.assertEqual(
+            set(items), {self.work_a.pk, self.work_b.pk}
+        )
+        # ... but the permission follows the delete guard: the
+        # archived Project's item is denied, the active one is not.
+        self.assertTrue(
+            items[self.work_a.pk]["actionPermissions"]["canDelete"]
+        )
+        self.assertFalse(
+            items[self.work_b.pk]["actionPermissions"]["canDelete"]
+        )
+
+
+class WorkItemActionPermissionsReadModelTest(TestCase):
+    """Unit coverage of the canonical read model
+    ``work_item_action_permissions`` (default deny)."""
+
+    def setUp(self):
+        self.chris = User.objects.create_user(
+            username="permsunit_chris",
+            password="TestPass1!",
+        )
+        self.group = ResearchGroup.objects.create(
+            name="Perms Unit FG",
+            created_by=self.chris,
+        )
+        ResearchGroupMembership.objects.create(
+            research_group=self.group,
+            user=self.chris,
+            role=ResearchGroupMembership.Role.MEMBER,
+        )
+        self.project = create_project(
+            research_group=self.group,
+            creator=self.chris,
+            name="Perms Unit Project",
+        )
+        self.work = create_work_item(
+            project=self.project,
+            actor=self.chris,
+            type_definition_id=(
+                self.project.type_definitions
+                .get(name="Task").pk
+            ),
+            title="Perms unit work",
+            assignee_ids=[self.chris.pk],
+        )
+
+    def test_owner_of_active_project_allows_delete(self):
+        permissions = work_item_action_permissions(
+            work_item=self.work,
+            user=self.chris,
+        )
+        self.assertTrue(permissions.can_delete)
+
+    def test_archived_project_denies_delete(self):
+        archive_project(
+            project=self.project,
+            actor=self.chris,
+        )
+        # The setUp instance caches the pre-archive Project row;
+        # the guard must see the CURRENT archived_at.
+        work = WorkItem.objects.select_related(
+            "project"
+        ).get(pk=self.work.pk)
+        permissions = work_item_action_permissions(
+            work_item=work,
+            user=self.chris,
+        )
+        self.assertFalse(permissions.can_delete)
+
+    def test_user_without_project_membership_denies_delete(self):
+        outsider = User.objects.create_user(
+            username="permsunit_outsider",
+            password="TestPass1!",
+        )
+        permissions = work_item_action_permissions(
+            work_item=self.work,
+            user=outsider,
+        )
+        self.assertFalse(permissions.can_delete)
+
+    def test_viewer_membership_denies_delete(self):
+        viewer = User.objects.create_user(
+            username="permsunit_viewer",
+            password="TestPass1!",
+        )
+        ResearchGroupMembership.objects.create(
+            research_group=self.group,
+            user=viewer,
+            role=ResearchGroupMembership.Role.MEMBER,
+        )
+        ProjectMembership.objects.create(
+            project=self.project,
+            user=viewer,
+            role=ProjectMembership.Role.VIEWER,
+            added_by=self.chris,
+        )
+        permissions = work_item_action_permissions(
+            work_item=self.work,
+            user=viewer,
+        )
+        self.assertFalse(permissions.can_delete)

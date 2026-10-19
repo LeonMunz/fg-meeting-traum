@@ -59,6 +59,7 @@ from .services import (
     reposition_work_item,
     transition_work_item_status,
     resolve_work_item_meeting_origin,
+    work_item_action_permissions,
 )
 
 
@@ -1061,6 +1062,19 @@ class PersonalMyWorkView(APIView):
                 # (order, id) sequence is the target.
                 by_category.setdefault(defn.category, defn)
 
+        # One bulk Project-scope resolution for every Project
+        # represented by the response (NOT per item): the per-item
+        # action permissions (``actionPermissions``) consume it
+        # instead of re-querying per Work Item.
+        project_scopes = (
+            resolve_project_scopes(
+                request.user,
+                [wi.project_id for wi in work_items],
+            )
+            if work_items
+            else {}
+        )
+
         data = []
 
         for work_item in work_items:
@@ -1134,6 +1148,22 @@ class PersonalMyWorkView(APIView):
                     )
                     if category in targets
                 ],
+                # Server-derived action capabilities for this Work
+                # Item (the personal action menu): ``canDelete``
+                # mirrors the EXACT guard of the canonical delete
+                # operation (non-archived Project + PROJECT_WORK
+                # through the kernel). The client renders the action
+                # slot on this value ONLY — never inferred from
+                # visibility, assignment, or Project roles.
+                "actionPermissions": {
+                    "canDelete": work_item_action_permissions(
+                        work_item=work_item,
+                        user=request.user,
+                        project_scope=project_scopes.get(
+                            work_item.project_id
+                        ),
+                    ).can_delete,
+                },
             })
 
             data.append(item)

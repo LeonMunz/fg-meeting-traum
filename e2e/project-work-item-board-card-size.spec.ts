@@ -22,9 +22,10 @@ import {
 //
 // All three cards must end up with identical outer dimensions,
 // the title must render on exactly one visual line with an
-// ellipsis, the three-dot action menu must stay visible and
-// right-aligned, the footer must keep its position, and opening
-// a card must still expose the complete underlying title.
+// ellipsis (the shared WorkItemCard title typography), the
+// three-dot action menu must stay visible and right-aligned, the
+// footer must keep its position, and opening a card must still
+// expose the complete underlying title.
 
 test.use({ viewport: { width: 1920, height: 1000 } })
 
@@ -172,9 +173,10 @@ test('Project Board cards keep fixed size and truncate long titles', async ({
       metrics.scrollWidth,
       'the title must overflow the visible title box',
     ).toBeGreaterThan(metrics.clientWidth)
-    // Exactly one visual line (leading-5 = 20px), never wrapped.
-    expect(metrics.offsetHeight).toBeGreaterThanOrEqual(19)
-    expect(metrics.offsetHeight).toBeLessThanOrEqual(21)
+    // Exactly one visual line (shared card title leading-[18px] =
+    // 18px), never wrapped.
+    expect(metrics.offsetHeight).toBeGreaterThanOrEqual(17)
+    expect(metrics.offsetHeight).toBeLessThanOrEqual(19)
   }
 
   // 3. The three-dot action menu stays visible and its right edge

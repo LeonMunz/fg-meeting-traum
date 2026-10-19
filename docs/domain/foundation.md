@@ -1154,6 +1154,14 @@ metadata for that ID, plus the definition's stable semantic kind
 type-specific presentation (icons, colors) must key off `typeKind`,
 never off the `typeName` display string.
 
+The My Work read API also returns
+`actionPermissions: {canDelete: boolean}` for every item. This
+capability is calculated server-side from the current Project
+permissions; archived Projects return `canDelete: false`. Missing or
+unknown permission data is client-side default-deny. The canonical
+Work Item DELETE endpoint independently authorizes every request
+again.
+
 Global My Work Kanban columns represent semantic status
 categories. A cross-category move resolves to the first active
 project-local status definition in that category according to that

@@ -5,6 +5,7 @@ Centralizes domain rules for WorkItem creation and mutation.
 Every operation receives the authenticated actor explicitly.
 """
 
+from dataclasses import dataclass
 from typing import Optional
 
 from django.db import transaction
@@ -12,7 +13,10 @@ from django.db.models import QuerySet
 
 from audit_history.services import record_audit_event
 from authorization.capabilities import Capability
-from authorization.service import has_project_capability
+from authorization.service import (
+    has_project_capability,
+    resolve_project_scope,
+)
 from projects.models import (
     Project,
     ProjectMembership,
@@ -1090,6 +1094,60 @@ def delete_work_item(*, work_item: WorkItem, actor) -> None:
     _require_project_write_access(project, actor)
 
     work_item.delete()
+
+
+@dataclass(frozen=True)
+class WorkItemActionPermissions:
+    """Server-derived action capabilities for ONE concrete Work
+    Item.
+
+    Read-model projection of what the current user may do with this
+    Work Item: the values are derived EXCLUSIVELY from the canonical
+    authorization kernel and the EXACT guards of the destructive
+    Work Item operation — no second authorization implementation:
+
+    - ``can_delete``: mirrors the exact guard of ``delete_work_item``
+      (``_require_project_write_access``): the Work Item's Project is
+      NOT archived AND the user holds ``PROJECT_WORK`` in the
+      Project (current ``ProjectMembership`` owner/member plus
+      current ``ResearchGroupMembership`` in the Project's Research
+      Group, resolved through the kernel — default deny).
+
+    The client must consume these values as-is: permissions must
+    never be inferred from Work Item visibility, assignment, or
+    Project roles.
+    """
+
+    can_delete: bool
+
+
+def work_item_action_permissions(
+    *,
+    work_item,
+    user,
+    project_scope=None,
+) -> WorkItemActionPermissions:
+    """Canonical action-permission read model for one Work Item.
+
+    Read-only: no query beyond the canonical Project scope
+    resolution, no state change. ``project_scope`` is an optional
+    pre-resolved kernel input (see ``resolve_project_scopes``) so a
+    list caller that resolved the scopes once for the whole result
+    set does not re-query per Work Item.
+    """
+    if project_scope is None:
+        project_scope = resolve_project_scope(
+            user,
+            work_item.project_id,
+        )
+
+    return WorkItemActionPermissions(
+        can_delete=(
+            work_item.project.archived_at is None
+            and project_scope is not None
+            and project_scope.has(Capability.PROJECT_WORK)
+        ),
+    )
 
 
 def reposition_work_item(

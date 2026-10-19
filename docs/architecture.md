@@ -121,6 +121,30 @@ Cross-feature reuse should happen through a clear public feature interface once 
 
 Avoid generic abstractions before at least two concrete use cases justify them.
 
+### Shared Work Item presentation (`features/work-items/`)
+
+The `work-items` feature owns the presentation that both Work Item
+boards share — today the single Kanban card `WorkItemCard` (outer
+surface and geometry, one-line ellipsis title, the concrete type as
+text with machine-readable-kind coloring, Selected / Focus /
+Dragging / Pending presentations, the complete exception
+presentation — Blocked + due states — the optional assignee /
+provenance metadata regions, and the top-right action-slot position
+with its open/drag isolation guarantees) plus the pure due-date
+presentation helpers. The Project Work Items Board
+(`features/projects`) and the global My Work Kanban
+(`features/my-work`) render their cards through it with thin
+adapters over their own data sources, and keep everything
+board-specific in their own controllers: permissions and the
+shared delete action slot (board-level read-only on the Project
+Board; per-item server-derived `actionPermissions.canDelete` from
+the personal payload on My Work — never the open drawer's read-only
+state, never a per-Project request), selection, drag tracking, and
+the concrete reorder/refresh behavior. This is the canonical example
+of the rule above: two concrete use cases justify the shared
+presentation, and card-level visual changes happen in exactly one
+place.
+
 ### Navigation & route transitions
 
 - **Data router in production.** The production entry (`main.tsx`) uses the React Router data-router composition — `createBrowserRouter` + `RouterProvider` (from `react-router/dom`) — mounted through one shared composition (`DataRouterApp`) in which the global providers wrap `RouterProvider`. This is the rendering strategy that enables React Router's native View Transition integration for opted-in navigations.

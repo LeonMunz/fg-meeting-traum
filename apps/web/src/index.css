@@ -164,9 +164,10 @@
   --color-work-item-error: #ba1a1a;
   --color-work-item-error-bg: #fff2f1;
   --color-work-item-error-border: #e7afaf;
-  /* My Work board card surface + hover. Dark = approved values
-   * (#1E2023 card / #212225 hover); Light keeps the functional card on
-   * white with a restrained raised hover tone. */
+  /* Shared Work Item board card surface + hover — the Project Work
+   * Items Board and the My Work Kanban render the SAME WorkItemCard.
+   * Dark = approved values (#1E2023 card / #212225 hover); Light keeps
+   * the functional card on white with a restrained raised hover tone. */
   --color-work-card: #ffffff;
   --color-work-card-hover: #f2f3f5;
   /* My Work Kanban lane surface — the subtle per-status column
@@ -180,9 +181,9 @@
    * Dark = the approved #2D3034; Light = the canonical subtle
    * structural border. */
   --color-work-lane-divider: #e0e1e6;
-  /* My Work card rest border (the hover border stays the canonical
-   * `border-default`). Dark = the approved #303338; Light = the
-   * canonical subtle border. */
+  /* Shared board card rest border (the hover border stays the
+   * canonical `border-default`). Dark = the approved #303338; Light =
+   * the canonical subtle border. */
   --color-work-card-border: #e0e1e6;
   /* My Work lane drag treatment — the lane surface tinted with the
    * accent (pre-composited lane + 6% accent, so no raw rgba is
@@ -199,18 +200,19 @@
   --color-work-status-in-progress: #4059d6;
   --color-work-status-review: #7c4fd0;
   --color-work-status-done: #218358;
-  /* My Work semantic Work Item type accents — keyed ONLY by the
+  /* Semantic Work Item type accents — keyed ONLY by the
    * machine-readable `typeKind` (a null kind uses the neutral Work Item
-   * presentation, never these). Dark = approved values; Light = legible
-   * counterparts on white. */
+   * presentation, never these); used by the shared Kanban card's type
+   * text and the My Work List rows. Dark = approved values; Light =
+   * legible counterparts on white. */
   --color-work-type-task: #5f6b76;
   --color-work-type-epic: #4f63d2;
   --color-work-type-milestone: #8a6519;
   --color-work-type-deliverable: #177f71;
-  /* My Work exception-footer semantics (blocked / due today = warning,
-   * overdue = danger). Light = the existing warning/danger values; Dark =
-   * the approved readable counterparts (the bare `warning` / `danger`
-   * tokens are not dark-adapted). */
+  /* Shared board card exception-footer semantics (blocked / due today
+   * = warning, overdue = danger). Light = the existing warning/danger
+   * values; Dark = the approved readable counterparts (the bare
+   * `warning` / `danger` tokens are not dark-adapted). */
   --color-work-exception-warning: #ab6400;
   --color-work-exception-danger: #ce2c31;
   /* Prose text link. Light = legacy `primary` (#3525CD), the exact HEAD
@@ -424,7 +426,8 @@ html[data-theme='dark'] {
   --color-work-item-error: #ce2c31;
   --color-work-item-error-bg: #2a1a1c;
   --color-work-item-error-border: #5a2b2e;
-  /* My Work board card surface + hover — approved Dark values. */
+  /* Shared Work Item board card surface + hover (the SAME WorkItemCard
+   * on both boards) — approved Dark values. */
   --color-work-card: #1e2023;
   --color-work-card-hover: #212225;
   /* My Work Kanban lane surface — approved Dark value over the
@@ -432,8 +435,8 @@ html[data-theme='dark'] {
   --color-work-lane-surface: #1a1b1e;
   /* My Work lane divider — approved Dark value. */
   --color-work-lane-divider: #2d3034;
-  /* My Work card rest border — approved Dark value (hover stays the
-   * canonical `border-default` #43484E). */
+  /* Shared board card rest border — approved Dark value (hover stays
+   * the canonical `border-default` #43484E). */
   --color-work-card-border: #303338;
   /* My Work lane drag treatment — approved Dark tint (lane + 6%
    * accent) and #5B7CFA/45% inset ring. */
@@ -445,12 +448,14 @@ html[data-theme='dark'] {
   --color-work-status-in-progress: #6f85e8;
   --color-work-status-review: #9a7bd8;
   --color-work-status-done: #3a9b6a;
-  /* My Work semantic Work Item type accents — approved Dark values. */
+  /* Semantic Work Item type accents (shared Kanban card type text +
+   * My Work List rows) — approved Dark values. */
   --color-work-type-task: #a7adb5;
   --color-work-type-epic: #8096ff;
   --color-work-type-milestone: #d6a85f;
   --color-work-type-deliverable: #48b8a5;
-  /* My Work exception-footer semantics — approved Dark values. */
+  /* Shared board card exception-footer semantics — approved Dark
+   * values. */
   --color-work-exception-warning: #d6a85f;
   --color-work-exception-danger: #e5484d;
   --color-prose-link: #9eb1ff;

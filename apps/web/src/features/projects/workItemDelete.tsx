@@ -30,16 +30,43 @@ export function WorkItemActionMenuItem({
       type="button"
       role="menuitem"
       onClick={onClick}
+      // COMPUTED typography is enforced inline, not only via the
+      // text-[13px]/font-medium utilities below: two UNLAYERED author
+      // rules beat every Tailwind v4 utility (utilities live in
+      // @layer utilities) —
+      //   1. index.css: `button { font: inherit }` (a global form
+      //      control reset) made this item inherit the page's 16px /
+      //      normal weight instead of 13px / medium, and
+      //   2. the Google Fonts stylesheet for Material Symbols ships
+      //      `.material-symbols-outlined { font-size: 24px }`, which
+      //      made the icon span render a 24px glyph instead of 14px.
+      // Inline style outranks both, so the menu renders the compact
+      // 13px/500 label and the 14px glyph the panel width (w-45) was
+      // sized for. The utility classes stay as declarative intent.
+      style={{ fontSize: 13, fontWeight: 500 }}
       className={[
-        'flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-sm outline-none',
+        'flex h-7 w-full items-center gap-2 rounded-md px-2 text-left text-[13px] font-medium outline-none',
         danger
-          ? 'text-work-item-error hover:bg-work-item-error-bg focus-visible:bg-work-item-error-bg'
+          ? // Neutral and muted at rest (icon + label share the item's
+            // text color); the destructive red appears only as a
+            // restrained emphasis on hover/focus, together with the
+            // quiet error-bg tint.
+            'text-work-content-muted hover:bg-work-item-error-bg hover:text-work-item-error focus-visible:bg-work-item-error-bg focus-visible:text-work-item-error'
           : 'text-work-content-text hover:bg-work-surface-row-hover focus-visible:bg-work-surface-row-hover',
       ].join(' ')}
     >
       <span
         aria-hidden="true"
-        className="material-symbols-outlined text-[17px] text-text-work-faded-70"
+        // 14px outlined (unfilled, FILL=0) trash glyph. The size is
+        // enforced inline for the same unlayered-cascade reason as the
+        // button above: the Google Fonts stylesheet's unlayered
+        // `.material-symbols-outlined { font-size: 24px }` would
+        // otherwise beat the text-[14px] utility (the trigger's
+        // more_horiz glyph above uses the same inline pattern). The
+        // glyph inherits the item's text color: muted at rest,
+        // destructive red only on hover/focus.
+        style={{ fontSize: 14 }}
+        className="material-symbols-outlined text-[14px]"
       >
         {icon}
       </span>
@@ -109,7 +136,9 @@ export function WorkItemActionMenuTrigger({
 
       setPosition({
         top: rect.bottom + 6,
-        left: Math.max(8, rect.right - 208),
+        // Right edge aligned to the trigger for the compact panel width
+        // (w-45 = 180px); the 8px floor keeps it inside the viewport.
+        left: Math.max(8, rect.right - 180),
       })
     }
 
@@ -166,7 +195,7 @@ export function WorkItemActionMenuTrigger({
             top: position.top,
             left: position.left,
           }}
-          className="z-50 w-52 rounded-xl border border-border-structural bg-surface p-1 shadow-lg shadow-on-surface/10"
+          className="z-50 w-45 rounded-lg border border-border-structural bg-surface p-1 shadow-sm shadow-color"
         >
           <WorkItemActionMenuItem
             label="Delete work item"

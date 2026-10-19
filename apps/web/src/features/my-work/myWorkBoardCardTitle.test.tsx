@@ -132,6 +132,11 @@ function makeItem(
     statusTargets: [],
     // Unpositioned by default (no personal board row yet).
     myWorkBoardPosition: null,
+    // This suite pins the title / track GEOMETRY of the shared
+    // card: the action slot (server permission state) is an
+    // orthogonal dimension pinned by the shared card suite, so
+    // the geometry fixtures render the no-slot card shape.
+    actionPermissions: { canDelete: false },
     ...overrides,
   } as ApiPersonalWorkItem
 }

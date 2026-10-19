@@ -186,6 +186,28 @@ export interface ApiWorkItemStatusTarget {
   statusName: string
 }
 
+/**
+ * Server-authoritative action capabilities for one Work Item of the
+ * personal My Work payload (GET /api/me/work-items/).
+ *
+ * Derived on the server by mirroring the EXACT guard of the
+ * canonical delete operation: a non-archived Project plus the
+ * PROJECT_WORK capability (owner/member) resolved through the
+ * authorization kernel. The My Work projection itself guarantees
+ * the current owner/member membership, so the archived state is
+ * the live discriminator — but the value is never re-derived on
+ * the client.
+ *
+ * The client must consume this value as-is: the personal action
+ * menu is rendered on it ONLY. Permissions must never be inferred
+ * from Work Item visibility, assignment, or from the currently
+ * open drawer's read-only state (which describes ONE other
+ * Project context, not this item's).
+ */
+export interface ApiWorkItemActionPermissions {
+  canDelete: boolean
+}
+
 export interface ApiPersonalWorkItem extends ApiWorkItem {
   projectName: string
   researchGroupId: number
@@ -230,6 +252,11 @@ export interface ApiPersonalWorkItem extends ApiWorkItem {
   // top-level payload order (canonical creation order) and the
   // List View are never reordered by it.
   myWorkBoardPosition: number | null
+  // Server-derived action capabilities for this item (see
+  // ApiWorkItemActionPermissions): the personal action menu renders
+  // on canDelete ONLY — never inferred from visibility,
+  // assignment, Project roles, or the open drawer's read-only state.
+  actionPermissions: ApiWorkItemActionPermissions
 }
 
 /**

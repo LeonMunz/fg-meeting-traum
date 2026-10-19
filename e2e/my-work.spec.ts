@@ -3,7 +3,7 @@ import {
   type Page,
   test,
 } from '@playwright/test'
-import { login } from './helpers'
+import { login, openProject, openProjects } from './helpers'
 import {
   expectMyWorkPreferenceSave,
   expectMyWorkReady,
@@ -615,6 +615,280 @@ test('opening a My Work card does not navigate to the Project Work Items board',
       name: 'Work item',
     }),
   ).toBeVisible()
+})
+
+// AP-07: the My Work Kanban card's OWN action menu (the shared
+// three-dot "Work item actions" / "Delete work item", rendered
+// ONLY when the item's server-derived
+// actionPermissions.canDelete is true) had no dedicated browser
+// acceptance — the Project Board card path is covered in
+// e2e/project-work-item-deletion.spec.ts, but the My Work
+// card-originated delete runs through the page-level dialog +
+// performWorkItemDelete (no drawer-context guard). This test
+// drives the complete flow on a FRESH project + FRESH Work Item
+// self-assigned to alex, so the canonical seed data is never
+// mutated: the trigger opens ONLY the menu (never the drawer),
+// Cancel leaves the item intact without any DELETE, and the
+// confirmed delete sends exactly one DELETE
+// /api/work-items/{id}/ followed by exactly one authoritative
+// GET /api/me/work-items/ refresh that removes the card — while
+// the two seeded items and the /my-work URL stay untouched.
+test('My Work card action menu deletes the assigned Work Item without opening the drawer', async ({ page }) => {
+  const title = 'E2E My Work Deletion Task'
+  const projectName = 'E2E My Work Deletion Project'
+
+  // Wire contract from the very start: setup (project/item
+  // create) may only use POST — every canonical Work Item
+  // DELETE and every authoritative My Work refetch lands in
+  // this ordered log.
+  const wireEvents: Array<{
+    kind: 'delete' | 'my-work-fetch'
+    url: string
+  }> = []
+  page.on('request', (request) => {
+    const url = request.url()
+    const pathname = new URL(url).pathname
+
+    if (
+      request.method() === 'DELETE' &&
+      /\/api\/work-items\/\d+\/$/.test(pathname)
+    ) {
+      wireEvents.push({ kind: 'delete', url })
+    } else if (
+      request.method() === 'GET' &&
+      pathname === '/api/me/work-items/'
+    ) {
+      wireEvents.push({ kind: 'my-work-fetch', url })
+    }
+  })
+
+  const inspectorRegion = page.getByRole(
+    'region',
+    { name: 'Work item', exact: true },
+  )
+
+  await login(page, 'alex')
+
+  // Canonical server-side baseline (Board view, no active
+  // filters) persisted BEFORE the first My Work render — the
+  // same order-independent contract the other scenarios use.
+  await setMyWorkPreferences(
+    page,
+    MY_WORK_PREFERENCES_BASELINE,
+  )
+
+  // --------------------------------------------------------
+  // Setup: a fresh project (alex = owner) + a fresh Work Item
+  // self-assigned to alex in the create dialog itself — the
+  // only way the My Work card carries
+  // actionPermissions.canDelete without touching the canonical
+  // seed data.
+  // --------------------------------------------------------
+  await openProjects(page)
+
+  await page
+    .getByRole('button', { name: /New project/ })
+    .click()
+
+  const projectDialog = page.getByRole('dialog', {
+    name: 'Create project',
+  })
+  await expect(projectDialog).toBeVisible()
+  await projectDialog.getByLabel('Project name').fill(projectName)
+  await projectDialog
+    .getByRole('button', { name: /Create project/ })
+    .click()
+  await expect(
+    page.getByText(projectName, { exact: true }),
+  ).toBeVisible()
+
+  await openProject(page, projectName)
+
+  await page
+    .getByRole('button', { name: /New work item/ })
+    .click()
+
+  const workItemDialog = page.getByRole('dialog', {
+    name: 'New work item',
+  })
+  await expect(workItemDialog).toBeVisible()
+  await workItemDialog.getByLabel('Title').fill(title)
+
+  // Self-assign through the create dialog's canonical Assignees
+  // fieldset (no separate inspector round-trip needed).
+  await workItemDialog
+    .getByRole('button', { name: 'Add assignee…' })
+    .click()
+  const alexRow = workItemDialog
+    .locator('label')
+    .filter({ hasText: 'Alex Dev' })
+  await alexRow.getByRole('checkbox').check()
+  await expect(alexRow.getByRole('checkbox')).toBeChecked()
+
+  await workItemDialog
+    .getByRole('button', { name: /Create work item/ })
+    .click()
+  await expect(workItemDialog).not.toBeVisible()
+
+  // The board card renders from the creation; the drawer was
+  // never part of the setup path.
+  await expect(
+    page.getByRole('button', {
+      name: `Open ${title}`,
+      exact: true,
+    }),
+  ).toBeVisible()
+  await expect(inspectorRegion).not.toBeVisible()
+
+  // --------------------------------------------------------
+  // My Work: the assigned item is in the canonical personal
+  // payload WITH the server-derived delete permission the card
+  // menu is gated on.
+  // --------------------------------------------------------
+  await page.goto('/my-work')
+
+  await expectMyWorkReady(page, {
+    viewMode: 'board',
+    visibleTitles: [
+      title,
+      'First Draft Complete',
+      'E2E Analyze robot data',
+    ],
+  })
+
+  const payloadResponse = await page.request.get(
+    '/api/me/work-items/',
+  )
+  expect(
+    payloadResponse.ok(),
+    'The canonical My Work payload must be readable.',
+  ).toBe(true)
+
+  const payload = (await payloadResponse.json()) as Array<{
+    id: number
+    title: string
+    actionPermissions: { canDelete: boolean }
+  }>
+  const createdItem = payload.find(
+    (item) => item.title === title,
+  )
+  expect(
+    createdItem,
+    `The self-assigned Work Item "${title}" must be in the canonical My Work payload.`,
+  ).toBeTruthy()
+  const created = createdItem as {
+    id: number
+    title: string
+    actionPermissions: { canDelete: boolean }
+  }
+  expect(
+    created.actionPermissions.canDelete,
+    'The server must carry canDelete=true for the assigned item (the card menu is gated on it).',
+  ).toBe(true)
+  const workItemId = created.id
+
+  // 1. The card + its server-gated "Work item actions" trigger.
+  const myWorkCard = page.getByRole('button', {
+    name: `Open ${title}`,
+    exact: true,
+  })
+  await expect(myWorkCard).toBeVisible()
+
+  const trigger = myWorkCard.getByRole('button', {
+    name: 'Work item actions',
+  })
+  await expect(trigger).toBeVisible()
+
+  // 2. The trigger opens ONLY the action menu — never the drawer.
+  await trigger.click()
+  const deleteMenuItem = myWorkCard.getByRole('menuitem', {
+    name: 'Delete work item',
+  })
+  await expect(deleteMenuItem).toBeVisible()
+  await expect(inspectorRegion).not.toBeVisible()
+
+  // 3. Delete work item opens the existing confirmation dialog.
+  await deleteMenuItem.click()
+  const deleteDialog = page.getByRole('dialog', {
+    name: 'Delete work item?',
+  })
+  await expect(deleteDialog).toBeVisible()
+  await expect(inspectorRegion).not.toBeVisible()
+
+  // 4. Cancel: dialog closes, item intact, NO DELETE occurred.
+  await deleteDialog
+    .getByRole('button', { name: /Cancel/ })
+    .click()
+  await expect(deleteDialog).not.toBeVisible()
+  expect(
+    wireEvents.filter((event) => event.kind === 'delete'),
+  ).toEqual([])
+  await expect(myWorkCard).toBeVisible()
+  await expect(page.getByText(title, { exact: true })).toBeVisible()
+  await expect(inspectorRegion).not.toBeVisible()
+
+  // 5. Reopen + confirm: exactly ONE DELETE to the canonical
+  //    endpoint of THIS item, followed by exactly one
+  //    authoritative My Work refetch.
+  await trigger.click()
+  await expect(deleteMenuItem).toBeVisible()
+  await expect(inspectorRegion).not.toBeVisible()
+  await deleteMenuItem.click()
+  await expect(deleteDialog).toBeVisible()
+  await deleteDialog
+    .getByRole('button', { name: /^Delete work item$/ })
+    .click()
+
+  // 6. After the authoritative refresh the card is gone…
+  await expect(deleteDialog).not.toBeVisible()
+  await expect(myWorkCard).toHaveCount(0)
+  await expect(page.getByText(title, { exact: true })).toHaveCount(0)
+
+  // …because the refetched payload decided it: exactly one
+  // DELETE to this item's canonical endpoint, and the log ends
+  // with that DELETE immediately followed by the one refetch
+  // (nothing may follow a confirmed delete).
+  await expect
+    .poll(() =>
+      wireEvents.filter((event) => event.kind === 'delete'),
+    )
+    .toHaveLength(1)
+  const deleteEvent = wireEvents.find(
+    (event) => event.kind === 'delete',
+  )
+  if (!deleteEvent) {
+    throw new Error(
+      'The confirmed delete sent no DELETE request.',
+    )
+  }
+  expect(deleteEvent.url).toBe(
+    `http://127.0.0.1:4173/api/work-items/${workItemId}/`,
+  )
+  await expect
+    .poll(() =>
+      wireEvents.slice(-2).map((event) => event.kind),
+    )
+    .toEqual(['delete', 'my-work-fetch'])
+
+  // 7. The URL never left /my-work…
+  await expect(page).toHaveURL(/\/my-work$/)
+
+  // …and the two seeded Work Items remain untouched.
+  await expect(
+    page.getByRole('button', {
+      name: 'Open First Draft Complete',
+      exact: true,
+    }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole('button', {
+      name: 'Open E2E Analyze robot data',
+      exact: true,
+    }),
+  ).toBeVisible()
+
+  // The drawer never opened at any point.
+  await expect(inspectorRegion).not.toBeVisible()
 })
 
 test('My Work Kanban has no document horizontal overflow at a narrow viewport', async ({ page }, testInfo) => {
