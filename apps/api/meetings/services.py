@@ -101,7 +101,10 @@ def _require_research_group_membership(*, research_group, user):
         )
 
 
-def _has_canonical_meeting_read_access(*, meeting, user):
+def _has_canonical_meeting_read_access(
+    *, meeting, user,
+    group_scope=None, project_scopes=None, group_scopes=None,
+):
     """Canonical Meeting read-access rule (MEETING_READ).
 
     - group scope: the user is a CURRENT member of the Meeting's
@@ -118,8 +121,20 @@ def _has_canonical_meeting_read_access(*, meeting, user):
     Meeting read access only — it does NOT create Research Group
     membership, Project membership, Project permissions, or access
     to otherwise protected Work Items.
+
+    ``group_scope`` / ``project_scopes`` / ``group_scopes`` are
+    optional pre-resolved kernel inputs (see ``resolve_meeting_scope``)
+    so a list caller that resolved them once for the whole result set
+    does not re-query per Meeting. Omitting them keeps the ordinary
+    per-Meeting resolution.
     """
-    scope = resolve_meeting_scope(user, meeting)
+    scope = resolve_meeting_scope(
+        user,
+        meeting,
+        group_scope=group_scope,
+        project_scopes=project_scopes,
+        group_scopes=group_scopes,
+    )
     return scope is not None and scope.has(Capability.MEETING_READ)
 
 

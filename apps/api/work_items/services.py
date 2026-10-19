@@ -881,6 +881,7 @@ _ORIGIN_UNRESOLVED = object()
 
 def resolve_work_item_meeting_origin(
     work_item: WorkItem, user, relation=_ORIGIN_UNRESOLVED,
+    *, group_scopes=None, project_scopes=None,
 ):
     """Resolve the persisted Meeting source of a WorkItem, if any.
 
@@ -894,6 +895,13 @@ def resolve_work_item_meeting_origin(
     already established there is none) — the canonical per-item
     query runs only when the relation was not resolved by the
     caller.
+
+    ``group_scopes`` / ``project_scopes`` are optional pre-resolved
+    authorization inputs (see ``resolve_meeting_scope``) for
+    list-style callers that resolved the Meeting read-access kernel
+    inputs once for the whole result set. When provided, the
+    permission check consumes them instead of re-querying per Work
+    Item; the capability rules applied are unchanged.
     """
     from meetings.models import Meeting
 
@@ -919,6 +927,8 @@ def resolve_work_item_meeting_origin(
     if not _has_canonical_meeting_read_access(
         meeting=meeting,
         user=user,
+        project_scopes=project_scopes,
+        group_scopes=group_scopes,
     ):
         return None
 

@@ -231,6 +231,67 @@ def resolve_project_scopes(user, project_ids) -> dict:
     return scopes
 
 
+def resolve_group_scopes(user, group_ids) -> dict:
+    """Batched canonical Research Group scope resolution for a set of
+    Research Groups.
+
+    The per-Group rule is IDENTICAL to ``resolve_group_scope``: a
+    current ``ResearchGroupMembership`` in the Group (default deny
+    otherwise). The batched load issues exactly ONE
+    ``ResearchGroupMembership`` query across ALL given Groups: the
+    SQL query count is constant in the number of Groups (no
+    per-Group N+1). Groups without a matching membership resolve to
+    ``None`` exactly like the single-Group resolver does.
+
+    ``group_ids`` may be any iterable of Group primary keys (``None``
+    entries and duplicates are collapsed; an empty iterable yields an
+    empty mapping). The returned mapping covers every non-None input
+    id.
+    """
+    auth = get_auth_context(user)
+    if not auth.is_active:
+        return {
+            group_id: None
+            for group_id in sorted(
+                {
+                    group_id
+                    for group_id in group_ids
+                    if group_id is not None
+                }
+            )
+        }
+
+    ids = sorted(
+        {group_id for group_id in group_ids if group_id is not None}
+    )
+    if not ids:
+        return {}
+
+    memberships = {
+        membership.research_group_id: membership
+        for membership in (
+            ResearchGroupMembership.objects.filter(
+                user=user,
+                research_group_id__in=ids,
+            )
+        )
+    }
+
+    scopes = {}
+    for group_id in ids:
+        membership = memberships.get(group_id)
+        if membership is None:
+            scopes[group_id] = None
+            continue
+        scopes[group_id] = ScopeContext(
+            kind=ScopeKind.GROUP,
+            research_group_id=membership.research_group_id,
+            role=membership.role,
+            capabilities=capabilities_for_group_role(membership.role),
+        )
+    return scopes
+
+
 def has_project_capability(
     user,
     project_id,
@@ -309,6 +370,7 @@ def resolve_meeting_scope(
     *,
     group_scope: Optional[ScopeContext] = None,
     project_scopes: Optional[dict] = None,
+    group_scopes: Optional[dict] = None,
 ) -> Optional[ScopeContext]:
     """Resolve the user's scope for one Meeting occurrence.
 
@@ -334,10 +396,22 @@ def resolve_meeting_scope(
 
     - ``group_scope`` must have ``kind == ScopeKind.GROUP`` and
       ``research_group_id == meeting.research_group_id``;
+    - ``group_scopes`` (the batched twin of ``group_scope``) must
+      carry an entry for this Meeting's Research Group with
+      ``kind == ScopeKind.GROUP`` and
+      ``research_group_id == meeting.research_group_id``;
     - the ``project_scopes`` entry selected by ``meeting.project_id``
       must exist and have ``kind == ScopeKind.PROJECT``,
       ``project_id == meeting.project_id``, and
       ``research_group_id == meeting.research_group_id``.
+
+    ``group_scopes`` is a caller-built ``resolve_group_scopes``
+    mapping covering every Research Group represented by a list-style
+    result set. When provided it takes precedence over the single
+    ``group_scope`` and is consumed with the SAME fail-closed
+    identity check — a missing or mismatched entry resolves to NO
+    capabilities with NO fallback re-resolution (identical contract
+    to ``project_scopes``).
 
     Ordinary resolution (no pre-resolved inputs supplied) is
     unchanged.
@@ -385,22 +459,38 @@ def resolve_meeting_scope(
             # Scope inconsistency guard: a group Meeting must not
             # reference a Project.
             return None
-        if group_scope is not None and not (
-            group_scope.kind == ScopeKind.GROUP
-            and group_scope.research_group_id
-            == meeting.research_group_id
-        ):
-            # An explicitly supplied group scope that does not
-            # belong to this Meeting's Research Group must never
-            # grant Meeting capabilities: fail closed, and do NOT
-            # fall back to re-resolving the user's actual group
-            # scope (an inconsistent caller input is a programming
-            # error, not a missing cache entry).
-            return None
-        if group_scope is None:
-            group_scope = resolve_group_scope(
-                user, meeting.research_group_id
+        if group_scopes is not None:
+            # Batched pre-resolved input (list caller): the mapping
+            # covers exactly this Meeting's Research Group. A missing
+            # or mismatched entry fails closed with NO fallback
+            # re-resolution — the SAME contract as ``project_scopes``.
+            group_scope = group_scopes.get(
+                meeting.research_group_id
             )
+            if not (
+                group_scope is not None
+                and group_scope.kind == ScopeKind.GROUP
+                and group_scope.research_group_id
+                == meeting.research_group_id
+            ):
+                return None
+        else:
+            if group_scope is not None and not (
+                group_scope.kind == ScopeKind.GROUP
+                and group_scope.research_group_id
+                == meeting.research_group_id
+            ):
+                # An explicitly supplied group scope that does not
+                # belong to this Meeting's Research Group must never
+                # grant Meeting capabilities: fail closed, and do NOT
+                # fall back to re-resolving the user's actual group
+                # scope (an inconsistent caller input is a programming
+                # error, not a missing cache entry).
+                return None
+            if group_scope is None:
+                group_scope = resolve_group_scope(
+                    user, meeting.research_group_id
+                )
         if group_scope is not None and group_scope.has(
             Capability.GROUP_READ
         ):
@@ -590,6 +680,7 @@ __all__ = [
     "Capability",
     "get_auth_context",
     "resolve_group_scope",
+    "resolve_group_scopes",
     "has_group_capability",
     "require_group_capability",
     "group_scope_for",

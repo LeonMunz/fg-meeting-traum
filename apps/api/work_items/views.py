@@ -16,8 +16,12 @@ from rest_framework.views import APIView
 
 from audit_history.models import AuditEvent
 from authorization.capabilities import Capability
-from authorization.service import resolve_project_scope
-from meetings.models import MeetingItemWorkItem
+from authorization.service import (
+    resolve_group_scopes,
+    resolve_project_scope,
+    resolve_project_scopes,
+)
+from meetings.models import Meeting, MeetingItemWorkItem
 from projects.models import (
     Project,
     ProjectMembership,
@@ -76,6 +80,7 @@ def _require_project_access(request, project_id):
 
 def serialize_work_item(
     work_item, user=None, meeting_origin_relation=_ORIGIN_UNRESOLVED,
+    *, group_scopes=None, project_scopes=None,
 ):
     """Serialize a WorkItem to the API response shape.
 
@@ -90,6 +95,11 @@ def serialize_work_item(
     origins for a whole page pass the pre-resolved source link (or
     ``None`` when the Work Item has no note-backed origin) so no
     per-item origin query runs.
+
+    ``group_scopes`` / ``project_scopes`` are optional pre-resolved
+    Meeting read-access kernel inputs (see ``resolve_meeting_scope``)
+    for list-style callers: when provided, the permission-filtered
+    origin check consumes them instead of re-querying per Work Item.
     """
     serializer = WorkItemSerializer(work_item)
     data = serializer.data
@@ -118,6 +128,8 @@ def serialize_work_item(
             work_item,
             user,
             relation=meeting_origin_relation,
+            group_scopes=group_scopes,
+            project_scopes=project_scopes,
         )
     return result
 
@@ -153,15 +165,111 @@ class ProjectWorkItemListCreateView(APIView):
         # render from, so a WorkItem created through the Meeting
         # quick-create flow is immediately visible here without
         # requiring a client-side refresh.
+        #
+        # Constant-query read path: the serialized relations are
+        # eager-loaded (``select_related``) and the one-to-many
+        # assignee / label relations are ``prefetch_related``, so the
+        # query count does not scale with the number of Work Items.
         work_items = WorkItem.objects.filter(
             project_id=project_id,
-        ).select_related("project", "created_by", "parent").order_by(
+        ).select_related(
+            "project",
+            "created_by",
+            "parent",
+        ).prefetch_related(
+            "assignee_relations",
+            "label_relations",
+        ).order_by(
             F("board_position").asc(nulls_last=True),
             "created_at",
             "id",
         )
 
-        data = [serialize_work_item(wi, user=request.user) for wi in work_items]
+        work_items = list(work_items)
+
+        # One bulk origin check for the whole page instead of one per
+        # Work Item: the earliest note-backed link wins (same
+        # semantics as the canonical per-item ``.order_by("id")
+        # .first()`` lookup). The source Meeting is intentionally NOT
+        # select_related here — it is bulk-loaded once below with its
+        # participant relations prefetched.
+        origins = {}
+        if work_items:
+            for origin in MeetingItemWorkItem.objects.filter(
+                work_item_id__in=[wi.pk for wi in work_items],
+                meeting_note__isnull=False,
+            ).select_related(
+                "meeting_item",
+                "meeting_note",
+            ).order_by("id"):
+                origins.setdefault(origin.work_item_id, origin)
+
+        # Resolve the Meeting read-access kernel inputs ONCE for every
+        # distinct source Meeting on the page (NOT per Work Item): the
+        # permission-filtered origin check must not reintroduce a
+        # per-item N+1. The distinct source Meetings are bulk-loaded
+        # with their participant relations prefetched (so the kernel's
+        # participant check reads the prefetch cache, not an exists()
+        # query), and the Group / Project scopes are batched (constant
+        # in the Meeting count).
+        group_scopes = None
+        project_scopes = None
+        if origins:
+            meeting_by_id = {}
+            for meeting in Meeting.objects.filter(
+                pk__in={
+                    origin.meeting_item.meeting_id
+                    for origin in origins.values()
+                    if origin.meeting_item.meeting_id is not None
+                },
+            ).select_related("project").prefetch_related(
+                "participant_relations",
+            ):
+                meeting_by_id[meeting.pk] = meeting
+
+            # Rebind each origin's source Meeting to the bulk-loaded,
+            # participant-prefetched instance (data-identical) so both
+            # the permission check and the serialized origin read the
+            # prefetched participant relations.
+            for origin in origins.values():
+                origin.meeting_item.meeting = meeting_by_id[
+                    origin.meeting_item.meeting_id
+                ]
+
+            meetings = list(meeting_by_id.values())
+            group_ids = {
+                meeting.research_group_id
+                for meeting in meetings
+                if meeting.scope == Meeting.Scope.GROUP
+                and meeting.research_group_id is not None
+            }
+            project_ids = {
+                meeting.project_id
+                for meeting in meetings
+                if meeting.scope == Meeting.Scope.PROJECT
+                and meeting.project_id is not None
+            }
+            group_scopes = (
+                resolve_group_scopes(request.user, group_ids)
+                if group_ids
+                else {}
+            )
+            project_scopes = (
+                resolve_project_scopes(request.user, project_ids)
+                if project_ids
+                else {}
+            )
+
+        data = [
+            serialize_work_item(
+                wi,
+                user=request.user,
+                meeting_origin_relation=origins.get(wi.pk),
+                group_scopes=group_scopes,
+                project_scopes=project_scopes,
+            )
+            for wi in work_items
+        ]
         return Response(data)
 
     def post(self, request, project_id):
