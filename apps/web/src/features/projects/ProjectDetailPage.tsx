@@ -73,6 +73,7 @@ import {
   type WorkItemCardTypeKind,
 } from '../work-items/WorkItemCard'
 import { getWorkItemDueFields } from '../work-items/workItemDue'
+import { ProjectWorkItemsRealtime } from './projectWorkItemsRealtime'
 
 import type {
   ApiProjectMembership,
@@ -81,6 +82,9 @@ import type {
   ApiUpdateWorkItemInput,
   ApiWorkItem,
 } from '../../api/types'
+import {
+  type WorkItemEventStreamStatus,
+} from '../../api/work-item-events'
 import {
   deleteWorkItem,
   listProjectWorkItems,
@@ -782,6 +786,25 @@ export function ProjectDetailPage() {
   // re-arms it, and a revalidation itself never fails a drop.
   const workItemDropReconciliationNeededRef = useRef(false)
 
+  // RT-04B: a canonical Work Items fetch (initial load OR silent
+  // revalidation) is in flight for the CURRENT Project context.
+  // Set by the fetch effect before the request, cleared in its
+  // settle. A realtime invalidation arriving while a fetch is in
+  // flight is held as pending (below) instead of issuing a
+  // parallel request — the settle flushes it with exactly one
+  // follow-up fetch, so the final server state is never lost and
+  // fast event bursts never turn into a request flood.
+  const workItemsFetchInFlightRef = useRef(false)
+  // RT-04B: a realtime invalidation (a `work_item_changed` event
+  // for the open Project, or a valid `open` handshake — RC-5)
+  // arrived while a Work Items fetch was in flight or a Board drop
+  // was pending. It is re-requested exactly once by
+  // `flushWorkItemsRealtimeInvalidation` when the surface is
+  // quiescent again. The flag belongs to the open Project context
+  // and is dropped on a Project switch — the fresh context loads
+  // its own canonical state.
+  const workItemsRealtimePendingRef = useRef(false)
+
   // Work Items PROJECT GENERATION: the Board's data context is the
   // Project named by the route parameter, and the SAME mounted page
   // instance serves every project switch (no route key). Every
@@ -806,10 +829,38 @@ export function ProjectDetailPage() {
     // The reconciliation debt belongs to the abandoned context:
     // the fresh context loads its own canonical state.
     workItemDropReconciliationNeededRef.current = false
+    // Same for a held realtime invalidation: it addressed the
+    // abandoned Project and must never re-fetch into the fresh
+    // context.
+    workItemsRealtimePendingRef.current = false
   }
 
   const [workItemsError, setWorkItemsError] =
     useState<string | null>(null)
+  // RT-04B: the Work Item event stream's connection state for the
+  // open surface (reported by the lifecycle adapter). Only a
+  // LOST-then-recovering stream is presented — a subdued,
+  // non-blocking sync-paused indicator in the Work Items panel.
+  const [workItemsStreamStatus, setWorkItemsStreamStatus] =
+    useState<WorkItemEventStreamStatus>('idle')
+  // RT-04B: whether the open surface has observed at least one
+  // valid `open` handshake. Only AFTER the first connection does a
+  // non-connected state mean "sync paused" — the very first
+  // connection (before any data has been revalidated by a
+  // handshake) is normal startup, not a degraded mode.
+  const workItemsStreamEverConnectedRef = useRef(false)
+
+  const handleWorkItemsStreamStatus =
+    useCallback(
+      (status: WorkItemEventStreamStatus) => {
+        if (status === 'connected') {
+          workItemsStreamEverConnectedRef.current = true
+        }
+
+        setWorkItemsStreamStatus(status)
+      },
+      [],
+    )
   const [
     workItemDrawerState,
     setWorkItemDrawerState,
@@ -1131,6 +1182,60 @@ export function ProjectDetailPage() {
     }
   }, [project])
 
+  const requestWorkItemsRefresh = useCallback(() => {
+    setWorkItemsRefreshKey((current) => current + 1)
+  }, [])
+
+  /**
+   * RT-04B: one realtime invalidation for the open Project (a
+   * `work_item_changed` event, or a valid `open` handshake —
+   * RC-5). Requests one canonical SILENT revalidation of
+   * `GET /api/projects/{id}/work-items/` — never a Work Item
+   * field derived from the event. Coalesced: while a Work Items
+   * fetch is in flight or a Board drop is pending, the
+   * invalidation is held (workItemsRealtimePendingRef) and
+   * re-requested exactly once when the surface is quiescent
+   * again — so fast event bursts yield at most one in-flight
+   * plus one follow-up fetch, and the response of a fetch that
+   * started before a pending drop can never roll the optimistic
+   * card back (the existing drop guards decide its fate).
+   */
+  const requestWorkItemsRealtimeInvalidation = useCallback(() => {
+    if (
+      workItemsFetchInFlightRef.current ||
+      workItemDropPendingSequencesRef.current.size > 0
+    ) {
+      workItemsRealtimePendingRef.current = true
+      return
+    }
+
+    requestWorkItemsRefresh()
+  }, [requestWorkItemsRefresh])
+
+  /**
+   * RT-04B: called when a Work Items fetch settles or a pending
+   * Board drop settles (success or failure — a failed drop's
+   * rollback is not itself a revalidation, so a held
+   * invalidation must still be honored). Flushes the held
+   * invalidation with exactly one canonical revalidation, and
+   * only while the surface is quiescent again.
+   */
+  const flushWorkItemsRealtimeInvalidation = useCallback(() => {
+    if (!workItemsRealtimePendingRef.current) {
+      return
+    }
+
+    if (
+      workItemsFetchInFlightRef.current ||
+      workItemDropPendingSequencesRef.current.size > 0
+    ) {
+      return
+    }
+
+    workItemsRealtimePendingRef.current = false
+    requestWorkItemsRefresh()
+  }, [requestWorkItemsRefresh])
+
   useEffect(() => {
     if (!project) {
       workItemsLoadedProjectIdRef.current = null
@@ -1176,6 +1281,12 @@ export function ProjectDetailPage() {
     // captured value is the value of its own trigger.
     const revalidationOrigin =
       workItemDropRevalidationOriginRef.current
+
+    // RT-04B: this request is now in flight — realtime
+    // invalidations arriving until it settles are held, not
+    // issued as parallel fetches (see
+    // requestWorkItemsRealtimeInvalidation).
+    workItemsFetchInFlightRef.current = true
 
     listProjectWorkItems(numericProjectId)
       .then((items) => {
@@ -1257,17 +1368,25 @@ export function ProjectDetailPage() {
         if (!cancelled) {
           setWorkItemsLoading(false)
           setWorkItemsRefreshing(false)
+          workItemsFetchInFlightRef.current = false
+          // RT-04B: the surface is quiescent again — honor a
+          // realtime invalidation held while this fetch was in
+          // flight (exactly one follow-up fetch). A held
+          // invalidation of an ABANDONED context was already
+          // dropped by the generation bump, so the flush can only
+          // ever address the current one.
+          flushWorkItemsRealtimeInvalidation()
         }
       })
 
     return () => {
       cancelled = true
     }
-  }, [project, workItemsRefreshKey])
-
-  const requestWorkItemsRefresh = useCallback(() => {
-    setWorkItemsRefreshKey((current) => current + 1)
-  }, [])
+  }, [
+    project,
+    workItemsRefreshKey,
+    flushWorkItemsRealtimeInvalidation,
+  ])
 
   useEffect(() => {
     function handleWorkItemCreated(
@@ -2441,6 +2560,12 @@ export function ProjectDetailPage() {
         workItemDropRevalidationOriginRef.current =
           dropSequence
         requestWorkItemsRefresh()
+        // RT-04B: this drop's own canonical revalidation is the
+        // settle for any held realtime invalidation (its answer
+        // postdates every change the held invalidation named), so
+        // the pending flag is consumed together with it — the two
+        // refresh requests batch into a single fetch.
+        flushWorkItemsRealtimeInvalidation()
       } catch (error) {
         workItemDropPendingSequencesRef.current.delete(
           dropSequence,
@@ -2500,6 +2625,12 @@ export function ProjectDetailPage() {
           if (owesCanonicalReconciliation) {
             settleOwedReconciliation()
           }
+          // RT-04B: if this was the LAST pending drop, a held
+          // realtime invalidation is honored now (its request
+          // batches with the owed reconciliation, if any).
+          if (inCurrentProjectContext) {
+            flushWorkItemsRealtimeInvalidation()
+          }
           return
         }
 
@@ -2521,6 +2652,11 @@ export function ProjectDetailPage() {
         if (owesCanonicalReconciliation) {
           settleOwedReconciliation()
         }
+        // RT-04B: a held realtime invalidation must be honored
+        // after the last pending drop settles EVEN when the drop
+        // failed — the snapshot rollback alone is not a canonical
+        // revalidation.
+        flushWorkItemsRealtimeInvalidation()
       }
     })()
   }
@@ -2906,6 +3042,18 @@ export function ProjectDetailPage() {
         </div>
       )}
 
+      {/* RT-04B: realtime lifecycle for the open Work Items
+          surface — mounted exactly while this tab is active, so
+          the stream closes on tab leave and page unmount; an
+          authenticated session is required by the hook itself. */}
+      {activeTab === 'work-items' && (
+        <ProjectWorkItemsRealtime
+          projectId={Number(project.id)}
+          onInvalidation={requestWorkItemsRealtimeInvalidation}
+          onStreamStatus={handleWorkItemsStreamStatus}
+        />
+      )}
+
       {activeTab === 'work-items' &&
         workItemsError && (
           <div
@@ -2947,6 +3095,11 @@ export function ProjectDetailPage() {
           workItemConfigState={workItemConfigState}
           onRetryWorkItemConfig={
             requestWorkItemConfigRetry
+          }
+          syncPaused={
+            workItemsStreamEverConnectedRef.current &&
+            (workItemsStreamStatus === 'reconnecting' ||
+              workItemsStreamStatus === 'connecting')
           }
         />
       )}
@@ -3687,6 +3840,7 @@ function ProjectWorkItemsPanel({
   loading = false,
   workItemConfigState,
   onRetryWorkItemConfig,
+  syncPaused = false,
 }: {
   items: DemoWorkItem[]
   eligibleAssignees: ProjectMember[]
@@ -3723,6 +3877,10 @@ function ProjectWorkItemsPanel({
   workItemConfigState: WorkItemConfigLoadState
   // Re-issues the configuration fetch for the current project.
   onRetryWorkItemConfig: () => void
+  // RT-04B: the Work Item event stream is down and reconnecting
+  // (degraded mode) — a subdued, non-blocking sync-paused
+  // indicator; the rendered Board stays fully usable throughout.
+  syncPaused?: boolean
 }) {
   const [view, setView] = useState<WorkItemsView>('board')
   const [draggedItemId, setDraggedItemId] =
@@ -4155,6 +4313,21 @@ function ProjectWorkItemsPanel({
           <p className="mt-1 text-sm text-work-content-muted">
             Plan and track the work that belongs to this project.
           </p>
+
+          {syncPaused && (
+            <p
+              role="status"
+              className="mt-1.5 inline-flex items-center gap-1.5 text-xs text-work-content-muted"
+            >
+              <span
+                aria-hidden="true"
+                className="material-symbols-outlined text-[14px]"
+              >
+                cloud_off
+              </span>
+              Sync paused — reconnecting
+            </p>
+          )}
         </div>
 
         <div className="flex items-center gap-3">
