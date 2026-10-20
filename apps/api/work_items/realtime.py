@@ -28,7 +28,9 @@ Events are minimal invalidations (scope pointers, never Work Item data):
 Canonical contract: ``docs/architecture.md`` (Realtime). The
 project-scope invalidations are wired to the canonical Work Item
 mutation services (RT-03C); the personal ``my_work_changed``
-publisher is not yet called by production code.
+publisher is wired to the same services plus the personal My Work
+board move (RT-03D) — one personal notification per addressed user
+per outermost mutation transaction.
 """
 
 from __future__ import annotations
@@ -108,9 +110,21 @@ def publish_my_work_changed(user_id: int) -> None:
     """Publish one personal-scope My Work invalidation for exactly one
     addressed user.
 
-    Internal interface for the personal My Work invalidations (RT-03B
-    onward; not yet called by production code). Same commit-attached
-    contract as ``publish_project_work_item_changed``.
+    Internal interface for the personal My Work invalidations, called
+    by the canonical Work Item mutation services and the personal My
+    Work board move (RT-03D). Same commit-attached contract as
+    ``publish_project_work_item_changed``.
+
+    One addressed user receives at most one notification per
+    committed outermost transaction: the payload is stably serialized
+    (``_notify`` sorts the keys and uses compact separators), so
+    identical publications of the same user within one transaction —
+    including through nested ``transaction.atomic()`` blocks — are
+    coalesced BY POSTGRESQL ITSELF into a single delivery. A savepoint
+    rollback discards only the rolled-back publication and never
+    suppresses a later valid publication in the same outer
+    transaction; a later, distinct transaction publishes again. No
+    application-level cache is kept.
     """
     _notify({"scope": SCOPE_USER, "userId": int(user_id)})
 

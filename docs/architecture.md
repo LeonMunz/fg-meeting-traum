@@ -887,7 +887,7 @@ action, or a forced reconnect under a shortened stream cap in the
 test) re-renders from the canonical permission-filtered read; a forced
 API restart reconnects and refetches correctly.
 
-### Implementation sequence (RT-02, RT-03A, and RT-03C implemented — see `docs/CURRENT_STATE.md`)
+### Implementation sequence (RT-02, RT-03A, RT-03C, and RT-03D implemented — see `docs/CURRENT_STATE.md`)
 
 1. **RT-02 — transport prerequisite (deployment only).** Add
    `--threads <N>` (sized by the capacity model) to the API image
@@ -911,8 +911,9 @@ API restart reconnects and refetches correctly.
    keep-alive, 30-minute limit), the cleanup-on-disconnect path, and a
    small internal in-transaction `pg_notify` publication interface
    (commit-attached; the project-scoped wiring of the canonical
-   mutation services landed in RT-03C, the personal publisher is not
-   yet wired).
+   mutation services landed in RT-03C, the personal publisher was
+   wired to the same services plus the personal My Work board move in
+   RT-03D).
    Production Work Item mutations publish no events in this slice.
    Acceptance: the transport integration test suite above (real
    transactions + real listener connections), plus — in the deployed
@@ -921,8 +922,8 @@ API restart reconnects and refetches correctly.
    open beyond 60 s while concurrent API requests are served normally,
    and a forced client disconnect returns the database connection
    count to baseline. Dependencies: RT-02.
-3. **RT-03B — production publication wiring (partially implemented:
-   the project scope in RT-03C, the personal scope still pending).**
+3. **RT-03B — production publication wiring (IMPLEMENTED: the
+   project scope in RT-03C, the personal scope in RT-03D).**
    In-transaction `pg_notify` in the canonical Work Item mutation
    services (create, update, reposition, status transition, delete,
    assignee change, personal reorder) through the RT-03A internal
@@ -946,11 +947,38 @@ API restart reconnects and refetches correctly.
    comes from the server-authorized canonical state). Pinned by
    `apps/api/work_items/tests_realtime_mutations.py` (real
    transactions + real dedicated LISTEN connections + real SSE
-   streams). **Still pending (the remainder of RT-03B):** the personal
-   `my_work_changed` emission (assignment add/remove, a canonical
-   status change of an assigned item, a personal reorder) —
-   `publish_my_work_changed` is not yet called by production code, so
-   the FULL RT-03B domain integration is not complete.
+   streams). **RT-03D (implemented):** the PERSONAL scope of this
+   item — `publish_my_work_changed(user_id)` is wired to the same
+   canonical mutation services plus the personal My Work board move,
+   with recipients determined exclusively from the persisted pre/post
+   state (never unvalidated client payloads): create addresses the
+   new assignees; an assignee addition/removal/replacement addresses
+   the union of the added and removed users (each once); a canonical
+   status change addresses every current assignee (status transition
+   and update path); a visible My Work projection data change (title,
+   due date, labels, ...) addresses every current assignee — an
+   assignment-only change addresses only the added/removed users;
+   delete addresses the persisted former assignees. The personal My
+   Work board move (`move_my_work_item`) publishes exactly one
+   personal event for the acting user on a REAL same-category reorder
+   (no project event — the canonical Work Item state is untouched)
+   and, on a cross-category move, relies on the nested
+   `transition_work_item_status` personal publication for all current
+   assignees. Identical personal publications within one transaction
+   are coalesced by PostgreSQL itself (the payload is stably
+   serialized), so the cross-category move's nested service calls
+   deliver at most one personal notification per affected user per
+   committed transaction; a rolled-back inner savepoint discards only
+   its own publication — a later valid publication in the same outer
+   transaction is still delivered; genuine no-ops (unchanged position
+   map, unchanged values), failed authorization, and rollbacks of the
+   whole transaction publish nothing.
+   Recipients are delivered per-delivery only to the addressed user's
+   own stream (the RT-03A re-authorization is unchanged). Pinned by
+   `apps/api/work_items/tests_realtime_personal.py` (real
+   transactions + real dedicated LISTEN connections + real SSE
+   streams). The FULL RT-03B domain integration is complete; what
+   remains of the realtime sequence is client-side (RT-04/RT-05/RT-06).
 4. **RT-04 — Project Board client integration.** `EventSource` lifecycle
    on the Project detail page (open on board mount, close on unmount),
    including the client recovery contract (RC-1…RC-5) for the

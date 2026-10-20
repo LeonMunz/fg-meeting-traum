@@ -9,7 +9,9 @@ used throughout (``TransactionTestCase`` so service mutations commit);
 mock assertions against the publisher do NOT substitute for the
 PostgreSQL commit/rollback/delivery evidence.
 
-Contract under test (RT-03C required behavior):
+Contract under test (RT-03C required behavior — project scope; the
+personal-scope events coexisting on the same channel since RT-03D are
+pinned by tests_realtime_personal.py):
 - create, real update, delete, board reorder, and status transition
   publish the correct project invalidation;
 - an authorized, already-connected SSE client receives the real
@@ -132,13 +134,24 @@ class RealtimeMutationBase(TransactionTestCase):
         )
 
     def _assert_one_project_event(self, listener):
+        """Exactly one PROJECT-scope notification with the project
+        payload. Since RT-03D personal-scope notifications may
+        coexist on the same channel for the affected users; they are
+        pinned by tests_realtime_personal.py."""
         notifications = self._drain_listener(listener)
-        self.assertEqual(len(notifications), 1)
-        notification = notifications[0]
-        self.assertEqual(notification.channel, realtime.NOTIFY_CHANNEL)
+        project_notifications = [
+            notification
+            for notification in notifications
+            if json.loads(notification.payload)
+            == _project_payload(self.project.pk)
+        ]
         self.assertEqual(
-            json.loads(notification.payload),
-            _project_payload(self.project.pk),
+            len(project_notifications), 1,
+            f"expected exactly one project notification, got "
+            f"{[json.loads(n.payload) for n in notifications]}",
+        )
+        self.assertEqual(
+            project_notifications[0].channel, realtime.NOTIFY_CHANNEL
         )
 
     def _assert_no_events(self, listener, note=""):
@@ -600,8 +613,24 @@ class SameCategoryMyWorkRealtimeTests(RealtimeMutationBase):
                 status_category=self.todo_status.category,
                 before_work_item_id=first.pk,
             )
-            self._assert_no_events(
-                listener, note=" for a same-category My Work reorder"
+            # No PROJECT event: the canonical Work Item state is
+            # untouched. (RT-03D: the real personal reorder does
+            # publish exactly one personal event for the acting user —
+            # pinned here and in tests_realtime_personal.py.)
+            notifications = self._drain_listener(listener)
+            project_notifications = [
+                n for n in notifications
+                if json.loads(n.payload)
+                == _project_payload(self.project.pk)
+            ]
+            self.assertEqual(
+                project_notifications, [],
+                "a same-category My Work reorder must publish no "
+                "project event",
+            )
+            self.assertEqual(
+                [json.loads(n.payload) for n in notifications],
+                [{"scope": "user", "userId": self.alex.pk}],
             )
         finally:
             listener.close()

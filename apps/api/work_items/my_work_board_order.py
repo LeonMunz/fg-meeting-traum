@@ -77,6 +77,7 @@ from projects.models import Project, WorkItemStatusDefinition
 
 from .models import MyWorkBoardPosition, WorkItem
 from .personal_my_work import personal_my_work_queryset
+from .realtime import publish_my_work_changed
 from .services import (
     WorkItemDomainError,
     transition_work_item_status,
@@ -323,7 +324,7 @@ def move_my_work_item(
                     "The Work Item is not in your My Work."
                 )
 
-        column_items, _ = _user_column(
+        column_items, stored_positions = _user_column(
             user, status_category, exclude_pk=work_item.pk
         )
 
@@ -345,6 +346,26 @@ def move_my_work_item(
         else:
             new_order = column_items + [work_item]
 
+        # Realtime invalidation (RT-03D): the move is a REAL personal
+        # change iff the resulting column position map differs from
+        # the persisted pre-move map (a genuine no-op move — every
+        # item, incl. the moved one, already at its final position —
+        # publishes nothing). The moved item's pre-move row applies
+        # only when it was already stored for THIS category (a row
+        # from another category is stale and positions it nowhere).
+        before_positions = dict(stored_positions)
+        moved_before_position = MyWorkBoardPosition.objects.filter(
+            user=user,
+            work_item=work_item,
+            status_category=status_category,
+        ).values_list("position", flat=True).first()
+        if moved_before_position is not None:
+            before_positions[work_item.pk] = moved_before_position
+        after_positions = {
+            wi.pk: index for index, wi in enumerate(new_order, start=1)
+        }
+        personal_changed = before_positions != after_positions
+
         # Normalize the user's target column: explicit positions 1..N
         # in the resulting render order. ONLY this user's rows are
         # written; other users' ordering is untouched.
@@ -357,5 +378,26 @@ def move_my_work_item(
                     "position": index,
                 },
             )
+
+        if personal_changed:
+            # Realtime invalidation (RT-03D): exactly one personal
+            # my_work_changed for the acting user, published in this
+            # same transaction (delivered on commit, suppressed on
+            # rollback).
+            #
+            # Same-category move: only this user's personal projection
+            # changed — no project event is published (the canonical
+            # Work Item state is untouched).
+            #
+            # Cross-category move: the nested
+            # ``transition_work_item_status`` already published the
+            # project event AND the personal invalidation for every
+            # current assignee — including this user, whose move is
+            # only possible on an item of their own projection. The
+            # identical personal publications are coalesced by
+            # PostgreSQL within this transaction, so the acting user
+            # never receives the same personal event twice, no matter
+            # how the nested service calls interleave.
+            publish_my_work_changed(user.pk)
 
     return work_item

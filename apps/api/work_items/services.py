@@ -27,7 +27,10 @@ from projects.models import (
 from research_groups.models import ResearchGroupMembership
 
 from .models import WorkItem, WorkItemAssignee, WorkItemComment, WorkItemLabel
-from .realtime import publish_project_work_item_changed
+from .realtime import (
+    publish_my_work_changed,
+    publish_project_work_item_changed,
+)
 
 
 class WorkItemAuditEventType:
@@ -621,6 +624,19 @@ def create_work_item(
         # server-authorized Project row, never from the caller.
         publish_project_work_item_changed(locked_project.pk)
 
+        # Realtime invalidation (RT-03D): one personal my_work_changed
+        # per NEW assignee, whose My Work projection gains the item.
+        # Recipients come exclusively from the PERSISTED assignment
+        # rows of the committed creation (validated under the lock
+        # above), never from the unvalidated caller payload; identical
+        # personal publications are coalesced by PostgreSQL within the
+        # transaction, so each user receives at most one personal
+        # event per committed transaction.
+        for user_id in work_item.assignee_relations.values_list(
+            "user_id", flat=True
+        ):
+            publish_my_work_changed(user_id)
+
     return work_item
 
 
@@ -679,6 +695,9 @@ def update_work_item(
                     locked_project, parent_id, work_item.pk
                 )
 
+        # The locked, freshly loaded row is the persisted PRE state:
+        # its assignees anchor the personal invalidation recipients
+        # (RT-03D) together with the post-mutation snapshot below.
         before_state = _snapshot_work_item_state(work_item)
 
         labels_changed = _apply_work_item_fields(
@@ -728,6 +747,44 @@ def update_work_item(
         # suppressed on rollback.
         if changes or labels_changed:
             publish_project_work_item_changed(locked_project.pk)
+
+        # Realtime invalidation (RT-03D): personal my_work_changed
+        # invalidations, recipients determined EXCLUSIVELY from the
+        # persisted pre/post assignment state (the before/after
+        # snapshots of the locked row — never the unvalidated
+        # payload):
+        # - an assignee ADDED (their My Work projection gains the
+        #   item) or REMOVED (it loses it) is addressed — the union
+        #   of both diffs, each user at most once;
+        # - a real canonical change (audited fields or a real
+        #   label-set change) addresses every CURRENT assignee,
+        #   because the item's My Work projection data (title,
+        #   status, due date, labels, ...) changed for them;
+        # - an unchanged assignment without any data change
+        #   addresses nobody (genuine no-op -> no events).
+        before_assignees = set(before_state["assignee_ids"])
+        after_assignees = set(after_state["assignee_ids"])
+        personal_recipients = set()
+        if before_assignees != after_assignees:
+            personal_recipients |= (
+                before_assignees ^ after_assignees
+            )
+        # The remaining CURRENT assignees are addressed only when the
+        # item's My Work projection DATA changed for them — an
+        # audited field other than the assignee membership itself
+        # (the "assignees" diff affects only the added/removed users)
+        # or a real label-set change. An assignment-only change does
+        # not touch the projection of the unaffected assignees: no
+        # notification for uninvolved users.
+        non_assignment_changes = {
+            key: value
+            for key, value in changes.items()
+            if key != "assignees"
+        }
+        if non_assignment_changes or labels_changed:
+            personal_recipients |= after_assignees
+        for user_id in personal_recipients:
+            publish_my_work_changed(user_id)
 
     return work_item
 
@@ -987,6 +1044,11 @@ def set_assignees(
     The actor must have write access to the project.
     All assignees must be eligible.
     If any assignee is invalid, the entire operation rolls back.
+
+    RT-03D: this service has NO production call path (the canonical
+    update path is ``update_work_item``), so it is deliberately NOT
+    wired to the realtime invalidation publishers and must not be
+    treated as a covered production path.
     """
     project = work_item.project
     _require_project_write_access(project, actor)
@@ -1123,6 +1185,12 @@ def delete_work_item(*, work_item: WorkItem, actor) -> None:
     project_id = work_item.project_id
     _require_project_write_access(project, actor)
 
+    # Persisted PRE state (RT-03D): the current assignees lose the
+    # item from their My Work projection by the deletion.
+    former_assignee_ids = set(
+        work_item.assignee_relations.values_list("user_id", flat=True)
+    )
+
     work_item.delete()
 
     # Realtime invalidation (RT-03C): one project-scoped
@@ -1131,6 +1199,11 @@ def delete_work_item(*, work_item: WorkItem, actor) -> None:
     # The Project id is the Work Item's own canonical Project,
     # authorized above, never caller-supplied.
     publish_project_work_item_changed(project_id)
+
+    # Realtime invalidation (RT-03D): one personal my_work_changed
+    # per persisted former assignee.
+    for user_id in former_assignee_ids:
+        publish_my_work_changed(user_id)
 
 
 @dataclass(frozen=True)
@@ -1472,6 +1545,19 @@ def reposition_work_item(
         if state_changed:
             publish_project_work_item_changed(locked_project.pk)
 
+        # Realtime invalidation (RT-03D): a cross-category Board move
+        # is a real canonical status change — every CURRENT assignee's
+        # My Work projection changes column, so each is addressed
+        # (persisted assignment state of the locked row; the move
+        # never mutates assignments). A same-category reorder changes
+        # only the Project-local board_position, which is not My Work
+        # projection data: it publishes no personal invalidation.
+        if state_changed and not same_category:
+            for user_id in work_item.assignee_relations.values_list(
+                "user_id", flat=True
+            ):
+                publish_my_work_changed(user_id)
+
     return work_item
 
 
@@ -1580,5 +1666,16 @@ def transition_work_item_status(
             # to the current status records no history and publishes
             # nothing.
             publish_project_work_item_changed(locked_project.pk)
+
+            # Realtime invalidation (RT-03D): a real status change
+            # moves every CURRENT assignee's My Work projection to a
+            # new column; recipients come from the persisted
+            # assignment state of the locked, refreshed row (the
+            # transition never mutates assignments). A no-op
+            # transition publishes no personal invalidation.
+            for user_id in work_item.assignee_relations.values_list(
+                "user_id", flat=True
+            ):
+                publish_my_work_changed(user_id)
 
     return work_item
