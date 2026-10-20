@@ -887,7 +887,7 @@ action, or a forced reconnect under a shortened stream cap in the
 test) re-renders from the canonical permission-filtered read; a forced
 API restart reconnects and refetches correctly.
 
-### Implementation sequence (RT-02 and RT-03A implemented — see `docs/CURRENT_STATE.md`)
+### Implementation sequence (RT-02, RT-03A, and RT-03C implemented — see `docs/CURRENT_STATE.md`)
 
 1. **RT-02 — transport prerequisite (deployment only).** Add
    `--threads <N>` (sized by the capacity model) to the API image
@@ -910,7 +910,9 @@ API restart reconnects and refetches correctly.
    `text/event-stream` response contract (`open` handshake, 15 s
    keep-alive, 30-minute limit), the cleanup-on-disconnect path, and a
    small internal in-transaction `pg_notify` publication interface
-   (commit-attached; production mutation services are NOT wired to it).
+   (commit-attached; the project-scoped wiring of the canonical
+   mutation services landed in RT-03C, the personal publisher is not
+   yet wired).
    Production Work Item mutations publish no events in this slice.
    Acceptance: the transport integration test suite above (real
    transactions + real listener connections), plus — in the deployed
@@ -919,16 +921,36 @@ API restart reconnects and refetches correctly.
    open beyond 60 s while concurrent API requests are served normally,
    and a forced client disconnect returns the database connection
    count to baseline. Dependencies: RT-02.
-3. **RT-03B — production publication wiring.** In-transaction
-   `pg_notify` in the canonical Work Item mutation services (create,
-   update, reposition, status transition, delete, assignee change,
-   personal reorder) through the RT-03A internal publisher — each
-   committed mutation publishes exactly one notification per affected
-   scope, a rolled-back mutation publishes nothing — plus the
-   scope-correctness tests: same-category personal reorder emits a
-   personal event only; a cross-category personal move emits personal +
-   project events; assignee add/remove emits the project event plus one
-   personal event per affected assignee. Dependencies: RT-03A.
+3. **RT-03B — production publication wiring (partially implemented:
+   the project scope in RT-03C, the personal scope still pending).**
+   In-transaction `pg_notify` in the canonical Work Item mutation
+   services (create, update, reposition, status transition, delete,
+   assignee change, personal reorder) through the RT-03A internal
+   publisher — each committed mutation publishes exactly one
+   notification per affected scope, a rolled-back mutation publishes
+   nothing — plus the scope-correctness tests: same-category personal
+   reorder emits a personal event only; a cross-category personal move
+   emits personal + project events; assignee add/remove emits the
+   project event plus one personal event per affected assignee.
+   Dependencies: RT-03A. **RT-03C (implemented):** the PROJECT scope of
+   this item — every committed canonical Project Work Item mutation
+   (create, real update — including a real label-set change, delete,
+   real board reorder, real status transition, assignee change through
+   the update path) publishes exactly one `work_item_changed` for the
+   affected Project inside the mutation's own transaction (rollback →
+   nothing; failed mutation / failed authorization / genuine no-op →
+   nothing; nested service calls — e.g. the cross-category My Work
+   move through `transition_work_item_status` — publish no duplicate;
+   a same-category personal My Work reorder touches no canonical Work
+   Item state and publishes no project event; the Project id always
+   comes from the server-authorized canonical state). Pinned by
+   `apps/api/work_items/tests_realtime_mutations.py` (real
+   transactions + real dedicated LISTEN connections + real SSE
+   streams). **Still pending (the remainder of RT-03B):** the personal
+   `my_work_changed` emission (assignment add/remove, a canonical
+   status change of an assigned item, a personal reorder) —
+   `publish_my_work_changed` is not yet called by production code, so
+   the FULL RT-03B domain integration is not complete.
 4. **RT-04 — Project Board client integration.** `EventSource` lifecycle
    on the Project detail page (open on board mount, close on unmount),
    including the client recovery contract (RC-1…RC-5) for the

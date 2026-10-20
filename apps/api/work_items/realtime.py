@@ -25,8 +25,10 @@ Events are minimal invalidations (scope pointers, never Work Item data):
 ``open`` (own user id), ``work_item_changed`` (``projectId``), and
 ``my_work_changed`` (no Work Item data).
 
-Canonical contract: ``docs/architecture.md`` (Realtime). Production
-Work Item mutations are NOT wired to the publisher yet (RT-03B).
+Canonical contract: ``docs/architecture.md`` (Realtime). The
+project-scope invalidations are wired to the canonical Work Item
+mutation services (RT-03C); the personal ``my_work_changed``
+publisher is not yet called by production code.
 """
 
 from __future__ import annotations
@@ -94,8 +96,9 @@ def _notify(payload: dict) -> None:
 def publish_project_work_item_changed(project_id: int) -> None:
     """Publish one project-scope Work Item invalidation for a Project.
 
-    Internal interface for RT-03B (canonical Work Item mutation
-    services). MUST be called inside the mutation's own
+    Called by the canonical Project Work Item mutation services
+    (RT-03C: create, update, delete, board reorder, status
+    transition). MUST be called inside the mutation's own
     ``transaction.atomic()`` block.
     """
     _notify({"scope": SCOPE_PROJECT, "projectId": int(project_id)})
@@ -105,8 +108,9 @@ def publish_my_work_changed(user_id: int) -> None:
     """Publish one personal-scope My Work invalidation for exactly one
     addressed user.
 
-    Internal interface for RT-03B. Same commit-attached contract as
-    ``publish_project_work_item_changed``.
+    Internal interface for the personal My Work invalidations (RT-03B
+    onward; not yet called by production code). Same commit-attached
+    contract as ``publish_project_work_item_changed``.
     """
     _notify({"scope": SCOPE_USER, "userId": int(user_id)})
 

@@ -27,6 +27,7 @@ from projects.models import (
 from research_groups.models import ResearchGroupMembership
 
 from .models import WorkItem, WorkItemAssignee, WorkItemComment, WorkItemLabel
+from .realtime import publish_project_work_item_changed
 
 
 class WorkItemAuditEventType:
@@ -613,6 +614,13 @@ def create_work_item(
             data={},
         )
 
+        # Realtime invalidation (RT-03C): one project-scoped
+        # work_item_changed for the committed creation, published in
+        # this same transaction (delivered on commit, suppressed on
+        # rollback). The Project id comes from the locked,
+        # server-authorized Project row, never from the caller.
+        publish_project_work_item_changed(locked_project.pk)
+
     return work_item
 
 
@@ -673,7 +681,7 @@ def update_work_item(
 
         before_state = _snapshot_work_item_state(work_item)
 
-        _apply_work_item_fields(
+        labels_changed = _apply_work_item_fields(
             work_item=work_item,
             project=locked_project,
             title=title,
@@ -710,6 +718,17 @@ def update_work_item(
                 data={"changes": changes},
             )
 
+        # Realtime invalidation (RT-03C): one project-scoped
+        # work_item_changed per real canonical change — the audited
+        # fields via the history diff, plus a real label-set change
+        # (labels are persisted canonical Work Item state although
+        # they are deliberately not audited). A genuine no-op (every
+        # supplied value already current) publishes nothing.
+        # Published in this same transaction: delivered on commit,
+        # suppressed on rollback.
+        if changes or labels_changed:
+            publish_project_work_item_changed(locked_project.pk)
+
     return work_item
 
 
@@ -726,13 +745,18 @@ def _apply_work_item_fields(
     type_definition_id: Optional[int] = None,
     status_definition_id: Optional[int] = None,
     label_definition_ids: Optional[list[int]] = None,
-) -> None:
+) -> bool:
     """Apply field changes to a WorkItem and handle side effects.
 
     Assignee replacement is atomic (delete all, create new).
     completed_at is derived from status transitions.
+
+    Returns whether the Work Item's label set actually changed
+    (labels are persisted canonical Work Item state although they are
+    deliberately not part of the audit history).
     """
     update_fields = []
+    labels_changed = False
 
     if title is not None:
         work_item.title = title
@@ -847,12 +871,17 @@ def _apply_work_item_fields(
     if label_definition_ids is not None:
         label_defs = _resolve_label_definitions(project, label_definition_ids)
         label_def_ids = {d.pk for d in label_defs}
+        labels_changed = label_def_ids != set(
+            work_item.label_relations.values_list("label_id", flat=True)
+        )
         work_item.label_relations.all().delete()
         for label_def in label_defs:
             WorkItemLabel.objects.create(
                 work_item=work_item,
                 label=label_def,
             )
+
+    return labels_changed
 
 
 def _require_project_write_access(project: Project, actor) -> None:
@@ -1091,9 +1120,17 @@ def delete_work_item(*, work_item: WorkItem, actor) -> None:
       (parent on_delete=SET_NULL).
     """
     project = work_item.project
+    project_id = work_item.project_id
     _require_project_write_access(project, actor)
 
     work_item.delete()
+
+    # Realtime invalidation (RT-03C): one project-scoped
+    # work_item_changed for the committed deletion, published inside
+    # this transaction (delivered on commit, suppressed on rollback).
+    # The Project id is the Work Item's own canonical Project,
+    # authorized above, never caller-supplied.
+    publish_project_work_item_changed(project_id)
 
 
 @dataclass(frozen=True)
@@ -1334,6 +1371,18 @@ def reposition_work_item(
                     "beforeWorkItemId is not in the target status column."
                 )
 
+        # Realtime change detection (RT-03C): the canonical state
+        # changes iff a cross-category status change happens or the
+        # final persisted board positions of the target column differ
+        # from the pre-move values. A drop that leaves the committed
+        # state untouched is a no-op and publishes nothing (the
+        # intermediate normalization writes that net out to the same
+        # final positions do not count).
+        positions_before = {
+            item.pk: item.board_position for item in column
+        }
+        positions_before[work_item.pk] = work_item.board_position
+
         before_state = _snapshot_work_item_state(work_item)
 
         # Normalize: assign explicit positions 1..N in render order so
@@ -1389,6 +1438,16 @@ def reposition_work_item(
             ]
         )
 
+        # Final persisted state of the target column (same-category
+        # moves never change the concrete status).
+        state_changed = not same_category
+        if not state_changed:
+            positions_after = {
+                item.pk: item.board_position for item in column
+            }
+            positions_after[work_item.pk] = work_item.board_position
+            state_changed = positions_before != positions_after
+
         after_state = _snapshot_work_item_state(work_item)
         changes = _diff_work_item_changes(
             project_id=locked_project.pk,
@@ -1404,6 +1463,14 @@ def reposition_work_item(
                 work_item=work_item,
                 data={"changes": changes},
             )
+
+        # Realtime invalidation (RT-03C): one project-scoped
+        # work_item_changed per real canonical change (a cross-category
+        # status change, and/or a persisted board position change).
+        # Published in this same transaction: delivered on commit,
+        # suppressed on rollback.
+        if state_changed:
+            publish_project_work_item_changed(locked_project.pk)
 
     return work_item
 
@@ -1508,5 +1575,10 @@ def transition_work_item_status(
                 work_item=work_item,
                 data={"changes": changes},
             )
+            # Realtime invalidation (RT-03C): a real status change
+            # invalidates the project scope once; a no-op transition
+            # to the current status records no history and publishes
+            # nothing.
+            publish_project_work_item_changed(locked_project.pk)
 
     return work_item
