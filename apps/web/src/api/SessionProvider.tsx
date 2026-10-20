@@ -19,6 +19,14 @@ interface SessionContextValue extends SessionState {
    * state reflects the new session. Reuses the exact same state as login.
    */
   setAuthenticatedUser: (user: ApiUser) => void
+  /**
+   * Report a server-side authentication loss detected outside an
+   * explicit logout (currently: the realtime recovery contract's fresh
+   * `GET /api/auth/me/` check answering 401). Clears the local session
+   * state exactly like an explicit logout — WITHOUT issuing a logout
+   * POST to the already-invalid server session.
+   */
+  handleAuthenticationLost: () => void
 }
 
 const SessionContext = createContext<SessionContextValue | null>(null)
@@ -62,6 +70,12 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     setState({ user, loading: false, error: null })
   }, [])
 
+  const handleAuthenticationLost = useCallback(() => {
+    // Local session state only: the server session is already invalid,
+    // so no logout request is sent.
+    setState({ user: null, loading: false, error: null })
+  }, [])
+
   // On mount, try to recover session from /api/auth/me/
   useEffect(() => {
     let cancelled = false
@@ -79,7 +93,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <SessionContext.Provider
-      value={{ ...state, login, logout, setAuthenticatedUser }}
+      value={{ ...state, login, logout, setAuthenticatedUser, handleAuthenticationLost }}
     >
       {children}
     </SessionContext.Provider>
