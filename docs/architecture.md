@@ -514,8 +514,11 @@ below PostgreSQL's 8000-byte NOTIFY limit.
 
 **Authorization at connection and during continued access.**
 - Connection: the endpoint requires a live authenticated session
-  (anonymous → 401, inactive user → 403). The stream itself grants no
-  access.
+  (anonymous → 401; an inactive account also answers 401 — the standard
+  AuthenticationMiddleware/ModelBackend combination maps an inactive user
+  to anonymous; an explicit 403 `is_active` guard exists only as
+  unreachable defense in depth, never as the standard answer). The stream
+  itself grants no access.
 - Per-delivery re-authorization (the revocation mechanism): every
   notification is re-authorized at delivery time against the connected
   user's CURRENT access, deny by default. Each delivery re-resolves two
@@ -707,12 +710,19 @@ RT-05, verified in E2E by RT-06):
 - Each SSE stream runs in one request thread of any Gunicorn
   (`gthread`) worker and holds one dedicated PostgreSQL listener
   connection (`LISTEN`) for its lifetime. The listener connection is
-  the stream's own connection — not a Django request connection, which
-  would be closed at request end (the deployment uses the default
-  `CONN_MAX_AGE = 0`): the per-request connection that authenticates
-  the stream is released before the stream blocks, and the dedicated
-  listener connection is released only in the stream's own cleanup
-  path.
+  the stream's own connection — not the Django request connection (the
+  deployment uses the default `CONN_MAX_AGE = 0`). The per-request
+  connection that authenticates the stream is not released before the
+  stream blocks: it stays open for the stream's whole lifetime (it is
+  the connection the per-delivery re-authorization queries run on) and
+  is released when the WSGI server closes the response — in the
+  stream's own final cleanup path, together with the dedicated listener
+  connection (Gunicorn gthread closes the response after the body loop
+  ends or after a write failure; the Django WSGI path releases the
+  per-request connection only through the `request_finished` →
+  `close_old_connections` that response close fires). The capacity
+  formula below is unaffected: its `W x T` term already counts one
+  request connection per thread, streaming threads included.
 - The publisher's in-transaction `pg_notify` is delivered by PostgreSQL
   to every listening connection — across workers and across instances,
   since they all share the single PostgreSQL. No in-application bus, no
@@ -765,7 +775,7 @@ RT-05, verified in E2E by RT-06):
   gthread worker then closes the response iterator — the stream
   generator receives `GeneratorExit`, and its cleanup path closes the
   dedicated listener connection. This cleanup path is a hard
-  requirement of the RT-03 implementation and carries its own
+  requirement of the RT-03A implementation and carries its own
   integration test (force a client disconnect; the database connection
   count returns to baseline).
 - **Overload and failure response.** If a stream cannot be opened
@@ -827,7 +837,7 @@ Deterministic in-process integration tests (Django test runner, no
 browser) using the Django test client for the stream and raw psycopg
 connections for publishing and listening:
 
-- Connection authorization: anonymous 401, inactive user 403,
+- Connection authorization: anonymous 401, inactive user 401,
   authenticated user `200` + `text/event-stream` + the `open` handshake.
 - Publication: each committed Work Item mutation publishes exactly one
   notification per affected scope; a rolled-back mutation (simulated
@@ -866,7 +876,7 @@ gate. The current local Compose topology cannot host these checks — it
 is loopback HTTP, and the production settings contract (`SECURE_*`
 cookies, HTTPS-only `CSRF_TRUSTED_ORIGINS`) makes browser login
 impossible there; that restriction binds browsers, not scripts, which
-is why the loopback verification vehicle (the RT-03 scripted-client
+is why the loopback verification vehicle (the RT-03A scripted-client
 check in the implementation sequence) is a scripted non-browser client
 holding an operator-provisioned session cookie.
 Checks: two users — a Project Board drag by user A appears on user B's
@@ -877,7 +887,7 @@ action, or a forced reconnect under a shortened stream cap in the
 test) re-renders from the canonical permission-filtered read; a forced
 API restart reconnects and refetches correctly.
 
-### Implementation sequence (follow-up slices, NOT yet implemented)
+### Implementation sequence (RT-02 and RT-03A implemented — see `docs/CURRENT_STATE.md`)
 
 1. **RT-02 — transport prerequisite (deployment only).** Add
    `--threads <N>` (sized by the capacity model) to the API image
@@ -891,21 +901,35 @@ API restart reconnects and refetches correctly.
    point. Long-connection behavior (a stream staying open beyond 60 s
    while concurrent API requests are served) is NOT accepted here — no
    stream endpoint exists in a deployment-only slice — and moves to
-   RT-03, where the endpoint it exercises exists. Dependencies: none.
-2. **RT-03 — backend publication and authorized subscriptions.**
-   In-transaction `pg_notify` in the Work Item mutation services (create,
-   update, reposition, status transition, delete, assignee change,
-   personal reorder) + the SSE endpoint with connection authorization,
+   RT-03A, where the endpoint it exercises exists. Dependencies: none.
+2. **RT-03A — transport foundation (IMPLEMENTED).** The SSE endpoint
+   with connection authorization (anonymous/inactive → 401 before any
+   stream bytes; failed listener connection → 503 before any stream
+   bytes), the dedicated per-stream PostgreSQL `LISTEN` connection,
    per-delivery re-authorization (scope + session validity), the
-   `text/event-stream` response contract, keep-alive, the 30-minute
-   stream limit, and the cleanup-on-disconnect path. Acceptance: the
-   integration test suite above, plus — in the deployed production
-   topology with a scripted non-browser client (the loopback surface
-   can authenticate scripts, not browsers) — a stream stays open
-   beyond 60 s while concurrent API requests are served normally, and a
-   forced client disconnect returns the database connection count to
-   baseline. Dependencies: RT-02.
-3. **RT-04 — Project Board client integration.** `EventSource` lifecycle
+   `text/event-stream` response contract (`open` handshake, 15 s
+   keep-alive, 30-minute limit), the cleanup-on-disconnect path, and a
+   small internal in-transaction `pg_notify` publication interface
+   (commit-attached; production mutation services are NOT wired to it).
+   Production Work Item mutations publish no events in this slice.
+   Acceptance: the transport integration test suite above (real
+   transactions + real listener connections), plus — in the deployed
+   production topology with a scripted non-browser client (the loopback
+   surface can authenticate scripts, not browsers) — a stream stays
+   open beyond 60 s while concurrent API requests are served normally,
+   and a forced client disconnect returns the database connection
+   count to baseline. Dependencies: RT-02.
+3. **RT-03B — production publication wiring.** In-transaction
+   `pg_notify` in the canonical Work Item mutation services (create,
+   update, reposition, status transition, delete, assignee change,
+   personal reorder) through the RT-03A internal publisher — each
+   committed mutation publishes exactly one notification per affected
+   scope, a rolled-back mutation publishes nothing — plus the
+   scope-correctness tests: same-category personal reorder emits a
+   personal event only; a cross-category personal move emits personal +
+   project events; assignee add/remove emits the project event plus one
+   personal event per affected assignee. Dependencies: RT-03A.
+4. **RT-04 — Project Board client integration.** `EventSource` lifecycle
    on the Project detail page (open on board mount, close on unmount),
    including the client recovery contract (RC-1…RC-5) for the
    board's `EventSource`; one authoritative refetch on
@@ -915,14 +939,14 @@ API restart reconnects and refetches correctly.
    (incl. RC-1…RC-5) + cross-user board-sync browser E2E (on a
    TLS-terminating surface — the current loopback topology cannot
    authenticate a browser; see the E2E environment note).
-   Dependencies: RT-03.
-4. **RT-05 — My Work client integration.** One authoritative refetch on
+   Dependencies: RT-03B.
+5. **RT-05 — My Work client integration.** One authoritative refetch on
    `my_work_changed` with persisted view state preserved; the My Work
    stream implements the same client recovery contract (RC-1…RC-5).
    Acceptance: unit tests (incl. RC-1…RC-5) + cross-tab E2E (same
-   TLS-terminating surface requirement). Dependencies: RT-03
+   TLS-terminating surface requirement). Dependencies: RT-03B
    (independent of RT-04).
-5. **RT-06 — cross-surface and reconnect verification.** E2E: two users,
+6. **RT-06 — cross-surface and reconnect verification.** E2E: two users,
    cross-tab My Work, forced reconnect (both recovery tiers: native
    reconnect after a regular interruption, and the controlled
    new-`EventSource` reconnect after a terminal 5xx, including the

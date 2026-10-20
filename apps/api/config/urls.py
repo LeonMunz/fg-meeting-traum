@@ -57,6 +57,8 @@ from research_groups.views import (
 )
 
 
+from work_items.realtime import work_item_event_stream
+
 from work_items.views import (
     PersonalMyWorkReorderView,
     PersonalMyWorkView,
@@ -171,6 +173,11 @@ urlpatterns = [
     path('api/research-groups/<int:group_id>/members/', ResearchGroupMembersView.as_view(), name='research-group-members'),
     # Work Items
     path('api/projects/<int:project_id>/work-items/', ProjectWorkItemListCreateView.as_view(), name='project-work-items-list'),
+    # Work Item invalidation transport (RT-03A): authenticated SSE stream
+    # over PostgreSQL LISTEN/NOTIFY (invalidation-only events, no Work Item
+    # data). Dedicated per-stream listener connection; per-delivery
+    # re-authorization against CURRENT session + scope access.
+    path('api/work-items/events/', work_item_event_stream, name='work-item-events'),
     path('api/work-items/<int:work_item_id>/', WorkItemDetailView.as_view(), name='work-item-detail'),
     path('api/work-items/<int:work_item_id>/reorder/', csrf_protect_view(WorkItemReorderView), name='work-item-reorder'),
     path('api/work-items/<int:work_item_id>/transition-status/', csrf_protect_view(WorkItemStatusTransitionView), name='work-item-status-transition'),
