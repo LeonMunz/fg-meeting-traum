@@ -39,6 +39,7 @@ import {
 } from '../../api/projects'
 import { useSession } from '../../api/useSession'
 import { useResearchGroup } from '../research-group/useResearchGroup'
+import type { WorkItemEventStreamStatus } from '../../api/work-item-events'
 import { WORK_ITEM_CREATED_EVENT } from '../../components/layout/workItemInvalidation'
 import type { WorkItemFormInput } from '../projects/WorkItemDrawer'
 import {
@@ -73,6 +74,7 @@ import {
   MyWorkFilterCommandMenu,
   type MyWorkFilterCommandMenuHandle,
 } from './MyWorkFilterCommandMenu'
+import { MyWorkRealtime } from './myWorkRealtime'
 
 // Stable empty references so a null preference snapshot never
 // allocates a fresh array each render (keeps the filter memos
@@ -600,6 +602,41 @@ export function MyWorkPage() {
   // authoritative snapshot (the same contract the Home Activity
   // rail applies to its feed).
   const itemsRequestSeq = useRef(0)
+  // RT-05: a canonical items GET (the initial load or a silent
+  // refetch) is in flight for the mounted surface. A realtime
+  // invalidation arriving while a fetch is in flight is HELD (not
+  // issued as a parallel request) and re-requested exactly once
+  // when the fetch settles — so the final server state is never
+  // lost and a fast event burst never floods the endpoint.
+  const myWorkItemsInFlightRef = useRef(false)
+  // RT-05: a realtime invalidation (a personal event or a valid
+  // open handshake — RC-5) arrived while an items fetch was in
+  // flight or a personal board move was pending. It is
+  // re-requested exactly once when the surface is quiescent
+  // again. The flag is consumed, never looped on.
+  const myWorkRealtimePendingRef = useRef(false)
+  // RT-05: synchronous mirror of pendingMoveItemIds for the
+  // coalescing guards: an async settle callback runs before the
+  // state update commits, so the ref is updated FIRST — a flush
+  // never sees a just-settled move as still pending.
+  const pendingMoveItemIdsRef = useRef<ReadonlySet<number>>(
+    new Set(),
+  )
+  // RT-05: whether the mounted surface has observed at least one
+  // valid open handshake. Only AFTER the first connection does a
+  // non-connected state mean sync-paused — the very first
+  // connection is normal startup, not a degraded mode.
+  const myWorkStreamEverConnectedRef = useRef(false)
+  // RT-05: the Work Item event stream connection state for the
+  // mounted surface (reported by the lifecycle adapter).
+  const [myWorkStreamStatus, setMyWorkStreamStatus] =
+    useState<WorkItemEventStreamStatus>('idle')
+  // Forward ref so loadMyWork / refreshMyWork (defined before the
+  // flush callback) can settle a held invalidation without a
+  // circular callback dependency.
+  const flushMyWorkRealtimeInvalidationRef = useRef<() => void>(
+    () => {},
+  )
 
   const loadMyWork = useCallback(
     async () => {
@@ -607,6 +644,8 @@ export function MyWorkPage() {
       // delayed (stale) response must never settle the items state
       // over a newer authoritative snapshot.
       const seq = ++itemsRequestSeq.current
+
+      myWorkItemsInFlightRef.current = true
 
       setLoading(true)
       setError(null)
@@ -668,7 +707,15 @@ export function MyWorkPage() {
         // can only start from the settled error state — so the
         // flag always clears here, even if a refetch superseded
         // this load's list response in the meantime.
+        myWorkItemsInFlightRef.current = false
         setLoading(false)
+        // RT-05: the surface is quiescent again — honor a realtime
+        // invalidation (or the initial-connect handshake) held
+        // while this load was in flight: exactly one follow-up
+        // items fetch, coordinated AFTER the load settled, and the
+        // preference snapshot above stays the load's single
+        // preference read.
+        flushMyWorkRealtimeInvalidationRef.current()
       }
     },
     [],
@@ -696,6 +743,8 @@ export function MyWorkPage() {
   // `WORK_ITEM_CREATED_EVENT` listener) is safe.
   const refreshMyWork = useCallback(async () => {
     const seq = ++itemsRequestSeq.current
+
+    myWorkItemsInFlightRef.current = true
 
     try {
       const nextItems = await listMyWork()
@@ -725,6 +774,13 @@ export function MyWorkPage() {
           'My Work could not be refreshed.',
         ),
       )
+    } finally {
+      myWorkItemsInFlightRef.current = false
+      // RT-05: the surface is quiescent again — honor a realtime
+      // invalidation held while this fetch was in flight (exactly
+      // one follow-up fetch; the flush consumes the held flag, so
+      // no unbounded fetch loop is possible).
+      flushMyWorkRealtimeInvalidationRef.current()
     }
   }, [])
 
@@ -745,6 +801,81 @@ export function MyWorkPage() {
       )
     }
   }, [refreshMyWork])
+
+  /**
+   * RT-05: one realtime invalidation for the My Work surface (a
+   * my_work_changed event or a valid open handshake — RC-5).
+   * Requests one canonical SILENT revalidation of
+   * GET /api/me/work-items/ — never a Work Item field derived
+   * from the event, and never the persisted preferences.
+   * Coalesced: while an items fetch is in flight or a personal
+   * board move is pending, the invalidation is held
+   * (myWorkRealtimePendingRef) and re-requested exactly once when
+   * the surface is quiescent again — so fast event bursts yield
+   * at most one in-flight plus one follow-up fetch, and a pending
+   * move's position is never clobbered by a response that could
+   * predate the move's commit.
+   */
+  const requestMyWorkRealtimeInvalidation = useCallback(() => {
+    if (
+      myWorkItemsInFlightRef.current ||
+      pendingMoveItemIdsRef.current.size > 0
+    ) {
+      myWorkRealtimePendingRef.current = true
+      return
+    }
+
+    void refreshMyWork()
+  }, [refreshMyWork])
+
+  /**
+   * RT-05: called when an items fetch settles or a pending board
+   * move settles (success or failure — a failed move's error
+   * surface is not itself a revalidation, so a held invalidation
+   * must still be honored). Flushes the held invalidation with
+   * exactly one canonical revalidation, and only while the
+   * surface is quiescent again.
+   */
+  const flushMyWorkRealtimeInvalidation = useCallback(() => {
+    if (!myWorkRealtimePendingRef.current) {
+      return
+    }
+
+    if (
+      myWorkItemsInFlightRef.current ||
+      pendingMoveItemIdsRef.current.size > 0
+    ) {
+      return
+    }
+
+    myWorkRealtimePendingRef.current = false
+    void refreshMyWork()
+  }, [refreshMyWork])
+
+  flushMyWorkRealtimeInvalidationRef.current =
+    flushMyWorkRealtimeInvalidation
+
+  // RT-05: the stream connection state (reported by the lifecycle
+  // adapter). Only a LOST-then-recovering stream is presented — a
+  // subdued, non-blocking sync-paused line under the page heading.
+  const handleMyWorkStreamStatus = useCallback(
+    (status: WorkItemEventStreamStatus) => {
+      if (status === 'connected') {
+        myWorkStreamEverConnectedRef.current = true
+      }
+
+      setMyWorkStreamStatus(status)
+    },
+    [],
+  )
+
+  // RT-05: degraded-mode presentation — a valid open handshake was
+  // observed before, and the stream is now down (native or
+  // controlled reconnection in flight).
+  const myWorkSyncPaused =
+    myWorkStreamEverConnectedRef.current &&
+    (myWorkStreamStatus === 'reconnecting' ||
+      myWorkStreamStatus === 'connecting')
 
   // Board/List switch: update the COMPLETE preference snapshot
   // locally — only `viewMode` changes, the three filter arrays are
@@ -1595,9 +1726,10 @@ export function MyWorkPage() {
         return
       }
 
-      setPendingMoveItemIds((current) =>
-        new Set(current).add(itemId),
-      )
+      const nextPendingMoves = new Set(pendingMoveItemIdsRef.current)
+      nextPendingMoves.add(itemId)
+      pendingMoveItemIdsRef.current = nextPendingMoves
+      setPendingMoveItemIds(nextPendingMoves)
       setStatusDropError(null)
 
       try {
@@ -1620,6 +1752,16 @@ export function MyWorkPage() {
         // reach the catch below. A failed revalidation is surfaced
         // by `refreshMyWork` itself (visible + retryable) and is
         // never reported as a failed move.
+        //
+        // RT-05: this move's own revalidation is the settle for
+        // any realtime invalidation held while the move was
+        // pending — its response postdates every change such an
+        // event could name (the event was delivered before this
+        // mutation's response, and this request is issued after
+        // it), so the held flag is consumed with it: one fetch,
+        // not two.
+        myWorkRealtimePendingRef.current = false
+
         await refreshMyWork()
       } catch (mutationError) {
         // No optimistic relocation was made, so the previous
@@ -1634,11 +1776,15 @@ export function MyWorkPage() {
           ),
         )
       } finally {
-        setPendingMoveItemIds((current) => {
-          const next = new Set(current)
-          next.delete(itemId)
-          return next
-        })
+        const nextPendingMoves = new Set(pendingMoveItemIdsRef.current)
+        nextPendingMoves.delete(itemId)
+        pendingMoveItemIdsRef.current = nextPendingMoves
+        setPendingMoveItemIds(nextPendingMoves)
+        // RT-05: the move has settled (success or failure) — honor
+        // a realtime invalidation held while it was pending, if
+        // the surface is quiescent again (no other move pending,
+        // no fetch in flight).
+        flushMyWorkRealtimeInvalidation()
       }
     },
     [
@@ -1646,6 +1792,7 @@ export function MyWorkPage() {
       filteredItems,
       pendingMoveItemIds,
       refreshMyWork,
+      flushMyWorkRealtimeInvalidation,
     ],
   )
 
@@ -2016,6 +2163,27 @@ export function MyWorkPage() {
           <h1 className="text-[28px] font-semibold leading-[34px] tracking-[-0.015em] text-text">
             My Work
           </h1>
+
+          {/* RT-05: subdued, non-blocking sync-paused display
+              (degraded mode) — shown only AFTER the stream has
+              connected once, while a reconnection is in flight.
+              Never for the very first connection (normal
+              startup), never as a modal, toast, or loading shell:
+              existing data stays visible and fully usable. */}
+          {myWorkSyncPaused && (
+            <p
+              role="status"
+              className="mt-1.5 inline-flex items-center gap-1.5 text-xs text-work-content-muted"
+            >
+              <span
+                aria-hidden="true"
+                className="material-symbols-outlined text-[14px]"
+              >
+                cloud_off
+              </span>
+              Sync paused — reconnecting
+            </p>
+          )}
         </header>
 
         {/* One responsive toolbar: applied filters share the row with
@@ -2707,6 +2875,16 @@ export function MyWorkPage() {
           }
         />
       )}
+
+      {/* RT-05: realtime lifecycle for the mounted My Work
+          surface — the stream opens only for an authenticated
+          session (the hook's session gate) and closes on unmount,
+          logout, or session loss. No second reconnection
+          implementation, no global EventSource singleton. */}
+      <MyWorkRealtime
+        onInvalidation={requestMyWorkRealtimeInvalidation}
+        onStreamStatus={handleMyWorkStreamStatus}
+      />
     </div>
   )
 }
