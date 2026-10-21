@@ -68,7 +68,7 @@ test(
     // the workspace tree, with no page reload.
     const createdRowLabel = page
       .getByRole('group', { name: groupName })
-      .getByRole('button', {
+      .getByRole('link', {
         name: groupName,
         exact: true,
       })
@@ -79,10 +79,11 @@ test(
     )
 
     // --------------------------------------------------------
-    // The new group is a workspace tree row: its name and chevron
-    // share disclosure state. There is no
-    // overflow / three-dot menu — the admin-only Settings
-    // destination lives on the group's Overview.
+    // The new group is a workspace tree row: its name is the
+    // navigation link to the Overview, the chevron owns the
+    // disclosure. There is no overflow / three-dot menu — the
+    // admin-only Settings destination lives on the group's
+    // Overview.
     // --------------------------------------------------------
 
     await expect(
@@ -108,8 +109,8 @@ test(
       new RegExp(`/groups/${newGroupId}/settings$`),
     )
 
-    // The Overview route remains canonical even though the name
-    // controls disclosure rather than navigation.
+    // The Overview route is the group name's canonical
+    // navigation destination.
     await page.goto(`/groups/${newGroupId}`)
 
     // --------------------------------------------------------
@@ -279,7 +280,7 @@ test(
 
     const groupLabel = page
       .getByRole('group', { name: groupName })
-      .getByRole('button', {
+      .getByRole('link', {
         name: groupName,
         exact: true,
       })

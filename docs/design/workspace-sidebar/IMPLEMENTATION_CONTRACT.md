@@ -5,10 +5,11 @@ Documentation-only deliverable — no production source, test, or dependency
 file was changed by the task that produced this document, and no
 implementation has begun.
 
-**Revision:** v3 (2026-10-06) — the Research Group row now behaves as an
-accordion header: both its name and chevron toggle the same disclosure,
-disclosure never changes the route, and active context remains independent
-from expansion. The canonical Research Group Overview route remains valid.
+**Revision:** v4 (2026-10-21) — the Research Group row splits its two
+controls: the chevron is the disclosure toggle (never navigates) and
+the group name is a navigation link to the canonical Research Group
+Overview; expansion remains independent from the active route, and the
+admin Settings destination stays reachable from the Overview.
 
 **Baseline:** branch `slice/workspace-navigation`, HEAD `5ca1df8`
 ("Add project quick access client"), working tree containing 9 modified +
@@ -56,8 +57,10 @@ Sidebar (fixed 240px left rail)
   RESEARCH GROUPS — section header / context (approved IA element)
     per accessible Research Group, in the persisted personal order:
       [chevron]  <RG name>
-        chevron + RG name → the SAME disclosure toggle (toggles that
-                            group's persisted expansion; never navigates)
+        chevron → the group's disclosure toggle (toggles that group's
+                  persisted expansion; never navigates)
+        RG name → navigation link to the canonical /groups/<id>
+                  Overview (never changes the disclosure state)
       when expanded — EXACTLY TWO rows, nothing else:
         Projects   → /projects?group=<id>   (RG-scoped full Projects page)
         Meetings   → /meetings?group=<id>   (RG-scoped Meetings page)
@@ -75,10 +78,13 @@ Structural facts:
   (it has no disclosure control and no parent row).
 - Expanding a Research Group row reveals exactly the two rows `Projects`
   and `Meetings`.
-- The Research Group name and chevron control the same disclosure state;
-  neither changes the route or query parameters.
-- The canonical `/groups/:groupId` Overview route remains valid and active
-  presentation may follow it, but the Sidebar name does not navigate there.
+- The chevron controls the group's disclosure state and never changes
+  the route or query parameters; the RG name is a navigation link to
+  the canonical `/groups/:groupId` Overview and never changes the
+  disclosure state.
+- The canonical `/groups/:groupId` Overview route is the Sidebar name's
+  navigation destination; active presentation follows it (the Overview
+  and its subroutes), independent from expansion.
 - The Quick Access section has at most five rows, each navigating to the
   canonical Project entry route (`/projects/<id>/work-items`).
 - The Research Group section shows every Research Group the user can
@@ -277,16 +283,23 @@ QA-9 remains compatible with QA-2 (stable cold-load snapshot), QA-3
 (spatial stability), and QA-6 (no live reorder): reconciliation is a
 stale-data correction, never a navigation-triggered reorder.
 
-QA-10 **RG name and chevron are equivalent disclosure controls.** Both
-controls toggle the SAME rendered expansion state and the same persisted
-manual expansion preference (complete `WorkspaceNavigationPreferences`
-snapshot semantics retained; multiple groups may stay expanded). Either
-control can immediately reverse the other.
+QA-10 **The chevron is the RG disclosure control.** The chevron toggles
+the group's rendered expansion state and the persisted manual expansion
+preference (complete `WorkspaceNavigationPreferences` snapshot semantics
+retained; multiple groups may stay expanded). The chevron can
+immediately reverse a contextual reveal in both directions (manually
+collapse it, manually re-expand it). The RG name is NOT a disclosure
+control: it carries no expansion state, and activating it
+never changes `expandedResearchGroups` nor triggers a preference save.
 
-QA-11 **RG disclosure never navigates.** Activating the RG name or chevron
-does not change the current route or query parameters. The canonical
-`/groups/:groupId` Overview route remains valid, and route-active styling
-may still identify it; active context and expansion are independent.
+QA-11 **Chevron disclosure never navigates; the name navigates to the
+Overview.** Activating the chevron does not change the current route or
+query parameters. The RG name is a semantic link to the canonical
+`/groups/:groupId` Overview route; activating it navigates to that route
+without changing the group's disclosure state, and the name remains
+reachable while the group is collapsed. Route-active styling identifies
+the name on the Overview and its subroutes; active context and expansion
+are independent states.
 
 QA-12 **No RG overflow menu.** No three-dot / overflow menu exists on
 any Research Group row (the WIP `GroupOverflowMenu` is removed).
@@ -346,9 +359,10 @@ implementation:
   `8520013` (recency backend + per-RG QA endpoint + 28 tests),
   `5ca1df8` (QA client).
 
-Target architecture: §2 (global flat Quick Access; RG rows with shared
-name + chevron disclosure and exactly two non-disclosable child rows; no
-overflow menu; unchanged Personal and Bottom zones).
+Target architecture: §2 (global flat Quick Access; RG rows with chevron
+disclosure + name-to-Overview navigation link and exactly two
+non-disclosable child rows; no overflow menu; unchanged Personal and
+Bottom zones).
 
 ## 6. Current → target mapping
 
@@ -356,8 +370,8 @@ overflow menu; unchanged Personal and Bottom zones).
 |---|---|---|
 | Personal nav Home / My Work / Notes | `Sidebar.tsx` `personalNavigation` | KEEP unchanged |
 | Brand header (FG mark + "FG Workspace / Research OS") | `Sidebar.tsx` | KEEP (visual details pending §3) |
-| RG row chevron (disclosure) | `Sidebar.tsx` | KEEP — shared disclosure toggle, never navigates (QA-10/QA-11) |
-| RG row name (select-in-place, contextual routing) | `Sidebar.tsx` `handleGroupSelect` / `GROUP_LIST_PATHS` / `navigateOnGroupSelect` | REPLACE — the same disclosure toggle as the chevron; select-in-place, contextual routing, and name-to-Overview navigation are superseded (QA-10/QA-11) |
+| RG row chevron (disclosure) | `Sidebar.tsx` | KEEP — the disclosure toggle, never navigates (QA-10/QA-11) |
+| RG row name (select-in-place, contextual routing) | `Sidebar.tsx` `handleGroupSelect` / `GROUP_LIST_PATHS` / `navigateOnGroupSelect` | REPLACE — a semantic navigation link to the canonical `/groups/:groupId` Overview (select-in-place and contextual routing removed; the name is navigation, the chevron is disclosure — QA-10/QA-11) |
 | RG overflow / three-dot menu (admin → Settings) | `Sidebar.tsx` `GroupOverflowMenu` | REMOVE (QA-12) |
 | RG manual + contextual disclosure state | `Sidebar.tsx` `groupDisclosureState` | KEEP manual; contextual reveal (route `?group=` scope, group settings, current Project's owning group) stays presentation-only, never persisted |
 | `Projects` row disclosure chevron | `Sidebar.tsx` `toggleProjectsSection` | REMOVE (QA-16) |
@@ -434,9 +448,10 @@ overflow menu; unchanged Personal and Bottom zones).
 - **RG overflow / three-dot menu** — `GroupOverflowMenu`
   (`EllipsisVertical`) and its admin-Settings entry.
 - **Routing from the RG name** — `handleGroupSelect`,
-  `navigateOnGroupSelect`, `GROUP_LIST_PATHS` contextual switching, and
-  name-to-Overview navigation are superseded by the shared disclosure
-  invariant (QA-10/QA-11).
+  `navigateOnGroupSelect`, and `GROUP_LIST_PATHS` contextual switching
+  are superseded. Name-to-Overview navigation is restored as the row's
+  navigation control (the name is a link to `/groups/:groupId`); the
+  chevron alone owns disclosure (QA-10/QA-11).
 - **Docs asserting Project children under each RG** — the WIP
   "Implemented Sidebar integration" text in `docs/domain/foundation.md`
   §3b (per-RG branch semantics) is superseded by this contract; the
@@ -505,8 +520,9 @@ overflow menu; unchanged Personal and Bottom zones).
      identity/context page. No new domain data, no new API, no new
      authorization surface. Broad RG Overview functionality is NOT
      invented by this contract; page content scope is decision D-1.
-   - The route remains canonical, but the Sidebar RG name does not navigate
-     to it; name activation controls disclosure only (QA-10/QA-11).
+   - The route remains canonical and is the Sidebar RG name's navigation
+     destination; the name links to it, the chevron controls disclosure
+     only (QA-10/QA-11).
 5. **UI retirement of `expandedProjectSections`.** The Sidebar stops
    reading, writing, and rendering this preference field. The server
    field and its sanitization survive until an explicit deprecation
@@ -590,8 +606,9 @@ slices 1–3.
   global Quick Access request per cold load (request-count asserted);
   stable snapshot INCLUDING cross-Research-Group Project navigation
   (no refetch, no reorder — QA-9); contextual fifth slot; lifecycle
-  reconciliation on evidence only; RG name + chevron → shared disclosure;
-  disclosure never changes route; no overflow menu; no Project
+  reconciliation on evidence only; RG chevron → disclosure (never
+  changes route) + RG name → Overview navigation (never changes
+  disclosure); no overflow menu; no Project
   children; personal nav / bottom / group ordering unchanged; complete
   non-browser frontend verification green
   (`./scripts/agent-verify.sh frontend`), targeted E2E for the new spec
@@ -689,8 +706,9 @@ reset, committed, or modified by the contract tasks.
 Decisions (must be resolved where a slice is blocked):
 
 - **D-1 — RG Overview page content.** The canonical `/groups/:groupId`
-  route remains independent from Sidebar disclosure; QA-11 no longer uses
-  the RG name as navigation to it.
+  route remains independent from Sidebar disclosure; the RG name IS the
+  Sidebar's navigation to it (the chevron alone owns disclosure —
+  QA-10/QA-11).
   The reference's page content is an out-of-scope Kanban page (§3.3),
   so the content is not fixed by the approved decisions or the
   reference. Recommendation: minimal identity/context page (group name,
@@ -705,8 +723,9 @@ Decisions (must be resolved where a slice is blocked):
   RG context, if ever decided later, is a backend payload addition.
 - **D-3 — Active Research Group state.** Active context is route-derived
   (the `?group=` scope, the RG Overview, or the current entity's owning
-  group). The RG name toggles disclosure only and never selects or changes
-  context. Scoped list pages keep their `?group=` semantics.
+  group). The RG name is a navigation link to the Overview (it never
+  toggles disclosure, selects, or changes context); the chevron owns
+  disclosure. Scoped list pages keep their `?group=` semantics.
 - **D-4 — `expandedProjectSections` server field.** UI consumption
   stops in slice 2; the model/API field (committed) is retained —
   harmless, sanitized on every read/write — until an explicit
@@ -756,8 +775,8 @@ Known defects / risks:
 - **R-4 — Admin settings discoverability.** Removing the overflow menu
   changes the admin's path to Research Group settings (now reachable
   via the canonical `/groups/:groupId/settings` route, e.g. from the
-  Overview page); slice-2 acceptance includes verifying the path is
-  discoverable.
+  Overview page — the Sidebar group name's navigation destination);
+  slice-2 acceptance includes verifying the path is discoverable.
 
 ## 11. Task record (documentation-only)
 

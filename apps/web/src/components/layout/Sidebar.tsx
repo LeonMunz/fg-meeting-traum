@@ -699,10 +699,11 @@ export function Sidebar() {
     return () => clearTimeout(timer)
   }, [navPreferences, savedNavPreferences])
 
-  // Name or chevron activation toggles ONLY this group's rendered
-  // disclosure state (persisted via the effect above). Neither
-  // control navigates; route-derived active presentation remains
-  // independent from expansion.
+  // Chevron activation toggles ONLY this group's rendered disclosure
+  // state (persisted via the effect above). The chevron never
+  // navigates; the group name is a separate navigation link to the
+  // group's Overview (QA-10/QA-11). Route-derived active presentation
+  // remains independent from expansion.
   const toggleGroupExpansion = (
     groupId: number,
     visible: boolean,
@@ -760,23 +761,6 @@ export function Sidebar() {
     navigate(`/groups/${group.id}`, {
       viewTransition: true,
     })
-  }
-
-  /*
-   * The Research Group name row is emphasized while the current
-   * route is the group's Overview or one of its subroutes
-   * (settings) — active presentation follows the ROUTE, and
-   * expansion stays a separate state (QA-14/QA-15).
-   */
-  const groupRouteActive = (groupId: number) => {
-    const prefix = `/groups/${groupId}`
-
-    return (
-      location.pathname === prefix ||
-      location.pathname.startsWith(
-        `${prefix}/`,
-      )
-    )
   }
 
   const groupScopeParam = new URLSearchParams(
@@ -964,8 +948,6 @@ export function Sidebar() {
                       manualExpanded ||
                       (contextGroupId === group.id &&
                         contextuallyCollapsedGroupId !== group.id)
-                    const groupActive =
-                      groupRouteActive(group.id)
                     const childrenId = `research-group-children-${group.id}`
 
                     return (
@@ -992,22 +974,28 @@ export function Sidebar() {
                             />
                           </button>
 
-                          <button
-                            type="button"
-                            onClick={() =>
-                              toggleGroupExpansion(group.id, visible)
+                          {/*
+                           * The group name is the row's navigation
+                           * control: a semantic link to the canonical
+                           * Overview. It is never a disclosure control
+                           * — the chevron exclusively owns expansion
+                           * (QA-10/QA-11).
+                           */}
+                          <NavLink
+                            to={`/groups/${group.id}`}
+                            viewTransition
+                            aria-current="true"
+                            className={({ isActive }) =>
+                              [
+                                'flex h-7 min-w-0 flex-1 items-center truncate rounded text-left fg-type-nav-secondary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
+                                isActive
+                                  ? 'font-medium text-text'
+                                  : 'text-text-muted hover:text-text',
+                              ].join(' ')
                             }
-                            aria-expanded={visible}
-                            aria-controls={childrenId}
-                            aria-current={
-                              groupActive
-                                ? 'true'
-                                : undefined
-                            }
-                            className={`flex h-7 min-w-0 flex-1 items-center truncate rounded text-left fg-type-nav-secondary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus ${groupActive ? 'font-medium text-text' : 'text-text-muted hover:text-text'}`}
                           >
                             {group.name}
-                          </button>
+                          </NavLink>
 
                           {/*
                            * QA-12: no overflow / three-dot menu

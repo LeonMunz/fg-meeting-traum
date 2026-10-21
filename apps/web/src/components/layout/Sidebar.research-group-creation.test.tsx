@@ -272,10 +272,11 @@ describe('Sidebar Research Group area (parent render boundary)', () => {
       }),
     ).toBeVisible()
 
-    // The created group is a tree row with its own disclosure
-    // control and is contextually revealed by its Overview route…
+    // The created group is a tree row with its own name link and
+    // disclosure control, contextually revealed by its Overview
+    // route…
     expect(
-      screen.getByRole('button', {
+      screen.getByRole('link', {
         name: 'Brand New',
       }),
     ).toBeVisible()
@@ -310,7 +311,7 @@ describe('Sidebar Research Group area (parent render boundary)', () => {
       }),
     ).toBeVisible()
     expect(
-      screen.getByRole('button', { name: 'Existing Group' }),
+      screen.getByRole('link', { name: 'Existing Group' }),
     ).toBeVisible()
 
     fireEvent.click(

@@ -358,10 +358,11 @@ export async function expandResearchGroup(
 }
 
 /**
- * Opens the canonical Research Group Overview directly. The Sidebar
- * name is a disclosure control, so setup flows that need the Overview
- * resolve the accessible group id through the authenticated API instead
- * of assigning navigation behavior to that control.
+ * Opens the canonical Research Group Overview via a direct URL.
+ * The Sidebar group name is the product's navigation link to this
+ * same route (the FG specs exercise that click path); setup flows
+ * keep the direct URL as a deterministic entry and resolve the
+ * accessible group id through the authenticated API.
  */
 export async function openResearchGroupOverview(
   page: Page,

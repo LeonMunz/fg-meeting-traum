@@ -258,7 +258,7 @@ test(
     await expect(
       page
         .getByRole('group', { name: renamedName })
-        .getByRole('button', {
+        .getByRole('link', {
           name: renamedName,
           exact: true,
         }),
@@ -372,6 +372,29 @@ test(
         page,
         `E2E Settings Add Member ${Date.now()}`,
       )
+
+    // Browser path from the FG name: leave the Overview, then
+    // re-enter it through the Sidebar's group-name navigation
+    // link (the row's disclosure chevron is a separate control).
+    await page
+      .getByRole('link', { name: /My Work/ })
+      .click()
+
+    await expect(page).toHaveURL(
+      /\/my-work$/,
+    )
+
+    await page
+      .getByRole('group', { name: group.name })
+      .getByRole('link', {
+        name: group.name,
+        exact: true,
+      })
+      .click()
+
+    await expect(page).toHaveURL(
+      new RegExp(`/groups/${group.id}$`),
+    )
 
     await openOwnedGroupSettings(
       page,

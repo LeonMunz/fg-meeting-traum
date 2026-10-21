@@ -39,7 +39,7 @@ async function selectResearchGroup(
   await expect(
     page
       .getByRole('group', { name })
-      .getByRole('button', {
+      .getByRole('link', {
         name,
         exact: true,
       }),
@@ -53,8 +53,9 @@ async function openResearchGroupSettings(
   page: Page,
   name: string,
 ) {
-  // The Sidebar name controls disclosure. Open the still-canonical
-  // Overview directly, then use its admin-only Settings link.
+  // The Sidebar name links to this same canonical Overview route;
+  // the setup flow keeps the direct URL as a deterministic entry,
+  // then uses the Overview's admin-only Settings link.
   await openResearchGroupOverview(page, name)
 
   await page

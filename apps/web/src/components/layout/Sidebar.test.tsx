@@ -335,22 +335,22 @@ function rowFor(name: string) {
     .parentElement?.parentElement as HTMLElement
 }
 
-/** The group name (disclosure) button. */
+/** The group name navigation link (canonical Overview). */
 function labelFor(name: string) {
-  return screen.getByRole('button', { name })
+  return screen.getByRole('link', { name })
 }
 
 /**
- * The group names in rendered DOM order (the label buttons are the
- * only buttons carrying a bare group name).
+ * The group names in rendered DOM order (the name links are the
+ * only links carrying a bare group name).
  */
 function renderedGroupNames() {
   const navigation = screen.getByRole('navigation', {
     name: 'Research groups',
   })
 
-  return Array.from(navigation.querySelectorAll('button'))
-    .map((button) => button.textContent?.trim() ?? '')
+  return Array.from(navigation.querySelectorAll('a'))
+    .map((anchor) => anchor.textContent?.trim() ?? '')
     .filter((text) =>
       [
         'Bravo Group',
@@ -449,7 +449,10 @@ describe('Sidebar structure (frozen IA)', () => {
       const row = rowFor(name)
       const links = within(row).getAllByRole('link')
 
+      // The row container holds the group's own name link plus
+      // EXACTLY the two child rows — nothing else.
       expect(links.map((link) => link.textContent?.trim())).toEqual([
+        name,
         'Projects',
         'Meetings',
       ])
@@ -697,46 +700,63 @@ describe('Sidebar research group tree', () => {
     ).not.toBeInTheDocument()
   })
 
-  it('toggles a collapsed group via its name without navigating', async () => {
+  it('navigates to the group Overview via its name, keeping disclosure state untouched', async () => {
     renderSidebar(contextValue(), '/my-work')
     await waitForTree()
 
-    const initialLocation = screen.getByRole('status', {
-      name: 'Current location',
-    })
+    // The name is a semantic link to the group's canonical
+    // Overview, reachable even while the group is collapsed.
     const label = labelFor('Alpha Group')
-    const chevron = chevronFor('Alpha Group')
-
-    expect(label).toHaveAttribute('aria-expanded', 'false')
-    expect(label).toHaveAttribute(
-      'aria-controls',
-      chevron.getAttribute('aria-controls'),
+    expect(label).toHaveAttribute('href', '/groups/22')
+    expect(label).not.toHaveAttribute('aria-expanded')
+    expect(label).not.toHaveAttribute('aria-controls')
+    expect(chevronFor('Alpha Group')).toHaveAttribute(
+      'aria-expanded',
+      'false',
     )
 
-    fireEvent.click(labelFor('Alpha Group'))
+    // Distinct groups link to their own Overview routes.
+    expect(labelFor('Bravo Group')).toHaveAttribute(
+      'href',
+      '/groups/11',
+    )
+    expect(labelFor('Charlie Group')).toHaveAttribute(
+      'href',
+      '/groups/33',
+    )
 
-    expect(label).toHaveAttribute('aria-expanded', 'true')
-    expect(chevron).toHaveAttribute('aria-expanded', 'true')
+    fireEvent.click(label)
+
     expect(
-      within(rowFor('Alpha Group')).getByRole('link', {
-        name: 'Projects',
-      }),
-    ).toBeVisible()
-    expect(initialLocation).toHaveTextContent('/my-work')
+      screen.getByRole('status', { name: 'Current location' }),
+    ).toHaveTextContent('/groups/22')
 
-    fireEvent.click(labelFor('Alpha Group'))
+    // The name click is navigation only: back on a non-group
+    // route the group is collapsed again (no manual expansion
+    // happened)…
+    navigateTo('/my-work')
+    expect(chevronFor('Alpha Group')).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    )
 
-    expect(label).toHaveAttribute('aria-expanded', 'false')
-    expect(chevron).toHaveAttribute('aria-expanded', 'false')
+    vi.useFakeTimers()
+
+    try {
+      // …and no navigation preference is persisted.
+      await act(async () => {
+        vi.advanceTimersByTime(1000)
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+
     expect(
-      within(rowFor('Alpha Group')).queryByRole('link', {
-        name: 'Projects',
-      }),
-    ).not.toBeInTheDocument()
-    expect(initialLocation).toHaveTextContent('/my-work')
+      updateWorkspaceNavigationPreferences,
+    ).not.toHaveBeenCalled()
   })
 
-  it('lets the name and chevron immediately reverse the same contextual disclosure state', async () => {
+  it('lets the chevron immediately reverse the contextual disclosure state without navigating', async () => {
     renderSidebar(contextValue(), '/groups/22')
     await waitForTree()
 
@@ -744,33 +764,29 @@ describe('Sidebar research group tree', () => {
       name: 'Current location',
     })
 
-    expect(labelFor('Alpha Group')).toHaveAttribute(
-      'aria-expanded',
-      'true',
-    )
-
-    fireEvent.click(labelFor('Alpha Group'))
-    expect(chevronFor('Alpha Group')).toHaveAttribute(
-      'aria-expanded',
-      'false',
-    )
-
-    fireEvent.click(labelFor('Alpha Group'))
+    // Contextually revealed by the Overview route…
     expect(chevronFor('Alpha Group')).toHaveAttribute(
       'aria-expanded',
       'true',
     )
 
+    // …and the chevron alone reverses it in both directions.
     fireEvent.click(chevronFor('Alpha Group'))
-    expect(labelFor('Alpha Group')).toHaveAttribute(
+    expect(chevronFor('Alpha Group')).toHaveAttribute(
       'aria-expanded',
       'false',
     )
 
     fireEvent.click(chevronFor('Alpha Group'))
-    expect(labelFor('Alpha Group')).toHaveAttribute(
+    expect(chevronFor('Alpha Group')).toHaveAttribute(
       'aria-expanded',
       'true',
+    )
+
+    // The name link stays a pure navigation control through all
+    // of this: it carries no disclosure state.
+    expect(labelFor('Alpha Group')).not.toHaveAttribute(
+      'aria-expanded',
     )
     expect(location).toHaveTextContent('/groups/22')
   })
@@ -795,6 +811,17 @@ describe('Sidebar research group tree', () => {
     expect(
       screen.getByRole('button', { name: 'Collapse Alpha Group' }),
     ).toBeInTheDocument() // manual state still collapsed
+
+    // The Overview's settings subroute carries the same active
+    // presentation (the link's route family covers both).
+    navigateTo('/groups/22/settings')
+    expect(labelFor('Alpha Group')).toHaveAttribute(
+      'aria-current',
+      'true',
+    )
+    expect(labelFor('Bravo Group')).not.toHaveAttribute(
+      'aria-current',
+    )
   })
 
   it('does not emphasize any group name outside a group route', async () => {
@@ -928,7 +955,7 @@ describe('Sidebar research group tree', () => {
       })
 
       // Toggle 2 (supersedes the in-flight save): expand Alpha.
-      fireEvent.click(labelFor('Alpha Group'))
+      fireEvent.click(chevronFor('Alpha Group'))
       await act(async () => {
         vi.advanceTimersByTime(300)
       })
@@ -1103,7 +1130,7 @@ describe('Sidebar research group tree', () => {
         )
       })
 
-      fireEvent.click(labelFor('Alpha Group'))
+      fireEvent.click(chevronFor('Alpha Group'))
 
       expect(chevronFor('Alpha Group')).toHaveAttribute(
         'aria-expanded',
@@ -1154,7 +1181,7 @@ describe('Sidebar research group tree', () => {
     renderSidebar(contextValue(), '/groups/22')
     await waitForTree()
 
-    fireEvent.click(labelFor('Alpha Group'))
+    fireEvent.click(chevronFor('Alpha Group'))
     expect(chevronFor('Alpha Group')).toHaveAttribute(
       'aria-expanded',
       'false',
@@ -2178,8 +2205,9 @@ describe('Sidebar workspace-navigation preferences (retained contract)', () => {
     ]) {
       const links = within(rowFor(name)).getAllByRole('link')
 
-      // EXACTLY two child rows, nothing else.
+      // The name link plus EXACTLY two child rows, nothing else.
       expect(links.map((link) => link.textContent?.trim())).toEqual([
+        name,
         'Projects',
         'Meetings',
       ])
@@ -2245,7 +2273,7 @@ describe('Sidebar group creation (parent render boundary)', () => {
       }),
     ).toBeVisible()
     expect(
-      screen.getByRole('button', { name: 'Bravo Group' }),
+      screen.getByRole('link', { name: 'Bravo Group' }),
     ).toBeVisible()
   })
 

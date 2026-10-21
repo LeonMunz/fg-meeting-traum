@@ -7,24 +7,37 @@ import {
 import {
   datePartPlusDays,
   login,
-  openResearchGroupOverview,
   replaceControlValue,
 } from './helpers'
 
+/**
+ * Enters a Research Group's canonical Overview through the
+ * workspace tree. The group name is the row's navigation link,
+ * so this helper exercises the product path itself (name click →
+ * Overview) instead of assigning navigation to a direct URL.
+ */
 async function selectResearchGroup(
   page: Page,
   name: string,
 ) {
-  await openResearchGroupOverview(page, name)
+  const group = page.getByRole('group', { name })
 
-  await expect(
-    page
-      .getByRole('group', { name })
-      .getByRole('button', {
-        name,
-        exact: true,
-      }),
-  ).toHaveAttribute(
+  await expect(group).toBeVisible()
+
+  const nameLabel = group.getByRole('link', {
+    name,
+    exact: true,
+  })
+
+  await expect(nameLabel).toBeVisible()
+  await nameLabel.click()
+
+  await expect(page).toHaveURL(
+    /\/groups\/\d+$/,
+  )
+
+  // Active presentation follows the route on the name link.
+  await expect(nameLabel).toHaveAttribute(
     'aria-current',
     'true',
   )
@@ -273,9 +286,8 @@ test(
       }),
     ).toHaveCount(0)
 
-    // Enter the canonical Overview directly (the Sidebar name
-    // controls disclosure), then reach the new group's scoped
-    // list from that context.
+    // Enter the canonical Overview via the Sidebar name link,
+    // then reach the new group's scoped list from that context.
     await selectResearchGroup(
       page,
       'FG Example',
@@ -457,7 +469,7 @@ test(
     ).toHaveAttribute('aria-expanded', 'true')
     await expect(
       roboticsGroup
-        .getByRole('button', {
+        .getByRole('link', {
           name: 'Robotics Lab',
           exact: true,
         }),
