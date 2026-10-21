@@ -160,6 +160,71 @@ A first GET for a user with no preference row returns the default
 snapshot (all currently accessible Research Groups in the
 deterministic default order, nothing expanded) and creates no row.
 
+### Research Group scope resolution (frontend scope contract, implemented)
+
+Research Groups are becoming standalone workspaces. The canonical
+workspace URL structure is a product decision:
+
+| Area     | Canonical workspace URL          |
+|----------|----------------------------------|
+| Overview | `/groups/:groupId`               |
+| Projects | `/groups/:groupId/projects`      |
+| Meetings | `/groups/:groupId/meetings`      |
+| Settings | `/groups/:groupId/settings`      |
+
+Within these routes, ONLY the `:groupId` path parameter determines
+the Research Group.
+
+The global list URLs remain functional legacy entry points during
+the migration (no redirects, no removal):
+
+- `/projects?group=:groupId`
+- `/meetings?group=:groupId`
+
+**Implemented** — the frontend scope-resolution contract
+(`useResearchGroupListScope`), consumed by the group-bound list
+surfaces (Projects list, Meetings list, placeholder pages):
+
+- **Scope priority** — the first matching source is authoritative;
+  later sources never override it:
+  1. Workspace route with a `:groupId` path parameter: the path ID
+     is binding. A `?group=` query parameter on the same URL is
+     ignored and can never override the workspace context
+     (`/groups/11/meetings?group=22` scopes to Research Group 11).
+  2. Global list route with an explicit `?group=`: the query ID is
+     binding (legacy entry, behavior unchanged).
+  3. Global list route without an explicit group parameter: the
+     provider's active Research Group applies, and the URL is
+     normalized to `?group=<active id>` (existing behavior).
+- **No silent fallback.** An invalid (unparseable), unknown, or not
+  currently accessible group ID in a workspace path — or in a
+  `?group=` parameter — resolves to NO scope. The hook signals the
+  existing unavailable-group error
+  (`Research group is not available.`). No other Research Group is
+  substituted, no Projects/Meetings fetch is issued under a
+  different scope, the active provider group is never switched, no
+  navigation happens, and no `?group=` parameter is added.
+- **Provider synchronization.** When the authoritative scope is a
+  valid, accessible Research Group, the provider's active group is
+  synchronized with it (guarded so an already-active group is not
+  re-set). On missing access no activation takes place.
+- **URL preservation.** Workspace routes never gain an automatic
+  `?group=` parameter; all other query parameters (in particular
+  the Meetings `tab`) are preserved untouched. Global list routes
+  keep their existing `?group=` normalization unchanged.
+- **Authorization unchanged.** The contract is pure resolution over
+  the user's CURRENTLY ACCESSIBLE group list (the same boundary
+  `GET /api/research-groups/` lists). It grants no access and can
+  never bypass Research Group membership checks.
+
+**NOT implemented yet (later slices)** — the group-bound workspace
+Pages themselves: the route registrations
+`/groups/:groupId/projects` and `/groups/:groupId/meetings` and
+their shared workspace UI (tab bar, workspace layout). Only the
+scope-resolution contract above is implemented; the canonical
+`/groups/:groupId` Overview and `/groups/:groupId/settings` remain
+the only registered group workspace routes.
+
 ## 3. Project
 
 A Project is a protected work space inside exactly one Research Group.
