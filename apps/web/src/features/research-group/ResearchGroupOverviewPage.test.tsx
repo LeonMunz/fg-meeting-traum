@@ -283,7 +283,7 @@ describe('ResearchGroupOverviewPage', () => {
         screen.getByText(
           'Research group not found',
         ),
-      ).toHaveClass('text-error')
+      ).toHaveClass('text-overview-error')
     })
   })
 

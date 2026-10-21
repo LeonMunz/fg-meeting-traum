@@ -108,7 +108,7 @@ export function ResearchGroupOverviewPage() {
   if (loading) {
     return (
       <div className="flex min-h-[360px] items-center justify-center">
-        <span className="material-symbols-outlined animate-spin text-[22px] text-on-surface-variant">
+        <span className="material-symbols-outlined animate-spin text-[22px] text-text-muted">
           refresh
         </span>
       </div>
@@ -118,11 +118,11 @@ export function ResearchGroupOverviewPage() {
   if (!group) {
     return (
       <div className="mx-auto max-w-[1100px] px-8 py-10">
-        <h1 className="text-3xl font-semibold tracking-tight text-on-surface">
+        <h1 className="text-3xl font-semibold tracking-tight text-text">
           Research group
         </h1>
 
-        <p className="mt-2 text-sm text-error">
+        <p className="mt-2 text-sm text-overview-error">
           {error ??
             'Research group not found.'}
         </p>
@@ -133,17 +133,17 @@ export function ResearchGroupOverviewPage() {
   return (
     <div className="mx-auto max-w-[1100px] px-8 py-10">
       <header>
-        <h1 className="text-3xl font-semibold tracking-tight text-on-surface">
+        <h1 className="text-3xl font-semibold tracking-tight text-text">
           {group.name}
         </h1>
 
-        <p className="mt-1.5 text-sm text-on-surface-variant">
+        <p className="mt-1.5 text-sm text-text-muted">
           Research group overview
         </p>
       </header>
 
-      <section className="mt-8 max-w-xl border-t border-outline-variant pt-6">
-        <p className="text-sm text-on-surface-variant">
+      <section className="mt-8 max-w-xl border-t border-border-subtle pt-6">
+        <p className="text-sm text-text-muted">
           This is the overview for this research group. Open its projects and meetings from here.
         </p>
 
@@ -153,7 +153,7 @@ export function ResearchGroupOverviewPage() {
         >
           <Link
             to={`/projects?group=${groupId}`}
-            className="inline-flex h-9 items-center gap-2 rounded-lg border border-outline-variant bg-surface-container-lowest px-3.5 text-sm font-medium text-on-surface transition hover:bg-surface-container"
+            className="inline-flex h-9 items-center gap-2 rounded-lg border border-border-subtle bg-surface-quiet px-3.5 text-sm font-medium text-text transition-colors hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-canvas"
           >
             <span
               aria-hidden="true"
@@ -167,7 +167,7 @@ export function ResearchGroupOverviewPage() {
 
           <Link
             to={`/meetings?group=${groupId}`}
-            className="inline-flex h-9 items-center gap-2 rounded-lg border border-outline-variant bg-surface-container-lowest px-3.5 text-sm font-medium text-on-surface transition hover:bg-surface-container"
+            className="inline-flex h-9 items-center gap-2 rounded-lg border border-border-subtle bg-surface-quiet px-3.5 text-sm font-medium text-text transition-colors hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-canvas"
           >
             <span
               aria-hidden="true"
@@ -189,7 +189,7 @@ export function ResearchGroupOverviewPage() {
           {group.role === 'admin' && (
             <Link
               to={`/groups/${groupId}/settings`}
-              className="inline-flex h-9 items-center gap-2 rounded-lg border border-outline-variant bg-surface-container-lowest px-3.5 text-sm font-medium text-on-surface transition hover:bg-surface-container"
+              className="inline-flex h-9 items-center gap-2 rounded-lg border border-border-subtle bg-surface-quiet px-3.5 text-sm font-medium text-text transition-colors hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-canvas"
             >
               <span
                 aria-hidden="true"

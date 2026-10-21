@@ -243,6 +243,19 @@ semantic green in Dark while keeping the exact legacy Light value.
 |---|---|---|---|
 | `success-text` | `#047857` | `#3DD68C` | Semantic success text — Work Item Done status (Light = legacy `text-emerald-700`). Distinct from the `success` fill token, which is unchanged. |
 
+**Overview error text.** The Research Group Overview's not-found /
+load-failure message renders directly on the AppShell canvas. The global
+`danger` token is static across themes and reaches only 3.38:1 on the dark
+canvas (`#CE2C31` on `#18191B`) — below WCAG AA (4.5:1) for normal text —
+and no existing themeable error role clears AA in Dark (`work-item-error`
+reuses the same `#CE2C31`; `work-exception-danger` reaches only 4.49:1). A
+bounded, themeable role is therefore added for this message. The global
+`danger` token and all of its existing consumers are unchanged.
+
+| Token | Light | Dark | Purpose |
+|---|---|---|---|
+| `overview-error` | `#CE2C31` | `#FF8A80` | Overview page error text (Research Group Overview not-found / load failure), rendered on the canvas — Light = the existing `danger` rendering (5.08:1), Dark = approved bright red (7.71:1 on the `#18191B` canvas) |
+
 Note the two distinct "selected" fills: the **chip** uses a light
 secondary-container tint (`#DAE2FD`) while the **option card** composites
 `primary-fixed` at 45% over the card surface (`#F2F1FF`). They are kept as

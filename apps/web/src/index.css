@@ -220,6 +220,14 @@
    * Distinct from `link-hover`, which is the hover role for chrome text. */
   --color-prose-link: #3525cd;
 
+  /* Overview page error text (Research Group Overview: not-found and
+   * load-failure message, rendered directly on the AppShell canvas).
+   * Light preserves the existing `danger` rendering exactly; Dark needs a
+   * brighter red because the static `danger` token reaches only 3.38:1 on
+   * the dark canvas (#18191B) — below WCAG AA for normal text. The global
+   * `danger` token and its existing consumers stay untouched. */
+  --color-overview-error: #ce2c31;
+
   /* ── Inspector control bridges.
    *
    * The Work Item Inspector is migrated to the Dark token set while
@@ -459,6 +467,9 @@ html[data-theme='dark'] {
   --color-work-exception-warning: #d6a85f;
   --color-work-exception-danger: #e5484d;
   --color-prose-link: #9eb1ff;
+  /* Overview page error text — approved Dark value (see Light block):
+   * 7.7:1 on the #18191B canvas, comfortably above WCAG AA. */
+  --color-overview-error: #ff8a80;
   /* Inspector control bridges (Dark) — see Light @theme block. */
   --color-text-primary: #edeef0;
   --color-text-secondary: #afb3ba;
