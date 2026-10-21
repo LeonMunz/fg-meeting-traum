@@ -5,6 +5,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from '@testing-library/react'
 import {
   Outlet,
@@ -172,7 +173,7 @@ describe('ResearchGroupOverviewPage', () => {
     ).toHaveBeenCalledWith(11)
   })
 
-  it('keeps the existing group-scoped Projects and Meetings destinations', async () => {
+  it('renders the project-style tab bar with Overview active for non-admins', async () => {
     const router =
       createRouter('/groups/11')
 
@@ -187,22 +188,55 @@ describe('ResearchGroupOverviewPage', () => {
       { name: 'Aurora Research' },
     )
 
-    expect(
+    const tabNav =
       screen.getByRole(
-        'link',
-        { name: 'Projects' },
-      ),
-    ).toHaveAttribute(
+        'navigation',
+        { name: 'Research group sections' },
+      )
+
+    // Non-admins see exactly Overview, Projects,
+    // Meetings — in this order.
+    const tabs =
+      within(tabNav).getAllByRole('link')
+
+    expect(
+      tabs.map((tab) => tab.textContent),
+    ).toEqual([
+      'Overview',
+      'Projects',
+      'Meetings',
+    ])
+
+    const [
+      overview,
+      projects,
+      meetings,
+    ] = tabs
+
+    // Overview is the active tab of this route.
+    expect(overview).toHaveAttribute(
+      'href',
+      '/groups/11',
+    )
+    expect(overview).toHaveAttribute(
+      'aria-current',
+      'page',
+    )
+
+    // The other tabs carry no aria-current and
+    // keep their existing group-scoped routes.
+    expect(projects).not.toHaveAttribute(
+      'aria-current',
+    )
+    expect(meetings).not.toHaveAttribute(
+      'aria-current',
+    )
+
+    expect(projects).toHaveAttribute(
       'href',
       '/projects?group=11',
     )
-
-    expect(
-      screen.getByRole(
-        'link',
-        { name: 'Meetings' },
-      ),
-    ).toHaveAttribute(
+    expect(meetings).toHaveAttribute(
       'href',
       '/meetings?group=11',
     )
@@ -313,7 +347,7 @@ describe('ResearchGroupOverviewPage', () => {
     ).not.toHaveBeenCalled()
   })
 
-  it('offers the admin-only Settings destination on the Overview for admins', async () => {
+  it('offers the admin-only Settings tab on the Overview for admins', async () => {
     const router =
       createRouter('/groups/12')
 
@@ -328,31 +362,61 @@ describe('ResearchGroupOverviewPage', () => {
       { name: 'Beacon Lab' },
     )
 
-    const settings =
+    const tabNav =
       screen.getByRole(
-        'link',
-        { name: 'Settings' },
+        'navigation',
+        { name: 'Research group sections' },
       )
 
+    // Admins see all four tabs — Overview,
+    // Projects, Meetings, Settings — in this
+    // order.
+    const tabs =
+      within(tabNav).getAllByRole('link')
+
+    expect(
+      tabs.map((tab) => tab.textContent),
+    ).toEqual([
+      'Overview',
+      'Projects',
+      'Meetings',
+      'Settings',
+    ])
+
+    const [
+      overview,
+      projects,
+      meetings,
+      settings,
+    ] = tabs
+
+    expect(overview).toHaveAttribute(
+      'href',
+      '/groups/12',
+    )
+    expect(overview).toHaveAttribute(
+      'aria-current',
+      'page',
+    )
+
+    expect(projects).toHaveAttribute(
+      'href',
+      '/projects?group=12',
+    )
+    expect(meetings).toHaveAttribute(
+      'href',
+      '/meetings?group=12',
+    )
     expect(settings).toHaveAttribute(
       'href',
       '/groups/12/settings',
     )
-
-    // The group-scoped destinations remain.
-    expect(
-      screen.getByRole('link', {
-        name: 'Projects',
-      }),
-    ).toHaveAttribute('href', '/projects?group=12')
-    expect(
-      screen.getByRole('link', {
-        name: 'Meetings',
-      }),
-    ).toHaveAttribute('href', '/meetings?group=12')
+    expect(settings).not.toHaveAttribute(
+      'aria-current',
+    )
   })
 
-  it('does not offer the Settings destination on the Overview for non-admins', async () => {
+  it('does not offer the Settings tab on the Overview for non-admins', async () => {
     const router =
       createRouter('/groups/11')
 
@@ -366,6 +430,22 @@ describe('ResearchGroupOverviewPage', () => {
       'heading',
       { name: 'Aurora Research' },
     )
+
+    const tabNav =
+      screen.getByRole(
+        'navigation',
+        { name: 'Research group sections' },
+      )
+
+    expect(
+      within(tabNav)
+        .getAllByRole('link')
+        .map((tab) => tab.textContent),
+    ).toEqual([
+      'Overview',
+      'Projects',
+      'Meetings',
+    ])
 
     expect(
       screen.queryByRole(

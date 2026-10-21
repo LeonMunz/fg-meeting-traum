@@ -3,21 +3,26 @@
  * Research Group Overview theme contract (Dark + Light).
  *
  * Proves the rendered Overview — heading, subtitle, description, the
- * Projects / Meetings / Settings destination links, and the loading,
- * error, and not-found states — is bound to the semantic functional
- * tokens of `index.css` (the same vocabulary the migrated shell
- * consumes), never to the static legacy Material tokens
+ * project-style section tab bar (Overview / Projects / Meetings,
+ * Settings for admins), and the loading, error, and not-found states —
+ * is bound to the semantic functional tokens of `index.css` (the same
+ * vocabulary the migrated shell and the Project Detail section tabs
+ * consume), never to the static legacy Material tokens
  * (`on-surface`, `on-surface-variant`, `surface-container*`,
  * `outline-variant`, `error`) or to raw colors, in BOTH themes through
  * the central `data-theme` switch the Appearance feature owns.
  *
  * Division of labor (no duplication):
  *   - THIS suite pins the rendered class bindings of the Overview
- *     surfaces, the WCAG AA (4.5:1) contrast of the error message on
- *     the canvas — resolved per theme from the canonical stylesheet —
- *     and that no legacy / raw color class survives;
+ *     surfaces — including the tab bar's Project-Detail treatment
+ *     (38px bar, 28px gaps, subtle bottom border, 13px medium labels,
+ *     2px underline on the active tab, no button surface) — plus the
+ *     WCAG AA (4.5:1) contrast of the error message on the canvas
+ *     (resolved per theme from the canonical stylesheet) and that no
+ *     legacy / raw color class survives;
  *   - `ResearchGroupOverviewPage.test.tsx` pins routing, group-scoped
- *     destinations, and the admin-only Settings visibility;
+ *     destinations, tab order, and the admin-only Settings
+ *     visibility;
  *   - `e2e/token-contract.test.ts` pins the approved Light/Dark VALUES
  *     of those semantic tokens.
  *
@@ -168,26 +173,128 @@ function assertOnlyFunctionalColors(
   ).toEqual([])
 }
 
-function assertDestinationLinks(
+function exactClasses(el: Element): string[] {
+  return el.className
+    .toString()
+    .split(/\s+/)
+    .filter((value) => value.length > 0)
+}
+
+/**
+ * The tab bar must render with the Project Detail section-tab
+ * treatment (see ProjectDetailPage): a 38px-tall bar on a subtle
+ * full-width bottom border, 28px gaps, horizontally overflowing on
+ * narrow viewports, 13px medium labels, a 2px `bg-text` underline on
+ * the active tab only, muted text + hover for the inactive tabs, and
+ * the canonical visible keyboard focus. The former button surface
+ * (fill, border, hover background, icons) must be gone.
+ *
+ * `expectedLabels` pins the tab order; the FIRST tab (Overview) is
+ * the active tab on the Overview route.
+ */
+function assertProjectStyleTabBar(
   nav: HTMLElement,
+  expectedLabels: string[],
 ) {
+  const navClasses = exactClasses(nav)
+
+  for (const utility of [
+    'h-[38px]',
+    'gap-7',
+    'overflow-x-auto',
+    'items-stretch',
+    'border-b',
+    'border-border-subtle',
+  ]) {
+    expect(navClasses, `nav ${utility}`).toContain(utility)
+  }
+
   const links = Array.from(
     nav.querySelectorAll('a'),
   ) as HTMLElement[]
 
-  // Projects and Meetings are always present; Settings only for
-  // admins. The visual treatment is identical for every destination.
-  expect(links.length).toBeGreaterThanOrEqual(2)
-  expect(links.length).toBeLessThanOrEqual(3)
+  expect(
+    links.map((link) => link.textContent),
+  ).toEqual(expectedLabels)
 
-  for (const link of links) {
-    expect(hasColorClass(link, 'bg-surface-quiet')).toBe(true)
-    expect(hasColorClass(link, 'border-border-subtle')).toBe(true)
-    expect(hasColorClass(link, 'text-text')).toBe(true)
-    expect(hasColorClass(link, 'hover:bg-surface-hover')).toBe(true)
-    expect(hasColorClass(link, 'focus-visible:ring-focus')).toBe(true)
-    expect(hasColorClass(link, 'focus-visible:ring-offset-canvas')).toBe(true)
-  }
+  links.forEach((link, index) => {
+    const selected = index === 0
+    const classes = exactClasses(link)
+
+    // Project-Detail tab typography and overflow behavior.
+    for (const utility of [
+      'text-[13px]',
+      'font-medium',
+      'leading-5',
+      'shrink-0',
+      'relative',
+      'flex',
+      'items-center',
+    ]) {
+      expect(classes, `tab ${utility}`).toContain(utility)
+    }
+
+    // Visible keyboard focus in the canonical focus token.
+    for (const utility of [
+      'outline-none',
+      'focus-visible:ring-2',
+      'focus-visible:ring-focus',
+    ]) {
+      expect(classes, `tab ${utility}`).toContain(utility)
+    }
+
+    // No former button surface: no fill, no border, no hover
+    // background, no rounded pill, no icon inside the tab.
+    for (const utility of [
+      'bg-surface-quiet',
+      'border-border-subtle',
+      'hover:bg-surface-hover',
+      'rounded-lg',
+      'h-9',
+      'px-3.5',
+    ]) {
+      expect(classes, `tab !${utility}`).not.toContain(utility)
+    }
+    expect(
+      link.querySelector('.material-symbols-outlined'),
+    ).toBeNull()
+
+    if (selected) {
+      // Active tab: neutral primary text + 2px underline,
+      // marked for assistive tech via aria-current.
+      expect(classes).toContain('text-text')
+      expect(classes).not.toContain('text-text-muted')
+      expect(link).toHaveAttribute('aria-current', 'page')
+
+      const underline =
+        link.querySelector('span[aria-hidden="true"]')
+      expect(underline).not.toBeNull()
+      const underlineClasses = exactClasses(
+        underline as Element,
+      )
+      for (const utility of [
+        'absolute',
+        'inset-x-0',
+        'bottom-0',
+        'h-0.5',
+        'bg-text',
+      ]) {
+        expect(underlineClasses, `underline ${utility}`).toContain(
+          utility,
+        )
+      }
+    } else {
+      // Inactive tabs: muted text turning primary on
+      // hover, no underline, no aria-current.
+      expect(classes).toContain('text-text-muted')
+      expect(classes).toContain('hover:text-text')
+      expect(classes).not.toContain('text-text')
+      expect(
+        link.querySelector('span[aria-hidden="true"]'),
+      ).toBeNull()
+      expect(link).not.toHaveAttribute('aria-current')
+    }
+  })
 }
 
 function renderOverview(initialPath: string) {
@@ -313,15 +420,16 @@ describe('ResearchGroupOverviewPage theme contract', () => {
         hasColorClass(description, 'text-text-muted'),
       ).toBe(true)
 
-      const section =
-        description.closest('section') as HTMLElement
-      expect(section).not.toBeNull()
-      expect(
-        hasColorClass(section, 'border-border-subtle'),
-      ).toBe(true)
-
-      const nav = screen.getByRole('navigation')
-      assertDestinationLinks(nav)
+      // The description keeps its functional muted-text
+      // binding; the tab bar (not the content section) is
+      // now the divider below the header.
+      const nav = screen.getByRole('navigation', {
+        name: 'Research group sections',
+      })
+      assertProjectStyleTabBar(
+        nav,
+        ['Overview', 'Projects', 'Meetings'],
+      )
 
       assertOnlyFunctionalColors(
         container,
@@ -331,7 +439,7 @@ describe('ResearchGroupOverviewPage theme contract', () => {
   )
 
   it.each(['light', 'dark'] as Theme[])(
-    'offers all three destinations with the same treatment for admins in %s',
+    'offers all four section tabs with the same treatment for admins in %s',
     async (theme) => {
       setTheme(theme)
 
@@ -359,8 +467,18 @@ describe('ResearchGroupOverviewPage theme contract', () => {
         screen.getByRole('link', { name: 'Settings' }),
       ).toBeInTheDocument()
 
-      const nav = screen.getByRole('navigation')
-      assertDestinationLinks(nav)
+      const nav = screen.getByRole('navigation', {
+        name: 'Research group sections',
+      })
+      assertProjectStyleTabBar(
+        nav,
+        [
+          'Overview',
+          'Projects',
+          'Meetings',
+          'Settings',
+        ],
+      )
     },
   )
 
