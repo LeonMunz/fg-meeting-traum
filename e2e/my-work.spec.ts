@@ -46,8 +46,13 @@ import {
  * carrying exactly `statusCategory` + `beforeWorkItemId` (no
  * boardPosition, no status definition, no standalone
  * transition-status request, no status-changing PATCH, no Project
- * reorder), followed by exactly one authoritative
- * `GET /api/me/work-items/` refetch.
+ * reorder), followed by the mutation's authoritative
+ * `GET /api/me/work-items/` refetch — and, because the RT-05 page
+ * consumes the server's self-echo `my_work_changed` frame on its
+ * own stream, at most ONE additional authoritative refetch (the
+ * spec waits for that frame on the stream before judging the
+ * request bound, so a delayed self-echo is never missed by an
+ * early assertion).
  *
  * My Work preferences are server-persistent, so the two preference
  * scenarios (the rendering scenario and the Research Groups
@@ -128,6 +133,131 @@ async function openMyWorkFilterCategory(
     .click()
   await expect(listbox).toBeVisible()
   return listbox
+}
+
+/**
+ * RT-05 realtime observation (browser E2E): the server publishes
+ * the personal `my_work_changed` invalidation for the ACTING user
+ * in the mutation's own transaction (commit-attached delivery), so
+ * the page's own live stream receives the self-echo. The probe is
+ * observation-only: it delegates EVERY EventSource construction to
+ * the real native constructor (the returned instance is the
+ * untouched native one — the app's listeners, payload validation,
+ * and native behavior are never altered) and only counts the
+ * server's named `open` handshake frames and the `my_work_changed`
+ * frames that reach a stream targeting the canonical work-items
+ * event endpoint.
+ */
+const MY_WORK_SSE_PROBE_SCRIPT = `
+(() => {
+  if (window.__e2eMyWorkSseProbe) {
+    return;
+  }
+  const realEventSource = window.EventSource;
+  const probe = {
+    openHandshakes: 0,
+    myWorkChanged: 0,
+  };
+  window.__e2eMyWorkSseProbe = probe;
+
+  function observedEventSource(url, options) {
+    const source = new realEventSource(url, options);
+    if (!String(url).includes('/api/work-items/events/')) {
+      return source;
+    }
+    source.addEventListener('open', (event) => {
+      // Only the server's named "open" handshake frame carries the
+      // {userId} JSON payload; the native connection-open event
+      // carries no data and is not a handshake.
+      const raw =
+        event && typeof event.data === 'string' ? event.data : '';
+      if (raw === '') {
+        return;
+      }
+      try {
+        const parsed = JSON.parse(raw);
+        if (
+          parsed !== null &&
+          typeof parsed === 'object' &&
+          typeof parsed.userId === 'number'
+        ) {
+          probe.openHandshakes += 1;
+        }
+      } catch {
+        // Not a JSON handshake frame — ignored.
+      }
+    });
+    source.addEventListener('my_work_changed', () => {
+      probe.myWorkChanged += 1;
+    });
+    return source;
+  }
+
+  observedEventSource.prototype = realEventSource.prototype;
+  observedEventSource.CONNECTING = realEventSource.CONNECTING;
+  observedEventSource.OPEN = realEventSource.OPEN;
+  observedEventSource.CLOSED = realEventSource.CLOSED;
+  window.EventSource = observedEventSource;
+})();
+`
+
+interface MyWorkSseProbe {
+  openHandshakes: number
+  myWorkChanged: number
+}
+
+function installMyWorkSseProbe(page: Page): void {
+  void page.addInitScript(MY_WORK_SSE_PROBE_SCRIPT)
+}
+
+async function readMyWorkSseProbe(
+  page: Page,
+): Promise<MyWorkSseProbe> {
+  const probe = await page.evaluate(
+    () =>
+      (
+        window as unknown as {
+          __e2eMyWorkSseProbe?: MyWorkSseProbe
+        }
+      ).__e2eMyWorkSseProbe,
+  )
+  return probe ?? { openHandshakes: 0, myWorkChanged: 0 }
+}
+
+/**
+ * Wait until the page's canonical My Work reads are QUIESCENT — no
+ * read in flight AND the settled request count unchanged across a
+ * bounded quiet window (the check retries, so a request in transit
+ * during one window is caught by the next). Returns the settled
+ * count. The realtime self-echo makes a bare "exactly N requests"
+ * snapshot racy (the echo's refetch may still be in transit), so a
+ * request count is only trusted once the wire has proven it is
+ * quiet.
+ */
+async function waitForMyWorkWireQuiescence(
+  page: Page,
+  inFlight: () => number,
+  totalCount: () => number,
+): Promise<number> {
+  let settled = -1
+  await expect
+    .poll(async () => {
+      if (inFlight() > 0) {
+        return -1
+      }
+      const snapshot = totalCount()
+      await page.waitForTimeout(250)
+      const after = totalCount()
+      if (after !== snapshot) {
+        return -1
+      }
+      settled = after
+      return after
+    }, {
+      timeout: 15_000,
+    })
+    .toBeGreaterThanOrEqual(0)
+  return settled
 }
 
 test('My Work lists assigned Work Items across Projects and Research Groups', async ({ page }, testInfo) => {
@@ -634,6 +764,10 @@ test('opening a My Work card does not navigate to the Project Work Items board',
 // GET /api/me/work-items/ refresh that removes the card — while
 // the two seeded items and the /my-work URL stay untouched.
 test('My Work card action menu deletes the assigned Work Item without opening the drawer', async ({ page }) => {
+  // RT-05 self-echo probe: must see every navigation of this page
+  // (installed before login / goto).
+  installMyWorkSseProbe(page)
+
   const title = 'E2E My Work Deletion Task'
   const projectName = 'E2E My Work Deletion Project'
 
@@ -645,6 +779,9 @@ test('My Work card action menu deletes the assigned Work Item without opening th
     kind: 'delete' | 'my-work-fetch'
     url: string
   }> = []
+  // Canonical personal reads currently in flight (request seen,
+  // response not yet settled) — the quiescence barrier's input.
+  let myWorkGetsInFlight = 0
   page.on('request', (request) => {
     const url = request.url()
     const pathname = new URL(url).pathname
@@ -659,6 +796,18 @@ test('My Work card action menu deletes the assigned Work Item without opening th
       pathname === '/api/me/work-items/'
     ) {
       wireEvents.push({ kind: 'my-work-fetch', url })
+      myWorkGetsInFlight += 1
+    }
+  })
+
+  page.on('response', (response) => {
+    const url = response.url()
+    const pathname = new URL(url).pathname
+    if (
+      response.request().method() === 'GET' &&
+      pathname === '/api/me/work-items/'
+    ) {
+      myWorkGetsInFlight -= 1
     }
   })
 
@@ -828,8 +977,17 @@ test('My Work card action menu deletes the assigned Work Item without opening th
   await expect(inspectorRegion).not.toBeVisible()
 
   // 5. Reopen + confirm: exactly ONE DELETE to the canonical
-  //    endpoint of THIS item, followed by exactly one
-  //    authoritative My Work refetch.
+  //    endpoint of THIS item, followed by the delete's own
+  //    authoritative My Work refetch (and — the RT-05 self-echo —
+  //    exactly one further refetch; proven below).
+  //
+  // The self-echo frame counter before the confirmed delete (the
+  // setup's work-item create published its invalidation before
+  // this page's stream existed, so this is the mutation's own
+  // baseline).
+  const echoFramesBeforeConfirm =
+    (await readMyWorkSseProbe(page)).myWorkChanged
+
   await trigger.click()
   await expect(deleteMenuItem).toBeVisible()
   await expect(inspectorRegion).not.toBeVisible()
@@ -844,10 +1002,12 @@ test('My Work card action menu deletes the assigned Work Item without opening th
   await expect(myWorkCard).toHaveCount(0)
   await expect(page.getByText(title, { exact: true })).toHaveCount(0)
 
-  // …because the refetched payload decided it: exactly one
-  // DELETE to this item's canonical endpoint, and the log ends
-  // with that DELETE immediately followed by the one refetch
-  // (nothing may follow a confirmed delete).
+  // …because the refetched payload decided it: exactly one DELETE
+  // to this item's canonical endpoint, an authoritative read
+  // following the DELETE directly — and, because the RT-05 page
+  // consumes the server's self-echo my_work_changed frame on its
+  // own stream, exactly ONE further authoritative refetch after
+  // that (nothing else may follow a confirmed delete).
   await expect
     .poll(() =>
       wireEvents.filter((event) => event.kind === 'delete'),
@@ -864,11 +1024,73 @@ test('My Work card action menu deletes the assigned Work Item without opening th
   expect(deleteEvent.url).toBe(
     `http://127.0.0.1:4173/api/work-items/${workItemId}/`,
   )
+
+  // Ordering: an authoritative My Work read follows the DELETE
+  // directly (no other ledgered kind may intervene).
+  const deleteIndex = wireEvents.indexOf(deleteEvent)
   await expect
-    .poll(() =>
-      wireEvents.slice(-2).map((event) => event.kind),
-    )
-    .toEqual(['delete', 'my-work-fetch'])
+    .poll(() => wireEvents[deleteIndex + 1]?.kind)
+    .toBe('my-work-fetch')
+
+  // Realtime self-echo barrier: the server publishes one personal
+  // my_work_changed per persisted former assignee in the delete's
+  // own transaction (commit-attached delivery) — the deleted item
+  // was self-assigned to the acting user, so the page's own live
+  // stream receives the self-echo. The RT-05 page honors that
+  // frame with exactly ONE authoritative SILENT refetch, no matter
+  // when the frame lands relative to the delete's own revalidation
+  // (the delete flow has no coalescing shortcut). The frame's
+  // delivery is independent of the DELETE response, so wait for it
+  // ON THE STREAM before judging the request bound — a delayed
+  // self-echo must not be missed by an early snapshot.
+  await expect
+    .poll(async () =>
+      (await readMyWorkSseProbe(page)).myWorkChanged)
+    .toBeGreaterThan(echoFramesBeforeConfirm)
+
+  // Boundedness: once the wire is quiet, the ledger tail from the
+  // DELETE is EXACTLY the delete plus the two authoritative reads
+  // (the delete's own revalidation + the one self-echo refetch). A
+  // third read would mean an unbounded refetch loop.
+  await waitForMyWorkWireQuiescence(
+    page,
+    () => myWorkGetsInFlight,
+    () =>
+      wireEvents.filter(
+        (event) => event.kind === 'my-work-fetch',
+      ).length,
+  )
+  expect(
+    wireEvents.slice(deleteIndex).map((event) => event.kind),
+  ).toEqual([
+    'delete',
+    'my-work-fetch',
+    'my-work-fetch',
+  ])
+
+  // Persistence: the deletion is committed server-side — the
+  // canonical payload no longer carries the item, and the two
+  // seeded items remain (read through the browser's own session
+  // via the API request context — not page traffic, so the wire
+  // ledger above is untouched).
+  const readbackResponse = await page.request.get(
+    '/api/me/work-items/',
+  )
+  expect(readbackResponse.ok()).toBe(true)
+  const readback = (await readbackResponse.json()) as Array<{
+    id: number
+    title: string
+  }>
+  expect(
+    readback.find((item) => item.id === workItemId),
+    'The deleted Work Item must be gone from the canonical server payload.',
+  ).toBeUndefined()
+  expect(
+    readback.some((item) => item.title === 'First Draft Complete'),
+  ).toBe(true)
+  expect(
+    readback.some((item) => item.title === 'E2E Analyze robot data'),
+  ).toBe(true)
 
   // 7. The URL never left /my-work…
   await expect(page).toHaveURL(/\/my-work$/)
@@ -1910,6 +2132,10 @@ test('My Work Work Item Types multiselect filters, persists, restores, and combi
 })
 
 test('My Work Kanban drag: cross-category drop mutates the canonical status from statusTargets and refetches My Work', async ({ page }, testInfo) => {
+  // RT-05 self-echo probe: must see every navigation of this page
+  // (installed before login / goto).
+  installMyWorkSseProbe(page)
+
   // Capture the wire contract: exactly one canonical My Work board
   // move (POST /api/me/work-items/{id}/reorder/ carrying exactly
   // statusCategory + beforeWorkItemId — no boardPosition, no status
@@ -1947,6 +2173,9 @@ test('My Work Kanban drag: cross-category drop mutates the canonical status from
   }
 
   let myWorkPayload: PersonalWorkItem[] = []
+  // Canonical personal reads currently in flight (request seen,
+  // response not yet settled) — the quiescence barrier's input.
+  let myWorkGetsInFlight = 0
 
   page.on('request', (request) => {
     const url = request.url()
@@ -1961,6 +2190,7 @@ test('My Work Kanban drag: cross-category drop mutates the canonical status from
       url.includes('/api/me/work-items/')
     ) {
       myWorkRequestUrls.push(url)
+      myWorkGetsInFlight += 1
     }
 
     if (url.includes('/work-item-configuration/')) {
@@ -2023,6 +2253,7 @@ test('My Work Kanban drag: cross-category drop mutates the canonical status from
       ) &&
       response.request().method() === 'GET'
     ) {
+      myWorkGetsInFlight -= 1
       void response
         .json()
         .then((payload) => {
@@ -2087,6 +2318,24 @@ test('My Work Kanban drag: cross-category drop mutates the canonical status from
     )
   }
 
+  // Deterministic startup baseline: the SSE `open` handshake
+  // (RC-5) revalidates on connect and can still be in flight when
+  // the first content renders (StrictMode double-mount + the
+  // handshake make the ABSOLUTE startup count timing-dependent).
+  // Wait for the handshake frame on the stream AND for the
+  // revalidation it triggered to settle — only then does the
+  // baseline include ALL startup traffic, so the post-mutation
+  // bound below is deterministic.
+  await expect
+    .poll(async () =>
+      (await readMyWorkSseProbe(page)).openHandshakes)
+    .toBeGreaterThanOrEqual(1)
+  await waitForMyWorkWireQuiescence(
+    page,
+    () => myWorkGetsInFlight,
+    () => myWorkRequestUrls.length,
+  )
+
   const myWorkRequestsAfterLoad =
     myWorkRequestUrls.length
   expect(myWorkRequestsAfterLoad).toBeGreaterThanOrEqual(
@@ -2116,6 +2365,12 @@ test('My Work Kanban drag: cross-category drop mutates the canonical status from
       'Card or target column bounding box not found.',
     )
   }
+
+  // The self-echo frame counter before the drag (the stream is
+  // live and quiescent behind the barrier above — this is the
+  // mutation's own baseline).
+  const echoFramesBeforeDrag =
+    (await readMyWorkSseProbe(page)).myWorkChanged
 
   await page.mouse.move(
     cardBox.x + cardBox.width / 2,
@@ -2217,9 +2472,39 @@ test('My Work Kanban drag: cross-category drop mutates the canonical status from
     )?.statusName,
   ).toBe(target.statusName)
 
-  // Exactly one refetch: the mutation's authoritative read.
-  expect(myWorkRequestUrls.length).toBe(
+  // Realtime self-echo barrier: the server publishes exactly one
+  // personal my_work_changed for the ACTING user in the move's own
+  // transaction (commit-attached delivery; identical nested
+  // publications are coalesced), and the page's own live stream
+  // receives it as a self-echo. The RT-05 page honors that frame
+  // with one authoritative SILENT refetch: a frame delivered while
+  // the move's revalidation is still in flight is coalesced into
+  // it (one fetch total); a frame delivered after the revalidation
+  // settled costs exactly ONE additional refetch (two fetches
+  // total) — never more (the held flag is consumed by the flush).
+  // The frame's delivery is independent of the mutation response,
+  // so wait for it ON THE STREAM before judging the request bound
+  // — a delayed self-echo must not be missed by an early snapshot.
+  await expect
+    .poll(async () =>
+      (await readMyWorkSseProbe(page)).myWorkChanged)
+    .toBeGreaterThan(echoFramesBeforeDrag)
+
+  // All canonical reads (including any self-echo refetch) settled.
+  const settledAfterMove = await waitForMyWorkWireQuiescence(
+    page,
+    () => myWorkGetsInFlight,
+    () => myWorkRequestUrls.length,
+  )
+
+  // The mutation's own authoritative read happened ...
+  expect(settledAfterMove).toBeGreaterThanOrEqual(
     myWorkRequestsAfterLoad + 1,
+  )
+  // ... and the self-echo added AT MOST one more (boundedness —
+  // no unbounded refetch loop).
+  expect(settledAfterMove).toBeLessThanOrEqual(
+    myWorkRequestsAfterLoad + 2,
   )
   expect(projectConfigRequestUrls).toEqual([])
 
@@ -2254,16 +2539,19 @@ test('My Work Kanban drag: cross-category drop mutates the canonical status from
   )
   await page.mouse.up()
 
-  // Bounded quiet window: nothing should have happened at all.
+  // Bounded quiet window: nothing should have happened at all —
+  // the no-op placement sends nothing (the client's isNoOp
+  // short-circuit; the server publishes nothing for a genuine
+  // no-op move) and the FIRST move's self-echo was already drained
+  // by the barrier above, so `settledAfterMove` is the complete
+  // wire state to compare against.
   await page.waitForTimeout(300)
 
   expect(myWorkReorderRequests).toHaveLength(1)
   expect(transitionRequests).toEqual([])
   expect(statusPatchRequests).toEqual([])
   expect(reorderRequests).toEqual([])
-  expect(myWorkRequestUrls.length).toBe(
-    myWorkRequestsAfterLoad + 1,
-  )
+  expect(myWorkRequestUrls.length).toBe(settledAfterMove)
   await expect(movedCard).toBeVisible()
 
   // The no-op drag also never opens the drawer.

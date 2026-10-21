@@ -111,6 +111,35 @@ async function createImportTemplate(
   }
 }
 
+/**
+ * Font-ready barrier for the 390px geometry measurement.
+ *
+ * The header icon spans use the Material Symbols Outlined
+ * ligature font loaded from the Google Fonts CDN with
+ * swap behavior: until the woff2 arrives, the literal
+ * keywords ("download", "upload", ...) render as ordinary
+ * text and are far wider than the final 1em glyphs, so any
+ * geometry measured in that window is not the product
+ * geometry. Requests the face for the exact icon keywords
+ * used by this page's header, awaits the Font Loading API
+ * ready state, and reports whether a face for the family
+ * is verifiably present and loaded.
+ */
+const materialSymbolsFontReady = () =>
+  document.fonts
+    .load(
+      '18px "Material Symbols Outlined"',
+      'arrow_back download refresh upload',
+    )
+    .then(() => document.fonts.ready)
+    .then(() =>
+      Array.from(document.fonts).some(
+        (face) =>
+          face.family === 'Material Symbols Outlined' &&
+          face.status === 'loaded',
+      ),
+    )
+
 test(
   'Meeting Template agenda JSON import replaces the complete agenda only after confirmation',
   async ({ page }) => {
@@ -459,6 +488,25 @@ test(
     await expect
       .poll(() => page.evaluate(() => window.innerWidth))
       .toBe(390)
+    // Font-ready barrier: the header icon spans use the
+    // Material Symbols Outlined ligature font (Google
+    // Fonts CDN, swap behavior). Until the woff2 arrives,
+    // the literal keywords ("download", "upload", ...)
+    // render as ordinary text and are far wider than the
+    // final 1em glyphs, so any geometry measured in that
+    // window is not the product geometry. Poll the Font
+    // Loading API until a face for the family is
+    // verifiably loaded (polling, never a sleep); a
+    // failed or stalled CDN load fails the test with this
+    // named error instead of a bogus overflow reading.
+    await expect
+      .poll(() => page.evaluate(materialSymbolsFontReady), {
+        message:
+          'Material Symbols Outlined must be fully ' +
+          'loaded before the 390px layout measurement ' +
+          '(Google Fonts CDN load failed or stalled)',
+      })
+      .toBe(true)
 
     const actionGroup = page
       .locator('div.ml-auto')
