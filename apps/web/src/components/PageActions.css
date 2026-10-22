@@ -1,0 +1,31 @@
+/*
+ * Primary page header actions — the Projects "New project" button
+ * and the Meetings "Meeting Templates" / "New meeting" buttons.
+ * The same cascade trap as the Upcoming row actions
+ * (features/meetings/UpcomingMeetings.css) and the Live Meeting
+ * actions (features/meetings/MeetingDetailPage.css):
+ *
+ * 1. The form-control reset's unlayered `font: inherit` beats the
+ *    layered `.fg-type-control` role, so the buttons render at the
+ *    inherited 16px / 400 instead of the `control` role's
+ *    13px / 18px / 500.
+ * 2. Google Fonts' unlayered 24px `.material-symbols-outlined`
+ *    default beats the utilities-layer `text-[18px]`, so the icons
+ *    render at 24px instead of 18px.
+ *
+ * The correction is opt-in and limited to elements carrying these
+ * classes. The button class (0,1,0) outranks the element-level
+ * `font: inherit` reset; the two-class icon selector keeps (0,2,0)
+ * specificity above the external single-class rule (0,1,0) —
+ * regardless of stylesheet order or load order.
+ */
+.fg-page-action {
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 500;
+}
+
+.fg-page-action-icon.material-symbols-outlined {
+  font-size: 18px;
+  line-height: 1;
+}

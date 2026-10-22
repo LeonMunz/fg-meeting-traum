@@ -17,6 +17,7 @@ import type {
   ApiProjectStatus,
 } from '../../api/types'
 import { WorkspaceContent } from '../../components/layout/WorkspaceContent'
+import '../../components/PageActions.css'
 import { useResearchGroupListScope } from '../research-group/useResearchGroupListScope'
 import {
   CreateProjectDialog,
@@ -328,9 +329,9 @@ export function ProjectListPage({
       type="button"
       disabled={!hasResearchGroup || isLoading}
       onClick={() => setCreateDialogOpen(true)}
-      className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-lg bg-action px-4 fg-type-control text-text-inverse shadow-sm transition hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-45"
+      className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-lg bg-action px-4 fg-type-control fg-page-action text-text-inverse shadow-sm transition hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-45"
     >
-      <span className="material-symbols-outlined text-[18px]">
+      <span className="fg-page-action-icon material-symbols-outlined text-[18px]">
         add
       </span>
       New project

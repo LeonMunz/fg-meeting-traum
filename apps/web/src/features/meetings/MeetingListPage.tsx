@@ -33,6 +33,7 @@ import type {
   ApiUpdateMeetingInput,
 } from '../../api/types'
 import { WorkspaceContent } from '../../components/layout/WorkspaceContent'
+import '../../components/PageActions.css'
 import { useResearchGroupListScope } from '../research-group/useResearchGroupListScope'
 import {
   CreateMeetingDialog,
@@ -1141,9 +1142,9 @@ export function MeetingListPage({
       <button
         type="button"
         onClick={() => navigate('/meetings/series')}
-        className="inline-flex h-9 items-center gap-2 rounded-lg border border-border-subtle bg-surface px-3.5 fg-type-control text-text transition hover:bg-surface-hover"
+        className="inline-flex h-9 items-center gap-2 rounded-lg border border-border-subtle bg-surface px-3.5 fg-type-control fg-page-action text-text transition hover:bg-surface-hover"
       >
-        <span className="material-symbols-outlined text-[18px]">
+        <span className="fg-page-action-icon material-symbols-outlined text-[18px]">
           event_repeat
         </span>
         Meeting Templates
@@ -1153,11 +1154,11 @@ export function MeetingListPage({
         type="button"
         disabled={groupUnavailable || listLoading}
         onClick={openCreateDialog}
-        className="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg bg-accent px-3.5 fg-type-control text-text-inverse shadow-sm transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-45"
+        className="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg bg-accent px-3.5 fg-type-control fg-page-action text-text-inverse shadow-sm transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-45"
       >
         <span
           aria-hidden="true"
-          className="material-symbols-outlined text-[18px]"
+          className="fg-page-action-icon material-symbols-outlined text-[18px]"
         >
           add
         </span>
