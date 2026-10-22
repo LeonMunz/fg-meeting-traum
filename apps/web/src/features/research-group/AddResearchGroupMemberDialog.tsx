@@ -278,7 +278,7 @@ export function AddResearchGroupMemberDialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-on-surface/25 px-4 py-8 backdrop-blur-[2px]"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-overlay-scrim px-4 py-8 backdrop-blur-[2px]"
       onMouseDown={(event) => {
         if (
           event.target ===
@@ -292,18 +292,18 @@ export function AddResearchGroupMemberDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="add-research-group-member-title"
-        className="w-full max-w-lg overflow-hidden rounded-2xl border border-outline-variant bg-surface-container-lowest shadow-xl"
+        className="w-full max-w-lg overflow-hidden rounded-2xl border border-border-structural bg-surface shadow-xl"
       >
-        <header className="flex items-start justify-between border-b border-outline-variant px-6 py-5">
+        <header className="flex items-start justify-between border-b border-border-structural px-6 py-5">
           <div>
             <h2
               id="add-research-group-member-title"
-              className="text-lg font-semibold tracking-tight text-on-surface"
+              className="text-lg font-semibold tracking-tight text-text"
             >
               Add member
             </h2>
 
-            <p className="mt-1 text-sm text-on-surface-variant">
+            <p className="mt-1 text-sm text-text-muted">
               Add an existing user to this research group.
             </p>
           </div>
@@ -312,7 +312,7 @@ export function AddResearchGroupMemberDialog({
             type="button"
             onClick={onClose}
             aria-label="Close dialog"
-            className="flex h-8 w-8 items-center justify-center rounded-lg text-on-surface-variant transition hover:bg-surface-container-high hover:text-on-surface"
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-text-muted transition hover:bg-surface-hover hover:text-text"
           >
             <span className="material-symbols-outlined text-[20px]">
               close
@@ -324,13 +324,13 @@ export function AddResearchGroupMemberDialog({
           <div>
             <label
               htmlFor="research-group-member-search"
-              className="block text-sm font-medium text-on-surface"
+              className="block text-sm font-medium text-text"
             >
               Search person
             </label>
 
             <div className="relative mt-2">
-              <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[18px] text-on-surface-variant">
+              <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[18px] text-text-muted">
                 search
               </span>
 
@@ -345,24 +345,24 @@ export function AddResearchGroupMemberDialog({
                   )
                 }
                 placeholder="Name or username"
-                className="h-10 w-full rounded-lg border border-outline-variant bg-surface-container-lowest pl-10 pr-3 text-sm text-on-surface outline-none transition placeholder:text-on-surface-variant/60 focus:border-primary focus:ring-2 focus:ring-primary/15"
+                className="h-10 w-full rounded-lg border border-border-field bg-surface pl-10 pr-3 text-sm text-text outline-none transition placeholder:text-text-muted/60 focus:border-focus focus:ring-2 focus:ring-focus/15"
               />
             </div>
 
-            <div className="mt-2 min-h-20 overflow-hidden rounded-xl border border-outline-variant">
+            <div className="mt-2 min-h-20 overflow-hidden rounded-xl border border-border-subtle">
               {query.trim().length < 2 ? (
-                <div className="px-4 py-5 text-sm text-on-surface-variant">
+                <div className="px-4 py-5 text-sm text-text-muted">
                   Enter at least 2 characters.
                 </div>
               ) : searching ? (
-                <div className="flex items-center gap-2 px-4 py-5 text-sm text-on-surface-variant">
+                <div className="flex items-center gap-2 px-4 py-5 text-sm text-text-muted">
                   <span className="material-symbols-outlined animate-spin text-[18px]">
                     refresh
                   </span>
                   Searching…
                 </div>
               ) : candidates.length > 0 ? (
-                <div className="divide-y divide-outline-variant">
+                <div className="divide-y divide-border-subtle">
                   {candidates.map(
                     (candidate) => {
                       const selected =
@@ -383,24 +383,24 @@ export function AddResearchGroupMemberDialog({
                           className={[
                             'flex w-full items-center gap-3 px-4 py-3 text-left transition',
                             selected
-                              ? 'bg-primary-fixed/55'
-                              : 'hover:bg-surface-container-low',
+                              ? 'bg-option-selected-bg'
+                              : 'hover:bg-surface-hover',
                           ].join(' ')}
                         >
-                          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-surface-container-high text-[11px] font-semibold text-on-surface">
+                          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-surface-muted text-[11px] font-semibold text-text">
                             {getInitials(
                               candidate,
                             )}
                           </div>
 
                           <div className="min-w-0 flex-1">
-                            <div className="truncate text-sm font-medium text-on-surface">
+                            <div className="truncate text-sm font-medium text-text">
                               {getCandidateName(
                                 candidate,
                               )}
                             </div>
 
-                            <div className="truncate text-xs text-on-surface-variant">
+                            <div className="truncate text-xs text-text-muted">
                               @
                               {
                                 candidate.username
@@ -409,7 +409,7 @@ export function AddResearchGroupMemberDialog({
                           </div>
 
                           {selected && (
-                            <span className="material-symbols-outlined text-[19px] text-primary">
+                            <span className="material-symbols-outlined text-[19px] text-action">
                               check_circle
                             </span>
                           )}
@@ -419,7 +419,7 @@ export function AddResearchGroupMemberDialog({
                   )}
                 </div>
               ) : (
-                <div className="px-4 py-5 text-sm text-on-surface-variant">
+                <div className="px-4 py-5 text-sm text-text-muted">
                   No matching people found.
                 </div>
               )}
@@ -427,7 +427,7 @@ export function AddResearchGroupMemberDialog({
           </div>
 
           <fieldset>
-            <legend className="text-sm font-medium text-on-surface">
+            <legend className="text-sm font-medium text-text">
               Role
             </legend>
 
@@ -453,8 +453,8 @@ export function AddResearchGroupMemberDialog({
                     className={[
                       'flex cursor-pointer items-center gap-3 rounded-xl border px-4 py-3 transition',
                       role === value
-                        ? 'border-primary bg-primary-fixed/35'
-                        : 'border-outline-variant hover:bg-surface-container-low',
+                        ? 'border-border-field bg-option-selected-bg'
+                        : 'border-border-field hover:bg-surface-hover',
                     ].join(' ')}
                   >
                     <input
@@ -467,9 +467,10 @@ export function AddResearchGroupMemberDialog({
                       onChange={() =>
                         setRole(value)
                       }
+                      className="accent-control-accent"
                     />
 
-                    <span className="text-sm font-medium text-on-surface">
+                    <span className="text-sm font-medium text-text">
                       {label}
                     </span>
                   </label>
@@ -481,18 +482,18 @@ export function AddResearchGroupMemberDialog({
           {error && (
             <div
               role="alert"
-              className="rounded-lg bg-error-container px-4 py-3 text-sm text-error"
+              className="rounded-lg border border-danger/20 bg-danger/5 px-4 py-3 text-sm text-overview-error"
             >
               {error}
             </div>
           )}
         </div>
 
-        <footer className="flex justify-end gap-3 border-t border-outline-variant bg-surface-container-low/45 px-6 py-4">
+        <footer className="flex justify-end gap-3 border-t border-border-structural bg-surface-footer px-6 py-4">
           <button
             type="button"
             onClick={onClose}
-            className="h-9 rounded-lg px-4 text-sm font-medium text-on-surface-variant transition hover:bg-surface-container-high hover:text-on-surface"
+            className="h-9 rounded-lg px-4 text-sm font-medium text-text-muted transition hover:bg-surface-hover hover:text-text"
           >
             Cancel
           </button>
@@ -506,7 +507,7 @@ export function AddResearchGroupMemberDialog({
             onClick={() =>
               void handleSubmit()
             }
-            className="inline-flex h-9 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-white transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-45"
+            className="inline-flex h-9 items-center gap-2 rounded-lg bg-action px-4 text-sm font-semibold text-text-inverse transition hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-45"
           >
             <span
               aria-hidden="true"

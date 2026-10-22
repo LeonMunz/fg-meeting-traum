@@ -461,7 +461,7 @@ export function RemoveResearchGroupMemberDialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-on-surface/25 px-4 py-8 backdrop-blur-[2px]"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-overlay-scrim px-4 py-8 backdrop-blur-[2px]"
       onMouseDown={(event) => {
         if (
           event.target ===
@@ -477,20 +477,20 @@ export function RemoveResearchGroupMemberDialog({
         aria-modal="true"
         aria-labelledby="remove-research-group-member-title"
         aria-describedby="remove-research-group-member-description"
-        className="flex max-h-[calc(100vh-4rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-outline-variant bg-surface-container-lowest shadow-xl"
+        className="flex max-h-[calc(100vh-4rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-border-structural bg-surface shadow-xl"
       >
-        <header className="flex items-start justify-between border-b border-outline-variant px-6 py-5">
+        <header className="flex items-start justify-between border-b border-border-structural px-6 py-5">
           <div>
             <h2
               id="remove-research-group-member-title"
-              className="text-lg font-semibold tracking-tight text-on-surface"
+              className="text-lg font-semibold tracking-tight text-text"
             >
               Remove member
             </h2>
 
             <p
               id="remove-research-group-member-description"
-              className="mt-1 text-sm text-on-surface-variant"
+              className="mt-1 text-sm text-text-muted"
             >
               Remove {memberName} from this
               research group.
@@ -502,7 +502,7 @@ export function RemoveResearchGroupMemberDialog({
             aria-label="Close dialog"
             disabled={submitting}
             onClick={onClose}
-            className="flex h-8 w-8 items-center justify-center rounded-lg text-on-surface-variant transition hover:bg-surface-container-high hover:text-on-surface disabled:opacity-45"
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-text-muted transition hover:bg-surface-hover hover:text-text disabled:opacity-45"
           >
             <span className="material-symbols-outlined text-[20px]">
               close
@@ -512,7 +512,7 @@ export function RemoveResearchGroupMemberDialog({
 
         <div className="overflow-y-auto px-6 py-6">
           {loading ? (
-            <div className="flex items-center gap-2 py-8 text-sm text-on-surface-variant">
+            <div className="flex items-center gap-2 py-8 text-sm text-text-muted">
               <span className="material-symbols-outlined animate-spin text-[19px]">
                 refresh
               </span>
@@ -523,13 +523,13 @@ export function RemoveResearchGroupMemberDialog({
               {preview.finalResearchGroupAdmin ? (
                 <div
                   role="alert"
-                  className="rounded-xl border border-error/25 bg-error/5 px-4 py-4"
+                  className="rounded-xl border border-danger/25 bg-danger/5 px-4 py-4"
                 >
-                  <div className="text-sm font-semibold text-on-surface">
+                  <div className="text-sm font-semibold text-text">
                     Another admin is required
                   </div>
 
-                  <p className="mt-1 text-sm text-on-surface-variant">
+                  <p className="mt-1 text-sm text-text-muted">
                     {memberName} is the final
                     research group admin. Make
                     another member an admin before
@@ -538,8 +538,8 @@ export function RemoveResearchGroupMemberDialog({
                 </div>
               ) : (
                 <>
-                  <div className="rounded-xl border border-outline-variant bg-surface-container-low px-4 py-4">
-                    <div className="text-sm font-medium text-on-surface">
+                  <div className="rounded-xl border border-border-subtle bg-surface-subtle px-4 py-4">
+                    <div className="text-sm font-medium text-text">
                       {preview.projects.length ===
                       0
                         ? 'No project responsibilities'
@@ -551,7 +551,7 @@ export function RemoveResearchGroupMemberDialog({
                           } will be removed.`}
                     </div>
 
-                    <p className="mt-1 text-sm text-on-surface-variant">
+                    <p className="mt-1 text-sm text-text-muted">
                       Historical authorship and
                       activity are preserved.
                     </p>
@@ -560,12 +560,12 @@ export function RemoveResearchGroupMemberDialog({
                   {projectsNeedingAttention.length >
                     0 && (
                     <div>
-                      <h3 className="text-sm font-semibold text-on-surface">
+                      <h3 className="text-sm font-semibold text-text">
                         Resolve current
                         responsibilities
                       </h3>
 
-                      <p className="mt-1 text-sm text-on-surface-variant">
+                      <p className="mt-1 text-sm text-text-muted">
                         Only projects that need a
                         decision are shown below.
                       </p>
@@ -588,15 +588,15 @@ export function RemoveResearchGroupMemberDialog({
                           key={
                             project.projectId
                           }
-                          className="rounded-xl border border-outline-variant px-4 py-4"
+                          className="rounded-xl border border-border-subtle px-4 py-4"
                         >
                           <div className="flex flex-wrap items-center gap-2">
-                            <h4 className="text-sm font-semibold text-on-surface">
+                            <h4 className="text-sm font-semibold text-text">
                               {project.name}
                             </h4>
 
                             {project.archivedAt && (
-                              <span className="rounded-full bg-surface-container-high px-2 py-0.5 text-[11px] font-medium text-on-surface-variant">
+                              <span className="rounded-full bg-surface-muted px-2 py-0.5 text-[11px] font-medium text-text-muted">
                                 Archived
                               </span>
                             )}
@@ -605,11 +605,11 @@ export function RemoveResearchGroupMemberDialog({
                           {project.assignmentCount >
                             0 && (
                             <fieldset className="mt-4">
-                              <legend className="text-sm font-medium text-on-surface">
+                              <legend className="text-sm font-medium text-text">
                                 Assigned work
                               </legend>
 
-                              <p className="mt-1 text-xs text-on-surface-variant">
+                              <p className="mt-1 text-xs text-text-muted">
                                 {
                                   project.assignmentCount
                                 }{' '}
@@ -643,11 +643,11 @@ export function RemoveResearchGroupMemberDialog({
                                           },
                                         )
                                       }
-                                      className="mt-0.5"
+                                      className="mt-0.5 accent-control-accent"
                                     />
 
                                     <span className="min-w-0 flex-1">
-                                      <span className="block text-sm font-medium text-on-surface">
+                                      <span className="block text-sm font-medium text-text">
                                         Transfer
                                         assignments
                                       </span>
@@ -672,7 +672,7 @@ export function RemoveResearchGroupMemberDialog({
                                               },
                                             )
                                           }
-                                          className="mt-2 h-10 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none focus:border-primary"
+                                          className="mt-2 h-10 w-full rounded-lg border border-border-field bg-surface px-3 text-sm text-text outline-none focus:border-focus focus:ring-2 focus:ring-focus/15"
                                         >
                                           <option value="">
                                             Select
@@ -722,15 +722,15 @@ export function RemoveResearchGroupMemberDialog({
                                         },
                                       )
                                     }
-                                    className="mt-0.5"
+                                    className="mt-0.5 accent-control-accent"
                                   />
 
                                   <span>
-                                    <span className="block text-sm font-medium text-on-surface">
+                                    <span className="block text-sm font-medium text-text">
                                       Leave work
                                       unassigned
                                     </span>
-                                    <span className="mt-0.5 block text-xs text-on-surface-variant">
+                                    <span className="mt-0.5 block text-xs text-text-muted">
                                       Other
                                       assignees stay
                                       unchanged.
@@ -747,16 +747,16 @@ export function RemoveResearchGroupMemberDialog({
                               className={
                                 project.assignmentCount >
                                 0
-                                  ? 'mt-5 border-t border-outline-variant pt-5'
+                                  ? 'mt-5 border-t border-border-subtle pt-5'
                                   : 'mt-4'
                               }
                             >
-                              <legend className="text-sm font-medium text-on-surface">
+                              <legend className="text-sm font-medium text-text">
                                 Project
                                 ownership
                               </legend>
 
-                              <p className="mt-1 text-xs text-on-surface-variant">
+                              <p className="mt-1 text-xs text-text-muted">
                                 {memberName} is
                                 the only owner of
                                 this active
@@ -785,11 +785,11 @@ export function RemoveResearchGroupMemberDialog({
                                           },
                                         )
                                       }
-                                      className="mt-0.5"
+                                      className="mt-0.5 accent-control-accent"
                                     />
 
                                     <span className="min-w-0 flex-1">
-                                      <span className="block text-sm font-medium text-on-surface">
+                                      <span className="block text-sm font-medium text-text">
                                         Transfer
                                         ownership
                                       </span>
@@ -814,7 +814,7 @@ export function RemoveResearchGroupMemberDialog({
                                               },
                                             )
                                           }
-                                          className="mt-2 h-10 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none focus:border-primary"
+                                          className="mt-2 h-10 w-full rounded-lg border border-border-field bg-surface px-3 text-sm text-text outline-none focus:border-focus focus:ring-2 focus:ring-focus/15"
                                         >
                                           <option value="">
                                             Select
@@ -864,14 +864,14 @@ export function RemoveResearchGroupMemberDialog({
                                         },
                                       )
                                     }
-                                    className="mt-0.5"
+                                    className="mt-0.5 accent-control-accent"
                                   />
 
                                   <span>
-                                    <span className="block text-sm font-medium text-on-surface">
+                                    <span className="block text-sm font-medium text-text">
                                       Archive project
                                     </span>
-                                    <span className="mt-0.5 block text-xs text-on-surface-variant">
+                                    <span className="mt-0.5 block text-xs text-text-muted">
                                       Preserve its
                                       work and
                                       history.
@@ -891,7 +891,7 @@ export function RemoveResearchGroupMemberDialog({
               {error && (
                 <div
                   role="alert"
-                  className="rounded-lg border border-error/20 bg-error/5 px-4 py-3 text-sm text-error"
+                  className="rounded-lg border border-danger/20 bg-danger/5 px-4 py-3 text-sm text-overview-error"
                 >
                   {error}
                 </div>
@@ -900,19 +900,19 @@ export function RemoveResearchGroupMemberDialog({
           ) : error ? (
             <div
               role="alert"
-              className="rounded-lg border border-error/20 bg-error/5 px-4 py-3 text-sm text-error"
+              className="rounded-lg border border-danger/20 bg-danger/5 px-4 py-3 text-sm text-overview-error"
             >
               {error}
             </div>
           ) : null}
         </div>
 
-        <footer className="flex items-center justify-end gap-3 border-t border-outline-variant px-6 py-4">
+        <footer className="flex items-center justify-end gap-3 border-t border-border-structural px-6 py-4">
           <button
             type="button"
             disabled={submitting}
             onClick={onClose}
-            className="inline-flex h-9 items-center justify-center rounded-lg border border-outline-variant px-4 text-sm font-semibold text-on-surface transition hover:bg-surface-container-low disabled:opacity-45"
+            className="inline-flex h-9 items-center justify-center rounded-lg border border-border-field px-4 text-sm font-semibold text-text transition hover:bg-surface-hover disabled:opacity-45"
           >
             Cancel
           </button>
@@ -923,7 +923,7 @@ export function RemoveResearchGroupMemberDialog({
             onClick={() =>
               void handleSubmit()
             }
-            className="inline-flex h-9 items-center justify-center rounded-lg bg-error px-4 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+            className="inline-flex h-9 items-center justify-center rounded-lg bg-danger px-4 text-sm font-semibold text-text-inverse transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
           >
             {submitting
               ? 'Removing…'

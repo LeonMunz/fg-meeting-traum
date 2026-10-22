@@ -6609,3 +6609,86 @@ describe('MeetingListPage — skip a virtual recurring occurrence', () => {
     })
   })
 })
+
+describe('MeetingListPage embedded presentation mode', () => {
+  it('renders no own frame or outer padding and a local H2 heading (no H1, no group subtitle)', async () => {
+    const { container } = render(
+      <MemoryRouter
+        initialEntries={['/meetings']}
+      >
+        <Routes>
+          <Route
+            path="/meetings"
+            element={
+              <MeetingListPage embedded />
+            }
+          />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    const root =
+      container.firstElementChild as HTMLElement
+
+    // The page renders its header directly — the
+    // workspace layout owns the outer padding and the
+    // shared constrained frame.
+    expect(root.tagName).toBe('HEADER')
+    expect(
+      container.querySelectorAll(
+        '[data-fg-workspace-content]',
+      ),
+    ).toHaveLength(0)
+
+    // Local H2 page heading — no H1, no group subtitle
+    // (the shared workspace header carries the group
+    // identity).
+    const pageHeading = screen.getByRole(
+      'heading',
+      { name: 'Meetings', level: 2 },
+    )
+    expect(pageHeading).toBeInTheDocument()
+    expect(
+      screen.queryByRole('heading', {
+        name: 'Meetings',
+        level: 1,
+      }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByText(/Your meetings in/),
+    ).not.toBeInTheDocument()
+
+    // The INTERNAL tab strip stays intact as subordinate
+    // navigation.
+    const header = pageHeading.closest('header')!
+    expect(
+      within(header).getByRole('button', {
+        name: /Meeting Templates/,
+      }),
+    ).toBeInTheDocument()
+
+    const internalTabs =
+      screen.getByRole('tablist', {
+        name: 'Meetings',
+      })
+    expect(
+      within(internalTabs)
+        .getAllByRole('tab')
+        .map((tab) => tab.textContent),
+    ).toEqual([
+      'Upcoming',
+      'Series',
+      'Past',
+    ])
+
+    // The 'New meeting' action is enabled once the list has
+    // settled (disabled while the scope or the list is still
+    // loading).
+    await screen.findByText('No upcoming meetings')
+    expect(
+      within(header).getByRole('button', {
+        name: 'New meeting',
+      }),
+    ).toBeEnabled()
+  })
+})

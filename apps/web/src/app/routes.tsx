@@ -19,6 +19,7 @@ import { ProjectListPage } from '../features/projects/ProjectListPage'
 import { ResearchGroupProvider } from '../features/research-group/ResearchGroupProvider'
 import { ResearchGroupOverviewPage } from '../features/research-group/ResearchGroupOverviewPage'
 import { ResearchGroupSettingsPage } from '../features/research-group/ResearchGroupSettingsPage'
+import { ResearchGroupWorkspaceLayout } from '../features/research-group/ResearchGroupWorkspaceLayout'
 
 import {
   PlaceholderPage,
@@ -76,11 +77,25 @@ export const appRoutes: RouteObject[] = [
       },
       {
         path: 'groups/:groupId',
-        element: <ResearchGroupOverviewPage />,
-      },
-      {
-        path: 'groups/:groupId/settings',
-        element: <ResearchGroupSettingsPage />,
+        element: <ResearchGroupWorkspaceLayout />,
+        children: [
+          {
+            index: true,
+            element: <ResearchGroupOverviewPage />,
+          },
+          {
+            path: 'projects',
+            element: <ProjectListPage embedded />,
+          },
+          {
+            path: 'meetings',
+            element: <MeetingListPage embedded />,
+          },
+          {
+            path: 'settings',
+            element: <ResearchGroupSettingsPage embedded />,
+          },
+        ],
       },
       {
         path: 'projects',

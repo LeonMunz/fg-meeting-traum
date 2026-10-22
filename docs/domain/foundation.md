@@ -217,13 +217,67 @@ surfaces (Projects list, Meetings list, placeholder pages):
   `GET /api/research-groups/` lists). It grants no access and can
   never bypass Research Group membership checks.
 
-**NOT implemented yet (later slices)** — the group-bound workspace
-Pages themselves: the route registrations
-`/groups/:groupId/projects` and `/groups/:groupId/meetings` and
-their shared workspace UI (tab bar, workspace layout). Only the
-scope-resolution contract above is implemented; the canonical
-`/groups/:groupId` Overview and `/groups/:groupId/settings` remain
-the only registered group workspace routes.
+**Implemented** — the group-bound workspace Pages and their
+shared workspace UI:
+
+- **Nested workspace routes.** The canonical route
+  configuration registers ONE nested structure: the parent
+  `/groups/:groupId` renders the shared workspace layout, and
+  the child routes are `index` (Overview), `projects`,
+  `meetings`, and `settings`. All four areas render through
+  the shared layout, which — as the PARENT route — stays
+  mounted across tab switches (only the routed area content
+  swaps).
+
+- **Shared workspace layout.** The layout owns the Research
+  Group header (group name as H1 + a subdued workspace
+  description), the persistent horizontal section tab bar, and
+  the shared constrained content frame. The tab bar uses the
+  established Project-Detail tab treatment (38px bar, 28px
+  gaps, 13px medium labels, subtle bottom border, 2px
+  underline on the active tab, horizontally scrollable) with
+  real links and `aria-current="page"` — no ARIA tablist and
+  no artificial tab panels. The active tab is derived from the
+  matched workspace route (the URL is the single source of
+  truth; there is no local tab state). The `Settings` tab is
+  offered to Research Group admins only.
+
+- **Layout gating.** Group identity and authorization come
+  from the scope contract above (no new group-state
+  architecture). While the group list is loading a loading
+  state renders — no tabs, no content. An invalid
+  (unparseable), unknown, or not currently accessible group id
+  resolves to NO scope: the layout renders a traceable
+  not-found view instead of the workspace — no header, no
+  tabs, no area content, no fetch under any other group, no
+  silent fallback.
+
+- **Embedded presentation mode.** Inside the workspace, the
+  existing pages keep ALL behavior (scoping, filters, search,
+  archive view, tabs, creation, row actions, member
+  management, rename, authorization) but render in a small
+  explicit embedded mode: the Projects and Meetings list pages
+  render no own outer page padding, no own content frame, and
+  no own H1 / group subtitle — only a local H2 heading plus
+  the existing action buttons; the Settings page drops its
+  redundant Research-Group header and outer container while
+  keeping the internal General/Members navigation. Their
+  standalone (global route) rendering is unchanged.
+
+- **Rename propagation.** After a successful group rename the
+  shared header's group name updates in place (the Settings
+  page reloads the provider's group list, which the header
+  reads) — no browser reload required.
+
+**Deliberately unchanged (transitional phase)** — the global
+list URLs `/projects?group=:groupId` and
+`/meetings?group=:groupId` (and their bare variants) remain
+functional legacy entry points (no redirects, no removal), and
+the Sidebar's per-group `Projects` / `Meetings` child rows
+still point at those legacy global list URLs. Re-pointing the
+Sidebar entry points at the workspace routes is a separate
+later slice — the current workspace navigation is a deliberate
+transitional state, not the final navigation.
 
 ## 3. Project
 

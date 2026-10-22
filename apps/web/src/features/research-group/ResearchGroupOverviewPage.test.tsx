@@ -1,4 +1,24 @@
 // @vitest-environment happy-dom
+/**
+ * Research Group Overview — content contract under the shared
+ * workspace layout.
+ *
+ * The group header (name + description), the persistent section
+ * tab bar, and the group-resolution states (loading / not-found
+ * / error) are owned by the SHARED workspace layout — see
+ * `ResearchGroupWorkspaceLayout.test.tsx` (router integration)
+ * and `ResearchGroupOverviewPage.theme.test.tsx` (theme
+ * contract for the shared surfaces). This suite pins the
+ * OVERVIEW PAGE'S remaining responsibilities:
+ *
+ * - the page renders only its own content section (no second
+ *   Research-Group heading, no own tab bar, no own container);
+ * - the page no longer fetches the group of its own — the
+ *   layout resolved the group through the existing provider /
+ *   scope mechanism BEFORE mounting this page;
+ * - the layout's group-resolution gate keeps the overview
+ *   content out for invalid / inaccessible group ids.
+ */
 
 import {
   cleanup,
@@ -24,7 +44,6 @@ import {
   vi,
 } from 'vitest'
 
-import { ApiError } from '../../api/client'
 import {
   getResearchGroup,
   listResearchGroups,
@@ -33,7 +52,7 @@ import type { ApiResearchGroup } from '../../api/types'
 
 import { ResearchGroupOverviewPage } from './ResearchGroupOverviewPage'
 import { ResearchGroupProvider } from './ResearchGroupProvider'
-import { ResearchGroupSettingsPage } from './ResearchGroupSettingsPage'
+import { ResearchGroupWorkspaceLayout } from './ResearchGroupWorkspaceLayout'
 
 vi.mock('../../api/research-groups', () => ({
   getResearchGroup: vi.fn(),
@@ -41,26 +60,6 @@ vi.mock('../../api/research-groups', () => ({
   listResearchGroupMemberships: vi.fn(),
   updateResearchGroup: vi.fn(),
   updateResearchGroupMembership: vi.fn(),
-}))
-
-const syncResearchGroupContextSpy = vi.hoisted(() => vi.fn())
-
-vi.mock('./useSyncResearchGroupContext', () => ({
-  useSyncResearchGroupContext: (groupId: number | null) => {
-    syncResearchGroupContextSpy(groupId)
-  },
-}))
-
-/*
- * The settings page mounts the member management dialogs; the
- * route-contract test under exercise does not open them.
- */
-vi.mock('./AddResearchGroupMemberDialog', () => ({
-  AddResearchGroupMemberDialog: () => null,
-}))
-
-vi.mock('./RemoveResearchGroupMemberDialog', () => ({
-  RemoveResearchGroupMemberDialog: () => null,
 }))
 
 const GROUP_AURORA: ApiResearchGroup = {
@@ -83,6 +82,11 @@ function ProviderLayout() {
   )
 }
 
+/**
+ * The canonical workspace route structure (layout parent +
+ * overview index child) — the same nesting `appRoutes`
+ * registers.
+ */
 function createRouter(initialPath: string) {
   return createMemoryRouter(
     [
@@ -91,11 +95,15 @@ function createRouter(initialPath: string) {
         children: [
           {
             path: '/groups/:groupId',
-            element: <ResearchGroupOverviewPage />,
-          },
-          {
-            path: '/groups/:groupId/settings',
-            element: <ResearchGroupSettingsPage />,
+            element:
+              <ResearchGroupWorkspaceLayout />,
+            children: [
+              {
+                index: true,
+                element:
+                  <ResearchGroupOverviewPage />,
+              },
+            ],
           },
         ],
       },
@@ -107,8 +115,6 @@ function createRouter(initialPath: string) {
 beforeEach(() => {
   vi.clearAllMocks()
 
-  syncResearchGroupContextSpy.mockReset()
-
   ;(listResearchGroups as ReturnType<typeof vi.fn>)
     .mockResolvedValue([
       GROUP_AURORA,
@@ -116,28 +122,15 @@ beforeEach(() => {
     ])
 
   ;(getResearchGroup as ReturnType<typeof vi.fn>)
-    .mockImplementation(async (id: number) => {
-      if (id === GROUP_AURORA.id) {
-        return GROUP_AURORA
-      }
-
-      if (id === GROUP_BEACON.id) {
-        return GROUP_BEACON
-      }
-
-      throw new ApiError(
-        404,
-        { error: 'Research group not found' },
-      )
-    })
+    .mockResolvedValue(GROUP_AURORA)
 })
 
 afterEach(() => {
   cleanup()
 })
 
-describe('ResearchGroupOverviewPage', () => {
-  it('renders the overview for an accessible research group', async () => {
+describe('ResearchGroupOverviewPage (workspace index content)', () => {
+  it('renders only the overview content below the shared workspace header', async () => {
     const router =
       createRouter('/groups/11')
 
@@ -147,33 +140,34 @@ describe('ResearchGroupOverviewPage', () => {
       />,
     )
 
+    // The shared header (layout) carries the ONE group-name
+    // H1 + the workspace description.
     await screen.findByRole(
       'heading',
-      { name: 'Aurora Research' },
+      {
+        name: 'Aurora Research',
+        level: 1,
+      },
     )
 
     expect(
+      screen.getAllByRole('heading'),
+    ).toHaveLength(1)
+
+    expect(
+      screen.getByText('Research group workspace'),
+    ).toBeInTheDocument()
+
+    // The overview content section renders …
+    expect(
       screen.getByText(
-        'Research group overview',
+        /This is the overview for this research group/,
       ),
     ).toBeInTheDocument()
 
-    expect(
-      screen.queryByText(
-        'Research group not found',
-      ),
-    ).not.toBeInTheDocument()
-
-    expect(getResearchGroup).toHaveBeenCalledWith(
-      11,
-    )
-
-    expect(
-      syncResearchGroupContextSpy,
-    ).toHaveBeenCalledWith(11)
   })
 
-  it('renders the project-style tab bar with Overview active for non-admins', async () => {
+  it('does not fetch the group itself — the layout resolved it', async () => {
     const router =
       createRouter('/groups/11')
 
@@ -185,64 +179,68 @@ describe('ResearchGroupOverviewPage', () => {
 
     await screen.findByRole(
       'heading',
-      { name: 'Aurora Research' },
+      {
+        name: 'Aurora Research',
+        level: 1,
+      },
     )
 
-    const tabNav =
-      screen.getByRole(
-        'navigation',
-        { name: 'Research group sections' },
-      )
-
-    // Non-admins see exactly Overview, Projects,
-    // Meetings — in this order.
-    const tabs =
-      within(tabNav).getAllByRole('link')
+    // Identity comes from the provider list the layout
+    // resolved — the overview page issues no group fetch of
+    // its own.
+    expect(
+      listResearchGroups,
+    ).toHaveBeenCalled()
 
     expect(
-      tabs.map((tab) => tab.textContent),
-    ).toEqual([
-      'Overview',
-      'Projects',
-      'Meetings',
-    ])
+      getResearchGroup,
+    ).not.toHaveBeenCalled()
+  })
 
-    const [
-      overview,
-      projects,
-      meetings,
-    ] = tabs
+  it('keeps the tab bar free of a second Overview tab and a second nav', async () => {
+    const router =
+      createRouter('/groups/11')
 
-    // Overview is the active tab of this route.
-    expect(overview).toHaveAttribute(
-      'href',
-      '/groups/11',
+    render(
+      <RouterProvider
+        router={router}
+      />,
     )
-    expect(overview).toHaveAttribute(
+
+    await screen.findByRole(
+      'heading',
+      {
+        name: 'Aurora Research',
+        level: 1,
+      },
+    )
+
+    // Exactly ONE workspace section navigation (the
+    // layout's persistent tab bar) …
+    const navs =
+      screen.getAllByRole('navigation', {
+        name: 'Research group sections',
+      })
+    expect(navs).toHaveLength(1)
+
+    // … and the Overview tab is the ONLY link to the index
+    // route.
+    const overviewLinks =
+      within(navs[0]!)
+        .getAllByRole('link')
+        .filter((link) =>
+          link.getAttribute(
+            'href',
+          ) === '/groups/11',
+        )
+    expect(overviewLinks).toHaveLength(1)
+    expect(overviewLinks[0]).toHaveAttribute(
       'aria-current',
       'page',
     )
-
-    // The other tabs carry no aria-current and
-    // keep their existing group-scoped routes.
-    expect(projects).not.toHaveAttribute(
-      'aria-current',
-    )
-    expect(meetings).not.toHaveAttribute(
-      'aria-current',
-    )
-
-    expect(projects).toHaveAttribute(
-      'href',
-      '/projects?group=11',
-    )
-    expect(meetings).toHaveAttribute(
-      'href',
-      '/meetings?group=11',
-    )
   })
 
-  it('resolves the corresponding group when :groupId changes', async () => {
+  it('follows the group when :groupId changes', async () => {
     const router =
       createRouter('/groups/11')
 
@@ -254,7 +252,10 @@ describe('ResearchGroupOverviewPage', () => {
 
     await screen.findByRole(
       'heading',
-      { name: 'Aurora Research' },
+      {
+        name: 'Aurora Research',
+        level: 1,
+      },
     )
 
     await act(async () => {
@@ -265,7 +266,10 @@ describe('ResearchGroupOverviewPage', () => {
 
     await screen.findByRole(
       'heading',
-      { name: 'Beacon Lab' },
+      {
+        name: 'Beacon Lab',
+        level: 1,
+      },
     )
 
     expect(
@@ -275,29 +279,16 @@ describe('ResearchGroupOverviewPage', () => {
       ),
     ).not.toBeInTheDocument()
 
+    // The overview content stays part of the workspace on
+    // the new group.
     expect(
-      screen.getByRole(
-        'link',
-        { name: 'Projects' },
+      screen.getByText(
+        /This is the overview for this research group/,
       ),
-    ).toHaveAttribute(
-      'href',
-      '/projects?group=12',
-    )
+    ).toBeInTheDocument()
   })
 
-  it('shows the not-found state for an inaccessible or nonexistent group', async () => {
-    ;(getResearchGroup as ReturnType<typeof vi.fn>)
-      .mockRejectedValue(
-        new ApiError(
-          404,
-          {
-            error:
-              'Research group not found',
-          },
-        ),
-      )
-
+  it('renders no overview content for an inaccessible group (layout gate)', async () => {
     const router =
       createRouter('/groups/99')
 
@@ -309,21 +300,39 @@ describe('ResearchGroupOverviewPage', () => {
 
     await screen.findByRole(
       'heading',
-      { name: 'Research group' },
+      {
+        name: 'Research group',
+        level: 1,
+      },
     )
 
     await waitFor(() => {
       expect(
         screen.getByText(
-          'Research group not found',
+          'Research group is not available.',
         ),
-      ).toHaveClass('text-overview-error')
+      ).toBeInTheDocument()
     })
+
+    // No overview content, no workspace tab bar.
+    expect(
+      screen.queryByText(
+        /This is the overview for this research group/,
+      ),
+    ).not.toBeInTheDocument()
+
+    expect(
+      screen.queryByRole('navigation', {
+        name: 'Research group sections',
+      }),
+    ).not.toBeInTheDocument()
   })
 
-  it('reports an invalid group id without calling the API', async () => {
+  it('renders the not-found gate for an invalid group id without any group fetch', async () => {
     const router =
-      createRouter('/groups/not-a-group')
+      createRouter(
+        '/groups/not-a-group',
+      )
 
     render(
       <RouterProvider
@@ -333,155 +342,20 @@ describe('ResearchGroupOverviewPage', () => {
 
     await screen.findByRole(
       'heading',
-      { name: 'Research group' },
+      {
+        name: 'Research group',
+        level: 1,
+      },
     )
 
     expect(
       screen.getByText(
-        'Research group not found.',
+        'Research group is not available.',
       ),
     ).toBeInTheDocument()
 
     expect(
       getResearchGroup,
     ).not.toHaveBeenCalled()
-  })
-
-  it('offers the admin-only Settings tab on the Overview for admins', async () => {
-    const router =
-      createRouter('/groups/12')
-
-    render(
-      <RouterProvider
-        router={router}
-      />,
-    )
-
-    await screen.findByRole(
-      'heading',
-      { name: 'Beacon Lab' },
-    )
-
-    const tabNav =
-      screen.getByRole(
-        'navigation',
-        { name: 'Research group sections' },
-      )
-
-    // Admins see all four tabs — Overview,
-    // Projects, Meetings, Settings — in this
-    // order.
-    const tabs =
-      within(tabNav).getAllByRole('link')
-
-    expect(
-      tabs.map((tab) => tab.textContent),
-    ).toEqual([
-      'Overview',
-      'Projects',
-      'Meetings',
-      'Settings',
-    ])
-
-    const [
-      overview,
-      projects,
-      meetings,
-      settings,
-    ] = tabs
-
-    expect(overview).toHaveAttribute(
-      'href',
-      '/groups/12',
-    )
-    expect(overview).toHaveAttribute(
-      'aria-current',
-      'page',
-    )
-
-    expect(projects).toHaveAttribute(
-      'href',
-      '/projects?group=12',
-    )
-    expect(meetings).toHaveAttribute(
-      'href',
-      '/meetings?group=12',
-    )
-    expect(settings).toHaveAttribute(
-      'href',
-      '/groups/12/settings',
-    )
-    expect(settings).not.toHaveAttribute(
-      'aria-current',
-    )
-  })
-
-  it('does not offer the Settings tab on the Overview for non-admins', async () => {
-    const router =
-      createRouter('/groups/11')
-
-    render(
-      <RouterProvider
-        router={router}
-      />,
-    )
-
-    await screen.findByRole(
-      'heading',
-      { name: 'Aurora Research' },
-    )
-
-    const tabNav =
-      screen.getByRole(
-        'navigation',
-        { name: 'Research group sections' },
-      )
-
-    expect(
-      within(tabNav)
-        .getAllByRole('link')
-        .map((tab) => tab.textContent),
-    ).toEqual([
-      'Overview',
-      'Projects',
-      'Meetings',
-    ])
-
-    expect(
-      screen.queryByRole(
-        'link',
-        { name: 'Settings' },
-      ),
-    ).not.toBeInTheDocument()
-  })
-
-  it('keeps /groups/:groupId/settings rendering the existing settings page', async () => {
-    const router =
-      createRouter(
-        '/groups/11/settings',
-      )
-
-    render(
-      <RouterProvider
-        router={router}
-      />,
-    )
-
-    await screen.findByRole(
-      'heading',
-      { name: 'Aurora Research' },
-    )
-
-    expect(
-      screen.getByText(
-        'Research group settings are managed by admins.',
-      ),
-    ).toBeInTheDocument()
-
-    expect(
-      screen.queryByText(
-        'Research group overview',
-      ),
-    ).not.toBeInTheDocument()
   })
 })

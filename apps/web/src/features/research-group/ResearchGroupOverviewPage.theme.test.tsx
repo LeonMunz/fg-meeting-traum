@@ -1,34 +1,44 @@
 // @vitest-environment happy-dom
 /**
- * Research Group Overview theme contract (Dark + Light).
+ * Research Group workspace theme contract (Dark + Light).
  *
- * Proves the rendered Overview — heading, subtitle, description, the
- * project-style section tab bar (Overview / Projects / Meetings,
- * Settings for admins), and the loading, error, and not-found states —
- * is bound to the semantic functional tokens of `index.css` (the same
- * vocabulary the migrated shell and the Project Detail section tabs
- * consume), never to the static legacy Material tokens
- * (`on-surface`, `on-surface-variant`, `surface-container*`,
- * `outline-variant`, `error`) or to raw colors, in BOTH themes through
- * the central `data-theme` switch the Appearance feature owns.
+ * Proves the rendered workspace surface — the shared layout
+ * header (group name, subdued description), the persistent
+ * Project-style section tab bar (Overview / Projects /
+ * Meetings, Settings for admins), the Overview content
+ * description, and the loading, not-found, and error states —
+ * is bound to the semantic functional tokens of `index.css`
+ * (the same vocabulary the migrated shell and the Project
+ * Detail section tabs consume), never to the static legacy
+ * Material tokens (`on-surface`, `on-surface-variant`,
+ * `surface-container*`, `outline-variant`, `error`) or to raw
+ * colors, in BOTH themes through the central `data-theme`
+ * switch the Appearance feature owns.
  *
  * Division of labor (no duplication):
- *   - THIS suite pins the rendered class bindings of the Overview
- *     surfaces — including the tab bar's Project-Detail treatment
- *     (38px bar, 28px gaps, subtle bottom border, 13px medium labels,
- *     2px underline on the active tab, no button surface) — plus the
- *     WCAG AA (4.5:1) contrast of the error message on the canvas
- *     (resolved per theme from the canonical stylesheet) and that no
- *     legacy / raw color class survives;
- *   - `ResearchGroupOverviewPage.test.tsx` pins routing, group-scoped
- *     destinations, tab order, and the admin-only Settings
- *     visibility;
- *   - `e2e/token-contract.test.ts` pins the approved Light/Dark VALUES
- *     of those semantic tokens.
+ *   - THIS suite pins the rendered class bindings of the
+ *     shared workspace surfaces — including the tab bar's
+ *     Project-Detail treatment (38px bar, 28px gaps, subtle
+ *     bottom border, 13px medium labels, 2px underline on the
+ *     active tab, no button surface) — plus the WCAG AA
+ *     (4.5:1) contrast of the not-found / error message on the
+ *     canvas (resolved per theme from the canonical stylesheet)
+ *     and that no legacy / raw color class survives;
+ *   - `ResearchGroupWorkspaceLayout.test.tsx` pins routing,
+ *     group-scoped destinations, tab order, persistence, and
+ *     the admin-only Settings visibility;
+ *   - `e2e/token-contract.test.ts` pins the approved Light/Dark
+ *     VALUES of those semantic tokens.
  *
- * Together they prove the Overview keeps one stable class binding while
- * the central data-theme switch re-resolves every bound token, so Dark
- * -> Light and Light -> Dark both render a legible, on-system surface.
+ * Together they prove the workspace keeps one stable class
+ * binding while the central data-theme switch re-resolves every
+ * bound token, so Dark -> Light and Light -> Dark both render a
+ * legible, on-system surface.
+ *
+ * NOTE: the legacy static tokens that remain INSIDE the
+ * Settings area content are documented theme debt (see
+ * docs/CURRENT_STATE.md) and are outside this contract's
+ * rendered surface.
  */
 
 import { readFileSync } from 'node:fs'
@@ -42,6 +52,7 @@ import {
   waitFor,
 } from '@testing-library/react'
 import {
+  Outlet,
   RouterProvider,
   createMemoryRouter,
 } from 'react-router'
@@ -54,18 +65,20 @@ import {
   vi,
 } from 'vitest'
 
-import { ApiError } from '../../api/client'
-import { getResearchGroup } from '../../api/research-groups'
+import { listResearchGroups } from '../../api/research-groups'
+import type { ApiResearchGroup } from '../../api/types'
 
 import { ResearchGroupOverviewPage } from './ResearchGroupOverviewPage'
+import { ResearchGroupProvider } from './ResearchGroupProvider'
+import { ResearchGroupWorkspaceLayout } from './ResearchGroupWorkspaceLayout'
 
 /*
  * Canonical stylesheet, read from disk (the same pattern as
- * `e2e/token-contract.test.ts`): the WCAG AA check below resolves
- * the token VALUES per theme instead of hard-coding them, so a
- * value change in index.css is caught here. Read directly (not
- * through the Vite module pipeline) because the unit suite stubs
- * CSS — `?raw` included — to an empty string.
+ * `e2e/token-contract.test.ts`): the WCAG AA check below
+ * resolves the token VALUES per theme instead of hard-coding
+ * them, so a value change in index.css is caught here. Read
+ * directly (not through the Vite module pipeline) because the
+ * unit suite stubs CSS — `?raw` included — to an empty string.
  */
 const indexCss = readFileSync(
   resolve(
@@ -76,15 +89,7 @@ const indexCss = readFileSync(
 )
 
 vi.mock('../../api/research-groups', () => ({
-  getResearchGroup: vi.fn(),
   listResearchGroups: vi.fn(),
-  listResearchGroupMemberships: vi.fn(),
-  updateResearchGroup: vi.fn(),
-  updateResearchGroupMembership: vi.fn(),
-}))
-
-vi.mock('./useSyncResearchGroupContext', () => ({
-  useSyncResearchGroupContext: () => {},
 }))
 
 type Theme = 'light' | 'dark'
@@ -113,10 +118,10 @@ function hasColorClass(
 }
 
 /*
- * The exact legacy Material utilities the Overview must no longer
- * consume. They are static across themes and were the root cause of
- * the Dark Mode defects (dark-blue title, white buttons, pale
- * divider).
+ * The exact legacy Material utilities the workspace surfaces
+ * must not consume. They are static across themes and were the
+ * root cause of the Dark Mode defects (dark-blue title, white
+ * buttons, pale divider).
  */
 const FORBIDDEN_LEGACY_TOKENS = new Set([
   'text-on-surface',
@@ -129,9 +134,9 @@ const FORBIDDEN_LEGACY_TOKENS = new Set([
 ])
 
 /*
- * Raw (non-token) color classes are the other failure mode this
- * migration removes: arbitrary hex values and static white / black
- * alpha treatments that cannot follow the theme.
+ * Raw (non-token) color classes are the other failure mode
+ * this migration removes: arbitrary hex values and static
+ * white / black alpha treatments that cannot follow the theme.
  */
 const FORBIDDEN_RAW_COLOR_CLASS =
   /(^|\s)[a-z-]*-(?:\[[^\]]*#[0-9a-fA-F]+\]|white(?:\/[\d.]+)?|black(?:\/[\d.]+)?)(\s|$)/
@@ -181,16 +186,17 @@ function exactClasses(el: Element): string[] {
 }
 
 /**
- * The tab bar must render with the Project Detail section-tab
- * treatment (see ProjectDetailPage): a 38px-tall bar on a subtle
- * full-width bottom border, 28px gaps, horizontally overflowing on
- * narrow viewports, 13px medium labels, a 2px `bg-text` underline on
- * the active tab only, muted text + hover for the inactive tabs, and
- * the canonical visible keyboard focus. The former button surface
- * (fill, border, hover background, icons) must be gone.
+ * The workspace tab bar must render with the Project Detail
+ * section-tab treatment (see ProjectDetailPage): a 38px-tall
+ * bar on a subtle full-width bottom border, 28px gaps,
+ * horizontally overflowing on narrow viewports, 13px medium
+ * labels, a 2px `bg-text` underline on the active tab only,
+ * muted text + hover for the inactive tabs, and the canonical
+ * visible keyboard focus. The former button surface (fill,
+ * border, hover background, icons) must be gone.
  *
- * `expectedLabels` pins the tab order; the FIRST tab (Overview) is
- * the active tab on the Overview route.
+ * `expectedLabels` pins the tab order; the FIRST tab
+ * (Overview) is the active tab on the Overview route.
  */
 function assertProjectStyleTabBar(
   nav: HTMLElement,
@@ -297,19 +303,49 @@ function assertProjectStyleTabBar(
   })
 }
 
-function renderOverview(initialPath: string) {
+/**
+ * The canonical workspace route structure (layout parent +
+ * overview index child), rendered under the Research Group
+ * provider — the same nesting `appRoutes` registers.
+ */
+function renderWorkspace(
+  initialPath: string,
+  groups: ApiResearchGroup[],
+) {
   const router = createMemoryRouter(
     [
       {
-        path: '/groups/:groupId',
-        element: <ResearchGroupOverviewPage />,
+        element: (
+          <ResearchGroupProvider>
+            <Outlet />
+          </ResearchGroupProvider>
+        ),
+        children: [
+          {
+            path: '/groups/:groupId',
+            element:
+              <ResearchGroupWorkspaceLayout />,
+            children: [
+              {
+                index: true,
+                element:
+                  <ResearchGroupOverviewPage />,
+              },
+            ],
+          },
+        ],
       },
     ],
     { initialEntries: [initialPath] },
   )
 
+  ;(listResearchGroups as ReturnType<typeof vi.fn>)
+    .mockResolvedValue(groups)
+
   return render(
-    <RouterProvider router={router} />,
+    <RouterProvider
+      router={router}
+    />,
   )
 }
 
@@ -375,9 +411,6 @@ function contrastRatio(
 
 beforeEach(() => {
   vi.clearAllMocks()
-
-  ;(getResearchGroup as ReturnType<typeof vi.fn>)
-    .mockReset()
 })
 
 afterEach(() => {
@@ -385,31 +418,35 @@ afterEach(() => {
   delete document.documentElement.dataset.theme
 })
 
-describe('ResearchGroupOverviewPage theme contract', () => {
+describe('Research Group workspace theme contract', () => {
   it.each(['light', 'dark'] as Theme[])(
-    'binds every Overview surface to functional tokens in %s',
+    'binds every workspace surface to functional tokens in %s',
     async (theme) => {
       setTheme(theme)
 
-      ;(getResearchGroup as ReturnType<typeof vi.fn>)
-        .mockResolvedValue({
-          id: 11,
-          name: 'Aurora Research',
-          role: 'member',
-        })
-
-      const { container } =
-        renderOverview('/groups/11')
+      const { container } = renderWorkspace(
+        '/groups/11',
+        [
+          {
+            id: 11,
+            name: 'Aurora Research',
+            role: 'member',
+          },
+        ],
+      )
 
       const heading = await screen.findByRole(
         'heading',
-        { name: 'Aurora Research' },
+        {
+          name: 'Aurora Research',
+          level: 1,
+        },
       )
 
       expect(hasColorClass(heading, 'text-text')).toBe(true)
 
       const subtitle = screen.getByText(
-        'Research group overview',
+        'Research group workspace',
       )
       expect(hasColorClass(subtitle, 'text-text-muted')).toBe(true)
 
@@ -420,9 +457,8 @@ describe('ResearchGroupOverviewPage theme contract', () => {
         hasColorClass(description, 'text-text-muted'),
       ).toBe(true)
 
-      // The description keeps its functional muted-text
-      // binding; the tab bar (not the content section) is
-      // now the divider below the header.
+      // The tab bar (the layout's persistent navigation) is
+      // the divider below the header.
       const nav = screen.getByRole('navigation', {
         name: 'Research group sections',
       })
@@ -433,7 +469,7 @@ describe('ResearchGroupOverviewPage theme contract', () => {
 
       assertOnlyFunctionalColors(
         container,
-        `overview (${theme})`,
+        `workspace (${theme})`,
       )
     },
   )
@@ -443,18 +479,23 @@ describe('ResearchGroupOverviewPage theme contract', () => {
     async (theme) => {
       setTheme(theme)
 
-      ;(getResearchGroup as ReturnType<typeof vi.fn>)
-        .mockResolvedValue({
-          id: 12,
-          name: 'Beacon Lab',
-          role: 'admin',
-        })
-
-      renderOverview('/groups/12')
+      renderWorkspace(
+        '/groups/12',
+        [
+          {
+            id: 12,
+            name: 'Beacon Lab',
+            role: 'admin',
+          },
+        ],
+      )
 
       await screen.findByRole(
         'heading',
-        { name: 'Beacon Lab' },
+        {
+          name: 'Beacon Lab',
+          level: 1,
+        },
       )
 
       expect(
@@ -483,33 +524,38 @@ describe('ResearchGroupOverviewPage theme contract', () => {
   )
 
   it.each(['light', 'dark'] as Theme[])(
-    'keeps the not-found / error state legible in %s',
+    'keeps the not-found state legible in %s',
     async (theme) => {
       setTheme(theme)
 
-      ;(getResearchGroup as ReturnType<typeof vi.fn>)
-        .mockRejectedValue(
-          new ApiError(
-            404,
-            { error: 'Research group not found' },
-          ),
-        )
-
-      renderOverview('/groups/99')
+      const { container } = renderWorkspace(
+        '/groups/99',
+        [
+          {
+            id: 11,
+            name: 'Aurora Research',
+            role: 'member',
+          },
+        ],
+      )
 
       const heading = await screen.findByRole(
         'heading',
-        { name: 'Research group' },
+        {
+          name: 'Research group',
+          level: 1,
+        },
       )
       expect(hasColorClass(heading, 'text-text')).toBe(true)
 
       await waitFor(() => {
         const message = screen.getByText(
-          'Research group not found',
+          'Research group is not available.',
         )
-        // The message must bind the themeable overview-error
-        // role, never the static `danger` token (3.38:1 in
-        // Dark) — see the WCAG AA value check below.
+        // The message must bind the themeable
+        // overview-error role, never the static `danger`
+        // token (3.38:1 in Dark) — see the WCAG AA value
+        // check below.
         expect(
           hasColorClass(message, 'text-overview-error'),
         ).toBe(true)
@@ -519,7 +565,7 @@ describe('ResearchGroupOverviewPage theme contract', () => {
       })
 
       assertOnlyFunctionalColors(
-        document.body,
+        container,
         `not-found (${theme})`,
       )
     },
@@ -531,11 +577,12 @@ describe('ResearchGroupOverviewPage theme contract', () => {
       /*
        * Value-based contrast contract: the not-found / error
        * message renders directly on the AppShell canvas
-       * (`bg-canvas`, no intermediate background in that view),
-       * so the pair `overview-error` on `canvas` — resolved per
-       * theme from the canonical stylesheet — must clear WCAG AA
-       * for normal text. The class assertions in the not-found
-       * test pin that the message consumes `overview-error`.
+       * (`bg-canvas`, no intermediate background in that
+       * view), so the pair `overview-error` on `canvas` —
+       * resolved per theme from the canonical stylesheet —
+       * must clear WCAG AA for normal text. The class
+       * assertions in the not-found test pin that the
+       * message consumes `overview-error`.
        */
       const block = cssBlock(
         indexCss,
@@ -554,19 +601,23 @@ describe('ResearchGroupOverviewPage theme contract', () => {
   )
 
   it.each(['light', 'dark'] as Theme[])(
-    'renders a muted loading spinner in %s',
+    'renders a muted loading spinner while the group resolves in %s',
     async (theme) => {
       setTheme(theme)
 
-      ;(getResearchGroup as ReturnType<typeof vi.fn>)
+      ;(listResearchGroups as ReturnType<typeof vi.fn>)
         .mockReturnValue(
           new Promise<never>(() => {}),
         )
 
-      const { container } =
-        renderOverview('/groups/11')
+      const { container } = renderWorkspace(
+        '/groups/11',
+        [],
+      )
 
-      const spinner = await screen.findByText('refresh')
+      const spinner = await screen.findByText(
+        'refresh',
+      )
       expect(
         hasColorClass(spinner, 'text-text-muted'),
       ).toBe(true)

@@ -146,7 +146,34 @@ export function SeriesCreatedToast() {
   )
 }
 
-export function MeetingListPage() {
+/**
+ * Meetings list presentation modes:
+ *
+ * - default: the STANDALONE global Meetings page (`/meetings`,
+ *   kept unchanged as a legacy entry during the workspace
+ *   migration) — owns its outer page padding, its own
+ *   constrained WorkspaceContent frame, and the H1 page header
+ *   with the group subtitle;
+ * - `embedded`: rendered inside the Research Group workspace
+ *   layout (`/groups/:groupId/meetings`) — that layout owns the
+ *   outer padding, the shared constrained frame, the group
+ *   header, and the persistent workspace tab bar, so this page
+ *   renders neither its own frame nor its own outer padding,
+ *   and its page title is demoted from H1 to a local H2 (the
+ *   group subtitle is dropped: the shared header above carries
+ *   the group identity). All list behavior — Research Group
+ *   scoping, Upcoming/Series/Past tabs incl. the `?tab=` URL
+ *   state, meeting creation, row actions — is identical in both
+ *   modes; the internal Meetings tab strip stays the
+ *   subordinate navigation below the workspace tabs.
+ */
+type MeetingListPageProps = {
+  embedded?: boolean
+}
+
+export function MeetingListPage({
+  embedded = false,
+}: MeetingListPageProps) {
   const navigate = useNavigate()
 
   const {
@@ -1109,50 +1136,65 @@ export function MeetingListPage() {
     occurrences == null &&
     occurrencesError == null
 
-  return (
-    <div className="w-full px-6 py-8 lg:px-8">
-      <WorkspaceContent>
-      <header className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
-        <div className="min-w-0">
-          <h1 className="fg-type-page-title text-text">
-            Meetings
-          </h1>
+  const pageHeaderActions = (
+    <div className="flex shrink-0 items-center gap-2">
+      <button
+        type="button"
+        onClick={() => navigate('/meetings/series')}
+        className="inline-flex h-9 items-center gap-2 rounded-lg border border-border-subtle bg-surface px-3.5 fg-type-control text-text transition hover:bg-surface-hover"
+      >
+        <span className="material-symbols-outlined text-[18px]">
+          event_repeat
+        </span>
+        Meeting Templates
+      </button>
 
-          <p className="mt-1 fg-type-primary-content text-text-muted">
-            {activeResearchGroup
-              ? `Your meetings in ${activeResearchGroup.name}.`
-              : 'Research Group Meetings and follow-up work.'}
-          </p>
-        </div>
+      <button
+        type="button"
+        disabled={groupUnavailable || listLoading}
+        onClick={openCreateDialog}
+        className="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg bg-accent px-3.5 fg-type-control text-text-inverse shadow-sm transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-45"
+      >
+        <span
+          aria-hidden="true"
+          className="material-symbols-outlined text-[18px]"
+        >
+          add
+        </span>
+        New meeting
+      </button>
+    </div>
+  )
 
-        <div className="flex shrink-0 items-center gap-2">
-          <button
-            type="button"
-            onClick={() => navigate('/meetings/series')}
-            className="inline-flex h-9 items-center gap-2 rounded-lg border border-border-subtle bg-surface px-3.5 fg-type-control text-text transition hover:bg-surface-hover"
-          >
-            <span className="material-symbols-outlined text-[18px]">
-              event_repeat
-            </span>
-            Meeting Templates
-          </button>
+  const pageHeader = embedded ? (
+    <header className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
+      <h2 className="text-lg font-semibold tracking-tight text-text">
+        Meetings
+      </h2>
 
-          <button
-            type="button"
-            disabled={groupUnavailable || listLoading}
-            onClick={openCreateDialog}
-            className="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg bg-accent px-3.5 fg-type-control text-text-inverse shadow-sm transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-45"
-          >
-            <span
-              aria-hidden="true"
-              className="material-symbols-outlined text-[18px]"
-            >
-              add
-            </span>
-            New meeting
-          </button>
-        </div>
-      </header>
+      {pageHeaderActions}
+    </header>
+  ) : (
+    <header className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
+      <div className="min-w-0">
+        <h1 className="fg-type-page-title text-text">
+          Meetings
+        </h1>
+
+        <p className="mt-1 fg-type-primary-content text-text-muted">
+          {activeResearchGroup
+            ? `Your meetings in ${activeResearchGroup.name}.`
+            : 'Research Group Meetings and follow-up work.'}
+        </p>
+      </div>
+
+      {pageHeaderActions}
+    </header>
+  )
+
+  const pageBody = (
+    <>
+      {pageHeader}
 
       <div
         role="tablist"
@@ -1405,7 +1447,82 @@ export function MeetingListPage() {
           )
         )}
       </div>
+    </>
+  )
 
+  return embedded ? (
+    <>
+      {pageBody}
+
+      <CreateMeetingDialog
+        open={
+          createDialogOpen || editDialogMeeting != null
+        }
+        submitting={creating || updating}
+        submitError={
+          editDialogMeeting != null
+            ? updateError
+            : createError
+        }
+        onClose={() => {
+          if (editDialogMeeting != null) {
+            // Edit mode: closing never mutates; the pending save
+            // (if any) keeps the dialog open.
+            if (!updating) {
+              setEditDialogMeeting(null)
+            }
+          } else if (!creating) {
+            setCreateDialogOpen(false)
+          }
+        }}
+        onCreate={(input) =>
+          void handleCreateMeeting(input)
+        }
+        onCreateSeries={(input) =>
+          void handleCreateSeries(input)
+        }
+        meeting={editDialogMeeting}
+        onUpdate={(meetingId, input) =>
+          void handleUpdateMeeting(meetingId, input)
+        }
+      />
+
+      {deleteTarget != null && (
+        <MeetingDeleteConfirmDialog
+          mode={deleteTarget.mode}
+          meetingTitle={deleteTarget.item.title}
+          whenLabel={`${formatUpcomingDate(
+            deleteTarget.item.scheduledAt,
+          )} at ${formatUpcomingTime(
+            deleteTarget.item.scheduledAt,
+          )}`}
+          deleting={deleting}
+          error={deleteError}
+          onCancel={closeDeleteDialog}
+          onConfirm={() =>
+            void handleConfirmDelete()
+          }
+        />
+      )}
+
+      {terminateTarget != null && (
+        <MeetingSeriesTerminateConfirmDialog
+          seriesTitle={terminateTarget.title}
+          terminating={terminating}
+          error={terminateError}
+          onCancel={closeTerminateDialog}
+          onConfirm={() =>
+            void handleConfirmTerminateSeries()
+          }
+        />
+      )}
+
+      {seriesToastVisible && <SeriesCreatedToast />}
+    </>
+  ) : (
+    <div className="w-full px-6 py-8 lg:px-8">
+      <WorkspaceContent>
+        {pageBody}
       </WorkspaceContent>
 
       <CreateMeetingDialog

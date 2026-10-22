@@ -129,3 +129,89 @@ describe('ProjectListPage workspace content frame', () => {
     ).toBe(true)
   })
 })
+
+describe('ProjectListPage embedded presentation mode', () => {
+  it('renders no own frame or outer padding and a local H2 heading (no H1, no group subtitle)', async () => {
+    const { container } = render(
+      <ProjectListPage embedded />,
+    )
+
+    const root =
+      container.firstElementChild as HTMLElement
+
+    // The page renders its header row directly — the
+    // workspace layout owns the outer padding and the
+    // shared constrained frame.
+    expect(
+      root.className,
+    ).not.toContain('px-6')
+    expect(
+      container.querySelectorAll(
+        '[data-fg-workspace-content]',
+      ),
+    ).toHaveLength(0)
+
+    // Local H2 page heading — no H1, no group subtitle
+    // (the shared workspace header carries the group
+    // identity).
+    expect(
+      screen.getByRole('heading', {
+        name: 'Projects',
+        level: 2,
+      }),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole('heading', {
+        name: 'Projects',
+        level: 1,
+      }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByText(
+        /Projects you can access in/,
+      ),
+    ).not.toBeInTheDocument()
+
+    // The list behavior stays intact …
+    const row = await screen.findByRole(
+      'link',
+      { name: /Paper One/ },
+    )
+    expect(row).toBeInTheDocument()
+
+    // … and the action button is enabled once the list has
+    // settled (it is disabled while the scope or the list is
+    // still loading).
+    expect(
+      screen.getByRole('button', {
+        name: /New project/,
+      }),
+    ).toBeEnabled()
+  })
+
+  it('keeps the standalone presentation unchanged by default', async () => {
+    const { container } = render(<ProjectListPage />)
+
+    const root =
+      container.firstElementChild as HTMLElement
+
+    // Standalone: own padded wrapper + own frame + H1.
+    expect(root.className).toContain('px-6')
+    expect(
+      container.querySelectorAll(
+        '[data-fg-workspace-content="constrained"]',
+      ),
+    ).toHaveLength(1)
+    expect(
+      screen.getByRole('heading', {
+        name: 'Projects',
+        level: 1,
+      }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        'Projects you can access in Bravo Group.',
+      ),
+    ).toBeInTheDocument()
+  })
+})

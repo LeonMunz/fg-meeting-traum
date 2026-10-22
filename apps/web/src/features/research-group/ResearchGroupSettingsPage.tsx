@@ -65,7 +65,27 @@ function getMemberName(
   )
 }
 
-export function ResearchGroupSettingsPage() {
+/**
+ * Research Group settings presentation modes:
+ *
+ * - default: the STANDALONE rendering — owns its outer container
+ *   and the Research-Group header (group name + subtitle);
+ * - `embedded`: rendered inside the Research Group workspace
+ *   layout (`/groups/:groupId/settings`) — the layout owns the
+ *   outer container, the group header, and the persistent
+ *   workspace tab bar (this page is its active tab), so the
+ *   redundant Research-Group header and outer container are
+ *   omitted here. The internal General / Members navigation,
+ *   the member management, the group rename, and the admin
+ *   authorization rule are UNCHANGED in both modes.
+ */
+type ResearchGroupSettingsPageProps = {
+  embedded?: boolean
+}
+
+export function ResearchGroupSettingsPage({
+  embedded = false,
+}: ResearchGroupSettingsPageProps) {
   const { groupId: rawGroupId } =
     useParams<{
       groupId: string
@@ -288,7 +308,7 @@ export function ResearchGroupSettingsPage() {
   if (loading) {
     return (
       <div className="flex min-h-[360px] items-center justify-center">
-        <span className="material-symbols-outlined animate-spin text-[22px] text-on-surface-variant">
+        <span className="material-symbols-outlined animate-spin text-[22px] text-text-muted">
           refresh
         </span>
       </div>
@@ -296,13 +316,23 @@ export function ResearchGroupSettingsPage() {
   }
 
   if (!group) {
-    return (
+    /*
+     * In workspace mode the shared layout already renders the
+     * group header — this state must not add a second
+     * Research-Group heading of its own.
+     */
+    return embedded ? (
+      <p className="text-sm text-overview-error">
+        {error ??
+          'Research group not found.'}
+      </p>
+    ) : (
       <div className="mx-auto max-w-[1100px] px-8 py-10">
-        <h1 className="text-3xl font-semibold tracking-tight text-on-surface">
+        <h1 className="text-3xl font-semibold tracking-tight text-text">
           Research group
         </h1>
 
-        <p className="mt-2 text-sm text-error">
+        <p className="mt-2 text-sm text-overview-error">
           {error ??
             'Research group not found.'}
         </p>
@@ -311,20 +341,28 @@ export function ResearchGroupSettingsPage() {
   }
 
   if (group.role !== 'admin') {
-    return (
+    const adminNote = (
+      <div className="max-w-xl border-t border-border-subtle pt-6">
+        <p className="text-sm text-text-muted">
+          Research group settings are managed by admins.
+        </p>
+      </div>
+    )
+
+    return embedded ? (
+      adminNote
+    ) : (
       <div className="mx-auto max-w-[1100px] px-8 py-10">
-        <h1 className="text-3xl font-semibold tracking-tight text-on-surface">
+        <h1 className="text-3xl font-semibold tracking-tight text-text">
           {group.name}
         </h1>
 
-        <p className="mt-1.5 text-sm text-on-surface-variant">
+        <p className="mt-1.5 text-sm text-text-muted">
           Research group settings
         </p>
 
-        <div className="mt-8 max-w-xl border-t border-outline-variant pt-6">
-          <p className="text-sm text-on-surface-variant">
-            Research group settings are managed by admins.
-          </p>
+        <div className="mt-8">
+          {adminNote}
         </div>
       </div>
     )
@@ -338,29 +376,32 @@ export function ResearchGroupSettingsPage() {
     normalizedName !== group.name &&
     !savingGeneral
 
-  return (
-    <div className="mx-auto max-w-[1100px] px-8 py-10">
-      <header>
-        <h1 className="text-3xl font-semibold tracking-tight text-on-surface">
-          {group.name}
-        </h1>
-
-        <p className="mt-1.5 text-sm text-on-surface-variant">
-          Research group settings
-        </p>
-      </header>
-
-      <div className="mt-8 flex gap-6 border-b border-outline-variant">
+  /*
+   * The internal General / Members navigation and the
+   * administrative content — unchanged in both presentation
+   * modes. In workspace mode the shared layout owns the group
+   * header above, so the redundant Research-Group header is
+   * omitted and the internal tab strip sits directly below the
+   * workspace tabs (no doubled top margin).
+   */
+  const settingsContent = (
+    <>
+      <div
+        className={[
+          'flex gap-6 border-b border-border-subtle',
+          embedded ? '' : 'mt-8',
+        ].join(' ')}
+      >
         <button
           type="button"
           onClick={() =>
             setTab('general')
           }
           className={[
-            '-mb-px border-b-2 px-1 pb-3 text-sm font-medium transition',
+            '-mb-px border-b-2 px-1 pb-3 text-sm font-medium outline-none transition focus-visible:ring-2 focus-visible:ring-focus',
             tab === 'general'
-              ? 'border-primary text-on-surface'
-              : 'border-transparent text-on-surface-variant hover:text-on-surface',
+              ? 'border-tab-active text-text'
+              : 'border-transparent text-text-muted hover:text-text',
           ].join(' ')}
         >
           General
@@ -372,10 +413,10 @@ export function ResearchGroupSettingsPage() {
             setTab('members')
           }
           className={[
-            '-mb-px border-b-2 px-1 pb-3 text-sm font-medium transition',
+            '-mb-px border-b-2 px-1 pb-3 text-sm font-medium outline-none transition focus-visible:ring-2 focus-visible:ring-focus',
             tab === 'members'
-              ? 'border-primary text-on-surface'
-              : 'border-transparent text-on-surface-variant hover:text-on-surface',
+              ? 'border-tab-active text-text'
+              : 'border-transparent text-text-muted hover:text-text',
           ].join(' ')}
         >
           Members
@@ -385,7 +426,7 @@ export function ResearchGroupSettingsPage() {
       {error && (
         <div
           role="alert"
-          className="mt-6 max-w-2xl rounded-lg border border-error/20 bg-error/5 px-4 py-3 text-sm text-error"
+          className="mt-6 max-w-2xl rounded-lg border border-danger/20 bg-danger/5 px-4 py-3 text-sm text-overview-error"
         >
           {error}
         </div>
@@ -393,18 +434,18 @@ export function ResearchGroupSettingsPage() {
 
       {tab === 'general' ? (
         <section className="mt-8 max-w-2xl">
-          <h2 className="text-base font-semibold text-on-surface">
+          <h2 className="text-base font-semibold text-text">
             General
           </h2>
 
-          <p className="mt-1 text-sm text-on-surface-variant">
+          <p className="mt-1 text-sm text-text-muted">
             Basic information about this research group.
           </p>
 
           <div className="mt-6">
             <label
               htmlFor="research-group-name"
-              className="block text-sm font-medium text-on-surface"
+              className="block text-sm font-medium text-text"
             >
               Research group name
             </label>
@@ -417,7 +458,7 @@ export function ResearchGroupSettingsPage() {
                   event.target.value,
                 )
               }
-              className="mt-2 h-10 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15"
+              className="mt-2 h-10 w-full rounded-lg border border-border-field bg-surface px-3 text-sm text-text outline-none transition focus:border-focus focus:ring-2 focus:ring-focus/15"
             />
           </div>
 
@@ -430,7 +471,7 @@ export function ResearchGroupSettingsPage() {
               onClick={() =>
                 void handleSaveGeneral()
               }
-              className="inline-flex h-9 items-center rounded-lg bg-primary px-4 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+              className="inline-flex h-9 items-center rounded-lg bg-action px-4 text-sm font-semibold text-text-inverse transition hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-40"
             >
               {savingGeneral
                 ? 'Saving…'
@@ -442,11 +483,11 @@ export function ResearchGroupSettingsPage() {
         <section className="mt-8 max-w-3xl">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <h2 className="text-base font-semibold text-on-surface">
+              <h2 className="text-base font-semibold text-text">
                 Members
               </h2>
 
-              <p className="mt-1 text-sm text-on-surface-variant">
+              <p className="mt-1 text-sm text-text-muted">
                 People with access to this research group.
               </p>
             </div>
@@ -456,7 +497,7 @@ export function ResearchGroupSettingsPage() {
               onClick={() =>
                 setAddMemberOpen(true)
               }
-              className="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg bg-primary px-3.5 text-sm font-semibold text-white transition hover:bg-primary/90"
+              className="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg bg-action px-3.5 text-sm font-semibold text-text-inverse transition hover:bg-action-hover"
             >
               <span
                 aria-hidden="true"
@@ -469,8 +510,8 @@ export function ResearchGroupSettingsPage() {
             </button>
           </div>
 
-          <div className="mt-6 overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest">
-            <div className="divide-y divide-outline-variant/60">
+          <div className="mt-6 overflow-hidden rounded-xl border border-border-structural bg-surface">
+            <div className="divide-y divide-border-structural/60">
               {memberships.map(
                 (membership) => (
                   <div
@@ -480,13 +521,13 @@ export function ResearchGroupSettingsPage() {
                     className="flex items-center gap-4 px-5 py-4"
                   >
                     <div className="min-w-0 flex-1">
-                      <div className="truncate text-sm font-medium text-on-surface">
+                      <div className="truncate text-sm font-medium text-text">
                         {getMemberName(
                           membership,
                         )}
                       </div>
 
-                      <div className="mt-0.5 truncate text-xs text-on-surface-variant">
+                      <div className="mt-0.5 truncate text-xs text-text-muted">
                         @
                         {
                           membership
@@ -516,7 +557,7 @@ export function ResearchGroupSettingsPage() {
                         )
                       }
                       aria-label={`Role for ${getMemberName(membership)}`}
-                      className="h-9 min-w-28 rounded-lg border border-outline-variant bg-surface-container-lowest px-3 text-sm text-on-surface outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15 disabled:cursor-wait disabled:opacity-50"
+                      className="h-9 min-w-28 rounded-lg border border-border-field bg-surface px-3 text-sm text-text outline-none transition focus:border-focus focus:ring-2 focus:ring-focus/15 disabled:cursor-wait disabled:opacity-50"
                     >
                       <option value="member">
                         Member
@@ -540,7 +581,7 @@ export function ResearchGroupSettingsPage() {
                         )
                       }}
                       aria-label={`Remove ${getMemberName(membership)}`}
-                      className="inline-flex h-9 items-center justify-center rounded-lg px-3 text-sm font-medium text-error transition hover:bg-error/5 disabled:opacity-45"
+                      className="inline-flex h-9 items-center justify-center rounded-lg px-3 text-sm font-medium text-overview-error transition hover:bg-danger/5 disabled:opacity-45"
                     >
                       Remove
                     </button>
@@ -551,6 +592,11 @@ export function ResearchGroupSettingsPage() {
           </div>
         </section>
       )}
+    </>
+  )
+
+  const memberDialogs = (
+    <>
       {groupId != null && (
         <AddResearchGroupMemberDialog
           open={addMemberOpen}
@@ -581,6 +627,30 @@ export function ResearchGroupSettingsPage() {
           }}
         />
       )}
+    </>
+  )
+
+  return embedded ? (
+    <div>
+      {settingsContent}
+
+      {memberDialogs}
+    </div>
+  ) : (
+    <div className="mx-auto max-w-[1100px] px-8 py-10">
+      <header>
+        <h1 className="text-3xl font-semibold tracking-tight text-text">
+          {group.name}
+        </h1>
+
+        <p className="mt-1.5 text-sm text-text-muted">
+          Research group settings
+        </p>
+      </header>
+
+      {settingsContent}
+
+      {memberDialogs}
     </div>
   )
 }

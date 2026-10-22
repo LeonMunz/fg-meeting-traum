@@ -125,7 +125,32 @@ function formatUpdatedAt(value: string) {
   }).format(updatedAt)
 }
 
-export function ProjectListPage() {
+/**
+ * Project list presentation modes:
+ *
+ * - default: the STANDALONE global Projects page (`/projects`,
+ *   kept unchanged as a legacy entry during the workspace
+ *   migration) — owns its outer page padding, its own
+ *   constrained WorkspaceContent frame, and the H1 page header
+ *   with the group subtitle;
+ * - `embedded`: rendered inside the Research Group workspace
+ *   layout (`/groups/:groupId/projects`) — that layout owns the
+ *   outer padding, the shared constrained frame, the group
+ *   header, and the persistent workspace tab bar, so this page
+ *   renders neither its own frame nor its own outer padding,
+ *   and its page title is demoted from H1 to a local H2 (the
+ *   group subtitle is dropped: the shared header above carries
+ *   the group identity). All list behavior — scoping, filters,
+ *   search, archive view, actions, creation — is identical in
+ *   both modes.
+ */
+type ProjectListPageProps = {
+  embedded?: boolean
+}
+
+export function ProjectListPage({
+  embedded = false,
+}: ProjectListPageProps) {
   const navigate = useNavigate()
 
   const {
@@ -298,34 +323,49 @@ export function ProjectListPage() {
   const hasResearchGroup =
     activeResearchGroupId != null
 
-  return (
-    <div className="w-full px-6 py-8 lg:px-8 lg:py-10 xl:px-10">
-      <WorkspaceContent>
-      <header className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <h1 className="fg-type-page-title text-text">
-            Projects
-          </h1>
+  const newProjectButton = (
+    <button
+      type="button"
+      disabled={!hasResearchGroup || isLoading}
+      onClick={() => setCreateDialogOpen(true)}
+      className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-lg bg-action px-4 fg-type-control text-text-inverse shadow-sm transition hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-45"
+    >
+      <span className="material-symbols-outlined text-[18px]">
+        add
+      </span>
+      New project
+    </button>
+  )
 
-          <p className="mt-1.5 max-w-2xl fg-type-primary-content text-text-muted">
-            {activeResearchGroup
-              ? `Projects you can access in ${activeResearchGroup.name}.`
-              : 'Organize research work in separate project spaces.'}
-          </p>
-        </div>
+  const pageHeader = embedded ? (
+    <header className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
+      <h2 className="text-lg font-semibold tracking-tight text-text">
+        Projects
+      </h2>
 
-        <button
-          type="button"
-          disabled={!hasResearchGroup || isLoading}
-          onClick={() => setCreateDialogOpen(true)}
-          className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-lg bg-action px-4 fg-type-control text-text-inverse shadow-sm transition hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-45"
-        >
-          <span className="material-symbols-outlined text-[18px]">
-            add
-          </span>
-          New project
-        </button>
-      </header>
+      {newProjectButton}
+    </header>
+  ) : (
+    <header className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
+      <div>
+        <h1 className="fg-type-page-title text-text">
+          Projects
+        </h1>
+
+        <p className="mt-1.5 max-w-2xl fg-type-primary-content text-text-muted">
+          {activeResearchGroup
+            ? `Projects you can access in ${activeResearchGroup.name}.`
+            : 'Organize research work in separate project spaces.'}
+        </p>
+      </div>
+
+      {newProjectButton}
+    </header>
+  )
+
+  const pageBody = (
+    <>
+      {pageHeader}
 
       <section className="mt-8">
         <div className="flex flex-col gap-4 border-b border-border-structural pb-4 md:flex-row md:items-center md:justify-between">
@@ -681,7 +721,23 @@ export function ProjectListPage() {
           </div>
         )}
       </section>
+    </>
+  )
 
+  return embedded ? (
+    <>
+      {pageBody}
+
+      <CreateProjectDialog
+        open={createDialogOpen}
+        onClose={() => setCreateDialogOpen(false)}
+        onCreate={handleCreateProject}
+      />
+    </>
+  ) : (
+    <div className="w-full px-6 py-8 lg:px-8 lg:py-10 xl:px-10">
+      <WorkspaceContent>
+        {pageBody}
       </WorkspaceContent>
 
       <CreateProjectDialog
