@@ -28,6 +28,35 @@ PRECHECK
 - Inspect the relevant files and nearby tests before editing.
 - If the task conflicts with a documented invariant, stop and report the conflict.
 
+**Reuse and reachability precheck (structural changes)**
+
+Apply when the task introduces a new shared abstraction, consolidates
+duplicated implementations, removes or relocates code, or otherwise
+materially changes component or module responsibility. Keep the assessment
+proportional to the task scope: a routine local bugfix does not require a
+broad repository scan.
+
+- Identify the relevant consumers of the affected code and their actual
+  role before changing structure: runtime consumers and production entry
+  points, type-only references, test-only references, configuration- or
+  framework-driven usage, and dynamic imports or other indirect consumers
+  where relevant.
+- A text search that finds no imports is not by itself proof that code is
+  unreachable. Where reachability is uncertain, report the gap as such;
+  incomplete evidence never authorizes deletion.
+- Before introducing a new abstraction, decide which outcome is justified:
+  reuse an existing implementation, extend an existing implementation,
+  remove demonstrably unused code, keep separate implementations because
+  their contracts differ, introduce a new implementation because no
+  suitable existing abstraction exists, or defer the structural change
+  when the required evidence is missing. Prefer the smallest justified
+  action, not maximum deduplication.
+- Prefer targeted inspection of the affected area over exhaustive
+  repository scans.
+- Discovering dead or duplicated code outside the approved task is not
+  authorization to remove or refactor it; report the discovery separately
+  (see SCOPE_DISCOVERY) instead of fixing it in the current task.
+
 ### BASELINE / REPRODUCE
 
 - For a feature: confirm the baseline is green for the touched area (typecheck /
@@ -39,6 +68,11 @@ PRECHECK
 
 - State a short, ordered plan for non-trivial changes.
 - Prefer the smallest coherent change; do not plan unrelated improvements.
+- For a non-trivial structural change, the plan carries the reuse and
+  reachability evidence: the relevant code paths and consumers, the
+  existing implementation considered, any compatibility or responsibility
+  differences, the chosen approach with a brief rationale, and the affected
+  behavior and tests that will verify the change.
 
 ### EDIT
 
@@ -61,6 +95,9 @@ PRECHECK
 - Run the smallest relevant test subset for the changed behavior.
 - Frontend: relevant unit tests, plus targeted E2E when a covered flow changed.
 - Backend: the relevant app/test subset; migration check for model changes.
+- For a structural change, preserve the existing caller contracts and
+  verify the affected active product paths — not only the extracted helper
+  or the newly introduced component.
 
 ### FINAL VERIFY
 
