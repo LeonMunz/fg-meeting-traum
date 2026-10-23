@@ -12,13 +12,20 @@ test('settings shell: /settings redirect, section tabs, and back/forward', async
   await page.goto('/settings')
   await expect(page).toHaveURL(/\/settings\/appearance$/)
 
-  // Settings is reachable from the user menu (no longer in the
-  // sidebar), and it lands on /settings/appearance.
+  // Personal account navigation is absent from the permanent
+  // Sidebar: no /settings or /profile link may live inside the
+  // Sidebar's <aside> (the sole complementary element on this
+  // page). Personal Settings stays reachable only via the user
+  // menu; the Settings page's own section tabs (asserted below)
+  // render in <main>, outside the Sidebar, so this check does not
+  // depend on the number of section tabs.
+  const sidebar = page.getByRole('complementary')
+
   await expect(
-    page.getByRole('link', { name: 'Settings' }),
+    sidebar.locator('a[href^="/settings"]'),
   ).toHaveCount(0)
   await expect(
-    page.getByRole('link', { name: 'Profile' }),
+    sidebar.locator('a[href="/profile"]'),
   ).toHaveCount(0)
 
   await userMenuTrigger(page, 'Alex').click()
