@@ -157,8 +157,8 @@ PW_LOCK_VERSION="$(node -e "const l=require('$REPO_ROOT/package-lock.json');proc
   && ok "t27d lockfile Playwright version resolved ($PW_LOCK_VERSION)" \
   || bad "t27d lockfile Playwright version resolved (got: ${PW_LOCK_VERSION:-none})"
 expect_contains "t27e container image is the official Playwright image pinned to the lockfile version" \
-  "$WF_TEXT" "image: mcr.microsoft.com/playwright/python:v${PW_LOCK_VERSION}-noble"
-[ "$(count_matches '^[[:space:]]*image: mcr\.microsoft\.com/playwright/python:v[0-9][0-9.]*-noble$')" -eq 1 ] \
+  "$WF_TEXT" "image: mcr.microsoft.com/playwright:v${PW_LOCK_VERSION}-noble"
+[ "$(count_matches '^[[:space:]]*image: mcr\.microsoft\.com/playwright:v[0-9][0-9.]*-noble$')" -eq 1 ] \
   && ok "t27f exactly one pinned Playwright container image reference" \
   || bad "t27f exactly one pinned Playwright container image reference"
 expect_contains "t27g container options keep the official Chromium recommendations" \

@@ -348,7 +348,7 @@ expect_line_count   "t47 Node 24 in all three gate jobs" 3 \
 expect_line_count   "t48 no runtime Playwright browser install" 0 'playwright install' "$WF"
 expect_line_count   "t48 no runtime apt package install" 0 'apt-get' "$WF"
 expect_line_count   "t48 exactly one pinned Playwright container image (e2e job only)" 1 \
-  '^[[:space:]]*image: mcr\.microsoft\.com/playwright/python:v[0-9][0-9.]*-noble$' "$WF"
+  '^[[:space:]]*image: mcr\.microsoft\.com/playwright:v[0-9][0-9.]*-noble$' "$WF"
 expect_line_count   "t48 container options keep the official Chromium recommendations" 1 \
   '^[[:space:]]*options: --init --ipc=host$' "$WF"
 expect_line_count   "t48 e2e job reaches postgres by service hostname" 1 \

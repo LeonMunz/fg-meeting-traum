@@ -63,7 +63,7 @@ jobs:
     # which the official Playwright documentation endorses for trusted
     # E2E code.
     container:
-      image: mcr.microsoft.com/playwright/python:v1.62.1-noble
+      image: mcr.microsoft.com/playwright:v1.62.1-noble
       # Official Playwright Docker recommendations: --init avoids PID-1
       # zombie buildup (Django + Vite + Chromium child processes);
       # --ipc=host gives Chromium the shared memory it needs instead of
