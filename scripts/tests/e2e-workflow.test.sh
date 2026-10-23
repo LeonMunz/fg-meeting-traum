@@ -21,8 +21,13 @@
 #   * every uses: reference is a full 40-char commit SHA (no @vN tags)
 #   * the PostgreSQL service is pinned to the repo contract (postgres:16)
 #     with a pg_isready healthcheck and a 5432 port mapping
-#   * setup is reproducible: npm ci (no npm install), uv sync --frozen,
-#     Playwright chromium only (the only configured browser project)
+#   * setup is reproducible: npm ci (no npm install), uv sync --frozen
+#   * the browser environment is the official Playwright CI container,
+#     pinned to the exact Playwright version of the root lockfile
+#     (resolved from package-lock.json with node — no runtime apt or
+#     browser install on the E2E critical path)
+#   * the PostgreSQL service is reached by its service hostname (the
+#     job runs inside a container, not on the runner host)
 #   * no direct `npm run test:e2e` / `playwright test` gate call: the only
 #     E2E invocation is the canonical scripts/agent-verify.sh e2e profile
 #     with the --summary-json target
@@ -135,10 +140,32 @@ expect_contains     "t23 checkout with persist-credentials: false" "$WF_TEXT" "p
 expect_contains     "t24 npm ci is the JS install"                 "$WF_TEXT" "npm ci"
 expect_not_contains "t25 no npm install"                           "$WF_TEXT" "npm install"
 expect_contains     "t26 uv sync --frozen (no lockfile update)"    "$WF_TEXT" "uv sync --frozen"
-expect_contains     "t27 playwright chromium install with deps"    "$WF_TEXT" "npx playwright install --with-deps chromium"
-[ "$(count_matches 'playwright install')" -eq 1 ] \
-  && ok "t28 playwright browser install is chromium-only (single call)" \
-  || bad "t28 playwright browser install is chromium-only (single call)"
+
+# Browser environment: the official Playwright CI container, pinned to
+# the exact Playwright version of the root lockfile. The image bakes in
+# the release's browsers + Ubuntu system dependencies, so no runtime
+# apt/browser install may remain on the E2E critical path (the former
+# per-run download was the ~11-minute bottleneck).
+expect_not_contains "t27 no runtime Playwright browser install" "$WF_TEXT" "playwright install"
+expect_not_contains "t27a no runtime apt package install"      "$WF_TEXT" "apt-get"
+expect_not_contains "t27b no runtime apt package install"      "$WF_TEXT" "apt install"
+[ "$(count_matches '^[[:space:]]*container:$')" -eq 1 ] \
+  && ok "t27c the single job declares a container environment" \
+  || bad "t27c the single job declares a container environment"
+PW_LOCK_VERSION="$(node -e "const l=require('$REPO_ROOT/package-lock.json');process.stdout.write(l.packages['node_modules/playwright'].version)" 2>/dev/null)"
+[ -n "$PW_LOCK_VERSION" ] \
+  && ok "t27d lockfile Playwright version resolved ($PW_LOCK_VERSION)" \
+  || bad "t27d lockfile Playwright version resolved (got: ${PW_LOCK_VERSION:-none})"
+expect_contains "t27e container image is the official Playwright image pinned to the lockfile version" \
+  "$WF_TEXT" "image: mcr.microsoft.com/playwright/python:v${PW_LOCK_VERSION}-noble"
+[ "$(count_matches '^[[:space:]]*image: mcr\.microsoft\.com/playwright/python:v[0-9][0-9.]*-noble$')" -eq 1 ] \
+  && ok "t27f exactly one pinned Playwright container image reference" \
+  || bad "t27f exactly one pinned Playwright container image reference"
+expect_contains "t27g container options keep the official Chromium recommendations" \
+  "$WF_TEXT" "options: --init --ipc=host"
+# The job container reaches the service container by service hostname.
+expect_contains     "t28 postgres host is the service hostname (container networking)" "$WF_TEXT" "POSTGRES_HOST: postgres"
+expect_not_contains "t28a no loopback postgres host (the job no longer runs on the runner host)" "$WF_TEXT" "POSTGRES_HOST: 127.0.0.1"
 
 # Canonical E2E gate: only scripts/agent-verify.sh may run the tests.
 expect_not_contains "t29 no direct npm run test:e2e gate"  "$WF_TEXT" "npm run test:e2e"

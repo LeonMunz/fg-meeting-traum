@@ -46,8 +46,11 @@
 #     non-browser setup, standard summary artifact)
 #   * the embedded e2e job preserves the canonical E2E invocation and
 #     the reset safety contract (FG_ALLOW_E2E_RESET exactly once, on
-#     the canonical gate line; chromium-only browser install; standard
-#     summary/failure artifacts)
+#     the canonical gate line; standard summary/failure artifacts) and
+#     runs inside the official Playwright CI container pinned to the
+#     lockfile Playwright version (no runtime apt/browser install; the
+#     e2e job reaches PostgreSQL by its service hostname while the core
+#     job keeps the loopback host)
 #   * the publication SHA derives from github.sha (both jobs), the
 #     checkout uses that same SHA, and the checked-out-HEAD equality
 #     assertion remains on both jobs
@@ -337,8 +340,21 @@ expect_line_count   "t47 uv sync --frozen in both gate jobs (no lockfile update)
   '^[[:space:]]*run: uv sync --frozen$' "$WF"
 expect_line_count   "t47 Node 24 in all three gate jobs" 3 \
   '^[[:space:]]*node-version: 24$' "$WF"
-expect_fixed_count  "t48 playwright chromium install with deps (e2e job only)" 1 \
-  'npx playwright install --with-deps chromium' "$WF"
+# Browser environment: the embedded e2e job runs inside the official
+# version-pinned Playwright CI container (Chromium + system dependencies
+# preinstalled) — no runtime apt/browser install on the E2E critical
+# path. The image pin must track the root lockfile (that cross-check
+# lives in e2e-workflow.test.sh, which resolves package-lock.json).
+expect_line_count   "t48 no runtime Playwright browser install" 0 'playwright install' "$WF"
+expect_line_count   "t48 no runtime apt package install" 0 'apt-get' "$WF"
+expect_line_count   "t48 exactly one pinned Playwright container image (e2e job only)" 1 \
+  '^[[:space:]]*image: mcr\.microsoft\.com/playwright/python:v[0-9][0-9.]*-noble$' "$WF"
+expect_line_count   "t48 container options keep the official Chromium recommendations" 1 \
+  '^[[:space:]]*options: --init --ipc=host$' "$WF"
+expect_line_count   "t48 e2e job reaches postgres by service hostname" 1 \
+  '^[[:space:]]*POSTGRES_HOST: postgres$' "$WF"
+expect_line_count   "t48 core job keeps the loopback postgres host (host-runner job)" 1 \
+  '^[[:space:]]*POSTGRES_HOST: 127\.0\.0\.1$' "$WF"
 expect_line_count   "t48 no playwright test call" 0 'playwright test' "$WF"
 expect_not_contains "t49 no direct npm run gate command" "$WF_TEXT" "npm run "
 expect_not_contains "t49 no direct Django manage.py gate" "$WF_TEXT" "manage.py"

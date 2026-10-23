@@ -183,10 +183,35 @@ jobs:
     permissions:
       contents: read
     runs-on: ubuntu-24.04
-    # Observed E2E run is ~2.5 minutes; 20 minutes covers setup
-    # (checkout, npm ci, uv sync, Playwright browser install) and bounds
-    # hanging jobs.
+    # The last fully successful suite run took ~11 minutes for the test
+    # execution itself (the former ~2.5-minute figure is obsolete);
+    # 20 minutes covers what setup still needs (container image pull,
+    # checkout, npm ci, uv sync — no per-run package or browser
+    # download) and bounds hanging jobs. The budget is deliberately
+    # kept, not raised.
     timeout-minutes: 20
+
+    # Reproducible browser environment: the job runs INSIDE the official
+    # Playwright CI container, pinned to the exact Playwright version of
+    # the root lockfile (package-lock.json: @playwright/test 1.62.1).
+    # The image bakes in Chromium (plus chromium-headless-shell) and the
+    # Ubuntu system dependencies of that release, so the E2E critical
+    # path performs no per-run package or browser download — the former
+    # per-run Chromium/system-dependency download (~11 minutes of apt
+    # traffic on the job) was the bottleneck that pushed the run past
+    # its 20-minute budget. The image ships Node 24 (repo contract) and
+    # git; Python 3.12 stays under the pinned setup-uv step below. The
+    # image runs as root: Playwright launches Chromium without its
+    # sandbox by default, and the suite only ever talks to 127.0.0.1,
+    # which the official Playwright documentation endorses for trusted
+    # E2E code.
+    container:
+      image: mcr.microsoft.com/playwright/python:v1.62.1-noble
+      # Official Playwright Docker recommendations: --init avoids PID-1
+      # zombie buildup (Django + Vite + Chromium child processes);
+      # --ipc=host gives Chromium the shared memory it needs instead of
+      # the small container /dev/shm.
+      options: --init --ipc=host
 
     # CI-only, non-secret PostgreSQL contract for config.settings_e2e:
     # Django connects to database "fg_workspace" as user "fg_ci" and works
@@ -209,7 +234,10 @@ jobs:
 
     env:
       # Only the environment variables settings_e2e actually requires.
-      POSTGRES_HOST: 127.0.0.1
+      # From inside the job container the PostgreSQL service container
+      # is reached by its service hostname on the job Docker network
+      # (127.0.0.1 inside the job container is the container itself).
+      POSTGRES_HOST: postgres
       POSTGRES_PORT: "5432"
       POSTGRES_DB: fg_workspace
       POSTGRES_USER: fg_ci
@@ -244,8 +272,9 @@ jobs:
         working-directory: apps/api
         run: uv sync --frozen
 
-      - name: Install Playwright chromium (the only configured browser project)
-        run: npx playwright install --with-deps chromium
+      # Browser note: Chromium (the only configured browser project) is
+      # preinstalled in the pinned Playwright container image — no
+      # browser or system-dependency installation step remains.
 
       - name: Prepare E2E summary target directory
         run: mkdir -p "$RUNNER_TEMP/fg-e2e"

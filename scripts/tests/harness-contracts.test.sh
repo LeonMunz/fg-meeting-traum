@@ -20,7 +20,9 @@
 #   5. harness-workflow — CI Harness workflow static contract (harness.yml)
 #
 # Contract: dependency-light and CLEAN-CHECKOUT-SAFE — bash plus node
-# (node only for JSON validation inside the agent-verify suite). No
+# (node for JSON validation inside the agent-verify suite and for
+# lockfile Playwright-version resolution inside the e2e-workflow
+# suite). No
 # installs, no browser, no PostgreSQL, no Docker, no network after
 # checkout, no mutation of the working tree, no retries, no parallelism.
 #
