@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+
 #
 # Tests for scripts/agent-observability (local agent trace capture).
 #
@@ -19,6 +20,22 @@
 #   * probe client usage contract
 #   * CODEX_HOME/CODEX_PATH resolution: unset-env discovery, explicit
 #     authority, invalid/ambiguous fail-closed (deterministic, sandbox-safe)
+#   * per-turn ownership contract (t16): a session identity resolves ONLY
+#     its own valid (session, run) association — missing/foreign/invalid
+#     mappings and manifest identity mismatches fail closed (exit 12),
+#     the manual fallback (no session id) keeps liveness semantics,
+#     stop --expected-run refuses foreign/inactive runs (exit 12) without
+#     touching them, usage errors precede the lifecycle lock (exit 2 even
+#     with an unusable lock path), the relay mapping guard serializes
+#     (flock), writes stay atomic (no torn reads, no temp leftovers),
+#     stale cleanup cannot delete a newer mapping (compare-and-delete),
+#     relay start-error cleanup is ownership-verified (a live run is
+#     adopted/finalized only when its capture manifest proves the
+#     session; a foreign live run is never stopped, adopted or mapped;
+#     _stop_sync / StopSidecar can structurally never issue an unguarded
+#     stop), and same-second run-dir collisions / concurrent starts
+#     preserve run identity (collector-dependent, isolated temp
+#     port/runs/lock)
 #   * ACP probe-client contract: session/prompt params match the exact
 #     codex-acp 1.7.0 schema (fake-agent fixture, deterministic)
 #   * collector-dependent e2e (start/stop idempotency + fake-secret
@@ -1945,14 +1962,14 @@ mk_live_run() { # mk_live_run <run-id> <kind>
 }
 
 # zero live captures
-run_cmd env -u CODEX_HOME FG_OBS_RUNS_DIR="$T13/runs" bash "$OBS" context current --task-type Bug --session NEW
+run_cmd env -u CODEX_HOME -u CODEX_SESSION_ID FG_OBS_RUNS_DIR="$T13/runs" bash "$OBS" context current --task-type Bug --session NEW
 expect_rc "t13a zero live captures fails closed (exit 10)" 10 "$RC"
 expect_contains "t13b zero-capture message advises start" "$CAP_OUT" "agent-observability start"
 expect_no_file "t13c no context file created on failure" "$T13/runs/run-context.json"
 
 # exactly one live product capture
 mk_live_run run-20260101T090000Z capture
-run_cmd env -u CODEX_HOME FG_OBS_RUNS_DIR="$T13/runs" bash "$OBS" context current --task-type Bug --session NEW
+run_cmd env -u CODEX_HOME -u CODEX_SESSION_ID FG_OBS_RUNS_DIR="$T13/runs" bash "$OBS" context current --task-type Bug --session NEW
 expect_rc "t13d exactly one live capture succeeds" 0 "$RC"
 expect_contains "t13e context attached to the resolved run" "$CAP_OUT" "run-20260101T090000Z"
 expect_file "t13f run-context.json written in the live run dir" "$T13/runs/run-20260101T090000Z/run-context.json"
@@ -1961,40 +1978,40 @@ expect_rc "t13g context record has the bounded v1 shape" 0 "$RC"
 
 # idempotent: identical bytes on re-run
 run_cmd cp "$T13/runs/run-20260101T090000Z/run-context.json" "$T13/ctx-before.json"
-run_cmd env -u CODEX_HOME FG_OBS_RUNS_DIR="$T13/runs" bash "$OBS" context current --task-type Bug --session NEW
+run_cmd env -u CODEX_HOME -u CODEX_SESSION_ID FG_OBS_RUNS_DIR="$T13/runs" bash "$OBS" context current --task-type Bug --session NEW
 run_cmd cmp -s "$T13/runs/run-20260101T090000Z/run-context.json" "$T13/ctx-before.json"
 expect_rc "t13h identical re-attach is byte-identical (idempotent)" 0 "$RC"
 
 # partial update preserves existing unrelated fields
-run_cmd env -u CODEX_HOME FG_OBS_RUNS_DIR="$T13/runs" bash "$OBS" context current --task-type Bug --session CURRENT --task-key "pair-7"
+run_cmd env -u CODEX_HOME -u CODEX_SESSION_ID FG_OBS_RUNS_DIR="$T13/runs" bash "$OBS" context current --task-type Bug --session CURRENT --task-key "pair-7"
 expect_rc "t13i update with task-key exits 0" 0 "$RC"
 run_cmd "$PY" -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["session_mode"]=="CURRENT" and d["task_key"]=="pair-7" and d["harness_variant"] is None and d["task_type"]=="Bug"' "$T13/runs/run-20260101T090000Z/run-context.json"
 expect_rc "t13j existing fields preserved on partial update" 0 "$RC"
 
 # fail-closed value validation through the wrapper
-run_cmd env -u CODEX_HOME FG_OBS_RUNS_DIR="$T13/runs" bash "$OBS" context current --task-type "Not A Type" --session NEW
+run_cmd env -u CODEX_HOME -u CODEX_SESSION_ID FG_OBS_RUNS_DIR="$T13/runs" bash "$OBS" context current --task-type "Not A Type" --session NEW
 expect_rc "t13k invalid task_type fails closed (exit 2)" 2 "$RC"
-run_cmd env -u CODEX_HOME FG_OBS_RUNS_DIR="$T13/runs" bash "$OBS" context current --task-type Bug --session "new"
+run_cmd env -u CODEX_HOME -u CODEX_SESSION_ID FG_OBS_RUNS_DIR="$T13/runs" bash "$OBS" context current --task-type Bug --session "new"
 expect_rc "t13l lowercase session enum fails closed (exit 2)" 2 "$RC"
-run_cmd env -u CODEX_HOME FG_OBS_RUNS_DIR="$T13/runs" bash "$OBS" context current --task-type Bug --session NEW --task-key "please fix the bug in auth"
+run_cmd env -u CODEX_HOME -u CODEX_SESSION_ID FG_OBS_RUNS_DIR="$T13/runs" bash "$OBS" context current --task-type Bug --session NEW --task-key "please fix the bug in auth"
 expect_rc "t13m prompt-like task_key rejected (exit 2)" 2 "$RC"
-run_cmd env -u CODEX_HOME FG_OBS_RUNS_DIR="$T13/runs" bash "$OBS" context current --task-type Bug --session NEW --harness-variant ".leading-dot"
+run_cmd env -u CODEX_HOME -u CODEX_SESSION_ID FG_OBS_RUNS_DIR="$T13/runs" bash "$OBS" context current --task-type Bug --session NEW --harness-variant ".leading-dot"
 expect_rc "t13n malformed slug (leading dot) rejected (exit 2)" 2 "$RC"
 run_cmd "$PY" -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["task_key"]=="pair-7"' "$T13/runs/run-20260101T090000Z/run-context.json"
 expect_rc "t13o rejected updates did not modify the stored context" 0 "$RC"
-run_cmd env -u CODEX_HOME FG_OBS_RUNS_DIR="$T13/runs" bash "$OBS" context current --task-type Bug
+run_cmd env -u CODEX_HOME -u CODEX_SESSION_ID FG_OBS_RUNS_DIR="$T13/runs" bash "$OBS" context current --task-type Bug
 expect_rc "t13p missing --session fails closed (exit 2)" 2 "$RC"
-run_cmd env -u CODEX_HOME FG_OBS_RUNS_DIR="$T13/runs" bash "$OBS" context
+run_cmd env -u CODEX_HOME -u CODEX_SESSION_ID FG_OBS_RUNS_DIR="$T13/runs" bash "$OBS" context
 expect_rc "t13q context without target fails (exit 2)" 2 "$RC"
 
 # multiple live captures -> ambiguous (exit 11), no guessing
 mk_live_run run-20260101T090001Z capture
-run_cmd env -u CODEX_HOME FG_OBS_RUNS_DIR="$T13/runs" bash "$OBS" context current --task-type Bug --session NEW
+run_cmd env -u CODEX_HOME -u CODEX_SESSION_ID FG_OBS_RUNS_DIR="$T13/runs" bash "$OBS" context current --task-type Bug --session NEW
 expect_rc "t13r multiple live captures fail closed (exit 11)" 11 "$RC"
 expect_contains "t13s ambiguity message names the candidates" "$CAP_OUT" "run-20260101T090000Z"
 expect_contains "t13t ambiguity message suggests an explicit run id" "$CAP_OUT" "explicit run id"
 # explicit run id still works under ambiguity
-run_cmd env -u CODEX_HOME FG_OBS_RUNS_DIR="$T13/runs" bash "$OBS" context run-20260101T090001Z --task-type Domain --session CURRENT
+run_cmd env -u CODEX_HOME -u CODEX_SESSION_ID FG_OBS_RUNS_DIR="$T13/runs" bash "$OBS" context run-20260101T090001Z --task-type Domain --session CURRENT
 expect_rc "t13u explicit run id succeeds despite ambiguity" 0 "$RC"
 run_cmd "$PY" -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["task_type"]=="Domain" and d["session_mode"]=="CURRENT"' "$T13/runs/run-20260101T090001Z/run-context.json"
 expect_rc "t13v explicit-run context stored in the right dir" 0 "$RC"
@@ -2003,13 +2020,13 @@ expect_rc "t13v explicit-run context stored in the right dir" 0 "$RC"
 rm -f "$T13/runs/run-20260101T090001Z/collector.pid" \
       "$T13/runs/run-20260101T090000Z/collector.pid"
 mk_live_run probe-native-20260101T090002Z probe-native
-run_cmd env -u CODEX_HOME FG_OBS_RUNS_DIR="$T13/runs" bash "$OBS" context current --task-type Bug --session NEW
+run_cmd env -u CODEX_HOME -u CODEX_SESSION_ID FG_OBS_RUNS_DIR="$T13/runs" bash "$OBS" context current --task-type Bug --session NEW
 expect_rc "t13w probe-only liveness is not a product capture (exit 10)" 10 "$RC"
 # dead pid is not live
 mkdir -p "$T13/runs/run-20260101T090003Z/raw"
 printf '999999\n' > "$T13/runs/run-20260101T090003Z/collector.pid"
 printf '{"schema_version": 1, "run_id": "run-20260101T090003Z", "kind": "capture", "stop_status": "running"}\n' > "$T13/runs/run-20260101T090003Z/capture-manifest.json"
-run_cmd env -u CODEX_HOME FG_OBS_RUNS_DIR="$T13/runs" bash "$OBS" context current --task-type Bug --session NEW
+run_cmd env -u CODEX_HOME -u CODEX_SESSION_ID FG_OBS_RUNS_DIR="$T13/runs" bash "$OBS" context current --task-type Bug --session NEW
 expect_rc "t13x dead pidfile is not a live capture (exit 10)" 10 "$RC"
 kill "$LIVE_PID" 2>/dev/null || true
 
@@ -2211,6 +2228,592 @@ else
 
   rm -rf "$T15"
 fi
+
+
+# ------------------------------------------------- t16 ownership contract --
+# Per-turn capture ownership: a Codex session may resolve, modify or
+# finalize only its own valid (session, run) association. A stale
+# lifecycle operation must not remove a newer mapping or stop a different
+# run. This section runs in the regular suite (no special flag) and is
+# deterministic whether or not the parent shell has CODEX_SESSION_ID:
+# manual-fallback tests run with the session identity explicitly removed,
+# session-bound tests supply it explicitly. All state is redirected into
+# $T16 — the real .artifacts, port 4318 and the product registration are
+# never touched.
+T16="$(mktemp -d "${TMPDIR:-/tmp}/fg-obs-ownership.XXXXXX")"
+mkdir -p "$T16/runs" "$T16/maps" "$T16/lock"
+T16_LOCK="$T16/lock/collector-4318.lock"
+T16A="$T16/runs/run-test-a"
+T16B="$T16/runs/run-test-b"
+mkdir -p "$T16A/raw" "$T16B/raw"
+sleep 300 & T16_PID=$!
+trap 'kill "${LIVE_PID:-}" "${T16_PID:-}" "${T16X_PID:-}" 2>/dev/null || true' EXIT
+printf '%s' "$T16_PID" > "$T16A/collector.pid"
+
+obs16() { # obs16 <session-id-or-empty> <cmd...>
+  local sid="$1"; shift
+  if [ -n "$sid" ]; then
+    env -u CODEX_HOME -u CODEX_PATH -u CODEX_SESSION_ID -u FG_AGENT_RUN_ID \
+      CODEX_SESSION_ID="$sid" \
+      FG_OBS_RUNS_DIR="$T16/runs" FG_PRODUCT_SESSION_MAP_DIR="$T16/maps" \
+      FG_OBS_LIFECYCLE_LOCK_FILE="$T16_LOCK" \
+      bash "$OBS" "$@"
+  else
+    env -u CODEX_HOME -u CODEX_PATH -u CODEX_SESSION_ID -u FG_AGENT_RUN_ID \
+      FG_OBS_RUNS_DIR="$T16/runs" FG_PRODUCT_SESSION_MAP_DIR="$T16/maps" \
+      FG_OBS_LIFECYCLE_LOCK_FILE="$T16_LOCK" \
+      bash "$OBS" "$@"
+  fi
+}
+mk16_manifest() { # mk16_manifest <run-dir> <conversation-id>
+  printf '{"schema_version": 1, "run_id": "%s", "kind": "capture", "stop_status": "running", "captured_conversation_id": "%s"}\n' \
+    "$(basename "$1")" "$2" > "$1/capture-manifest.json"
+}
+set16_map() { printf '%s\n' "$1" > "$T16/maps/session-b"; }
+
+mk16_manifest "$T16A" "session-a"
+mk16_manifest "$T16B" "session-b"
+
+# --- session-identity resolution (the 11 fail-closed regression cases) --
+# 1. manual fallback (no session identity): liveness semantics unchanged
+run_cmd obs16 "" current-run
+expect_rc "t16a manual fallback (no session id) resolves the live run" 0 "$RC"
+expect_eq "t16b manual fallback prints just the run id" "run-test-a" "$CAP_OUT"
+# 2. session identity + missing mapping: fail closed, no run id on stdout
+set +e
+out16="$(obs16 "session-b" current-run 2>"$T16/t16d.stderr")"; rc16=$?
+set -e
+expect_rc "t16c session id + missing mapping fails closed (exit 12)" 12 "$rc16"
+expect_eq "t16d missing mapping prints no run id" "" "$out16"
+expect_contains "t16e missing mapping names the fail-closed reason" "$(cat "$T16/t16d.stderr")" "no valid capture mapped for this session"
+# 3. orphan mapping (run dir absent)
+set16_map "run-missing"
+run_cmd obs16 "session-b" current-run
+expect_rc "t16f orphan mapping (run dir gone) fails closed (exit 12)" 12 "$RC"
+# 4. matching (session, run) identity resolves exactly
+set16_map "run-test-b"
+run_cmd obs16 "session-b" current-run
+expect_rc "t16g matching (session, run) identity resolves" 0 "$RC"
+expect_eq "t16h matching identity prints the mapped run" "run-test-b" "$CAP_OUT"
+# 5. foreign mapping (session-b -> run-test-a; the manifest is session-a)
+set16_map "run-test-a"
+run_cmd obs16 "session-b" current-run
+expect_rc "t16i foreign mapping fails closed (exit 12)" 12 "$RC"
+# 6. a foreign context attach is blocked and writes nothing
+run_cmd obs16 "session-b" context current --task-type Bug --session NEW
+expect_rc "t16j context on a foreign mapping fails closed (exit 12)" 12 "$RC"
+expect_no_file "t16k foreign context write never happens" "$T16A/run-context.json"
+# 7. wrong manifest conversation identity
+set16_map "run-test-b"
+mk16_manifest "$T16B" "session-a"
+run_cmd obs16 "session-b" current-run
+expect_rc "t16l wrong manifest conversation identity fails closed (exit 12)" 12 "$RC"
+# 8. missing manifest
+rm -f "$T16B/capture-manifest.json"
+run_cmd obs16 "session-b" current-run
+expect_rc "t16m missing manifest fails closed (exit 12)" 12 "$RC"
+# 9. invalid manifest
+printf '{invalid' > "$T16B/capture-manifest.json"
+run_cmd obs16 "session-b" current-run
+expect_rc "t16n invalid manifest fails closed (exit 12)" 12 "$RC"
+# 10. manifest without a conversation identity
+printf '{"kind":"capture"}\n' > "$T16B/capture-manifest.json"
+run_cmd obs16 "session-b" current-run
+expect_rc "t16o manifest without conversation identity fails closed (exit 12)" 12 "$RC"
+# 11. no active collector (manual path, no session identity)
+rm -f "$T16A/collector.pid"
+run_cmd obs16 "" current-run
+expect_rc "t16p no active collector fails closed (exit 10)" 10 "$RC"
+expect_contains "t16q no-capture message advises start" "$CAP_OUT" "agent-observability start"
+
+# --- stop --expected-run ownership guard ---------------------------------
+T16X="$T16/runs/run-test-x"
+mkdir -p "$T16X/raw"
+sleep 300 & T16X_PID=$!
+printf '%s' "$T16X_PID" > "$T16X/collector.pid"
+printf '{"schema_version": 1, "run_id": "run-test-x", "kind": "capture", "stop_status": "running"}\n' > "$T16X/capture-manifest.json"
+ln -sfn "run-test-x" "$T16/runs/latest"
+cp "$T16X/capture-manifest.json" "$T16/manifest-x-before.json"
+
+# a stale stop naming a different run is refused and touches nothing
+run_cmd obs16 "" stop --stop-status graceful --expected-run run-other
+expect_rc "t16r stop --expected-run refuses a foreign active run (exit 12)" 12 "$RC"
+expect_contains "t16s refusal names the foreign-run guard" "$CAP_OUT" "foreign run: stop refused"
+kill -0 "$T16X_PID" 2>/dev/null && ok "t16t the active run's collector stayed alive" || bad "t16t the active run's collector stayed alive"
+expect_file "t16u pidfile intact after the refused stop" "$T16X/collector.pid"
+run_cmd cmp -s "$T16X/capture-manifest.json" "$T16/manifest-x-before.json"
+expect_rc "t16v manifest byte-identical after the refused stop" 0 "$RC"
+# and with no run active at all
+rm -f "$T16X/collector.pid"
+run_cmd obs16 "" stop --stop-status graceful --expected-run run-test-x
+expect_rc "t16w stop --expected-run with no active run fails closed (exit 12)" 12 "$RC"
+expect_contains "t16x no-active-run refusal is explicit" "$CAP_OUT" "expected run not active"
+
+# --- usage errors precede the lifecycle lock ------------------------------
+# the lock path points under a regular file (unopenable): invalid usage
+# must still return the documented usage error (exit 2), never 13
+touch "$T16/badlock"
+obs16badlock() {
+  env -u CODEX_HOME -u CODEX_PATH -u CODEX_SESSION_ID -u FG_AGENT_RUN_ID \
+    FG_OBS_RUNS_DIR="$T16/runs" FG_PRODUCT_SESSION_MAP_DIR="$T16/maps" \
+    FG_OBS_LIFECYCLE_LOCK_FILE="$T16/badlock/collector.lock" \
+    bash "$OBS" "$@"
+}
+run_cmd obs16badlock stop --expected-run
+expect_rc "t16y stop usage error (missing value) without lock access (exit 2)" 2 "$RC"
+run_cmd obs16badlock stop --bogus
+expect_rc "t16z stop usage error (unknown option) without lock access (exit 2)" 2 "$RC"
+run_cmd obs16badlock start --bogus
+expect_rc "t16z2 start usage error (unknown option) without lock access (exit 2)" 2 "$RC"
+
+# --- relay mapping contract (real module, isolated map dir) ---------------
+run_cmd env FG_PRODUCT_SESSION_MAP_DIR="$T16/maps" "$PY" - "$REPO_ROOT" "$T16" <<'PY16MAP'
+import importlib.util
+import multiprocessing as mp
+import os
+import sys
+import time
+
+repo, tmp = sys.argv[1], sys.argv[2]
+map_dir = os.environ["FG_PRODUCT_SESSION_MAP_DIR"]
+relay_path = os.path.join(repo, "scripts", "observability",
+                          "acp-lifecycle-relay.py")
+SID = "session-b"
+
+def load():
+    spec = importlib.util.spec_from_file_location("fg_relay_under_test",
+                                                  relay_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+relay = load()
+
+# (1) ownership-checked compare-and-delete: a stale cleanup (the run id a
+#     previous turn owned) must not remove the newer (session, run) mapping
+relay.write_mapping(SID, "run-1")
+assert relay.read_mapping(SID) == "run-1"
+relay.write_mapping(SID, "run-2")              # the newer turn's mapping
+assert relay.remove_mapping(SID, "run-1") is False  # stale cleanup refused
+assert relay.read_mapping(SID) == "run-2"           # newer mapping intact
+assert relay.remove_mapping(SID, "run-2") is True   # the owner releases it
+assert relay.read_mapping(SID) is None
+
+# (2) invalid identifiers fail closed
+for bad_call in (lambda: relay.write_mapping("bad id", "run-1"),
+                 lambda: relay.write_mapping(SID, "run/1"),
+                 lambda: relay.write_mapping(SID, "")):
+    try:
+        bad_call()
+        raise AssertionError("invalid identifier accepted")
+    except ValueError:
+        pass
+assert relay.remove_mapping(SID, "bad-id") is False
+assert relay.remove_mapping("bad id", "run-1") is False
+
+# (3) no torn temp files after writes
+relay.write_mapping(SID, "run-3")
+leftovers = [n for n in os.listdir(map_dir)
+             if n.startswith(".mapping-write-")]
+assert leftovers == [], leftovers
+relay.remove_mapping(SID, "run-3")
+
+# (4) the mapping guard actually serializes (flock mutual exclusion):
+#     p1 holds the guard for 1.0 s; p2 (started 0.4 s later) must wait
+ctx = mp.get_context("fork")
+
+def holder(out_file, hold_s):
+    mod = load()
+    t0 = time.monotonic()
+    with mod._mapping_guard():
+        waited = time.monotonic() - t0
+        time.sleep(hold_s)
+    with open(out_file, "w") as f:
+        f.write(repr(waited))
+
+h1 = os.path.join(tmp, "hold-1.wait")
+h2 = os.path.join(tmp, "hold-2.wait")
+p1 = ctx.Process(target=holder, args=(h1, 1.0))
+p1.start()
+time.sleep(0.4)
+p2 = ctx.Process(target=holder, args=(h2, 0.0))
+p2.start()
+assert p1.join(30) is None and p1.exitcode == 0, "holder p1 failed"
+assert p2.join(30) is None and p2.exitcode == 0, "holder p2 failed"
+w1 = float(open(h1).read())
+w2 = float(open(h2).read())
+assert w1 < 0.25, "p1 did not get the lock first (waited %s)" % w1
+assert w2 >= 0.5, "p2 was not serialized behind p1 (waited %s)" % w2
+
+# (5) concurrent writers/readers: writes stay atomic (readers observe only
+#     complete, valid values) and the final state is a valid mapping
+def worker(kind, count, out_file):
+    mod = load()
+    seen = []
+    for i in range(count):
+        if kind == "w":
+            mod.write_mapping(SID, "run-c" if i % 2 == 0 else "run-d")
+        else:
+            v = mod.read_mapping(SID)
+            if v is not None and v not in ("run-c", "run-d"):
+                seen.append(v)
+    if seen:
+        with open(out_file, "w") as f:
+            f.write("\n".join(seen))
+
+procs = [ctx.Process(target=worker, args=("w", 25,
+         os.path.join(tmp, "invalid-w%d" % i))) for i in range(4)]
+procs += [ctx.Process(target=worker, args=("r", 150,
+          os.path.join(tmp, "invalid-r%d" % i))) for i in range(2)]
+for pr in procs:
+    pr.start()
+for pr in procs:
+    assert pr.join(60) is None and pr.exitcode == 0, "worker %s failed" % pr.name
+for i in range(4):
+    f = os.path.join(tmp, "invalid-w%d" % i)
+    assert not os.path.exists(f), "torn/invalid mapping observed: %s" % f
+for i in range(2):
+    f = os.path.join(tmp, "invalid-r%d" % i)
+    assert not os.path.exists(f), "torn/invalid mapping observed: %s" % f
+final = relay.read_mapping(SID)
+assert final in (None, "run-c", "run-d"), "invalid final state: %r" % final
+leftovers = [n for n in os.listdir(map_dir)
+             if n.startswith(".mapping-write-")]
+assert leftovers == [], leftovers
+
+print("mapping-contract-ok")
+PY16MAP
+expect_rc "t16z3 relay mapping contract (ownership, atomicity, serialization)" 0 "$RC"
+expect_contains "t16z4 relay mapping contract marker" "$CAP_OUT" "mapping-contract-ok"
+
+# --- relay start-error ownership contract (real relay module, stubbed
+# --- control surface, isolated runs/map/log dirs; no collector needed)
+# A start-sidecar failure (deadline / contract error) with a run live
+# must adopt or finalize that run ONLY when its capture manifest proves
+# it was seeded for this session (kind "capture" with
+# captured_conversation_id == the session id). A FOREIGN run that
+# became active after the turn's port probe is never stopped, never
+# adopted, never mapped; and _stop_sync / StopSidecar can structurally
+# never issue an unguarded stop (defense in depth).
+run_cmd env FG_PRODUCT_SESSION_MAP_DIR="$T16/maps" "$PY" - "$REPO_ROOT" "$T16" <<'PY16OWN'
+import importlib.util
+import json
+import os
+import sys
+import time
+import types
+
+repo, tmp = sys.argv[1], sys.argv[2]
+relay_path = os.path.join(repo, "scripts", "observability",
+                          "acp-lifecycle-relay.py")
+
+runs = os.path.join(tmp, "own-runs")
+maps = os.path.join(tmp, "own-maps")
+stub_log = os.path.join(tmp, "own-stub-calls.log")
+relay_log = os.path.join(tmp, "own-relay-events.log")
+state_file = os.path.join(tmp, "stub-state.json")
+os.makedirs(runs, exist_ok=True)
+os.makedirs(maps, exist_ok=True)
+for f in (stub_log, relay_log):
+    if os.path.exists(f):
+        os.unlink(f)
+
+# Stubbed control surface: records every invocation (argv, '|'-joined)
+# to T16_STUB_LOG; scripted responses via env (status JSON comes from
+# T16_STUB_STATE_FILE, current-run name/rc from env vars).
+stub = os.path.join(tmp, "obsctl-stub")
+with open(stub, "w") as f:
+    f.write(
+        """#!/usr/bin/env bash
+{ printf '%s|' "$@"; echo; } >> "${T16_STUB_LOG:?}"
+case "${1:-}" in
+  status) cat "${T16_STUB_STATE_FILE:?}"; exit 0 ;;
+  current-run)
+    rc="${T16_STUB_CURRENTRC:-0}"
+    [ "$rc" -eq 0 ] && echo "${T16_STUB_CURRENTRUN:-}"
+    exit "$rc" ;;
+  stop) exit "${T16_STUB_STOPRC:-0}" ;;
+  *) exit 2 ;;
+esac
+""")
+os.chmod(stub, 0o755)
+
+
+def set_state(state):
+    with open(state_file, "w") as f:
+        json.dump({"running": {"state": state}}, f)
+
+
+set_state("running")
+os.environ["FG_OBS_RUNS_DIR"] = runs
+os.environ["FG_PRODUCT_SESSION_MAP_DIR"] = maps
+os.environ["FG_PRODUCT_RELAY_LOG"] = relay_log
+os.environ["FG_PRODUCT_RELAY_OBSCTL"] = stub
+os.environ["T16_STUB_LOG"] = stub_log
+os.environ["T16_STUB_STATE_FILE"] = state_file
+os.environ["T16_STUB_CURRENTRC"] = "0"
+os.environ["T16_STUB_CURRENTRUN"] = ""
+os.environ["T16_STUB_STOPRC"] = "0"
+
+spec = importlib.util.spec_from_file_location("fg_relay_ownership",
+                                              relay_path)
+relay = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(relay)
+
+SID = "session-s1"
+
+
+def make_run(run_id, ccid):
+    d = os.path.join(runs, run_id)
+    os.makedirs(d, exist_ok=True)
+    m = {"schema_version": 1, "run_id": run_id, "kind": "capture",
+         "stop_status": "running", "captured_conversation_id": ccid}
+    with open(os.path.join(d, "capture-manifest.json"), "w") as f:
+        json.dump(m, f)
+    return os.path.join(d, "capture-manifest.json")
+
+
+def stub_calls():
+    if not os.path.exists(stub_log):
+        return []
+    out = []
+    with open(stub_log) as f:
+        for line in f:
+            line = line.rstrip()
+            if not line:
+                continue
+            args = line.split("|")
+            if args and args[-1] == "":
+                args = args[:-1]
+            out.append(args)
+    return out
+
+
+def new_pending(sid=SID):
+    r = relay.Relay("delegate", [])
+    st = relay.Relay._new_session_state()
+    st["state"] = "pending"
+    st["turn_id"] = 7
+    r.sessions[sid] = st
+    return r, st
+
+
+def owned_sidecar():
+    return types.SimpleNamespace(owned_port=True)
+
+
+def wait_finalized(r, st, n=200):
+    for _ in range(n):
+        r.process_sidecars()
+        if st["state"] != "finalizing":
+            return
+        time.sleep(0.05)
+    raise AssertionError("finalization did not settle: %r" % st)
+
+
+# (1) REGRESSION: another session's run becomes active BEFORE this
+#     turn's unnamed-run cleanup (start deadline). The relay must not
+#     stop it, adopt it, or map it — ownership is unproven.
+foreign_manifest = make_run("run-foreign", "session-other")
+before = open(foreign_manifest).read()
+os.environ["T16_STUB_CURRENTRUN"] = "run-foreign"
+r, st = new_pending()
+r._handle_start_error(SID, st, owned_sidecar(), "start deadline exceeded")
+assert st["state"] == "uncaptured", st["state"]
+assert st["turn_id"] is None
+assert relay.read_mapping(SID) is None, "foreign run mapped to this session"
+assert not [c for c in stub_calls() if c[0] == "stop"], stub_calls()
+assert open(foreign_manifest).read() == before, "foreign manifest modified"
+ev = open(relay_log).read()
+assert ("start-cleanup-skipped session=%s "
+        "reason=ownership-unproven active_run=run-foreign" % SID) in ev, ev
+
+# (2) the resolver cannot name the live run (ambiguous, rc 11):
+#     still no stop, still uncaptured
+os.environ["T16_STUB_CURRENTRC"] = "11"
+r, st = new_pending()
+r._handle_start_error(SID, st, owned_sidecar(), "start deadline exceeded")
+assert st["state"] == "uncaptured", st["state"]
+assert not [c for c in stub_calls() if c[0] == "stop"], stub_calls()
+assert relay.read_mapping(SID) is None
+
+# (3) a live run whose manifest proves THIS session: adopted (matching
+#     cleanup stays functional), mapping written, turn open — and the
+#     later finalization stops it GUARDED with the verified run id
+make_run("run-own", SID)
+os.environ["T16_STUB_CURRENTRC"] = "0"
+os.environ["T16_STUB_CURRENTRUN"] = "run-own"
+r, st = new_pending()
+r._handle_start_error(SID, st, owned_sidecar(), "start deadline exceeded")
+assert st["state"] == "open" and st["run_id"] == "run-own", st
+assert relay.read_mapping(SID) == "run-own"
+r.finalize_turn(SID, 7, "graceful")
+assert st["state"] == "finalizing"
+wait_finalized(r, st)
+assert st["state"] == "idle", st
+stops = [c for c in stub_calls() if c[0] == "stop"]
+assert stops == [["stop", "--stop-status", "graceful",
+                  "--expected-run", "run-own"]], stops
+assert relay.read_mapping(SID) is None
+
+# (4) proven-own run, but the turn already ended before cleanup:
+#     guarded stop with the decided status, mapping never written
+r, st = new_pending()
+st["stop_status"] = "interrupted"
+r._handle_start_error(SID, st, owned_sidecar(), "start deadline exceeded")
+assert st["state"] == "idle", st
+stops = [c for c in stub_calls() if c[0] == "stop"]
+assert stops[-1] == ["stop", "--stop-status", "interrupted",
+                     "--expected-run", "run-own"], stops
+assert relay.read_mapping(SID) is None
+
+# (5) defense in depth: _stop_sync without a verified run id never
+#     issues any stop (state released, bounded diagnostic recorded)
+r, st = new_pending()
+st["state"] = "open"
+st["run_id"] = None
+n_before = len(stub_calls())
+r._stop_sync(SID, st, "interrupted")
+assert len(stub_calls()) == n_before, "stop issued without verified run id"
+assert st["state"] == "idle" and st["turn_id"] is None, st
+ev = open(relay_log).read()
+assert ("stop-refused session=%s reason=no-verified-run "
+        "stop_status=interrupted" % SID) in ev, ev
+
+# (6) defense in depth: StopSidecar refuses to spawn without a verified
+#     run id (rc 12, no process)
+sc = relay.StopSidecar("interrupted", None)
+assert sc.proc is None and sc.rc == 12, (sc.proc, sc.rc)
+assert sc.poll() is True
+sc.cleanup()  # must not raise
+sc = relay.StopSidecar("graceful", "bad id")  # malformed: also refused
+assert sc.proc is None and sc.rc == 12
+
+print("relay-ownership-ok")
+PY16OWN
+expect_rc "t16z5 relay start-error cleanup is ownership-verified (foreign live run never stopped, proven-own run adopted and stopped guarded)" 0 "$RC"
+expect_contains "t16z6 relay ownership contract marker" "$CAP_OUT" "relay-ownership-ok"
+
+# --- lifecycle lock + same-second collision (collector-dependent) ---------
+# Isolated e2e: temp runs dir + temp lifecycle lock + test port.
+if collector_present; then
+  T16_PORT=""
+  for cand in 4397 4398 4399; do
+    if "$PY" -c 'import socket, sys
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+try:
+    s.bind(("127.0.0.1", int(sys.argv[1])))
+    s.close()
+except OSError:
+    sys.exit(1)
+sys.exit(0)' "$cand" 2>/dev/null; then
+      T16_PORT="$cand"
+      break
+    fi
+  done
+  if [ -z "$T16_PORT" ]; then
+    skip "t16e2e no free test port in 4397..4399 — lifecycle e2e SKIPPED"
+  else
+    T16E="$T16/e2e"
+    mkdir -p "$T16E/runs" "$T16E/lock"
+    obs16e() {
+      env -u CODEX_HOME -u CODEX_PATH -u CODEX_SESSION_ID -u FG_AGENT_RUN_ID \
+        FG_OBS_RUNS_DIR="$T16E/runs" FG_OBS_PORT="$T16_PORT" \
+        FG_OBS_LIFECYCLE_LOCK_FILE="$T16E/lock/collector-$T16_PORT.lock" \
+        FG_OBS_NO_DOCTOR_SNAPSHOT=1 bash "$OBS" "$@"
+    }
+    # same-second run-dir collision: pre-occupy the run dirs of the next
+    # three UTC seconds; start must retry on the collision, land in a
+    # fresh second, and leave the pre-occupied dirs untouched
+    t16_busy=()
+    for off in 0 1 2; do
+      ts="$(date -u -v "+${off}S" +%Y%m%dT%H%M%SZ)"
+      mkdir -p "$T16E/runs/run-$ts"
+      printf 'sentinel\n' > "$T16E/runs/run-$ts/keep.txt"
+      t16_busy+=("run-$ts")
+    done
+    run_cmd obs16e start --json
+    expect_rc "t16e1 start survives a same-second run-dir collision" 0 "$RC"
+    t16_run="$(printf '%s\n' "$CAP_OUT" | "$PY" -c 'import json, sys
+data = sys.stdin.read()
+end = data.rfind("}")
+d = json.loads(data[:end + 1])
+print(d["run_id"])' 2>/dev/null || true)"
+    if [ -z "$t16_run" ]; then
+      bad "t16e2 start --json contract names the new run (no contract in: ${CAP_OUT:0:160})"
+    else
+      ok "t16e2 start --json contract names the new run"
+      [ -f "$T16E/runs/$t16_run/capture-manifest.json" ] \
+        && ok "t16e3 the collided run landed in its own run dir" \
+        || bad "t16e3 the collided run landed in its own run dir"
+      m16="$("$PY" -c 'import json, sys
+print(json.load(open(sys.argv[1]))["run_id"])' "$T16E/runs/$t16_run/capture-manifest.json" 2>/dev/null || true)"
+      expect_eq "t16e4 manifest run_id matches the run dir (identity preserved)" "$t16_run" "$m16"
+      t16_sent=0
+      for b in "${t16_busy[@]}"; do
+        [ -f "$T16E/runs/$b/keep.txt" ] && t16_sent=$((t16_sent + 1))
+      done
+      [ "$t16_sent" -eq 3 ] && ok "t16e5 pre-occupied run dirs stayed untouched" \
+        || bad "t16e5 pre-occupied run dirs stayed untouched ($t16_sent/3)"
+      case " ${t16_busy[*]} " in
+        *" $t16_run "*) bad "t16e6 the collided run took a pre-occupied dir" ;;
+        *) ok "t16e6 the collided run took a fresh run dir" ;;
+      esac
+      run_cmd obs16e stop --stop-status graceful --expected-run "$t16_run"
+      expect_rc "t16e7 stop --expected-run (matching) finalizes the collided run" 0 "$RC"
+    fi
+    # lifecycle lock serialization: two concurrent starts must not both
+    # create runs — the loser serializes on the lock and reports
+    # already_running (no port-conflict crash, no second run)
+    obs16e start --json > "$T16E/s1.out" 2> "$T16E/s1.err" &
+    s1_pid=$!
+    obs16e start --json > "$T16E/s2.out" 2> "$T16E/s2.err" &
+    s2_pid=$!
+    t16_rc1=0; wait "$s1_pid" || t16_rc1=$?
+    t16_rc2=0; wait "$s2_pid" || t16_rc2=$?
+    [ "$t16_rc1" -eq 0 ] && [ "$t16_rc2" -eq 0 ] \
+      && ok "t16e8 two concurrent starts both exit 0" \
+      || bad "t16e8 two concurrent starts both exit 0 (rc1=$t16_rc1 rc2=$t16_rc2)"
+    t16_sts="$("$PY" -c 'import json, sys
+sts = [json.load(open(p))["status"] for p in (sys.argv[1], sys.argv[2])]
+print(" ".join(sorted(sts)))' "$T16E/s1.out" "$T16E/s2.out" 2>/dev/null || true)"
+    expect_eq "t16e9 concurrent starts serialize: one started, one already_running" "already_running started" "$t16_sts"
+    t16_live=0
+    for pf in "$T16E/runs"/run-*/collector.pid; do
+      [ -f "$pf" ] || continue
+      c="$("$PY" "$LIVENESS_PY" classify "$(cat "$pf")" 2>/dev/null || echo dead)"
+      case "$c" in
+        signalable|denied) t16_live=$((t16_live + 1)) ;;
+      esac
+    done
+    [ "$t16_live" -eq 1 ] && ok "t16e10 exactly one live collector after concurrent starts" \
+      || bad "t16e10 exactly one live collector after concurrent starts (found $t16_live)"
+    run_cmd obs16e stop --stop-status graceful
+    expect_rc "t16e11 cleanup stop releases the serialized run" 0 "$RC"
+    "$PY" -c 'import socket, sys
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+try:
+    s.bind(("127.0.0.1", int(sys.argv[1])))
+    s.close()
+except OSError:
+    sys.exit(1)
+sys.exit(0)' "$T16_PORT" 2>/dev/null \
+      && ok "t16e12 test port released after cleanup" \
+      || bad "t16e12 test port released after cleanup"
+  fi
+else
+  skip "t16e2e collector not installed — lifecycle e2e SKIPPED (./scripts/agent-observability install)"
+fi
+# best-effort: never leave a test collector behind, then remove the tree
+if [ -n "${T16E:-}" ]; then
+  env -u CODEX_HOME -u CODEX_PATH -u CODEX_SESSION_ID -u FG_AGENT_RUN_ID \
+    FG_OBS_RUNS_DIR="$T16E/runs" FG_OBS_PORT="$T16_PORT" \
+    FG_OBS_LIFECYCLE_LOCK_FILE="$T16E/lock/collector-$T16_PORT.lock" \
+    bash "$OBS" stop >/dev/null 2>&1 || true
+fi
+rm -rf "$T16"
 
 
 # ---------------------------------------------------------------- summary ---

@@ -292,8 +292,10 @@ session mapping) + bounded relay event log (.artifacts/agent-observability/)
 The two systems intersect at exactly two places, both deliberate:
 
 1. `agent-verify --summary-json` can auto-correlate its run summary to the
-   active product run (session mapping first, single live capture second,
-   explicit `FG_AGENT_RUN_ID` always wins) — §8.5, §18.
+   active product run (session mapping first — only when `CODEX_SESSION_ID`
+   is set and the mapping is valid; single live capture second — only when
+   no session identity is present; explicit `FG_AGENT_RUN_ID` always wins)
+   — §8.5, §18.
 2. `agent-observability start` snapshots `agent-doctor.sh --json` read-only
    into the run directory as environment evidence — §8, §22.
 
@@ -1388,7 +1390,11 @@ reads, per-line skip boundary, CRLF, blank lines, and long lines.
   suppressed), `server-error` (id), `session-open` / `session-open-ignored`
   / `session-seen`, `open-ignored` / `open-no-session-id` /
   `open-response-incomplete`, `turn-start` / `turn-uncaptured` /
-  `prompt-ignored`, `start-result` / `start-error`, `mapping-written` /
+  `prompt-ignored`, `start-result` / `start-error`,
+  `start-cleanup-skipped` (session id, active run id or none — a live
+  run not proven to belong to the session; no stop issued),
+  `stop-refused` (stop status, bounded reason — no verified run id),
+  `mapping-written` /
   `mapping-write-failed`, `gate-released` (session id + held byte
   count — the held prompt bytes are forwarded now), `turn-response`
   (+`-pending` / `-unmatched` /
@@ -1449,7 +1455,13 @@ Opens track session **identity only** — they start no run.
   `agent-observability start --json` as a short-lived sidecar
   (`started` → mapping written, turn run OPEN; `already_running` → turn
   uncaptured, one at a time; error/timeout → fail open, one bounded
-  warning, stream intact). **Readiness ordering (invariant):** the
+  warning, stream intact; if a run is live at that point the relay
+  adopts or finalizes it ONLY when its capture manifest proves it was
+  seeded for this session (kind `capture` with
+  `captured_conversation_id` == the session id) — otherwise no stop is
+  issued at all (fail closed, bounded `start-cleanup-skipped`
+  diagnostic; the relay can structurally never issue an unguarded
+  stop). **Readiness ordering (invariant):** the
   collector must be CONFIRMED ACCEPTING on its loopback OTLP endpoint
   BEFORE a captured prompt's bytes are forwarded to the Codex child.
   The `started` contract IS that confirmation — the control surface
@@ -1469,9 +1481,12 @@ Opens track session **identity only** — they start no run.
   (§22.2).
 - The **matching** `session/prompt` response, correlated by the **EXACT
   request id** (a late or foreign id never touches any run), finalizes the
-  run: `agent-observability stop --stop-status graceful`. From that
-  response the relay reads only the correlation and `stopReason` (a
-  bounded enum string) — never the result content.
+  run: `agent-observability stop --stop-status graceful
+  --expected-run <this turn's run>` — the ownership guard refuses (exit
+  12) a stop of any run the turn does not name, so a stale lifecycle
+  operation can never stop a different run. From that response the relay
+  reads only the correlation and `stopReason` (a bounded enum string) —
+  never the result content.
 
 - **Live shadow warning (diagnostic only, no intervention).** While a
   captured turn is still running, the relay evaluates a bounded live
@@ -1526,7 +1541,10 @@ resolves finalizes the run with that status as soon as it comes up
 uncaptured, prompt response still finalizes the run, bounded
 `mapping-write-failed` diagnostic). A failed finalization (non-recoverable
 write failure) leaves raw evidence untouched and **keeps** the mapping so a
-later close or a manual `stop` can re-finalize. Manifest corruption is NOT
+later close or a manual `stop --expected-run <run-id>` can re-finalize
+(same ownership guard). Mapping release is ownership-checked
+(compare-and-delete under an exclusive mapping lock): a stale cleanup can
+never remove a newer `(session, run)` mapping. Manifest corruption is NOT
 a finalization failure — manifest finalize is self-healing (rebuilds from
 raw evidence; stop stays green; the ledger records the resulting gaps).
 SIGKILL cannot be trapped — an orphaned run is reconciled as `interrupted`
@@ -1536,7 +1554,8 @@ on the next start/stop.
 
 ```text
 Prompt A → Run A → graceful finalization (stop_status=graceful, end_ts set,
-             end Git evidence, run-ledger.json, mapping released)
+             end Git evidence, run-ledger.json, mapping released
+             (ownership-checked))
 Prompt B in the SAME still-open chat → Run B (different run id, no evidence
              from A attributed to B) → graceful finalization
 The ACP/PyCharm chat remains open the whole time; no close, no manual
@@ -1569,7 +1588,7 @@ turn's metrics.
 | ACP session ID = native Codex thread id = `CODEX_SESSION_ID` | one identifier end-to-end (codex-acp returns `thread.id` as `sessionId`; the same id reaches tool shells as `CODEX_SESSION_ID`) | Codex/adapter (read-only) |
 | Prompt request id | the JSON-RPC `id` of the `session/prompt` request | ACP client |
 | Observability run id | `run-<UTC timestamp>` (captures), `probe-native-<UTC timestamp>` (probes); = the run directory name | `agent-observability start` |
-| Session/run mapping | `.artifacts/agent-observability/session-runs/<session-id>` (override `FG_PRODUCT_SESSION_MAP_DIR`): exactly one line per file — the run id of that session's **active prompt turn**; written when the turn's run comes up, released when it finalizes; between turns the session has no mapping; atomic writes | the relay |
+| Session/run mapping | `.artifacts/agent-observability/session-runs/<session-id>` (override `FG_PRODUCT_SESSION_MAP_DIR`): exactly one line per file — the run id of that session's **active prompt turn**; written when the turn's run comes up, released when it finalizes; between turns the session has no mapping; atomic writes serialized by an exclusive mapping lock; the release is **ownership-checked** (compare-and-delete: removed only if it still names the owning turn's run); a mapping **resolves** only when the mapped run's capture manifest is kind `capture` with `captured_conversation_id` equal to the session id (manifest identity validation) — otherwise resolution fails closed (exit 12) | the relay |
 | Captured conversation identity (durable) | `captured_conversation_id` in the run's capture manifest: the ACP sessionId (native Codex conversation) of the prompt that caused the run, persisted by the relay at start time; survives finalization and the mapping release; the Run Ledger's attribution key (null for manual starts, probes and historical runs — never derived from telemetry) | the relay (via the start sidecar) |
 | Product-runtime registration | `.artifacts/agent-observability/product-runtime.json` (§14.1) | `product-runtime register` |
 | Run directory | `.artifacts/agent-runs/<run-id>/` (root overridable via `FG_OBS_RUNS_DIR`) | `agent-observability` |
@@ -1577,23 +1596,40 @@ turn's metrics.
 
 Active-turn resolution (the agent's view):
 
-1. `CODEX_SESSION_ID` → mapping file → the exact run of this session's
-   active prompt turn (authoritative for the automatic path; `context
-   current` and `agent-verify --summary-json` both use this tier first).
-2. No mapping → exactly one live product capture (canonical EPERM-aware
-   liveness for `agent-observability` commands; builtins-only probe for
+1. `CODEX_SESSION_ID` set → mapping file → the exact run of this
+   session's active prompt turn — and **only** that session's mapping is
+   consulted (authoritative for the automatic path; `context current`
+   and `agent-verify --summary-json` both use this tier first). A
+   missing, foreign or invalid mapping — or a mapped run whose capture
+   manifest fails the identity validation (kind `capture` +
+   `captured_conversation_id` = session id) — **fails closed with exit
+   12**: there is no fallback to a liveness scan, so a session can never
+   resolve, modify or finalize a run it does not own.
+2. `CODEX_SESSION_ID` unset (manual/controller shell) → exactly one live
+   product capture (canonical EPERM-aware liveness for
+   `agent-observability` commands; builtins-only probe for
    `agent-verify`, §8.5); multiple candidates are refused, never guessed.
 3. **Explicit override**: `FG_AGENT_RUN_ID` is a manual/debug override that
    always wins. The automatic path **never exports it** (one persistent ACP
    process serves many sessions/turns); any inherited value is dropped at
    the launch boundary.
 
-`context current` exit semantics: 10 = zero live captures; 11 = multiple
-(candidates named); an explicit run id always works, including after the
-run stopped. Latest/timestamp guessing is structurally impossible in the
-automatic path: the mapping names exactly one run per active turn, and
-`current-run`/`context current` refuse ambiguity instead of ranking
-candidates.
+`context current` / `current-run` exit semantics: 12 = session identity
+present but no valid mapping (fail closed); 10 = zero live captures; 11 =
+multiple (candidates named); an explicit run id always works, including
+after the run stopped. Latest/timestamp guessing is structurally
+impossible in the automatic path: the mapping names exactly one run per
+active turn, and `current-run`/`context current` refuse ambiguity instead
+of ranking candidates.
+
+`start` and `stop` additionally run under a **per-port lifecycle lock**
+(repo-local lock file under the git-ignored `.artifacts` tree; override
+`FG_OBS_LIFECYCLE_LOCK_FILE`): argument validation happens BEFORE the
+lock (invalid usage → exit 2 even when the lock directory is
+unavailable); a valid operation the lock cannot serve within its 90 s
+budget is refused with exit 13 and no state is changed; concurrent
+starts/stop calls serialize (a waiting `start` observes `already_running`
+instead of racing into a port conflict).
 
 ## 19. OTel capture pipeline
 
@@ -1938,15 +1974,15 @@ and `docs/agent/OBSERVABILITY.md`):
 | Command | Intended for | Key exit semantics |
 |---|---|---|
 | `status [--json]` | automatic normal operation (agents poll it) + manual diagnostics | 0 read-only success |
-| `start [--json]` | manual fallback + relay sidecar (automatic path) | 1 generic; 3 collector missing; 4 port conflict; `--json` single-write `started`/`already_running` |
-| `stop [--stop-status graceful\|interrupted]` | manual fallback + relay sidecar | 0; 9 ledger normalization failure (raw preserved) |
+| `start [--json]` | manual fallback + relay sidecar (automatic path) | 1 generic; 3 collector missing; 4 port conflict; 13 lifecycle lock unavailable/timeout (no state changed); `--json` single-write `started`/`already_running`; usage (exit 2) validated before the lock |
+| `stop [--stop-status graceful\|interrupted] [--expected-run <run-id>]` | manual fallback + relay sidecar | 0; 2 usage (validated before the lock); 9 ledger normalization failure (raw preserved); 12 ownership mismatch — `--expected-run` named a run that is not the single active run (refused, nothing stopped) or no run is active; 13 lifecycle lock unavailable/timeout (no state changed) |
 | `doctor [--json]` | manual diagnostics (pipeline acceptance) | AVAILABLE / NOT_CONFIGURED / BLOCKED / BROKEN |
 | `config` | one-time manual setup (prints the exact `[otel]` block for the product home) | refuses actionable destination when product identity unknown/corrupt |
 | `install` | host-level one-time collector install (opt-in) | 0; network failure nonzero |
 | `native-probe` | native probe/testing (pipeline acceptance, NOT product-session adoption proof) | 1; 4 port occupied; 5 no valid / ambiguous standalone Codex home |
 | `ledger [run-id] [--json]` | automatic (run by `stop`) + manual diagnostics | 0; 2 usage; 6 run dir missing; 7 manifest missing/malformed; 8 verification attribution mismatch |
 | `annotate <run-id> …` | manual diagnostics (post-hoc human input) | 0; 2 usage |
-| `context current\|<run-id> …` | automatic normal operation (agent attaches its given Task type + Session once per run) | 0; 2 validation; 7 corrupt stored; 10 zero live captures; 11 multiple |
+| `context current\|<run-id> …` | automatic normal operation (agent attaches its given Task type + Session once per run) | 0; 2 validation; 7 corrupt stored; 10 zero live captures (no session identity); 11 multiple; 12 session identity present but no valid mapping (fail closed) |
 | `product-runtime register\|show` | one-time setup from inside a product-agent session (also done idempotently by `context`) | 0; 5 `CODEX_HOME` unset (register); 7 corrupt (show) |
 | `current-run` | manual correlation helper (feeds reliable explicit `FG_AGENT_RUN_ID`) | 0; 10 zero; 11 multiple |
 | `current-run` | manual correlation helper (feeds reliable explicit `FG_AGENT_RUN_ID`) | 0; 10 zero; 11 multiple |
@@ -1972,7 +2008,7 @@ clean CI gate contract.
 |---|---|---|---|---|---|
 | `scripts/tests/agent-doctor.test.sh` | doctor output formats (human + JSON schema, stable capability order, summary consistency), exit codes, non-mutation, no secrets in output, simulated blockers (restricted PATH = missing runtimes; empty `PLAYWRIGHT_BROWSERS_PATH` = missing browser), optional-capability gating (`FG_DOCTOR_REQUIRE_OBSERVABILITY`), launch-error classification + cause sanitization, read-only contract markers in source | runs the real doctor against restricted environments; no collector | format drift, exit-code drift, mutation, secret leakage, optional-cap leakage into the result | none (harness only) | CORE mechanism, CONFIG probes |
 | `scripts/tests/agent-verify.test.sh` | usage, `plan` mode (read-only, rejects `--summary-json`), the `--summary-json` contract: schemaVersion-1 shape, exact announced commands, stable phase order, fail-fast (process rc == JSON exitCode, one failed phase, later phases `not_run`), no file without the flag, identical human output with/without flag (timing normalized), target validation (missing/unwritable/invalid dir rejected before any phase; no parent creation; relative paths vs caller CWD), no secrets/env in summary, no leftover temp files | **no real profile executes** — phase tools replaced by deterministic PATH shims with scripted exit codes (same restricted-PATH convention as the doctor tests) | summary schema drift, fail-fast contract drift, mutation/leakage | none | CORE |
-| `scripts/tests/agent-observability.test.sh` | usage/exit codes; `config` output contract (loopback endpoints, `log_user_prompt=false`, repo-config rationale); gitignore coverage of all runtime artifact paths; `status` read-only + deterministic; collector config template (sanitization statements, loopback-only); `pins.json` integrity; `manifest.py` seed/finalize/summary + interrupted-run safety; probe-client usage contract; `CODEX_HOME`/`CODEX_PATH` resolution (discovery, explicit authority, invalid/ambiguous fail-closed); ACP probe-client schema contract vs codex-acp 1.7.0 (fake-agent fixture); collector-dependent e2e (start/stop idempotency + fake-secret sanitization + doctor) — executed only when a collector is present and none is running, else SKIPPED; Run Ledger: deterministic normalization of a synthetic capture (fixture OTel + real manifest seed/finalize in a temp git repo), idempotency, activity/timing/token metrics, git/WIP evidence, failures without invented classifications, explicit verification correlation (agentRunId match/mismatch), doctor evidence, annotations, privacy (dropped-key values never reach the ledger), dedup identity (distinct paired records sharing the correlation tuple are kept — incl. the 0.148.0 paired `response.completed` with/without token counters — while byte-equivalent copies collapse and the pair's counters reach token accounting), captured-conversation attribution (v3 ledger: clean single-conversation run unchanged; captured + foreign conversation → primary metrics = captured only with the foreign telemetry explicitly reported; multiple foreign conversations deterministic; missing identity → run-wide aggregate + `captured_conversation_unknown` gap; historical-incident reconstruction), pathological-run diagnostics (v4, diagnostic-only: explicit deterministic signals with observed-value evidence — incident shape detected, short no-tool / healthy long / tool-failure negative shapes, extreme-foreign isolation, unevaluated-evidence discipline, byte-identical re-normalization, incident replay via the forensic fixture), manifest `captured_conversation_id` persistence (seed, finalize survival, invalid value fails safe to null), missing telemetry → null + gaps, malformed manifest → clear failure | mixed: static + Python unit-level + one real-collector e2e section (conditional) | schema/pin drift, privacy regression, determinism break, correlation mismatch, dedup over-collapse (counter-bearing records dropped), liveness semantic regression | none (synthetic captures only) | CORE |
+| `scripts/tests/agent-observability.test.sh` | usage/exit codes; `config` output contract (loopback endpoints, `log_user_prompt=false`, repo-config rationale); gitignore coverage of all runtime artifact paths; `status` read-only + deterministic; collector config template (sanitization statements, loopback-only); `pins.json` integrity; `manifest.py` seed/finalize/summary + interrupted-run safety; probe-client usage contract; `CODEX_HOME`/`CODEX_PATH` resolution (discovery, explicit authority, invalid/ambiguous fail-closed); ACP probe-client schema contract vs codex-acp 1.7.0 (fake-agent fixture); collector-dependent e2e (start/stop idempotency + fake-secret sanitization + doctor) — executed only when a collector is present and none is running, else SKIPPED; Run Ledger: deterministic normalization of a synthetic capture (fixture OTel + real manifest seed/finalize in a temp git repo), idempotency, activity/timing/token metrics, git/WIP evidence, failures without invented classifications, explicit verification correlation (agentRunId match/mismatch), doctor evidence, annotations, privacy (dropped-key values never reach the ledger), dedup identity (distinct paired records sharing the correlation tuple are kept — incl. the 0.148.0 paired `response.completed` with/without token counters — while byte-equivalent copies collapse and the pair's counters reach token accounting), captured-conversation attribution (v3 ledger: clean single-conversation run unchanged; captured + foreign conversation → primary metrics = captured only with the foreign telemetry explicitly reported; multiple foreign conversations deterministic; missing identity → run-wide aggregate + `captured_conversation_unknown` gap; historical-incident reconstruction), pathological-run diagnostics (v4, diagnostic-only: explicit deterministic signals with observed-value evidence — incident shape detected, short no-tool / healthy long / tool-failure negative shapes, extreme-foreign isolation, unevaluated-evidence discipline, byte-identical re-normalization, incident replay via the forensic fixture), manifest `captured_conversation_id` persistence (seed, finalize survival, invalid value fails safe to null), missing telemetry → null + gaps, malformed manifest → clear failure; per-turn ownership contract (t16, runs by default, deterministic with or without an inherited CODEX_SESSION_ID: 11 fail-closed session-resolution cases — missing/orphan/foreign mapping + manifest identity mismatches → exit 12, manual fallback without a session id keeps liveness semantics, foreign context attach blocked; stop --expected-run refuses foreign/inactive runs (exit 12) without touching them; usage errors precede the lifecycle lock (exit 2 even with an unusable lock path); relay mapping contract against the real module — compare-and-delete ownership (stale cleanup cannot remove a newer mapping), invalid identifiers fail closed, no torn temp files, flock serialization, atomic writes under concurrent writers/readers; relay start-error cleanup ownership contract against the real module (stubbed control surface, isolated runs/map/log dirs — a foreign live run that became active before unnamed-run cleanup is never stopped, adopted or mapped; a proven-own run is adopted and later stopped guarded with --expected-run; stop paths without a verified run id refuse structurally); lifecycle lock + same-second run-dir collision e2e on an isolated temp port/runs/lock — collision retry preserves run identity, concurrent starts serialize into started + already_running with exactly one live collector) | mixed: static + Python unit-level + one real-collector e2e section (conditional) + ownership e2e (collector-conditional, isolated temp port) | schema/pin drift, privacy regression, determinism break, correlation mismatch, dedup over-collapse (counter-bearing records dropped), liveness semantic regression, ownership/fail-closed regression (foreign run adopted, stale mapping removed, foreign run stopped, validation after lock) | none (synthetic captures only; e2e on isolated temp port) | CORE |
 | `scripts/tests/agent-product-launch.test.sh` | the per-**prompt-turn** lifecycle end-to-end: session open starts NO run; prompt A → run A (+ active-turn mapping); response A → graceful finalization (end Git evidence, ledger, mapping released, collector stopped) with the session STAYING ALIVE; prompt B → distinct run B; exact request-id correlation (forged wrong-id never finalizes; late duplicate bounded no-op); close during active turn → interrupted; duplicate/unknown closes harmless; no run for session-less process / session without prompt; prompt content never persisted; fragmented stream stays valid ACP; crash/signal fallbacks (crash mid-prompt → interrupted, no orphan collector, exit status kept; SIGTERM mid-turn → 143); concurrency (foreign live capture → fail open; after it ends the same session's next prompt is captured); run identity (inherited stale `FG_AGENT_RUN_ID` dropped; mapping resolves the turn's run including over a newer live run; explicit override still wins); verification correlation (summary attributed to the ACTIVE TURN's run via the mapping; finalization ledger consumes it); fail-open (broken collector → uncaptured, stream intact, bounded warning); re-opens (`session/resume` + `session/load` as fresh ROOT sessions, `session/fork` response id) — every prompt turn gets its own run; mapping-write failure contract; NDJSON wire on real newline-delimited traffic; opt-out `FG_AGENT_OBSERVABILITY=0`; doctor-snapshot knob; `start --json` contract; captured conversation identity persisted by the relay into the run manifest at start (`captured_conversation_id` — present after finalization and mapping release, echoed into the generated ledger identity); one-time install (backup/trampoline/config, idempotency, status, trampoline end-to-end with a real ACP session through the installed trampoline, fallback when the wrapper is missing, uninstall) | **yes** — real subprocesses: scenario driver + fake long-lived ACP server + **real collector** in temp dirs, plus the byte-level framer units (no collector needed) | lifecycle-boundary regression (wrong finalization trigger), correlation regression (id guessing), privacy leakage, install/rollback break, wire-format regression | none (fake ACP server stands in for the product launcher) | CORE mechanism + HOST INTEGRATION contract |
 | `scripts/tests/core-workflow.test.sh` | `.github/workflows/core.yml` security/contract invariants: triggers exactly PR(main)+dispatch (no push — main-push verification lives in the release DAG); `permissions: contents: read`; single job on pinned ubuntu (no `ubuntu-latest`) with bounded timeout; concurrency cancels PR superseded runs only; all `uses:` pinned to 40-char SHAs; `postgres:16` health-checked service on 5432; reproducible setup (`npm ci`, `uv sync --frozen`, **no** Playwright browser); exactly one canonical `agent-verify … core` invocation with the `--summary-json` target; upload conditions `!cancelled()` | no (static file assertions; optional actionlint if installed) | trigger/permission drift, unpinned action, non-canonical gate invocation, browser leak into core | none | CONFIG (FG CI wiring) |
 | `scripts/tests/e2e-workflow.test.sh` | same for `e2e.yml` (no push trigger), plus: Playwright chromium-only install; **no** direct `npm run test:e2e` / `playwright test` gate call — the only invocation is the canonical `agent-verify e2e` with `--summary-json`; `FG_ALLOW_E2E_RESET` appears **exactly once**, on the canonical gate line; exact upload matrix (summary `!cancelled()`; failure artifacts `failure() && !cancelled()`) | no (static) | consent flag duplication/missing, non-canonical gate, upload matrix drift | none | CONFIG |
@@ -2541,7 +2577,10 @@ beyond canonical safe ones (`stop`, `uninstall`, opt-out).
    failure-boundary table in §16.3/OBSERVABILITY.md. Stop: if no
    `relay-started`, the problem is upstream of the relay (trampoline /
    wrapper degradation) — that is a host-integration task, not a capture
-   retry.
+   retry. Note: exit 12 is a DIFFERENT state — a session identity
+   (`CODEX_SESSION_ID`) is present but has no valid mapping; that is
+   fail-closed by design (a foreign run is never adopted), not a missing
+   current run.
 8. **Run does not finalize** — evidence: `status` (run still
    `running`), relay log (`turn-response` present? `turn-finalize`?).
    Command: inspect the run dir + relay log. Class: harness defect if the

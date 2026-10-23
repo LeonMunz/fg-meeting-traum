@@ -124,6 +124,8 @@ docs/agent/OBSERVABILITY.md, "Automatic product-session lifecycle").
 
 import json
 import os
+import fcntl
+import contextlib
 import re
 import select
 import signal
@@ -292,34 +294,59 @@ def _mapping_path(session_id):
     return os.path.join(MAP_DIR, session_id)
 
 
-def write_mapping(session_id, run_id):
-    if not valid_id(session_id) or not RUN_ID_RE.match(run_id):
-        raise ValueError("invalid session/run identifier")
+@contextlib.contextmanager
+def _mapping_guard():
     os.makedirs(MAP_DIR, exist_ok=True)
-    tmp = os.path.join(MAP_DIR, ".%s.tmp.%d" % (session_id, os.getpid()))
-    with open(tmp, "w") as f:
-        f.write(run_id + "\n")
-    os.replace(tmp, _mapping_path(session_id))
+    with open(os.path.join(MAP_DIR, '.mapping.lock'), 'a+b') as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
+def write_mapping(session_id, run_id):
+    if not valid_id(session_id) or not isinstance(run_id, str) or not RUN_ID_RE.fullmatch(run_id):
+        raise ValueError('invalid session/run identifier')
+    with _mapping_guard():
+        fd, tmp = tempfile.mkstemp(
+            prefix='.mapping-write-', dir=MAP_DIR
+        )
+        try:
+            with os.fdopen(fd, 'w') as f:
+                f.write(run_id + '\n')
+            os.replace(tmp, _mapping_path(session_id))
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
 
 def read_mapping(session_id):
     if not valid_id(session_id):
         return None
     try:
-        with open(_mapping_path(session_id), "r") as f:
+        with open(_mapping_path(session_id)) as f:
             run_id = f.read().strip()
     except OSError:
         return None
-    return run_id if RUN_ID_RE.match(run_id) else None
+    return run_id if RUN_ID_RE.fullmatch(run_id) else None
 
-
-def remove_mapping(session_id):
-    if not valid_id(session_id):
-        return
+def remove_mapping(session_id, expected_run_id):
+    if not valid_id(session_id) or not isinstance(expected_run_id, str) or not RUN_ID_RE.fullmatch(expected_run_id):
+        return False
     try:
-        os.unlink(_mapping_path(session_id))
+        with _mapping_guard():
+            if read_mapping(session_id) != expected_run_id:
+                return False
+            try:
+                os.unlink(_mapping_path(session_id))
+                return True
+            except FileNotFoundError:
+                return False
     except OSError:
-        pass
+        # Unusable map dir (e.g. blocked): no mapping could have been
+        # written under it either (writes take the same guard), so the
+        # release is a no-op — it must never crash the relay.
+        return False
+
 
 
 # ------------------------------------------------------------- framer ----
@@ -457,11 +484,17 @@ def _short_exc():
 
 # ------------------------------------------------------------- sidecars ---
 
-def run_bounded(argv, timeout=60):
-    """Run a command to completion (stdin from /dev/null); return (rc, stdout, stderr)."""
+def run_bounded(argv, timeout=60, env=None):
+    """Run a command to completion (stdin from /dev/null); return (rc, stdout, stderr).
+
+    env=None inherits the relay environment (all existing callers); an
+    explicit env is used where a deterministic resolver branch is
+    required (see resolve_live_run_id).
+    """
     try:
         p = subprocess.Popen(argv, stdin=subprocess.DEVNULL,
-                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             env=env)
         out, err = p.communicate(timeout=timeout)
         return p.returncode, out, err
     except Exception:
@@ -479,6 +512,55 @@ def probe_running_state():
         return r.get("state", "unknown") if isinstance(r, dict) else "unknown"
     except Exception:
         return "unknown"
+
+
+def resolve_live_run_id():
+    """The control surface's single live product capture (its run id),
+    or None.
+
+    CODEX_SESSION_ID is stripped from the resolver environment so the
+    canonical single-live-capture branch is taken deterministically
+    (a failed turn holds no mapping, so a session-bound resolution
+    could only fail closed anyway). rc 10 (no live capture), 11
+    (ambiguous) and malformed output all resolve to None — never a
+    guess, and no fallback to newest-run semantics.
+    """
+    cur_env = {k: v for k, v in os.environ.items()
+               if k != "CODEX_SESSION_ID"}
+    try:
+        rc, out, _ = run_bounded([OBSCTL, "current-run"], timeout=30,
+                                 env=cur_env)
+    except Exception:
+        return None
+    if rc != 0:
+        return None
+    run_id = out.decode("utf-8", "replace").strip()
+    if not RUN_ID_RE.fullmatch(run_id):
+        return None
+    return run_id
+
+
+def run_belongs_to_session(run_id, session_id):
+    """Authoritative ownership check for a live run: its capture
+    manifest must be kind "capture" with
+    captured_conversation_id == session_id.
+
+    Only this session's start sidecar was ever passed that identity
+    (FG_OBS_CAPTURED_CONVERSATION_ID), so a matching manifest proves the
+    run was seeded for this session — the same trust anchor the control
+    surface uses for session/run resolution. A missing, unreadable,
+    invalid or mismatched manifest fails closed (the run is left
+    alone); the run id is validated by the caller.
+    """
+    manifest = os.path.join(RUNS_DIR, run_id, "capture-manifest.json")
+    try:
+        with open(manifest, "r") as f:
+            m = json.load(f)
+    except (OSError, ValueError, UnicodeDecodeError):
+        return False
+    return (isinstance(m, dict)
+            and m.get("kind") == "capture"
+            and m.get("captured_conversation_id") == session_id)
 
 
 class StartSidecar:
@@ -604,18 +686,35 @@ class StartSidecar:
 
 
 class StopSidecar:
-    """`agent-observability stop --stop-status <s>` (runs to completion)."""
+    """`agent-observability stop --stop-status <s> --expected-run <r>`
+    (runs to completion).
 
-    def __init__(self, stop_status):
+    The ownership guard is structural: a stop process is spawned ONLY
+    with a verified run id. Without one, nothing is spawned (rc 12) —
+    a stop without --expected-run could finalize a DIFFERENT session's
+    live collector, so no path may issue it.
+    """
+
+    def __init__(self, stop_status, expected_run):
+        self.stop_status = stop_status
+        self.deadline = time.monotonic() + STOP_WAIT
+        self.rc = None
+        self.proc = None
+        self.out_file = None
+        self.err_file = None
+        if not (isinstance(expected_run, str)
+                and RUN_ID_RE.fullmatch(expected_run)):
+            self.rc = 12
+            log("stop-refused stop_status=%s reason=no-verified-run"
+                % stop_status)
+            return
         self.out_file = tempfile.mktemp(prefix="fg-relay-stop-out.")
         self.err_file = tempfile.mktemp(prefix="fg-relay-stop-err.")
         with open(self.out_file, "wb") as of, open(self.err_file, "wb") as ef:
             self.proc = subprocess.Popen(
-                [OBSCTL, "stop", "--stop-status", stop_status],
+                [OBSCTL, "stop", "--stop-status", stop_status,
+                   "--expected-run", expected_run],
                 stdin=subprocess.DEVNULL, stdout=of, stderr=ef)
-        self.stop_status = stop_status
-        self.deadline = time.monotonic() + STOP_WAIT
-        self.rc = None
 
     def poll(self):
         if self.rc is not None:
@@ -634,12 +733,15 @@ class StopSidecar:
         return False
 
     def cleanup(self):
-        try:
-            self.proc.kill()
-            self.proc.wait(timeout=5)
-        except Exception:
-            pass
+        if self.proc is not None:
+            try:
+                self.proc.kill()
+                self.proc.wait(timeout=5)
+            except Exception:
+                pass
         for f in (self.out_file, self.err_file):
+            if f is None:
+                continue
             try:
                 os.unlink(f)
             except OSError:
@@ -944,7 +1046,7 @@ class Relay:
             return
         if st["state"] == "open":
             st["state"] = "finalizing"
-            st["stop"] = StopSidecar(status)
+            st["stop"] = StopSidecar(status, st["run_id"])
             self._events.write("turn-finalize session=%s id=%s "
                                "stop_status=%s run=%s"
                                % (sid, _fmt_id(mid), status, st["run_id"]))
@@ -982,7 +1084,7 @@ class Relay:
             # it finalizes as interrupted (never graceful).
             st["closed"] = True
             st["state"] = "finalizing"
-            st["stop"] = StopSidecar("interrupted")
+            st["stop"] = StopSidecar("interrupted", st["run_id"])
             self._events.write("close-launched session=%s run=%s stop_status=interrupted"
                                % (sid, st["run_id"]))
             return
@@ -1026,7 +1128,7 @@ class Relay:
                         # turn is over, so nothing resolves to it, and the
                         # run is released moments later.
                         st["state"] = "finalizing"
-                        st["stop"] = StopSidecar(st["stop_status"])
+                        st["stop"] = StopSidecar(st["stop_status"], st["run_id"])
                         self._events.write("turn-finalize-during-start session=%s "
                                            "run=%s stop_status=%s"
                                            % (sid, run_id, st["stop_status"]))
@@ -1060,12 +1162,12 @@ class Relay:
                 st["stop"] = None
                 stop.cleanup()
                 if stop.rc == 0:
-                    remove_mapping(sid)
+                    remove_mapping(sid, st["run_id"])
                     st["state"] = "closed" if st["closed"] else "idle"
                     st["turn_id"] = None
                     self._clear_shadow(st)
                     self._events.write("stop-result session=%s stop_status=%s rc=0 "
-                                       "run=%s mapping=released"
+                                       "run=%s mapping=release-checked"
                                        % (sid, stop.stop_status, st["run_id"]))
                 else:
                     # The turn itself is over (its prompt response or close
@@ -1081,17 +1183,25 @@ class Relay:
 
     def _handle_start_error(self, sid, st, sidecar, detail):
         # Deadline / contract failure: the run may or may not be live.
-        # If the port was free before we started and is live now, the run
-        # is ours (no one else could bind the port): adopt it via the
-        # deterministic resolver, or clean it up if we cannot name it.
+        # Adopting or finalizing a live run requires AUTHORITATIVE
+        # ownership evidence: the single live product run's capture
+        # manifest must be kind "capture" with
+        # captured_conversation_id == this session. The owned-port
+        # snapshot alone is NOT sufficient: the port may have been free
+        # when this turn's start began and a DIFFERENT session may have
+        # bound it since — stopping (or adopting) that run would violate
+        # the ownership invariant. Without proven ownership no stop is
+        # issued (fail closed): the turn runs uncaptured, a bounded
+        # diagnostic names the active run, and any truly orphaned run is
+        # reconciled by the control surface on the next start.
         state = probe_running_state()
         if state == "running" and sidecar.owned_port:
-            rc, out, _ = run_bounded([OBSCTL, "current-run"], timeout=30)
-            run_id = out.decode("utf-8", "replace").strip()
-            if rc == 0 and RUN_ID_RE.match(run_id):
+            run_id = resolve_live_run_id()
+            if (run_id is not None
+                    and run_belongs_to_session(run_id, sid)):
                 if st["stop_status"] is not None:
-                    # The turn already ended: finalize the adopted run
-                    # with the decided status.
+                    # The turn already ended: finalize the PROVEN-OWN run
+                    # with the decided status (guarded stop).
                     st["run_id"] = run_id
                     self._stop_sync(sid, st, st["stop_status"])
                     return
@@ -1106,24 +1216,44 @@ class Relay:
                     pass
                 self._stop_sync(sid, st, "interrupted")
                 return
-            else:
-                # A live run we cannot name: it is still ours (port was
-                # free before) — stop it so it cannot orphan.
-                self._stop_sync(sid, st, "interrupted")
-                return
+            # A live run exists that we CANNOT prove is ours (no live
+            # run the resolver can name, ambiguous, or manifest identity
+            # mismatch): never stop it.
+            self._events.write("start-cleanup-skipped session=%s "
+                               "reason=ownership-unproven active_run=%s"
+                               % (sid, run_id or "none"))
         st["state"] = "uncaptured"
         st["turn_id"] = None
         log("session %s turn not captured: %s" % (sid, str(detail)[:160]))
 
     def _stop_sync(self, sid, st, stop_status):
+        # Ownership guard (fail closed): a stop may only target the run
+        # id this session verified as its own (the start contract named
+        # it, or the live run's capture manifest proved it). Without a
+        # verified run id there is NO authoritative ownership evidence:
+        # an unguarded stop could finalize a DIFFERENT session's live
+        # collector, so no stop is issued at all — one bounded
+        # diagnostic, the session state is released, and any live run
+        # (ours or not) is left for the control surface's orphan
+        # reconciliation on the next start.
+        run_id = st.get("run_id")
+        if not (isinstance(run_id, str) and RUN_ID_RE.fullmatch(run_id)):
+            st["state"] = "closed" if st.get("closed") else "idle"
+            st["turn_id"] = None
+            self._clear_shadow(st)
+            self._events.write("stop-refused session=%s "
+                               "reason=no-verified-run stop_status=%s"
+                               % (sid, stop_status))
+            return
+        argv = [OBSCTL, "stop", "--stop-status", stop_status,
+                "--expected-run", run_id]
         try:
-            rc, _, err = run_bounded(
-                [OBSCTL, "stop", "--stop-status", stop_status], timeout=STOP_WAIT + 30)
+            rc, _, err = run_bounded(argv, timeout=STOP_WAIT + 30)
         except Exception:
             rc = 1
             err = b""
         if rc == 0:
-            remove_mapping(sid)
+            remove_mapping(sid, run_id)
             st["state"] = "closed" if st["closed"] else "idle"
             st["turn_id"] = None
             self._clear_shadow(st)
@@ -1251,7 +1381,7 @@ class Relay:
                     time.sleep(0.1)
                 stop.cleanup()
                 if stop.rc == 0:
-                    remove_mapping(sid)
+                    remove_mapping(sid, st["run_id"])
                     st["state"] = "closed"
                     self._clear_shadow(st)
                 else:

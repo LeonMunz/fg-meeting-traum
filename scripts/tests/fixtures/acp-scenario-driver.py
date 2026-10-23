@@ -1452,8 +1452,15 @@ def scenario_session_reopen(repo, workdir, fake_bin=None,
               runs == sorted(runs_seen),
               "expected=%s actual=%s" % (sorted(runs_seen), runs))
         mapdir = os.path.join(workdir, "map")
+        # .mapping.lock (flock guard) and .mapping-write-* temps are
+        # mapping-GUARD artifacts, not mappings: they may remain.
+        def _is_mapping(name):
+            return not (name == ".mapping.lock"
+                        or name.startswith(".mapping-write-"))
+
         released = wait_for(
-            lambda: not os.path.isdir(mapdir) or os.listdir(mapdir) == [],
+            lambda: not os.path.isdir(mapdir)
+            or not any(_is_mapping(n) for n in os.listdir(mapdir)),
             20, None)
         check("tH0u all mappings released", released,
               "maps=%s" % (os.listdir(mapdir) if os.path.isdir(mapdir)

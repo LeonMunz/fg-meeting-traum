@@ -6,7 +6,13 @@
 #   ./scripts/agent-observability start [--json]    idempotently start the local collector
 #                                               (--json: machine-readable
 #                                               start contract on stdout)
-#   ./scripts/agent-observability stop              gracefully stop + finalize the run
+#   ./scripts/agent-observability stop [--stop-status graceful|interrupted]
+#                                               [--expected-run <run-id>]
+#                                               gracefully stop + finalize
+#                                               the run (ownership guard:
+#                                               --expected-run refuses to
+#                                               stop any run it is not
+#                                               named for, exit 12)
 #   ./scripts/agent-observability doctor [--json]   end-to-end local OTLP capability probe
 #   ./scripts/agent-observability config            print the Codex user-level [otel] config
 #   ./scripts/agent-observability install           explicitly fetch the pinned collector
@@ -299,7 +305,11 @@ session_map_dir() {
 
 # Print the run dir mapped from CODEX_SESSION_ID (this session's run).
 # Fails closed on an unset/malformed session id, a malformed stored run id,
-# or a missing run dir (e.g. pruned). Never invents a mapping.
+# a missing run dir (e.g. pruned), or a manifest identity mismatch: the
+# mapped run's capture manifest must be kind "capture" with
+# captured_conversation_id == the session id, so a mapping that cannot
+# prove the run belongs to this session never resolves. Never invents a
+# mapping.
 session_mapped_run_dir() {
   local sid="${CODEX_SESSION_ID:-}"
   [ -n "$sid" ] || return 1
@@ -317,26 +327,51 @@ session_mapped_run_dir() {
   [ "${#run_id}" -le 128 ] || return 1
   local d="$RUNS_DIR/$run_id"
   [ -d "$d" ] || return 1
+
+  local py
+  py="$(probe_python)"
+  [ -n "$py" ] || return 1
+  "$py" - "$d/capture-manifest.json" "$sid" <<'MANIFEST_CHECK' >/dev/null 2>&1 || return 1
+import json
+import sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as f:
+        m = json.load(f)
+except (OSError, ValueError, UnicodeError):
+    sys.exit(1)
+valid = (isinstance(m, dict)
+         and m.get("kind") == "capture"
+         and m.get("captured_conversation_id") == sys.argv[2])
+sys.exit(0 if valid else 1)
+MANIFEST_CHECK
+
   printf '%s' "$d"
   return 0
 }
 
 # Resolve the current run to its run dir (deterministic; no
-# timestamp-nearest guessing anywhere). Two tiers, in order:
-#   1) the ACP session mapping — when CODEX_SESSION_ID names a session that
-#      has a stored run mapping, that run is THIS session's run (exact,
-#      even after the run stopped);
-#   2) the single live product capture (canonical liveness semantic).
-# Sets the global CURRENT_RUN_DIR on success; tier 2 exits 10 (zero live
-# captures) or 11 (several). Must be called in the current shell, never
-# inside a command substitution (die() exits). Reused by `context current`
-# and `current-run`.
+# timestamp-nearest guessing anywhere). Strict per session identity:
+#   1) CODEX_SESSION_ID set -> ONLY this session's stored mapping may
+#      resolve, and only when the mapped run's capture manifest is kind
+#      "capture" with captured_conversation_id == CODEX_SESSION_ID
+#      (manifest identity validation). A missing, foreign or invalid
+#      mapping fails closed with exit 12 — there is NO fallback to a
+#      liveness scan, so a session can never adopt a foreign run;
+#   2) CODEX_SESSION_ID unset (manual/controller shell) -> the single
+#      live product capture (canonical liveness semantic); exits 10
+#      (zero live captures) or 11 (several).
+# Sets the global CURRENT_RUN_DIR on success. Must be called in the
+# current shell, never inside a command substitution (die() exits).
+# Reused by `context current` and `current-run`.
 resolve_current_run_dir() {
   local live=() r mapped
   CURRENT_RUN_DIR=""
-  if mapped="$(session_mapped_run_dir)"; then
-    CURRENT_RUN_DIR="$mapped"
-    return 0
+  if [ -n "${CODEX_SESSION_ID:-}" ]; then
+    if mapped="$(session_mapped_run_dir)"; then
+      CURRENT_RUN_DIR="$mapped"
+      return 0
+    fi
+    die "no valid capture mapped for this session" 12
   fi
   while IFS= read -r r; do
     [ -n "$r" ] && live+=("$r")
@@ -1103,9 +1138,16 @@ cmd_start() {
   mkdir -p "$RUNS_DIR"
 
   local run_id run_dir
-  run_id="run-$(date -u +%Y%m%dT%H%M%SZ)"
-  run_dir="$RUNS_DIR/$run_id"
-  mkdir -p "$run_dir/raw"
+  local attempts=0
+  while :; do
+    run_id="run-$(date -u +%Y%m%dT%H%M%SZ)"
+    run_dir="$RUNS_DIR/$run_id"
+    if mkdir "$run_dir" 2>/dev/null; then break; fi
+    attempts=$((attempts + 1))
+    [ "$attempts" -lt 5 ] || die "run directory collision" 1
+    sleep 1
+  done
+  mkdir "$run_dir/raw" || die "raw directory creation failed" 1
 
   # NOTE: no FG_OBS_CODEX_VERSION seed here. The capture manifest must not
   # carry the controller/standalone `codex` on PATH (or CODEX_PATH) version
@@ -1200,6 +1242,7 @@ except Exception:
 
 cmd_stop() {
   local final_status="graceful"
+  local expected_run="" expected_set=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --stop-status)
@@ -1207,8 +1250,14 @@ cmd_stop() {
         final_status="$2"
         shift 2
         ;;
+      --expected-run)
+        [ $# -ge 2 ] || die "stop: --expected-run requires a value (run id)" 2
+        expected_run="$2"
+        expected_set=1
+        shift 2
+        ;;
       *)
-        die "unknown option for stop: $1 (usage: agent-observability stop [--stop-status graceful|interrupted])" 2
+        die "unknown option for stop: $1 (usage: agent-observability stop [--stop-status graceful|interrupted] [--expected-run <run-id>])" 2
         ;;
     esac
   done
@@ -1216,8 +1265,20 @@ cmd_stop() {
     graceful|interrupted) ;;
     *) die "stop: invalid --stop-status value: $final_status (allowed: graceful, interrupted)" 2 ;;
   esac
+  # --expected-run ownership guard (used by the product-session relay):
+  # this stop may only finalize the named run. Syntax errors are usage
+  # errors (exit 2) regardless of collector state; an ownership mismatch
+  # refuses the stop with exit 12 and touches nothing — a stale lifecycle
+  # operation can never stop a different run.
+  if [ "$expected_set" = 1 ]; then
+    [[ "$expected_run" =~ ^[A-Za-z0-9._-]{1,128}$ ]] || die "stop: invalid --expected-run value: $expected_run (usage: agent-observability stop [--stop-status graceful|interrupted] [--expected-run <run-id>])" 2
+  fi
   local runline run_dir
   runline="$(running_run)"
+  if [ "$expected_set" = 1 ]; then
+    [ -n "$runline" ] || die "expected run not active: $expected_run (no run is active)" 12
+    [ "${runline%%|*}" = "$expected_run" ] || die "foreign run: stop refused (active run ${runline%%|*} is not the expected $expected_run)" 12
+  fi
   if [ -z "$runline" ]; then
     # Clean stale pid files, finalize any unfinalized latest run.
     local d pidfile
@@ -1685,11 +1746,19 @@ Usage:
       the reported run belongs to another session. Failures: no JSON
       on stdout, error on stderr, human exit codes preserved.
   ./scripts/agent-observability stop [--stop-status graceful|interrupted]
+      [--expected-run <run-id>]
       [--stop-status interrupted] finalizes the run as an interrupted
       session close (the product-session lifecycle fallback: the ACP
       connection/process died with the session still open) instead of a
       graceful close. The collector is still stopped gracefully and all
       raw evidence is preserved.
+      [--expected-run <run-id>] ownership guard (used by the
+      product-session relay's stop sidecar): refuse to stop (exit 12)
+      unless the single active run is exactly <run-id> — a stale
+      lifecycle operation can never stop a different run (exit 12 also
+      when no run is active). start/stop run under a per-port lifecycle
+      lock (exit 13 when the lock is unavailable or its 90 s budget
+      expires; invalid usage still exits 2 before the lock is touched).
   ./scripts/agent-observability doctor [--json]
   ./scripts/agent-observability config
   ./scripts/agent-observability install
@@ -1704,12 +1773,16 @@ Usage:
       capture (or an explicit <run-id> instead of 'current')
   ./scripts/agent-observability current-run
       print the id of this session's product run. Read-only,
-      deterministic, two tiers: (1) when CODEX_SESSION_ID names an ACP
-      session with a stored session/run mapping (the automatic
-      product-session lifecycle), the mapped run id — exact, no liveness
-      or timestamp guessing; (2) otherwise the single live product
-      capture (same liveness as status / context current); exit 10 if
-      none, 11 if several. Feed it to agent-verify as FG_AGENT_RUN_ID for
+      deterministic, strict per session identity: (1) when
+      CODEX_SESSION_ID is set, ONLY that session's stored session/run
+      mapping may resolve — and only when the mapped run's capture
+      manifest is kind "capture" with captured_conversation_id equal to
+      CODEX_SESSION_ID (manifest identity validation); a missing,
+      foreign or invalid mapping fails closed with exit 12 (no fallback
+      to another run, no liveness scan); (2) when CODEX_SESSION_ID is
+      unset (manual/controller shell), the single live product capture
+      (same liveness as status / context current); exit 10 if none,
+      11 if several. Feed it to agent-verify as FG_AGENT_RUN_ID for
       reliable cross-identity correlation.
   ./scripts/agent-observability product-runtime register|show
       register/show the product-agent runtime identity (the product
@@ -1753,7 +1826,10 @@ Run Ledger (normalized, versioned run records):
       optional bounded slugs (1-128 chars of [A-Za-z0-9._-], never
       prompt text). 'current' succeeds only when exactly one live product
       capture exists; zero or multiple fail closed (no guessing).
-      Idempotent; existing fields are preserved.
+      Idempotent; existing fields are preserved. 'current' from a
+      product-agent session (CODEX_SESSION_ID set) resolves ONLY that
+      session's valid mapping (fail closed with exit 12 on a missing,
+      foreign or invalid mapping — a foreign run is never adopted).
 
 Product runtime identity (product Codex home):
   status / config / start resolve the *product* Codex home from
@@ -1779,6 +1855,9 @@ Environment overrides:
   FG_OBS_RUNS_DIR (runs root; default .artifacts/agent-runs — testability),
   FG_PRODUCT_SESSION_MAP_DIR (session/run mapping dir; default
   .artifacts/agent-observability/session-runs — testability),
+  FG_OBS_LIFECYCLE_LOCK_FILE (start/stop lifecycle lock file; default
+  .artifacts/agent-observability/lifecycle-locks/collector-<port>.lock —
+  testability),
   FG_OTELCOL (explicit collector binary), CODEX_ACP_ADAPTER (adapter path),
   FG_OBS_PROBE_TIMEOUT (ms, native-probe),
   FG_OBS_CAPTURED_CONVERSATION_ID (bounded conversation identifier; set by
@@ -1807,16 +1886,108 @@ Exit codes:
   9  ledger normalization failed after stop (raw capture preserved)
   10 no active product capture (context current / current-run)
   11 ambiguous: multiple active product captures (context current / current-run)
+  12 session/run ownership mismatch: stop --expected-run named a run
+     that is not the single active run (refused, nothing stopped), or
+     current-run / context current ran with a CODEX_SESSION_ID that has
+     no valid session/run mapping (fail closed — a foreign run is
+     never adopted)
+  13 lifecycle lock failure: the start/stop lifecycle lock is
+     unavailable (cannot create/open the lock file) or was not
+     acquired within its 90 s budget — refused, no state changed
 EOF
+}
+
+# Lifecycle lock (start/stop serialization): valid lifecycle operations
+# run under one exclusive lock per OTLP port so concurrent start/stop
+# calls cannot interleave run creation, manifest writes, or collector
+# shutdown. The lock file sits next to the state it protects (git-ignored
+# .artifacts tree; override: FG_OBS_LIFECYCLE_LOCK_FILE). The locking
+# wrapper re-executes this script with LUCID_PHASE2_LOCKED=1 (same argv,
+# same environment) while holding the lock; a valid operation that cannot
+# acquire the lock within its 90 s budget is refused with exit 13 and no
+# state is changed. Argument validation happens BEFORE this wrapper
+# (main): invalid usage exits 2 without touching the lock.
+lifecycle_locked_main() {
+  local py lock_file
+  py="$(probe_python)"
+  [ -n "$py" ] || die "Python required for lifecycle lock" 1
+  lock_file="${FG_OBS_LIFECYCLE_LOCK_FILE:-$OBS_DIR/lifecycle-locks/collector-${PORT}.lock}"
+  "$py" - "$lock_file" "$0" "$@" <<'LUCID_PHASE2_LOCK_PY'
+import fcntl, os, subprocess, sys, time
+path, script, *argv = sys.argv[1:]
+try:
+    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+    with open(path, 'a+b') as h:
+        end = time.monotonic() + 90
+        while True:
+            try:
+                fcntl.flock(
+                    h.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB
+                )
+                break
+            except BlockingIOError:
+                if time.monotonic() > end:
+                    sys.exit(13)
+                time.sleep(.1)
+        env = dict(os.environ, LUCID_PHASE2_LOCKED='1')
+        sys.exit(
+            subprocess.run(
+                ['/bin/bash', script, *argv], env=env
+            ).returncode
+        )
+except OSError as e:
+    print('Lifecycle lock failed: %s' % e, file=sys.stderr)
+    sys.exit(13)
+LUCID_PHASE2_LOCK_PY
+}
+
+# Argument validation for the lifecycle-locked commands (start/stop), run
+# BEFORE the lifecycle lock is acquired: invalid usage must return the
+# documented usage error (exit 2) even when the lock directory is
+# unavailable, and a malformed invocation must never touch the lock.
+stop_args_wellformed() { # $@ = everything after 'stop'
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --stop-status)
+        [ $# -ge 2 ] || return 1
+        case "$2" in graceful|interrupted) ;; *) return 1 ;; esac
+        shift 2
+        ;;
+      --expected-run)
+        [ $# -ge 2 ] || return 1
+        [[ "$2" =~ ^[A-Za-z0-9._-]{1,128}$ ]] || return 1
+        shift 2
+        ;;
+      *) return 1 ;;
+    esac
+  done
+  return 0
 }
 
 main() {
   local cmd="${1:-help}"
+  if [ "$cmd" = start ] || [ "$cmd" = stop ]; then
+    # Syntax/argument validation precedes the lifecycle lock (see above).
+    if [ "$cmd" = start ]; then
+      [ $# -le 2 ] || { usage >&2; exit 2; }
+      case "${2:-}" in
+        ""|--json) ;;
+        *) usage >&2; exit 2 ;;
+      esac
+    else
+      [ $# -le 5 ] || { usage >&2; exit 2; }
+      stop_args_wellformed "${@:2}" || { usage >&2; exit 2; }
+    fi
+    if [ "${LUCID_PHASE2_LOCKED:-0}" != 1 ]; then
+      lifecycle_locked_main "$@"
+      return $?
+    fi
+  fi
   shift || true
   case "$cmd" in
     status) [ $# -le 1 ] || { usage >&2; exit 2; }; cmd_status "${1:-}" ;;
     start) [ $# -le 1 ] || { usage >&2; exit 2; }; cmd_start "${1:-}" ;;
-    stop) [ $# -le 2 ] || { usage >&2; exit 2; }; cmd_stop "$@" ;;
+    stop) [ $# -le 4 ] || { usage >&2; exit 2; }; cmd_stop "$@" ;;
     doctor) [ $# -le 1 ] || { usage >&2; exit 2; }; cmd_doctor "${1:-}" ;;
     config) [ $# -eq 0 ] || { usage >&2; exit 2; }; cmd_config ;;
     install) [ $# -eq 0 ] || { usage >&2; exit 2; }; cmd_install ;;

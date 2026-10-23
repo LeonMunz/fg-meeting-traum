@@ -192,6 +192,7 @@ Notes:
 ./scripts/agent-observability status [--json]
 ./scripts/agent-observability start [--json]
 ./scripts/agent-observability stop [--stop-status graceful|interrupted]
+                                       [--expected-run <run-id>]
 ./scripts/agent-observability doctor [--json]
 ./scripts/agent-observability config
 ./scripts/agent-observability install
@@ -252,7 +253,8 @@ Notes:
     to stderr and the human exit codes are preserved (1 generic, 3
     collector missing, 4 port conflict). Doctor-snapshot diagnostics,
     when the snapshot runs, go to stderr only.
-- `stop [--stop-status graceful|interrupted]` — graceful (SIGTERM,
+- `stop [--stop-status graceful|interrupted]
+  [--expected-run <run-id>]` — graceful (SIGTERM,
   drain/flush, manifest finalization, end-of-run Git evidence), handles
   already-stopped state, cleans transient PID files, never deletes trace
   history — and then **automatically normalizes the run into
@@ -262,7 +264,15 @@ Notes:
   records a normal close; `--stop-status interrupted` records the
   run as an interruption — used by the session-lifecycle relay's
   process-exit fallback and available for manually reconciling an
-  orphaned run.
+  orphaned run. `--expected-run <run-id>` is the **ownership guard** the
+  relay's stop sidecar uses: the stop is refused (exit 12) unless the
+  single active run is exactly `<run-id>` — a stale lifecycle operation
+  can never stop a different run (exit 12 also when no run is active);
+  an invalid value is a usage error (exit 2). `start` and `stop` run
+  under the per-port **lifecycle lock** (below); invalid usage returns
+  the usage error (exit 2) BEFORE the lock is acquired, and a valid
+  operation the lock cannot serve is refused with exit 13 (no state
+  changed).
 - `doctor` — end-to-end local OTLP capability: starts an ephemeral
   collector in a temp dir, injects a synthetic OTLP payload containing
   **fake secrets**, and verifies the payload is persisted **without** the
@@ -285,13 +295,26 @@ Notes:
   owned collector); only a nonexistent PID (ESRCH) is dead — plus manifest
   kind `capture`; probes never count) and fails closed with exit 10
   (zero) or exit 11 (multiple) — no timestamp-nearest guessing.
-  Idempotent; existing fields are preserved. When run from a product-agent
+  **Strict per session identity**: when `CODEX_SESSION_ID` is set,
+  `current` resolves ONLY that session's stored mapping (validated
+  against the run's manifest identity, see Session/run identity) and
+  fails closed with exit 12 on a missing, foreign or invalid mapping —
+  a foreign run is never adopted. Idempotent; existing fields are
+  preserved. When run from a product-agent
   session it also records the product-runtime registration idempotently.
-- `current-run` — read-only, deterministic resolver for the single **live**
-  product capture (the same canonical liveness as `status` and `context
-  current`). Prints just the run id; exits 10 (zero) / 11 (multiple). Use
-  it to feed a reliable explicit `FG_AGENT_RUN_ID` to `agent-verify`
-  across the controller/agent identity boundary.
+- `current-run` — read-only, deterministic resolver, **strict per
+  session identity**. When `CODEX_SESSION_ID` is set, ONLY this
+  session's stored session/run mapping may resolve — and only when the
+  mapped run's capture manifest is kind `capture` with
+  `captured_conversation_id` equal to `CODEX_SESSION_ID` (manifest
+  identity validation); a missing, foreign or invalid mapping fails
+  closed with exit 12 (no fallback to another run, no liveness scan).
+  When `CODEX_SESSION_ID` is unset (manual/controller shell), it
+  resolves the single **live** product capture (the same canonical
+  liveness as `status` and `context current`). Prints just the run id;
+  exits 12 (session identity, no valid mapping) / 10 (zero) /
+  11 (multiple). Use it to feed a reliable explicit `FG_AGENT_RUN_ID`
+  to `agent-verify` across the controller/agent identity boundary.
 - `product-runtime register|show` — record/show the bounded product-agent
   runtime identity (the product `CODEX_HOME`) that `status`/`config`/`start`
   use when no live `CODEX_HOME` is in scope. `register` must run FROM INSIDE
@@ -824,10 +847,21 @@ The relay's only protocol role is observation:
   grouping dimension every run of the session shares.
 - The mapping `.artifacts/agent-observability/session-runs/<session-id>`
   stores exactly one bounded run id per session file (git-ignored;
-  atomic write): the id of that session's **active prompt turn**. It
-  is written when the turn's run comes up and released when the turn
-  finalizes; between turns the session has no mapping, and nothing
-  resolves to a finished run.
+  atomic write, guarded by an exclusive mapping lock so concurrent
+  mapping changes serialize): the id of that session's **active prompt
+  turn**. It is written when the turn's run comes up and released when
+  the turn finalizes; between turns the session has no mapping, and
+  nothing resolves to a finished run.
+  The release is **ownership-checked** (compare-and-delete): the relay
+  removes the mapping only when it still names the run THIS session's
+  turn owns — a stale lifecycle operation can never delete a newer
+  `(session, run)` mapping.
+  Resolution is equally strict: a mapping only resolves when the mapped
+  run's capture manifest is kind `capture` with
+  `captured_conversation_id` equal to the session id (**manifest
+  identity validation**); a missing, foreign or invalid mapping fails
+  closed (exit 12) — a session can never resolve, modify or finalize a
+  run it does not own.
 - When the turn's run comes up, the relay persists the session's native
   Codex conversation id into the run's capture manifest
   (`captured_conversation_id`, at seed time). Unlike the mapping, that
@@ -852,17 +886,24 @@ The automatic path **does not export `FG_AGENT_RUN_ID`** — one
 persistent ACP process serves many sessions and turns, so a
 process-global id cannot represent them. Resolution is tiered:
 
-1. **Session mapping (automatic path, authoritative)**:
-   `CODEX_SESSION_ID` → mapping file → the exact run of this
-   session's ACTIVE prompt turn. Both `agent-observability context
-   current` and `agent-verify --summary-json` auto-correlation use
-   this tier first. Between turns the session has no mapping, so
+1. **Session mapping (automatic path, authoritative, strict)**:
+   when `CODEX_SESSION_ID` is set, ONLY the mapping file for THAT
+   session is consulted — a missing, foreign or invalid mapping (or a
+   mapped run whose manifest fails the identity validation) fails
+   closed with exit 12 for `context current` / `current-run`: there is
+   NO fallback to a liveness scan, so a session can never adopt a
+   foreign run. When the mapping is valid, it names the exact run of
+   this session's ACTIVE prompt turn; both `agent-observability
+   context current` and `agent-verify --summary-json` auto-correlation
+   use this tier first. Between turns the session has no mapping, so
    nothing resolves — work outside an observed turn is simply not
    correlated, which is correct (there is no turn to correlate it
    to).
-2. **Single live capture (manual path)**: with no session mapping,
-   exactly one live capture is selected by pidfile liveness (probes
-   excluded); multiple candidates are refused, never guessed.
+2. **Single live capture (manual fallback)**: only when
+   `CODEX_SESSION_ID` is unset (a manual/controller shell with no
+   product session identity), exactly one live capture is selected by
+   pidfile liveness (probes excluded); multiple candidates are
+   refused, never guessed.
 3. **Explicit `FG_AGENT_RUN_ID`**: a manual/debug override that always
    wins. The automatic path never sets it; any inherited value is
    dropped at the launch boundary.
@@ -905,14 +946,19 @@ session/prompt request (client → server)
      record; ACP serializes prompts per session)
 matching session/prompt response (carries stopReason)
    → stop sidecar: agent-observability stop --stop-status graceful
+        --expected-run <this turn's run> (ownership guard: the stop is
+        refused — exit 12 — if any other run is the active one, so a
+        stale lifecycle operation can never stop a different run)
         → collector stopped, manifest finalized (end Git evidence),
           run-ledger.json generated, mapping released
+          (ownership-checked: only if it still names this turn's run)
    → the ACP session stays OPEN
    → late/duplicate response for the same id: bounded no-op
      (exactly-once finalization)
 session/close (or session/delete) — CLEANUP ONLY, never required
    → active turn (response never arrived): stop sidecar
-     --stop-status interrupted, mapping released
+     --stop-status interrupted --expected-run <this turn's run>,
+     mapping released (ownership-checked)
    → no active turn: release the session state only (nothing to
      finalize)
    → duplicate close: harmless no-op (exactly-once finalization)
@@ -939,8 +985,9 @@ captured (no mapping), the stream stays intact, and the prompt
 response STILL finalizes the run — with a bounded `mapping-write-failed`
 diagnostic. A failed finalization
 (stop non-zero) leaves the raw evidence untouched and keeps the
-mapping so a later close (or a manual `agent-observability stop`) can
-re-finalize.
+mapping so a later close (or a manual `agent-observability stop
+--expected-run <run-id>`) can re-finalize — every re-finalize is
+ownership-checked the same way.
 
 ### Live pathological-generation shadow warning (diagnostic only)
 
@@ -1090,6 +1137,22 @@ naming the active run. A fast start failure fails open fast (the
 relay observes the sidecar's exit instead of polling to the
 deadline).
 
+**Start-sidecar failure cleanup is ownership-verified.** When the
+start sidecar fails (contract error or deadline) while a run is
+live, the relay may adopt or finalize that run ONLY on authoritative
+ownership evidence: the single live product run's capture manifest
+must be kind `capture` with `captured_conversation_id` equal to this
+session — the identity only this session's start sidecar was ever
+passed. The port being free when the turn started is NOT such
+evidence (a different session may have bound it since), so without
+proven ownership **no stop is issued at all** (fail closed): the
+turn runs uncaptured, a bounded `start-cleanup-skipped` diagnostic
+names the active run, and any truly orphaned run is reconciled by
+the control surface on the next start. The relay can structurally
+never issue an unguarded `stop`: its stop paths refuse (bounded
+`stop-refused` diagnostic) when the session holds no verified run id,
+so a stale relay can never stop another session's collector.
+
 ### Concurrency
 
 The capture architecture owns one loopback endpoint
@@ -1107,6 +1170,34 @@ primary activity is scoped to the persisted captured conversation
 identity, and the foreign conversations are reported via
 `activity.foreign`. Multi-turn routing is out of scope until observed
 normal usage requires parallel turns.
+
+### Lifecycle locking (start/stop serialization)
+
+`start` and `stop` are the only commands that create or finalize run
+state, so they run under one **exclusive lifecycle lock per OTLP
+port**: the lock file
+`<runs-root>/.artifacts/agent-observability/lifecycle-locks/collector-<port>.lock`
+(repo-local, git-ignored; override: `FG_OBS_LIFECYCLE_LOCK_FILE`) is
+flocked for the whole operation, and the wrapper re-executes the
+control surface with the lock held. Contract:
+
+- **Validation precedes the lock.** Command syntax and arguments are
+  validated BEFORE the lock is acquired: invalid usage returns the
+  documented usage error (exit 2) even when the lock directory is
+  unavailable, and a malformed invocation never touches the lock.
+- **Failure behavior.** A valid operation that cannot create/open the
+  lock file, or that cannot acquire the lock within its **90 s
+  budget**, is refused with **exit 13** and no state is changed (no
+  run created, no collector started or stopped, no manifest or
+  mapping touched).
+- **Purpose.** Concurrent `start`/`stop` calls serialize: a second
+  `start` waits for the first and then observes the already-running
+  run (`already_running`), instead of racing into a port conflict or a
+  double run; a `stop` concurrent with a `start` cannot interleave
+  run creation and collector shutdown. The per-session ownership
+  guards (`--expected-run`, the mapping identity validation, the
+  ownership-checked mapping release) are independent of this lock and
+  still apply inside it.
 
 ### Opt-out (one session)
 
@@ -1177,6 +1268,10 @@ high-volume `session/update` stream is suppressed), `server-error`
 `open-response-incomplete` (method), `turn-start` / `turn-uncaptured`
 / `prompt-ignored` (session id, request id, bounded reason),
 `start-result` / `start-error` (run id + bounded reason),
+`start-cleanup-skipped` (session id, active run id or none — a live
+run was not proven to belong to the session, so no stop was issued),
+`stop-refused` (session id or none, stop status, bounded reason —
+a stop was refused because the session holds no verified run id),
 `mapping-written` / `mapping-write-failed`, `gate-released` (session
 id, held byte count — the readiness gate released and the held prompt
 bytes are forwarded to the Codex child now), `turn-response` /
@@ -1186,7 +1281,11 @@ stopReason — never the result body), `turn-finalize` /
 `turn-finalize-during-start` / `turn-finalize-ignored` (session id,
 request id, run id, stop status), `close-pending` / `close-launched`
 / `close-ignored` / `close-unknown` / `session-closed`, `stop-result`
-(session id, stop status, run id, mapping outcome), `frame-skipped`
+(session id, stop status, run id, mapping outcome:
+`release-checked` = the ownership-checked release was attempted on a
+successful stop — the mapping is removed only if it still names this
+turn's run — or `kept-for-retry` = the stop failed and the mapping is
+kept for re-finalization), `frame-skipped`
 (direction + `reason=line-oversized`; one per line beyond the
 per-line observation bound — observation resumes on the next line,
 the stream is never disabled), `shadow-warning` (session id, run id,
@@ -1218,8 +1317,9 @@ Because the first line of every relay process lifetime is
 - **`start-result … status=started` + `mapping-write-failed`** — the
   run started but the turn is uncaptured (fail open by design);
 - **`turn-response … stop_reason=…` + `turn-finalize` + `stop-result
-  … mapping=released`** — a healthy prompt-turn boundary (the run is
-  finalized and the session stays open).
+  … mapping=release-checked`** — a healthy prompt-turn boundary (the
+  run is finalized and the session stays open; the mapping release was
+  ownership-checked).
 
 ### Environment variables
 
@@ -1234,6 +1334,7 @@ Because the first line of every relay process lifetime is
 | `FG_PRODUCT_LAUNCH_DELEGATE` | Original launcher path (set by the trampoline) |
 | `FG_PRODUCT_SESSION_MAP_DIR` | Session/run mapping dir (test override; default `.artifacts/agent-observability/session-runs`) |
 | `FG_OBS_RUNS_DIR` | Runs dir (test override) |
+| `FG_OBS_LIFECYCLE_LOCK_FILE` | Start/stop lifecycle lock file (test override; default `.artifacts/agent-observability/lifecycle-locks/collector-<port>.lock`) |
 | `FG_OBS_NO_DOCTOR_SNAPSHOT` | Skip the read-only doctor snapshot in `start` |
 | `FG_PRODUCT_RELAY_LOG` | Relay event log path (test override; default `.artifacts/agent-observability/relay-events.log`) |
 
