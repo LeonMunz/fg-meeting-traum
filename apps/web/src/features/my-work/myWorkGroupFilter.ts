@@ -51,6 +51,12 @@ export interface ResearchGroupChip {
   name: string
 }
 
+/** A Research Group that can be rendered as a selectable filter option. */
+export interface ResearchGroupFilterOption {
+  id: number
+  name: string
+}
+
 /** The density-collapsed applied-chip result for one filter category. */
 export interface CollapsedChips<TChip> {
   /** The individual chips to render (always in selection order). */

@@ -10,7 +10,7 @@ import {
 import { createPortal } from 'react-dom'
 
 import type { ApiWorkItemTypeKind } from '../../api/types'
-import type { ResearchGroupFilterOption } from './MyWorkResearchGroupFilter'
+import type { ResearchGroupFilterOption } from './myWorkGroupFilter'
 import type { ProjectFilterOption } from './myWorkProjectFilter'
 import {
   WORK_ITEM_TYPE_FILTER_OPTIONS,
