@@ -2563,6 +2563,10 @@ test('My Work Kanban drag: cross-category drop mutates the canonical status from
 })
 
 test('My Work Kanban drag: a failed revalidation after a successful move stays visible and retryable (the move is never reported as failed)', async ({ page }, testInfo) => {
+  // RT-05 self-echo probe: must see every navigation of this page
+  // (installed before login / goto).
+  installMyWorkSseProbe(page)
+
   // AP-06: mutation and revalidation are handled separately. The
   // atomic reorder POST succeeds, and the subsequent authoritative
   // GET /api/me/work-items/ revalidation is failed by route
@@ -2578,6 +2582,15 @@ test('My Work Kanban drag: a failed revalidation after a successful move stays v
   // test has moved "First Draft Complete" into In progress; in an
   // isolated run (-g) it is still in Todo — the target column is
   // therefore derived from the item's CURRENT payload category.
+  //
+  // RT-05: the move's own self-echo (one personal my_work_changed
+  // delivered on the page's live stream) may cost ONE additional
+  // authoritative refetch on top of the mutation's own
+  // revalidation — the documented bound is one or two
+  // post-mutation GETs, never unbounded. The SSE probe observes
+  // the frame ON THE STREAM, and the wire quiescence barrier
+  // settles all reads before the count is judged (the same
+  // convention the successful-move test above uses).
   type StatusTarget = {
     statusCategory: string
     statusDefinitionId: number
@@ -2618,9 +2631,20 @@ test('My Work Kanban drag: a failed revalidation after a successful move stays v
   // so it always passes through — and the reorder POST never
   // matches the intercepted list URL in the first place.
   let reorderDispatched = false
+  // Canonical list GETs currently in flight (request seen,
+  // response not yet settled) — the quiescence barrier's input.
+  let listGetsInFlight = 0
 
   page.on('request', (request) => {
-    const pathname = new URL(request.url()).pathname
+    const url = request.url()
+    const pathname = new URL(url).pathname
+
+    if (
+      request.method() === 'GET' &&
+      url.endsWith('/api/me/work-items/')
+    ) {
+      listGetsInFlight += 1
+    }
 
     if (
       request.method() === 'POST' &&
@@ -2643,6 +2667,7 @@ test('My Work Kanban drag: a failed revalidation after a successful move stays v
       ) &&
       response.request().method() === 'GET'
     ) {
+      listGetsInFlight -= 1
       listGetResponses.push({
         url: response.url(),
         status: response.status(),
@@ -2736,8 +2761,27 @@ test('My Work Kanban drag: a failed revalidation after a successful move stays v
     `[data-board-column="${targetCategory}"]`,
   )
 
-  // Baseline ledger: every list GET so far (the initial load)
-  // succeeded as a 200 passthrough, and no mutation happened yet.
+  // Deterministic startup baseline: the SSE `open` handshake
+  // (RC-5) revalidates on connect and can still be in flight when
+  // the first content renders (StrictMode double-mount + the
+  // handshake make the ABSOLUTE startup count timing-dependent).
+  // Wait for the handshake frame on the stream AND for the
+  // revalidation it triggered to settle — only then does the
+  // baseline include ALL startup traffic, so the post-mutation
+  // bound below is deterministic.
+  await expect
+    .poll(async () =>
+      (await readMyWorkSseProbe(page)).openHandshakes)
+    .toBeGreaterThanOrEqual(1)
+  await waitForMyWorkWireQuiescence(
+    page,
+    () => listGetsInFlight,
+    () => listGetResponses.length,
+  )
+
+  // Baseline ledger: every startup list GET (the initial loads
+  // plus the RC-5 handshake revalidation) succeeded as a 200
+  // passthrough, and no mutation happened yet.
   expect(listGetResponses.length).toBeGreaterThan(0)
   expect(
     listGetResponses.every(
@@ -2773,6 +2817,12 @@ test('My Work Kanban drag: a failed revalidation after a successful move stays v
       'Card or target column bounding box not found.',
     )
   }
+
+  // The self-echo frame counter before the drag (the stream is
+  // live and quiescent behind the barrier above — this is the
+  // mutation's own baseline).
+  const echoFramesBeforeDrag =
+    (await readMyWorkSseProbe(page)).myWorkChanged
 
   // Native HTML5 drag-and-drop needs a real mouse gesture (not
   // locator.dragTo's single jump) for Chromium to recognize the
@@ -2817,6 +2867,57 @@ test('My Work Kanban drag: a failed revalidation after a successful move stays v
   //    is visible — never reported as a failed move.
   // --------------------------------------------------------
 
+  // Realtime self-echo barrier: the server publishes exactly one
+  // personal my_work_changed for the ACTING user in the move's own
+  // transaction (commit-attached delivery), and the page's own
+  // live stream receives it as a self-echo. The RT-05 page honors
+  // that frame with one authoritative SILENT refetch: a frame
+  // delivered while the move's revalidation is still in flight is
+  // coalesced into it (one fetch total); a frame delivered after
+  // the revalidation settled costs exactly ONE additional refetch
+  // (two fetches total) — never more (the held flag is consumed by
+  // the flush). The frame's delivery is independent of the
+  // mutation response, so wait for it ON THE STREAM before
+  // judging the request bound — a delayed self-echo must not be
+  // missed by an early snapshot.
+  await expect
+    .poll(async () =>
+      (await readMyWorkSseProbe(page)).myWorkChanged)
+    .toBeGreaterThan(echoFramesBeforeDrag)
+
+  // All canonical reads (including any self-echo refetch) settled.
+  const settledAfterMove = await waitForMyWorkWireQuiescence(
+    page,
+    () => listGetsInFlight,
+    () => listGetResponses.length,
+  )
+
+  // The mutation's own revalidation read happened ...
+  expect(settledAfterMove).toBeGreaterThanOrEqual(
+    listGetsAfterLoad + 1,
+  )
+  // ... and the self-echo added AT MOST one more (boundedness —
+  // no unbounded refetch loop; the delayed self-echo is the ONLY
+  // second read the RT-05 contract allows).
+  expect(settledAfterMove).toBeLessThanOrEqual(
+    listGetsAfterLoad + 2,
+  )
+  // ... and the wire ledger records EVERY post-mutation read as
+  // the simulated outage, not a passthrough.
+  const postMoveGets = listGetResponses.slice(
+    listGetsAfterLoad,
+  )
+  expect(postMoveGets.length).toBeGreaterThanOrEqual(1)
+  expect(postMoveGets.length).toBeLessThanOrEqual(2)
+  expect(
+    postMoveGets.every(
+      (entry) =>
+        entry.url ===
+        'http://127.0.0.1:4173/api/me/work-items/' &&
+        entry.status === 503,
+    ),
+  ).toBe(true)
+
   const sourceCard = sourceColumn.getByRole('button', {
     name: cardName,
   })
@@ -2827,20 +2928,6 @@ test('My Work Kanban drag: a failed revalidation after a successful move stays v
   // No optimistic relocation: the card is NOT in the target
   // column yet.
   await expect(targetCard).toHaveCount(0)
-
-  // Exactly one revalidation read since the load — and the wire
-  // ledger records it as the simulated outage, not a passthrough.
-  await expect
-    .poll(() => listGetResponses.length)
-    .toBe(listGetsAfterLoad + 1)
-  expect(
-    listGetResponses.slice(listGetsAfterLoad),
-  ).toEqual([
-    {
-      url: 'http://127.0.0.1:4173/api/me/work-items/',
-      status: 503,
-    },
-  ])
 
   const alertLocator = page.locator('[role="alert"]')
   await expect(alertLocator).toHaveCount(1)
