@@ -20,12 +20,22 @@ test('authenticated topbar shows the user menu trigger and no permanent Sign out
     page.getByRole('button', { name: 'Sign out' }),
   ).toHaveCount(0)
 
-  // Personal account destinations no longer live in the sidebar.
+  // Personal account destinations live exclusively in the user
+  // menu: no permanent link targets a personal destination
+  // (/settings/*, /profile). The assertion is scoped by DESTINATION
+  // rather than by the "Settings" link name, because the
+  // Research Group workspace offers a legitimate admin-only
+  // "Settings" tab (/groups/<id>/settings) whose name collides with
+  // the personal entry but whose destination is group-scoped.
   await expect(
-    page.getByRole('link', { name: 'Settings' }),
+    page
+      .getByRole('link')
+      .and(page.locator('a[href^="/settings"]')),
   ).toHaveCount(0)
   await expect(
-    page.getByRole('link', { name: 'Profile' }),
+    page
+      .getByRole('link')
+      .and(page.locator('a[href="/profile"]')),
   ).toHaveCount(0)
   await expect(
     page.getByRole('link', { name: 'Notifications' }),
