@@ -444,18 +444,38 @@ test(
       }),
     ).toBeVisible()
 
-    // EXACTLY two child rows — and the group's only
-    // disclosure control is the row's own chevron (no
-    // nested disclosure, no nested group, no Project
-    // children).
+    // The expanded group renders EXACTLY its name link
+    // plus the two child rows (Projects / Meetings) — no
+    // Project shortcuts underneath a group, no third
+    // hierarchy level.
+    const roboticsName = roboticsGroup.getByRole('link', {
+      name: 'Robotics Lab',
+      exact: true,
+    })
+
+    // The name is the row's navigation control to the
+    // canonical Overview and carries no disclosure state.
+    await expect(roboticsName).toHaveAttribute(
+      'href',
+      `/groups/${robotStudy.researchGroupId}`,
+    )
+    await expect(roboticsName).not.toHaveAttribute(
+      'aria-expanded',
+    )
+    await expect(roboticsName).not.toHaveAttribute(
+      'aria-controls',
+    )
+
+    // The group's only disclosure control is its chevron
+    // (no nested disclosure, no nested group).
     expect(
       await roboticsGroup.getByRole('link').count(),
-    ).toBe(2)
+    ).toBe(3)
     expect(
       await roboticsGroup
         .locator('button[aria-expanded]')
         .count(),
-    ).toBe(2)
+    ).toBe(1)
     expect(
       await roboticsGroup.getByRole('group').count(),
     ).toBe(0)
@@ -463,9 +483,10 @@ test(
     const fgExampleGroup =
       await ensureGroupExpanded(page, 'FG Example')
 
+    // Same exact structure: name link + Projects + Meetings.
     expect(
       await fgExampleGroup.getByRole('link').count(),
-    ).toBe(2)
+    ).toBe(3)
 
     // --------------------------------------------------------
     // Chevron toggles disclosure only — it never navigates
@@ -494,41 +515,41 @@ test(
     expect(page.url()).toBe(homeUrl)
 
     // --------------------------------------------------------
-    // The name row controls the SAME disclosure state and
-    // never changes the current route.
+    // The group NAME is the Overview navigation link: it
+    // navigates to the group's canonical Overview and never
+    // toggles disclosure — the chevron exclusively owns
+    // expansion.
     // --------------------------------------------------------
 
-    const roboticsName = roboticsGroup.getByRole('button', {
-      name: 'Robotics Lab',
-      exact: true,
-    })
+    // Off the group's own route the name carries no active
+    // presentation.
+    await expect(roboticsName).not.toHaveAttribute(
+      'aria-current',
+    )
 
     await roboticsName.click()
 
-    await expect(roboticsName).toHaveAttribute(
-      'aria-expanded',
-      'false',
+    await expect(page).toHaveURL(
+      new RegExp(
+        `/groups/${robotStudy.researchGroupId}$`,
+      ),
     )
-    await expect(roboticsChevron).toHaveAttribute(
-      'aria-expanded',
-      'false',
-    )
-    expect(page.url()).toBe(homeUrl)
-
-    await roboticsName.click()
-
+    // Route-active presentation follows the route on the
+    // name link…
     await expect(roboticsName).toHaveAttribute(
-      'aria-expanded',
+      'aria-current',
       'true',
     )
+    // …and the click changed the route, not the disclosure
+    // state: the group stays expanded.
     await expect(roboticsChevron).toHaveAttribute(
       'aria-expanded',
       'true',
     )
-    expect(page.url()).toBe(homeUrl)
 
-    // Disclosure is not a concrete Project route: the snapshot
-    // is untouched and no further Quick Access request fired.
+    // The Overview is not a concrete Project route: the
+    // snapshot is untouched and no further Quick Access
+    // request fired.
     expect(
       await quickAccessRowNames(page),
     ).toEqual(snapshotOrder)
