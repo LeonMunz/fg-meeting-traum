@@ -290,6 +290,20 @@ describe('Project page — unified Work Item create launch', () => {
       name: /New work item/,
     })
 
+    // Synchronize on the initial Work Items load itself: the Work
+    // Items surface (with this entry) paints in the first commit of
+    // the loaded Project, while the load is issued by a passive
+    // effect that React flushes in a SEPARATE task — button
+    // visibility alone does not prove the load has been issued.
+    // Waiting for the observable load makes the baseline call count
+    // deterministic (and guarantees the creation-event listener is
+    // registered before the dispatches below).
+    await waitFor(() =>
+      expect(
+        vi.mocked(listProjectWorkItems).mock.calls.length,
+      ).toBeGreaterThanOrEqual(1),
+    )
+
     const initialListCalls =
       vi.mocked(listProjectWorkItems).mock.calls.length
     expect(initialListCalls).toBeGreaterThanOrEqual(1)
